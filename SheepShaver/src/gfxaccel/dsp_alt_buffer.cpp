@@ -98,13 +98,13 @@ static void DSpClearAltBufferRecord(DSpAltBufferRecord *rec)
 	rec->dirty_empty       = true;
 }
 
-/* Resolve a 1-based alt-buffer handle to its record (nullptr if invalid or
+/* Resolve a 1-based alt-buffer handle to its record (NULL if invalid or
  * not in use). Mirrors DSpGetContext. */
 DSpAltBufferRecord *DSpGetAltBuffer(uint32_t handle)
 {
-	if (handle == 0 || handle > DSP_MAX_ALT_BUFFERS) return nullptr;
+	if (handle == 0 || handle > DSP_MAX_ALT_BUFFERS) return NULL;
 	DSpAltBufferRecord *rec = &dsp_alt_buffer_table[handle - 1];
-	return rec->in_use ? rec : nullptr;
+	return rec->in_use ? rec : NULL;
 }
 
 /* Allocate a free alt-buffer slot, returning its 1-based handle (0 if the
@@ -176,7 +176,7 @@ extern "C" int32_t DSpAltBuffer_NewHandler(uint32_t ctxRef,
 		return kDSpInvalidAttributesErr;
 	}
 	DSpContextPrivate *ctx = DSpGetContext(ctxRef);
-	if (ctx == nullptr) {
+	if (ctx == NULL) {
 		DSP_LOG("AltBuffer_New: invalid ctxRef=%u -> kDSpInvalidContextErr", ctxRef);
 		return kDSpInvalidContextErr;
 	}
@@ -274,7 +274,7 @@ extern "C" int32_t DSpAltBuffer_NewHandler(uint32_t ctxRef,
 extern "C" int32_t DSpAltBuffer_DisposeHandler(uint32_t altBuffer)
 {
 	DSpAltBufferRecord *rec = DSpGetAltBuffer(altBuffer);
-	if (rec == nullptr) {
+	if (rec == NULL) {
 		DSP_LOG("AltBuffer_Dispose: unknown handle=%u -> kDSpInvalidAttributesErr",
 				altBuffer);
 		return kDSpInvalidAttributesErr;
@@ -283,7 +283,7 @@ extern "C" int32_t DSpAltBuffer_DisposeHandler(uint32_t altBuffer)
 	 * handle (single-writer emul thread; no primitive). */
 	for (int i = 0; i < DSP_MAX_CONTEXTS; i++) {
 		DSpContextPrivate *c = DSpGetContext((uint32_t)(i + 1));
-		if (c == nullptr) continue;
+		if (c == NULL) continue;
 		if (c->underlay_alt_buffer == altBuffer) c->underlay_alt_buffer = 0;
 		if (c->overlay_alt_buffer  == altBuffer) c->overlay_alt_buffer  = 0;
 	}
@@ -336,7 +336,7 @@ extern "C" int32_t DSpAltBuffer_GetCGrafPtrHandler(uint32_t altBuffer,
 		return kDSpInvalidAttributesErr;
 	}
 	DSpAltBufferRecord *rec = DSpGetAltBuffer(altBuffer);
-	if (rec == nullptr) {
+	if (rec == NULL) {
 		DSP_LOG("AltBuffer_GetCGrafPtr: unknown handle=%u -> kDSpInvalidAttributesErr",
 				altBuffer);
 		return kDSpInvalidAttributesErr;
@@ -405,7 +405,7 @@ extern "C" int32_t DSpAltBuffer_GetCGrafPtrHandler(uint32_t altBuffer,
 												rec->depth,
 												alignedRB,
 												rec->seed_pixmap_mac,
-												nullptr, nullptr);
+												NULL, NULL);
 	if (cgp_addr == 0) {
 		DSP_LOG("AltBuffer_GetCGrafPtr: CGrafPort emission failed "
 				"(handle=%u %ux%u@%u)", altBuffer, w, h, rec->depth);
@@ -430,7 +430,7 @@ static void DSpAltBufferInvalRect_Accumulate(DSpAltBufferRecord *rec,
 											 int16_t top, int16_t left,
 											 int16_t bottom, int16_t right)
 {
-	if (rec == nullptr) return;
+	if (rec == NULL) return;
 
 	/* Clamp to alt-buffer bounds (overscan mitigation). */
 	int32_t c_top    = (top    < 0) ? 0 : top;
@@ -476,7 +476,7 @@ extern "C" int32_t DSpAltBuffer_InvalRectHandler(uint32_t altBuffer,
 		return kDSpInvalidAttributesErr;
 	}
 	DSpAltBufferRecord *rec = DSpGetAltBuffer(altBuffer);
-	if (rec == nullptr) {
+	if (rec == NULL) {
 		DSP_LOG("AltBuffer_InvalRect: unknown handle=%u -> kDSpInvalidAttributesErr",
 				altBuffer);
 		return kDSpInvalidAttributesErr;
@@ -509,14 +509,14 @@ extern "C" int32_t DSpContext_SetUnderlayAltBufferHandler(uint32_t ctxRef,
 														  uint32_t inNewUnderlay)
 {
 	DSpContextPrivate *ctx = DSpGetContext(ctxRef);
-	if (ctx == nullptr) {
+	if (ctx == NULL) {
 		DSP_LOG("SetUnderlayAltBuffer: invalid ctxRef=%u -> kDSpInvalidContextErr",
 				ctxRef);
 		return kDSpInvalidContextErr;
 	}
 	if (inNewUnderlay != 0) {
 		DSpAltBufferRecord *rec = DSpGetAltBuffer(inNewUnderlay);
-		if (rec == nullptr) {
+		if (rec == NULL) {
 			DSP_LOG("SetUnderlayAltBuffer: unknown alt-buffer=%u -> "
 					"kDSpInvalidAttributesErr", inNewUnderlay);
 			return kDSpInvalidAttributesErr;
@@ -545,7 +545,7 @@ extern "C" int32_t DSpContext_GetUnderlayAltBufferHandler(uint32_t ctxRef,
 														  uint32_t outUnderlayAddr)
 {
 	DSpContextPrivate *ctx = DSpGetContext(ctxRef);
-	if (ctx == nullptr) {
+	if (ctx == NULL) {
 		DSP_LOG("GetUnderlayAltBuffer: invalid ctxRef=%u -> kDSpInvalidContextErr",
 				ctxRef);
 		return kDSpInvalidContextErr;
@@ -570,7 +570,7 @@ extern "C" int32_t DSpContext_GetUnderlayAltBufferHandler(uint32_t ctxRef,
  * no owned guest staging. */
 void DSpSyncAltBufferStagingToBacking(DSpAltBufferRecord *rec)
 {
-	if (rec == nullptr || rec->backing == NULL) return;
+	if (rec == NULL || rec->backing == NULL) return;
 	if (rec->baseaddr_mac == 0 || !rec->baseaddr_owned_staging) return;
 	void *dst = DSpGetBackingContents(rec->backing);
 	if (dst == NULL) return; /* NULL on StorageModePrivate */

@@ -29,7 +29,7 @@ static inline GLuint gfx_gl_compile_shader(GLenum type, const char *src)
 {
 	GLuint sh = glCreateShader(type);
 	if (!sh) return 0;
-	glShaderSource(sh, 1, &src, nullptr);
+	glShaderSource(sh, 1, &src, NULL);
 	glCompileShader(sh);
 	GLint ok = 0;
 	glGetShaderiv(sh, GL_COMPILE_STATUS, &ok);

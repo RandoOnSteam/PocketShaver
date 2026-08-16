@@ -93,28 +93,30 @@ typedef void (APIENTRY *PFNGLFOGCOORDFPROC)(GLfloat);
 #endif
 
 struct GfxGLExt {
-	PFNGLGENFRAMEBUFFERSPROC GenFramebuffers = nullptr;
-	PFNGLDELETEFRAMEBUFFERSPROC DeleteFramebuffers = nullptr;
-	PFNGLBINDFRAMEBUFFERPROC BindFramebuffer = nullptr;
-	PFNGLFRAMEBUFFERTEXTURE2DPROC FramebufferTexture2D = nullptr;
-	PFNGLGENRENDERBUFFERSPROC GenRenderbuffers = nullptr;
-	PFNGLDELETERENDERBUFFERSPROC DeleteRenderbuffers = nullptr;
-	PFNGLBINDRENDERBUFFERPROC BindRenderbuffer = nullptr;
-	PFNGLRENDERBUFFERSTORAGEPROC RenderbufferStorage = nullptr;
-	PFNGLFRAMEBUFFERRENDERBUFFERPROC FramebufferRenderbuffer = nullptr;
-	PFNGLCHECKFRAMEBUFFERSTATUSPROC CheckFramebufferStatus = nullptr;
-	PFNGLGENERATEMIPMAPPROC GenerateMipmap = nullptr;
-	PFNGLACTIVETEXTUREPROC ActiveTexture = nullptr;
-	PFNGLCLIENTACTIVETEXTUREPROC ClientActiveTexture = nullptr;
-	PFNGLMULTITEXCOORD2FPROC MultiTexCoord2f = nullptr;
-	PFNGLMULTITEXCOORD4FPROC MultiTexCoord4f = nullptr;
-	PFNGLSECONDARYCOLOR3FPROC SecondaryColor3f = nullptr;
-	PFNGLBLENDFUNCSEPARATEPROC BlendFuncSeparate = nullptr;
-	GFXPFNGLBLENDCOLORPROC BlendColor = nullptr;
-	GFXPFNGLBLENDEQUATIONPROC BlendEquation = nullptr;
-	PFNGLFOGCOORDFPROC FogCoordf = nullptr;
-	bool fbo = false;
-	bool multitex = false;
+	/* A plain aggregate: the one instance lives in gfx_gl_ext() below with
+	   static storage duration, so every member starts zeroed. */
+	PFNGLGENFRAMEBUFFERSPROC GenFramebuffers;
+	PFNGLDELETEFRAMEBUFFERSPROC DeleteFramebuffers;
+	PFNGLBINDFRAMEBUFFERPROC BindFramebuffer;
+	PFNGLFRAMEBUFFERTEXTURE2DPROC FramebufferTexture2D;
+	PFNGLGENRENDERBUFFERSPROC GenRenderbuffers;
+	PFNGLDELETERENDERBUFFERSPROC DeleteRenderbuffers;
+	PFNGLBINDRENDERBUFFERPROC BindRenderbuffer;
+	PFNGLRENDERBUFFERSTORAGEPROC RenderbufferStorage;
+	PFNGLFRAMEBUFFERRENDERBUFFERPROC FramebufferRenderbuffer;
+	PFNGLCHECKFRAMEBUFFERSTATUSPROC CheckFramebufferStatus;
+	PFNGLGENERATEMIPMAPPROC GenerateMipmap;
+	PFNGLACTIVETEXTUREPROC ActiveTexture;
+	PFNGLCLIENTACTIVETEXTUREPROC ClientActiveTexture;
+	PFNGLMULTITEXCOORD2FPROC MultiTexCoord2f;
+	PFNGLMULTITEXCOORD4FPROC MultiTexCoord4f;
+	PFNGLSECONDARYCOLOR3FPROC SecondaryColor3f;
+	PFNGLBLENDFUNCSEPARATEPROC BlendFuncSeparate;
+	GFXPFNGLBLENDCOLORPROC BlendColor;
+	GFXPFNGLBLENDEQUATIONPROC BlendEquation;
+	PFNGLFOGCOORDFPROC FogCoordf;
+	bool fbo;
+	bool multitex;
 };
 
 inline GfxGLExt &gfx_gl_ext()
@@ -186,8 +188,8 @@ inline GfxGLExt &gfx_gl_ext()
 		e.fbo = e.GenFramebuffers && e.BindFramebuffer && e.FramebufferTexture2D &&
 		        e.GenRenderbuffers && e.BindRenderbuffer && e.RenderbufferStorage &&
 		        e.FramebufferRenderbuffer && e.CheckFramebufferStatus && e.DeleteFramebuffers;
-		e.multitex = e.ActiveTexture != nullptr &&
-		             (e.MultiTexCoord2f != nullptr || e.MultiTexCoord4f != nullptr);
+		e.multitex = e.ActiveTexture != NULL &&
+		             (e.MultiTexCoord2f != NULL || e.MultiTexCoord4f != NULL);
 	}
 	return e;
 }

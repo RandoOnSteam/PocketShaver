@@ -88,8 +88,10 @@ enum {
   NATIVE_OP_MAX
 };
 
-// Ensure we don't exceed the 6-bit NATIVE_OP field (bits 20-25)
-static_assert(NATIVE_OP_MAX <= 64, "Too many NATIVE_OP entries; max is 64 (6-bit field)");
+// Ensure we don't exceed the 6-bit NATIVE_OP field (bits 20-25). A negative
+// array bound is the pre-C11/C++11 compile-time assertion; the typedef is
+// never instantiated.
+typedef char native_op_max_fits_in_six_bits[(NATIVE_OP_MAX <= 64) ? 1 : -1];
 // Initialize the thunks system
 extern bool ThunksInit(void);
 

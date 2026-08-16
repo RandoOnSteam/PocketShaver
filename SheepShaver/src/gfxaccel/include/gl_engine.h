@@ -14,7 +14,7 @@
 
 #include <cstdint>
 #include <vector>
-#include <unordered_map>
+#include <map>
 
 /*
  *  OpenGL sub-opcode constants
@@ -836,6 +836,14 @@ struct GLDisplayList {
     std::vector<GLCommand> commands;
 };
 
+/*
+ *  Name-keyed object tables. std::map rather than a hash table: the tables
+ *  hold tens of entries, lookup is by a 32-bit GL name, and the ordered
+ *  container needs no hash functor.
+ */
+typedef std::map<uint32_t, GLTextureObject> GLTextureObjectMap;
+typedef std::map<uint32_t, GLDisplayList>   GLDisplayListMap;
+
 
 /*
  *  GLLight -- per-light state (GL supports 8 lights)
@@ -1152,7 +1160,7 @@ struct GLContext {
     int      client_active_texture;    // for client state
 
     // ---- Texture objects ----
-    std::unordered_map<uint32_t, GLTextureObject> texture_objects;
+    GLTextureObjectMap texture_objects;
     uint32_t next_texture_name;
 
     // ---- Enable/disable caps ----
@@ -1234,7 +1242,7 @@ struct GLContext {
     GLVertexArrayPointer prepared_texcoord_array[4];
 
     // ---- Display lists ----
-    std::unordered_map<uint32_t, GLDisplayList> display_lists;
+    GLDisplayListMap display_lists;
     uint32_t next_list_name;
     bool     in_display_list;
     uint32_t current_list_name;
@@ -1472,7 +1480,7 @@ extern bool gl_logging_enabled;
 #define GL_METAL_VLOG(...) do { if (gl_logging_enabled && ACCEL_LOG_VERBOSE) GFX_DEBUG_EMIT("GL_METAL: ", __VA_ARGS__); } while (0)
 #endif
 #else /* !ACCEL_LOGGING_ENABLED */
-static constexpr bool gl_logging_enabled = false;
+const bool gl_logging_enabled = false;
 #define GL_LOG(fmt, ...)        do {} while (0)
 #define GL_VLOG(fmt, ...)       do {} while (0)
 #define GL_METAL_LOG(fmt, ...)  do {} while (0)

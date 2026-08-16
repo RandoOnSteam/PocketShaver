@@ -79,7 +79,7 @@
 #import <QuartzCore/CAMetalLayer.h>
 
 #include <stdint.h>
-#include <stdatomic.h>
+#include "atomic.h"
 #include <os/lock.h>
 
 #include "metal_compositor.h"
@@ -114,9 +114,9 @@ static id<MTLRenderPipelineState>     s_pipe_display_premultiplied = nil;
  * Target presentation timestamp set by the VBL callback via
  * MetalCompositorSubmitFrame_SetTargetTimestamp().
  *
- * C11 _Atomic double -- written from VBL callback (main thread), read
+ * atomic.h double -- written from VBL callback (main thread), read
  * from emul thread.  Same minimal-primitive rationale as vbl_source.mm's
- * _Atomic uint64_t counters.
+ * atomic uint64 counters.
  *
  * Iteration #3 (rave-overlay-flicker-black): in production SubmitFrame
  * no longer calls presentAtTime: (Present owns presentation), so this
@@ -124,7 +124,7 @@ static id<MTLRenderPipelineState>     s_pipe_display_premultiplied = nil;
  * MetalCompositorSubmitFrame_SetTargetTimestamp API shape which external
  * callers (vbl_source) still invoke.
  */
-static _Atomic double s_target_presentation_ts = 0;
+static atomic_double s_target_presentation_ts = 0;
 
 // ---------------------------------------------------------------------------
 // Overlay cache (rave-overlay-flicker-black fix).

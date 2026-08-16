@@ -23,7 +23,6 @@
 #ifndef _UTIL_WINDOWS_H
 #define _UTIL_WINDOWS_H
 
-#include <memory>
 #include <string>
 
 BOOL exists( const TCHAR *path );
@@ -59,44 +58,15 @@ extern void WarningAlert(const wchar_t *text);
 
 // ----------------- String conversion functions -----------------
 
-// Null deleter -- does nothing.  Allows returning a non-owning
-// unique_ptr.  This should go away if observer_ptr makes it into
-// the standard.
-template <class T> struct null_delete {
-    constexpr null_delete() noexcept = default;
-    template <class U> null_delete(const null_delete<U>&) noexcept { }
-    void operator ()(T*) const noexcept { }
-};
-template <class T> struct null_delete<T[]> {
-    constexpr null_delete() noexcept = default;
-    void operator ()(T*) const noexcept { }
-    template <class U> void operator ()(U*) const = delete;
-};
-
-// Functions returning null-terminated C strings
-std::unique_ptr<char[]>		str(const wchar_t* s);
-std::unique_ptr<wchar_t[]>  wstr(const char* s);
-
-inline std::unique_ptr<const char[], null_delete<const char[]>> str(const char* s)
-{
-    return std::unique_ptr<const char[], null_delete<const char[]>>(s);
-}
-inline std::unique_ptr<const wchar_t[], null_delete<const wchar_t[]>> wstr(const wchar_t* s)
-{
-    return std::unique_ptr<const wchar_t[], null_delete<const wchar_t[]>>(s);
-}
-
-#ifdef _UNICODE
-#define tstr wstr
-#else
-#define tstr str
-#endif
-
-// Functions returning std::strings
+// Conversions hand back a std::string/std::wstring by value; call .c_str()
+// where a C string is wanted. The temporary lives to the end of the full
+// expression, which is the same lifetime the previous unique_ptr returns had.
 std::string to_string(const wchar_t* s);
 std::wstring to_wstring(const char* s);
 inline std::string to_string(const char* s) { return std::string(s); }
 inline std::wstring to_wstring(const wchar_t* s) { return std::wstring(s); }
+
+typedef std::basic_string<TCHAR> tstring;
 
 #ifdef _UNICODE
 #define to_tstring to_wstring

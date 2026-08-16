@@ -35,9 +35,11 @@
 #include "cpu/ppc/ppc-instructions.hpp"
 #include <vector>
 #ifdef SHEEPSHAVER
-#include <condition_variable>
-#include <mutex>
-#include <thread>
+/* Host mutex, condition and thread backing the decrementer deadline. The
+ * definition is per platform and lives in ppc-execute.cpp, so the Win32 and
+ * pthread headers stay out of every translation unit that only needs the
+ * register layout. */
+struct powerpc_decrementer_timer;
 #endif
 
 class powerpc_cpu
@@ -312,10 +314,15 @@ private:
 	void start_decrementer_timer();
 	void stop_decrementer_timer();
 	void schedule_decrementer_timer(uint64 deadline);
-	void decrementer_timer_loop();
 #endif
 
 public:
+
+#ifdef SHEEPSHAVER
+	// Body of the decrementer timer thread. Public only so the per-platform
+	// thread entry point in ppc-execute.cpp can call it.
+	void decrementer_timer_loop();
+#endif
 
 	// Initialization & finalization
 	void initialize();
@@ -662,9 +669,7 @@ private:
 	// A host deadline wakes translated execution at the architectural DEC
 	// underflow. It avoids per-block time queries while retaining sub-VBL timer
 	// resolution for the nanokernel scheduler.
-	std::mutex decrementer_timer_mutex;
-	std::condition_variable decrementer_timer_cv;
-	std::thread decrementer_timer_thread;
+	struct powerpc_decrementer_timer *decrementer_timer;
 	uint64 decrementer_timer_deadline;
 	bool decrementer_timer_stop;
 #endif

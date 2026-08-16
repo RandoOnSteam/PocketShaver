@@ -37,7 +37,7 @@
 #include "gfxaccel_resources_heap.h"
 #include "display_mode_controller.h"   /* DMCOwner enum + dmc_set_active_owner signature */
 
-#include <atomic>                       /* std::atomic for bg/fg pending flag */
+#include "atomic.h"                     /* atomic_uint32 bg/fg pending flag */
 
 /* Threading note: DSpOnBackground / DSpOnForeground below run from the
  * UIKit lifecycle hook and only flip an atomic. In the current iOS build the
@@ -98,10 +98,10 @@ typedef int16 (*DSpReplaceGestaltProc)(uint32, uint32, uint32);
  *  Written by main-thread (observer hook via gfxaccel_resources.mm C shim);
  *  read + cleared by emul-thread (VBL secondary-callback drain chain in
  *  dsp_draw_context.mm, or the synchronous drain below). Matches the
- *  memory-warning single-word atomic pattern - _Atomic counters are the ONE
+ *  memory-warning single-word atomic pattern - atomic counters are the ONE
  *  sanctioned DSp concurrency primitive; no mutex / @synchronized.
  */
-static std::atomic<uint32_t> s_dsp_bg_fg_pending{0};
+static atomic_uint32 s_dsp_bg_fg_pending = 0;
 
 /* ---------------------------------------------------------------------- *
  *  Background / Foreground hook bodies                                  *
@@ -124,7 +124,8 @@ static std::atomic<uint32_t> s_dsp_bg_fg_pending{0};
  */
 static void DSpOnBackground(void * /*ctx*/)
 {
-	s_dsp_bg_fg_pending.fetch_or(kDSpPendingBackground, std::memory_order_release);
+	atomic_fetch_or_explicit(&s_dsp_bg_fg_pending, kDSpPendingBackground,
+	                         memory_order_release);
 	DSP_LOG("OnBackground: pending bit set; draining synchronously");
 	/* GPU work was already drained by gfxaccel_handle_background_enter
 	 * (Step 2 waitUntilCompleted) before this hook (Step 4), so the
@@ -134,7 +135,8 @@ static void DSpOnBackground(void * /*ctx*/)
 
 static void DSpOnForeground(void * /*ctx*/)
 {
-	s_dsp_bg_fg_pending.fetch_or(kDSpPendingForeground, std::memory_order_release);
+	atomic_fetch_or_explicit(&s_dsp_bg_fg_pending, kDSpPendingForeground,
+	                         memory_order_release);
 	DSP_LOG("OnForeground: pending bit set; draining synchronously");
 	/* Synchronous drain re-allocates back buffers immediately so the
 	 * first post-resume frame presents instead of waiting one VBL; if a
@@ -152,7 +154,7 @@ static void DSpOnForeground(void * /*ctx*/)
  */
 extern "C" uint32_t DSpExchangeBgFgPending(void)
 {
-	return s_dsp_bg_fg_pending.exchange(0u, std::memory_order_acquire);
+	return atomic_exchange_explicit(&s_dsp_bg_fg_pending, 0u, memory_order_acquire);
 }
 
 /* --- gfxaccel_resources fan-out handlers (no-op stubs).
@@ -454,7 +456,7 @@ int32_t DSpShutdownHandler(void)
 		 * so a follow-up re-init doesn't re-drain stale state. */
 		gfxaccel_set_dsp_background_hook(NULL, NULL);
 		gfxaccel_set_dsp_foreground_hook(NULL, NULL);
-		s_dsp_bg_fg_pending.store(0u, std::memory_order_relaxed);
+		atomic_store_explicit(&s_dsp_bg_fg_pending, 0u, memory_order_relaxed);
 		dsp_registered = false;
 		DSP_LOG("DSpShutdownHandler: final-call teardown complete");
 	}

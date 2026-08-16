@@ -31,6 +31,7 @@
  */
 
 #include "sysdeps.h"
+#include "vec_data.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <ctype.h>
@@ -1258,11 +1259,11 @@ void MixAudio_bincue(uint8 *stream, int dest_stream_len)
 			if (avail >= dest_stream_len) {
 				//D(bug("have bytes avail %d stream len %d\n", avail, dest_stream_len));
 				std::vector<uint8> converted((size_t)dest_stream_len);
-				SDL_GetAudioStreamData(player->stream, converted.data(), dest_stream_len);
+				SDL_GetAudioStreamData(player->stream, vec_data(converted), dest_stream_len);
 				float volume = (float)player->volume_mono/128;
 				// Apply 60% volume while scanning (ff/reverse)
 				if (player->scanning) volume *= 0.6f;
-				SDL_MixAudio(stream, converted.data(), (SDL_AudioFormat) o.format, dest_stream_len, volume);
+				SDL_MixAudio(stream, vec_data(converted), (SDL_AudioFormat) o.format, dest_stream_len, volume);
 			}
 #else
 			if (buf)
@@ -1271,11 +1272,11 @@ void MixAudio_bincue(uint8 *stream, int dest_stream_len)
 			if (avail >= dest_stream_len) {
 				//D(bug("have bytes avail %d stream len %d\n", avail, dest_stream_len));
 				std::vector<uint8> converted((size_t)dest_stream_len);
-				SDL_AudioStreamGet(player->stream, converted.data(), dest_stream_len);
+				SDL_AudioStreamGet(player->stream, vec_data(converted), dest_stream_len);
 				int volume = player->volume_mono;
 				// Apply 60% volume while scanning (ff/reverse)
 				if (player->scanning) volume = volume * 3 / 5;
-				SDL_MixAudio(stream, converted.data(), dest_stream_len, volume);
+				SDL_MixAudio(stream, vec_data(converted), dest_stream_len, volume);
 			}
 #endif
 		}

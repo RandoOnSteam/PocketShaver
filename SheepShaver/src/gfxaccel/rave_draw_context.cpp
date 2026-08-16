@@ -50,7 +50,7 @@ uint32_t rave_current_draw_context_addr = 0;
 RaveDrawPrivate *RaveGetContext(uint32 handle)
 {
 	if (handle == 0 || handle > RAVE_MAX_CONTEXTS)
-		return nullptr;
+		return NULL;
 	return context_table[handle - 1];
 }
 
@@ -58,7 +58,7 @@ static uint32_t AllocContextHandle(RaveDrawPrivate *ctx)
 {
 	// Find a free slot
 	for (int i = 0; i < RAVE_MAX_CONTEXTS; i++) {
-		if (context_table[i] == nullptr) {
+		if (context_table[i] == NULL) {
 			context_table[i] = ctx;
 			return (uint32_t)(i + 1);
 		}
@@ -69,7 +69,7 @@ static uint32_t AllocContextHandle(RaveDrawPrivate *ctx)
 static void FreeContextHandle(uint32_t handle)
 {
 	if (handle > 0 && handle <= RAVE_MAX_CONTEXTS) {
-		context_table[handle - 1] = nullptr;
+		context_table[handle - 1] = NULL;
 	}
 }
 
@@ -284,7 +284,7 @@ int32 NativeDrawPrivateNew(uint32 drawContextAddr, uint32 deviceAddr,
 		// Dump context table state on entry
 		printf("RAVE DrawPrivateNew: context_table state on entry (count=%d):\n", rave_context_count);
 		for (int i = 0; i < RAVE_MAX_CONTEXTS; i++) {
-			if (context_table[i] != nullptr) {
+			if (context_table[i] != NULL) {
 				printf("  slot[%d] = %p (occupied)\n", i, context_table[i]);
 			}
 		}
@@ -458,26 +458,26 @@ int32 NativeDrawPrivateDelete(uint32 drawPrivateHandle)
 
 	// Free vertex staging buffer
 	delete[] ctx->vertexStagingBuffer;
-	ctx->vertexStagingBuffer = nullptr;
+	ctx->vertexStagingBuffer = NULL;
 
 	// Free multi-texture staging buffer
 	delete[] ctx->multiTexStagingBuffer;
-	ctx->multiTexStagingBuffer = nullptr;
+	ctx->multiTexStagingBuffer = NULL;
 
 	// Free per-draw scratch arenas
 	delete[] ctx->drawScratchA;
-	ctx->drawScratchA = nullptr;
+	ctx->drawScratchA = NULL;
 	ctx->drawScratchACap = 0;
 	delete[] ctx->drawScratchB;
-	ctx->drawScratchB = nullptr;
+	ctx->drawScratchB = NULL;
 	ctx->drawScratchBCap = 0;
 	delete[] ctx->drawScratchF;
-	ctx->drawScratchF = nullptr;
+	ctx->drawScratchF = NULL;
 	ctx->drawScratchFCap = 0;
 
 	// Free Z-sort transparency buffer
 	delete[] ctx->zsortBuffer;
-	ctx->zsortBuffer = nullptr;
+	ctx->zsortBuffer = NULL;
 
 	// Release Metal resources before freeing context
 	RaveReleaseMetalResources(ctx);

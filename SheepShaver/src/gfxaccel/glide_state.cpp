@@ -22,6 +22,7 @@
  */
 
 #include "sysdeps.h"
+#include "vec_data.h"
 #include "cpu_emulation.h"
 #include "macos_util.h"
 #include "glide_engine.h"
@@ -347,15 +348,22 @@ void GlideStateSetConstantColor(uint32_t c)
 		break;
 	}
 }
+/* Clamp a 0..1 component and round it to the packed 8-bit channel. */
+static uint32_t quantize_component(float x)
+{
+	if (x < 0.f) x = 0.f;
+	if (x > 1.f) x = 1.f;
+	return (uint32_t)(x * 255.f + 0.5f);
+}
+
 void GlideStateSetConstantColor4(float r, float g, float b, float a)
 {
 	g_glide.constant_r = r; g_glide.constant_g = g;
 	g_glide.constant_b = b; g_glide.constant_a = a;
-	auto q = [](float x) -> uint32_t {
-		if (x < 0.f) x = 0.f; if (x > 1.f) x = 1.f;
-		return (uint32_t)(x * 255.f + 0.5f);
-	};
-	g_glide.constant_color = (q(a) << 24) | (q(r) << 16) | (q(g) << 8) | q(b);
+	g_glide.constant_color = (quantize_component(a) << 24) |
+							 (quantize_component(r) << 16) |
+							 (quantize_component(g) << 8) |
+							 quantize_component(b);
 }
 uint32_t GlideStateConstantColor(void) { return g_glide.constant_color; }
 float GlideStateConstantR(void) { return g_glide.constant_r; }
@@ -664,34 +672,37 @@ void GlideStateSetVertexLayout(int param, int offset, int mode)
  *     GrTmuVertex tmuvtx[2];// 36 (sow,tow,oow), 48 (sow,tow,oow)
  *   => sizeof(GrVertex) == 60
  */
+/* Enable one GR_PARAM_* slot at a fixed GrVertex byte offset. */
+static void set_vertex_param(int param, int offset)
+{
+	g_glide.vlayout[param].offset = offset;
+	g_glide.vlayout[param].mode = 1; /* GR_PARAM_ENABLE */
+}
+
 void GlideStateSetGlide2VertexLayout(void)
 {
 	for (int i = 0; i < 256; i++) {
 		g_glide.vlayout[i].offset = -1;
 		g_glide.vlayout[i].mode = 0;
 	}
-	auto set = [](int param, int offset) {
-		g_glide.vlayout[param].offset = offset;
-		g_glide.vlayout[param].mode = 1; /* GR_PARAM_ENABLE */
-	};
-	set(0x01, 0);   /* GR_PARAM_XY  -> x,y   */
+	set_vertex_param(0x01, 0);   /* GR_PARAM_XY  -> x,y   */
 	/* Glide 2's public GrVertex.z member is explicitly ignored. Its hardware
 	 * Z iterator is ooz at +24, which is what GR_PARAM_Z means to the host
 	 * renderer when emulating the fixed layout. */
-	set(0x02, 24);  /* GR_PARAM_Z   -> ooz   */
-	set(0x04, 32);  /* GR_PARAM_Q   -> oow (FBI W depth/fog) */
-	set(0x20, 12);  /* GR_PARAM_RGB -> r,g,b */
-	set(0x10, 28);  /* GR_PARAM_A   -> a     */
-	set(0x40, 36);  /* GR_PARAM_ST0 -> tmuvtx[0].sow,tow */
-	set(0x41, 48);  /* GR_PARAM_ST1 -> tmuvtx[1].sow,tow */
+	set_vertex_param(0x02, 24);  /* GR_PARAM_Z   -> ooz   */
+	set_vertex_param(0x04, 32);  /* GR_PARAM_Q   -> oow (FBI W depth/fog) */
+	set_vertex_param(0x20, 12);  /* GR_PARAM_RGB -> r,g,b */
+	set_vertex_param(0x10, 28);  /* GR_PARAM_A   -> a     */
+	set_vertex_param(0x40, 36);  /* GR_PARAM_ST0 -> tmuvtx[0].sow,tow */
+	set_vertex_param(0x41, 48);  /* GR_PARAM_ST1 -> tmuvtx[1].sow,tow */
 	/* Q is the VERTEX-level oow at +32, not tmuvtx[].oow (+44/+56).
 	 * Confirmed against Unreal Tournament's vertex builder at 0x12b5d0:
 	 * per vertex it writes x@+0, y@+4, oow@+32, then sow@+36 / tow@+40 scaled
 	 * by the texture extents - and never touches +44 or +56. Pointing Q0 at
 	 * tmuvtx[0].oow read uninitialised stack, so the perspective divide used
 	 * garbage. */
-	set(0x50, 32);  /* GR_PARAM_Q0  -> oow */
-	set(0x51, 32);  /* GR_PARAM_Q1  -> oow (shared) */
+	set_vertex_param(0x50, 32);  /* GR_PARAM_Q0  -> oow */
+	set_vertex_param(0x51, 32);  /* GR_PARAM_Q1  -> oow (shared) */
 	g_glide.vertex_stride = 60; /* sizeof(GrVertex) */
 	g_glide.vlayout_is_glide2_seed = true;
 }
@@ -882,7 +893,7 @@ bool GlideStateTmuWrite(uint32_t start, const void *src, uint32_t nbytes)
 		g_glide.tmu_mem.assign(kTmuSize, 0);
 	if (start >= kTmuSize) return false;
 	if (nbytes > kTmuSize - start) return false;
-	memcpy(g_glide.tmu_mem.data() + start, src, nbytes);
+	memcpy(vec_data(g_glide.tmu_mem) + start, src, nbytes);
 	return true;
 }
 
@@ -892,10 +903,10 @@ const uint8_t *GlideStateTmuPtr(uint32_t start, uint32_t *out_avail)
 		g_glide.tmu_mem.assign(kTmuSize, 0);
 	if (start >= kTmuSize) {
 		if (out_avail) *out_avail = 0;
-		return nullptr;
+		return NULL;
 	}
 	if (out_avail) *out_avail = kTmuSize - start;
-	return g_glide.tmu_mem.data() + start;
+	return vec_data(g_glide.tmu_mem) + start;
 }
 
 void GlideStateTexSetPalette(const uint32_t *argb256)
@@ -1158,22 +1169,22 @@ int GlideStateLfbBuffer(void) { return g_glide.lfb_buffer; }
 int GlideStateLfbBpp(void) { return g_glide.lfb_bpp; }
 
 /* Convert guest LFB (big-endian memory image) to host BGRA8 for GL upload.
- * Returns pointer + pitch into lfb_upload_bgra, or nullptr on failure. */
+ * Returns pointer + pitch into lfb_upload_bgra, or NULL on failure. */
 const uint8_t *GlideStateLfbConvertToBGRA(int *out_w, int *out_h, int *out_pitch)
 {
 	if (!g_glide.lfb_guest_ptr || !g_glide.lfb_stride || !g_glide.lfb_height_rows)
-		return nullptr;
+		return NULL;
 	const int w = g_glide.width;
 	const int h = (int)g_glide.lfb_height_rows;
 	const int bpp = g_glide.lfb_bpp > 0 ? g_glide.lfb_bpp : 2;
 	const uint32_t stride = g_glide.lfb_stride;
 	const uint8_t *src = Mac2HostAddr(g_glide.lfb_guest_ptr);
 	if (!src || w <= 0 || h <= 0)
-		return nullptr;
+		return NULL;
 
 	const int pitch = w * 4;
 	g_glide.lfb_upload_bgra.resize((size_t)pitch * (size_t)h);
-	uint8_t *dst = g_glide.lfb_upload_bgra.data();
+	uint8_t *dst = vec_data(g_glide.lfb_upload_bgra);
 	const int mode = g_glide.lfb_write_mode;
 
 	/* Guest LFB is top-down. Overlay slot samples t=1 at screen top (RAVE

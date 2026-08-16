@@ -127,10 +127,10 @@ public:
 		is_file = (_tcsncmp(device_name, TEXT("FILE"), 4) == 0);
 		if(is_file) {
 			char entry_name[20];
-			_snprintf( entry_name, lengthof(entry_name), "portfile%s", str(suffix).get() );
+			_snprintf( entry_name, lengthof(entry_name), "portfile%s", to_string(suffix).c_str() );
 			const char *path = PrefsFindString(entry_name);
 			if(path) {
-				_tcscpy( output_file_name, tstr(path).get() );
+				_tcscpy( output_file_name, to_tstring(path).c_str() );
 			} else {
 				_tcscpy( output_file_name, TEXT("C:\\B2TEMP.OUT") );
 			}
@@ -513,7 +513,7 @@ void SerialInit(void)
 	if (SerialWantsMidi(port))
 		the_serd_port[0] = new MIDISERDPort();
 	else
-		the_serd_port[0] = new XSERDPort(tstr(port).get(), TEXT("0"));
+		the_serd_port[0] = new XSERDPort(to_tstring(port).c_str(), TEXT("0"));
 
 	port = PrefsFindString("serialb");
 	if(port) {
@@ -522,7 +522,7 @@ void SerialInit(void)
 	if (SerialWantsMidi(port))
 		the_serd_port[1] = new MIDISERDPort();
 	else
-		the_serd_port[1] = new XSERDPort(tstr(port).get(), TEXT("1"));
+		the_serd_port[1] = new XSERDPort(to_tstring(port).c_str(), TEXT("1"));
 }
 
 

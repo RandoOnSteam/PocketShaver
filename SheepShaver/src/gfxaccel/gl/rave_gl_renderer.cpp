@@ -22,6 +22,7 @@
  */
 
 #include "sysdeps.h"
+#include "vec_data.h"
 #include "cpu_emulation.h"
 #include "video.h"
 #include "rave_engine.h"
@@ -43,10 +44,6 @@
 
 #include <cassert>
 #include <algorithm>
-#include <array>
-#if QD3D_GRAPHICS_LOGGING_ENABLED
-#include <chrono>
-#endif
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -84,87 +81,114 @@ static inline float ReadMacFloat(uint32 addr)
 }
 
 struct RaveMetalState {
-	GLuint fbo = 0;
-	GLuint color_tex = 0;
-	GLuint depth_rb = 0;
-	uint32_t w = 0, h = 0;
-	bool pass_active = false;
-	bool cleared = false;
+	GLuint fbo;
+	GLuint color_tex;
+	GLuint depth_rb;
+	uint32_t w, h;
+	bool pass_active;
+	bool cleared;
 	/* AccessDrawBuffer / AccessZBuffer CPU maps (guest-visible) */
-	uint32_t draw_cpu_mac = 0;
-	uint32_t draw_cpu_size = 0;
-	uint32_t draw_cpu_cap = 0;       /* allocated capacity in guest bytes */
-	uint32_t draw_cpu_row_bytes = 0;
-	uint32_t draw_cpu_pixel_type = 3; /* kQAPixel_RGB32 */
-	bool draw_accessed = false;
-	uint32_t notice_device_mac = 0;
-	uint32_t notice_dirty_rect_mac = 0;
-	uint32_t z_cpu_mac = 0;
-	uint32_t z_cpu_size = 0;
-	bool z_accessed = false;
+	uint32_t draw_cpu_mac;
+	uint32_t draw_cpu_size;
+	uint32_t draw_cpu_cap;       /* allocated capacity in guest bytes */
+	uint32_t draw_cpu_row_bytes;
+	uint32_t draw_cpu_pixel_type; /* kQAPixel_RGB32 */
+	bool draw_accessed;
+	uint32_t notice_device_mac;
+	uint32_t notice_dirty_rect_mac;
+	uint32_t z_cpu_mac;
+	uint32_t z_cpu_size;
+	bool z_accessed;
 	/* ATI GetDrawBuffer CPU-composite mode (Myth II). The guest reads the 3D
 	 * frame out of a vended back buffer, CPU-draws its 2D interface into it,
 	 * and expects that buffer to become the display. While cpu_composite_frames
 	 * is armed, NativeRenderEnd suppresses the GPU overlay submit so the
 	 * compositor presents only the framebuffer. */
-	uint32_t frame_generation = 0;          /* ++ at each RenderEnd */
-	uint32_t cpu_composite_copied_gen = UINT32_MAX; /* frame_generation at last overlay->back-buffer copy */
-	uint32_t cpu_composite_frames = 0;      /* RenderEnds left to suppress overlay submits for */
-	uint32_t ati_back_buffer_mac = 0;       /* guest 16bpp back buffer vended to the title */
-	uint8_t *ati_back_buffer_host = nullptr;/* host view of ati_back_buffer_mac */
-	uint32_t ati_back_buffer_size = 0;      /* allocation size (screen rowBytes * height) */
-	bool ati_back_buffer_dirty = false;     /* guest content awaiting present to framebuffer */
+	uint32_t frame_generation;          /* ++ at each RenderEnd */
+	uint32_t cpu_composite_copied_gen; /* frame_generation at last overlay->back-buffer copy */
+	uint32_t cpu_composite_frames;      /* RenderEnds left to suppress overlay submits for */
+	uint32_t ati_back_buffer_mac;       /* guest 16bpp back buffer vended to the title */
+	uint8_t *ati_back_buffer_host;      /* host view of ati_back_buffer_mac */
+	uint32_t ati_back_buffer_size;      /* allocation size (screen rowBytes * height) */
+	bool ati_back_buffer_dirty;     /* guest content awaiting present to framebuffer */
 	/* Reused full-frame transfer storage. The notice callback runs every
 	 * frame, so allocating and freeing two ~1.2 MB vectors here was visible
 	 * in both Debug and Release profiles. */
 	std::vector<uint8_t> readback_bgra;
 	std::vector<uint8_t> upload_bgra;
 	std::vector<uint32_t> rtt_handles;
-	bool draw_state_valid = false;
-	bool draw_state_textured = false;
-	bool draw_state_multitexture = false;
-	uint32_t draw_state_multitexture_handle = 0;
-	uint32_t draw_state_multitexture_op = 0;
-	float draw_state_multitexture_factor = 0.f;
-	uint32_t draw_state_texture = 0;
-	bool draw_state_primary_texture_live = false;
-	bool draw_state_secondary_texture_live = false;
+	bool draw_state_valid;
+	bool draw_state_textured;
+	bool draw_state_multitexture;
+	uint32_t draw_state_multitexture_handle;
+	uint32_t draw_state_multitexture_op;
+	float draw_state_multitexture_factor;
+	uint32_t draw_state_texture;
+	bool draw_state_primary_texture_live;
+	bool draw_state_secondary_texture_live;
 #if QD3D_GRAPHICS_LOGGING_ENABLED
 	/* Per-frame diagnostics. Kept here so the trace can distinguish a frame
 	 * that drew black from a frame whose draw calls were never accepted. */
-	uint64_t draw_calls = 0;
-	uint64_t vertices = 0;
-	uint64_t textured_draws = 0;
-	uint64_t texture_binds = 0;
-	uint64_t missing_textures = 0;
-	uint64_t dropped_draws = 0;
-	uint64_t state_applies = 0;
-	uint64_t state_cache_hits = 0;
-	uint32_t logged_draws = 0;
+	uint64_t draw_calls;
+	uint64_t vertices;
+	uint64_t textured_draws;
+	uint64_t texture_binds;
+	uint64_t missing_textures;
+	uint64_t dropped_draws;
+	uint64_t state_applies;
+	uint64_t state_cache_hits;
+	uint32_t logged_draws;
 #endif
+
+	RaveMetalState()
+		: fbo(0), color_tex(0), depth_rb(0), w(0), h(0),
+		  pass_active(false), cleared(false),
+		  draw_cpu_mac(0), draw_cpu_size(0), draw_cpu_cap(0),
+		  draw_cpu_row_bytes(0), draw_cpu_pixel_type(3),
+		  draw_accessed(false),
+		  notice_device_mac(0), notice_dirty_rect_mac(0),
+		  z_cpu_mac(0), z_cpu_size(0), z_accessed(false),
+		  frame_generation(0), cpu_composite_copied_gen(UINT32_MAX),
+		  cpu_composite_frames(0),
+		  ati_back_buffer_mac(0), ati_back_buffer_host(NULL),
+		  ati_back_buffer_size(0), ati_back_buffer_dirty(false),
+		  draw_state_valid(false), draw_state_textured(false),
+		  draw_state_multitexture(false),
+		  draw_state_multitexture_handle(0), draw_state_multitexture_op(0),
+		  draw_state_multitexture_factor(0.f),
+		  draw_state_texture(0),
+		  draw_state_primary_texture_live(false),
+		  draw_state_secondary_texture_live(false)
+#if QD3D_GRAPHICS_LOGGING_ENABLED
+		, draw_calls(0), vertices(0), textured_draws(0), texture_binds(0),
+		  missing_textures(0), dropped_draws(0), state_applies(0),
+		  state_cache_hits(0), logged_draws(0)
+#endif
+	{
+	}
 };
 
 /* Compatibility OpenGL state is context-global, not RaveDrawPrivate-local.
  * A per-draw-context cache is valid only while that context remains the last
  * owner to install fixed-function state. */
-static RaveMetalState *s_draw_state_owner = nullptr;
+static RaveMetalState *s_draw_state_owner = NULL;
 
 /* VideoVBL may re-enter the compositor from a guest notice callback.  The
  * compositor and RAVE use the same compatibility OpenGL context, so presenting
  * while a RAVE frame is open would replace its FBO and fixed-function state.
  * Keep this guard set across the notice callbacks as well as the GL draws. */
-static RaveMetalState *s_active_render_pass = nullptr;
+static RaveMetalState *s_active_render_pass = NULL;
 
 extern "C" int RaveGLRenderPassActive(void)
 {
-	return s_active_render_pass != nullptr ? 1 : 0;
+	return s_active_render_pass != NULL ? 1 : 0;
 }
 
 static void invalidate_draw_state(RaveMetalState *ms)
 {
-	assert(ms != nullptr);
+	assert(ms != NULL);
 	ms->draw_state_valid = false;
-	s_draw_state_owner = nullptr;
+	s_draw_state_owner = NULL;
 }
 
 static void load_rave_screen_projection(uint32_t w, uint32_t h)
@@ -184,7 +208,7 @@ static void invalidate_external_gl_state(void)
 	flush_draw_batch();
 	if (s_draw_state_owner)
 		s_draw_state_owner->draw_state_valid = false;
-	s_draw_state_owner = nullptr;
+	s_draw_state_owner = NULL;
 }
 
 /* Overlay fleet */
@@ -236,7 +260,7 @@ static void trace_overlay_readback(const RaveDrawPrivate *priv,
 	glGetIntegerv(GL_PACK_ALIGNMENT, &old_pack);
 	glPixelStorei(GL_PACK_ALIGNMENT, 1);
 	glReadPixels(0, 0, (GLsizei)ms->w, (GLsizei)ms->h,
-				 GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+				 GL_RGBA, GL_UNSIGNED_BYTE, vec_data(pixels));
 	glPixelStorei(GL_PACK_ALIGNMENT, old_pack);
 	const GLenum read_error = glGetError();
 
@@ -273,7 +297,7 @@ extern RaveDrawPrivate *RaveGetContext(uint32 handle);
 
 static RaveDrawPrivate *GetContextFromDrawAddr(uint32 drawContextAddr)
 {
-	if (!drawContextAddr) return nullptr;
+	if (!drawContextAddr) return NULL;
 	uint32 handle = ReadMacInt32(drawContextAddr + 0);
 	return RaveGetContext(handle);
 }
@@ -356,9 +380,9 @@ void RaveInitMetalResources(RaveDrawPrivate *priv)
 	}
 	if (priv->metal) {
 		delete priv->metal;
-		priv->metal = nullptr;
+		priv->metal = NULL;
 	}
-	auto *ms = new RaveMetalState();
+	RaveMetalState *ms = new RaveMetalState();
 	priv->metal = ms;
 	QD3D_INIT_LOG("RaveInitMetalResources(GL): allocated state=%p", (void *)ms);
 	if (priv->width > 0 && priv->height > 0)
@@ -374,11 +398,11 @@ void RaveReleaseMetalResources(RaveDrawPrivate *priv)
 	flush_draw_batch();
 	RaveMetalState *ms = priv->metal;
 	if (s_active_render_pass == ms)
-		s_active_render_pass = nullptr;
+		s_active_render_pass = NULL;
 	if (s_draw_state_owner == priv->metal)
-		s_draw_state_owner = nullptr;
+		s_draw_state_owner = NULL;
 	if (SharedMetalDevice()) {
-		auto &ext = gfx_gl_ext();
+		GfxGLExt &ext = gfx_gl_ext();
 		if (ext.fbo) {
 			if (ms->fbo) ext.DeleteFramebuffers(1, &ms->fbo);
 			if (ms->depth_rb) ext.DeleteRenderbuffers(1, &ms->depth_rb);
@@ -387,17 +411,17 @@ void RaveReleaseMetalResources(RaveDrawPrivate *priv)
 	} else {
 		delete priv->metal;
 	}
-	priv->metal = nullptr;
+	priv->metal = NULL;
 }
 
 static bool bind_overlay_fbo(RaveMetalState *ms, uint32_t w, uint32_t h)
 {
-	assert(ms != nullptr);
+	assert(ms != NULL);
 	if (!SharedMetalDevice()) {
 		QD3D_RENDER_LOG("bind_overlay_fbo: MakeCurrent failed");
 		return false;
 	}
-	auto &ext = gfx_gl_ext();
+	GfxGLExt &ext = gfx_gl_ext();
 	if (!ext.fbo) {
 		QD3D_RENDER_LOG("bind_overlay_fbo: framebuffer objects unavailable");
 		RAVE_LOG("No FBO support on this GL context");
@@ -457,17 +481,17 @@ static bool bind_overlay_fbo(RaveMetalState *ms, uint32_t w, uint32_t h)
 
 static void unbind_fbo(void)
 {
-	auto &ext = gfx_gl_ext();
+	GfxGLExt &ext = gfx_gl_ext();
 	if (ext.fbo)
 		ext.BindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
 static bool restore_overlay_fbo(RaveMetalState *ms)
 {
-	assert(ms != nullptr);
+	assert(ms != NULL);
 	if (!ms->fbo || !ms->color_tex || !SharedMetalDevice())
 		return false;
-	auto &ext = gfx_gl_ext();
+	GfxGLExt &ext = gfx_gl_ext();
 	if (!ext.fbo) return false;
 	ext.BindFramebuffer(GL_FRAMEBUFFER, ms->fbo);
 	ext.FramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
@@ -546,10 +570,11 @@ static bool ensure_draw_buffer_cpu(RaveMetalState *ms, uint32_t pixel_type)
 }
 
 struct NoticeRGB555Tables {
-	std::array<uint16_t, 256> red = {};
-	std::array<uint16_t, 256> green = {};
-	std::array<uint16_t, 256> blue = {};
-	std::array<uint32_t, 32768> bgra = {};
+	enum { kChannelEntries = 256, kBGRAEntries = 32768 };
+	uint16_t red[kChannelEntries];
+	uint16_t green[kChannelEntries];
+	uint16_t blue[kChannelEntries];
+	uint32_t bgra[kBGRAEntries];
 
 	NoticeRGB555Tables()
 	{
@@ -558,7 +583,7 @@ struct NoticeRGB555Tables {
 			green[c] = (uint16_t)((c >> 3) << 5);
 			blue[c] = (uint16_t)(c >> 3);
 		}
-		for (uint32_t value = 0; value < bgra.size(); value++) {
+		for (uint32_t value = 0; value < (uint32_t)kBGRAEntries; value++) {
 			const uint8_t r5 = (uint8_t)((value >> 10) & 0x1fu);
 			const uint8_t g5 = (uint8_t)((value >> 5) & 0x1fu);
 			const uint8_t b5 = (uint8_t)(value & 0x1fu);
@@ -587,7 +612,7 @@ static bool copy_overlay_to_guest(const RaveDrawPrivate *priv,
 	const uint32_t pixel_type = notice_pixel_type(priv);
 	if (!ensure_draw_buffer_cpu(ms, pixel_type) || !SharedMetalDevice())
 		return false;
-	auto &ext = gfx_gl_ext();
+	GfxGLExt &ext = gfx_gl_ext();
 	if (!ext.fbo || !ms->fbo) return false;
 	ext.BindFramebuffer(GL_FRAMEBUFFER, ms->fbo);
 	const uint32_t w = ms->w, h = ms->h;
@@ -597,14 +622,14 @@ static bool copy_overlay_to_guest(const RaveDrawPrivate *priv,
 	while (glGetError() != GL_NO_ERROR) {}
 	glPixelStorei(GL_PACK_ALIGNMENT, 1);
 	glReadPixels(0, 0, (GLsizei)w, (GLsizei)h,
-				 GL_BGRA, GL_UNSIGNED_BYTE, ms->readback_bgra.data());
+				 GL_BGRA, GL_UNSIGNED_BYTE, vec_data(ms->readback_bgra));
 	glPixelStorei(GL_PACK_ALIGNMENT, old_pack);
 	if (glGetError() != GL_NO_ERROR) return false;
 	uint8_t *guest = Mac2HostAddr(ms->draw_cpu_mac);
 	if (!guest) return false;
 	const NoticeRGB555Tables &tables = notice_rgb555_tables();
 	for (uint32_t guest_y = 0; guest_y < h; guest_y++) {
-		const uint8_t *src = ms->readback_bgra.data() +
+		const uint8_t *src = vec_data(ms->readback_bgra) +
 							 (size_t)(h - 1u - guest_y) * w * 4u;
 		uint8_t *dst = guest + (size_t)guest_y * ms->draw_cpu_row_bytes;
 		if (pixel_type == kRaveNoticePixelRGB16) {
@@ -662,7 +687,7 @@ static bool upload_guest_to_overlay(RaveMetalState *ms, uint32_t rect_addr)
 		const uint32_t guest_y = (uint32_t)bottom - 1u - gl_row;
 		const uint8_t *src = guest + (size_t)guest_y * ms->draw_cpu_row_bytes +
 							 (size_t)(uint32_t)left * bytes_per_pixel;
-		uint8_t *dst = ms->upload_bgra.data() +
+		uint8_t *dst = vec_data(ms->upload_bgra) +
 					   (size_t)gl_row * upload_w * 4u;
 		if (pixel_type == kRaveNoticePixelRGB16) {
 			uint32_t *dst32 = reinterpret_cast<uint32_t *>(dst);
@@ -689,7 +714,7 @@ static bool upload_guest_to_overlay(RaveMetalState *ms, uint32_t rect_addr)
 	glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
 	glTexSubImage2D(GL_TEXTURE_2D, 0, left, (GLint)ms->h - bottom,
 					(GLsizei)upload_w, (GLsizei)upload_h,
-					GL_BGRA, GL_UNSIGNED_BYTE, ms->upload_bgra.data());
+					GL_BGRA, GL_UNSIGNED_BYTE, vec_data(ms->upload_bgra));
 	glPixelStorei(GL_UNPACK_ALIGNMENT, old_unpack);
 	const bool uploaded = glGetError() == GL_NO_ERROR;
 	return restore_overlay_fbo(ms) && uploaded;
@@ -709,7 +734,7 @@ static void fire_notice_method(RaveDrawPrivate *priv, uint32_t selector)
 #endif
 	if (selector == 3u || selector == 4u) {
 #if QD3D_GRAPHICS_LOGGING_ENABLED
-		const auto notice_start = std::chrono::steady_clock::now();
+		const uint64_t notice_start = GetTicks_usec();
 #endif
 		if (!copy_overlay_to_guest(priv, ms)) {
 			QD3D_RENDER_LOG("Notice selector=%u callback=0x%08x: overlay readback failed",
@@ -717,7 +742,7 @@ static void fire_notice_method(RaveDrawPrivate *priv, uint32_t selector)
 			return;
 		}
 #if QD3D_GRAPHICS_LOGGING_ENABLED
-		const auto readback_done = std::chrono::steady_clock::now();
+		const uint64_t readback_done = GetTicks_usec();
 #endif
 		if (!ms->notice_device_mac)
 			ms->notice_device_mac = Mac_sysalloc(24);
@@ -746,7 +771,7 @@ static void fire_notice_method(RaveDrawPrivate *priv, uint32_t selector)
 		call_macos4(callback, priv->drawContextAddr, ms->notice_device_mac,
 					ms->notice_dirty_rect_mac, refcon);
 #if QD3D_GRAPHICS_LOGGING_ENABLED
-		const auto callback_done = std::chrono::steady_clock::now();
+		const uint64_t callback_done = GetTicks_usec();
 #endif
 		const bool uploaded = upload_guest_to_overlay(
 			ms, ms->notice_dirty_rect_mac);
@@ -754,13 +779,10 @@ static void fire_notice_method(RaveDrawPrivate *priv, uint32_t selector)
 		ms->pass_active = restored;
 #if QD3D_GRAPHICS_LOGGING_ENABLED
 		if (log_notice || !uploaded) {
-			const auto upload_done = std::chrono::steady_clock::now();
-			const auto readback_usec = std::chrono::duration_cast<
-				std::chrono::microseconds>(readback_done - notice_start).count();
-			const auto callback_usec = std::chrono::duration_cast<
-				std::chrono::microseconds>(callback_done - readback_done).count();
-			const auto upload_usec = std::chrono::duration_cast<
-				std::chrono::microseconds>(upload_done - callback_done).count();
+			const uint64_t upload_done = GetTicks_usec();
+			const uint64_t readback_usec = readback_done - notice_start;
+			const uint64_t callback_usec = callback_done - readback_done;
+			const uint64_t upload_usec = upload_done - callback_done;
 			QD3D_RENDER_LOG("Notice selector=%u count=%llu callback=0x%08x refCon=0x%08x buffer=0x%08x pixelType=%u rowBytes=%u device=0x%08x cachedType=%u dirty=0x%08x upload=%d usec=%lld/%lld/%lld",
 							selector, (unsigned long long)notice_count, callback,
 							refcon, ms->draw_cpu_mac,
@@ -785,35 +807,42 @@ static void fire_notice_method(RaveDrawPrivate *priv, uint32_t selector)
 
 /* ---- GL state from RAVE tags ---- */
 
+/* RAVE carries the GL blend-factor enums verbatim; unknown values fall back
+ * to the straight-alpha factor the fixed-function path assumes. */
+static GLenum rave_gl_blend_factor(uint32_t f)
+{
+	switch (f) {
+	case 0: return GL_ZERO;
+	case 1: return GL_ONE;
+	case 0x0300: return GL_SRC_COLOR;
+	case 0x0301: return GL_ONE_MINUS_SRC_COLOR;
+	case 0x0302: return GL_SRC_ALPHA;
+	case 0x0303: return GL_ONE_MINUS_SRC_ALPHA;
+	case 0x0304: return GL_DST_ALPHA;
+	case 0x0305: return GL_ONE_MINUS_DST_ALPHA;
+	case 0x0306: return GL_DST_COLOR;
+	case 0x0307: return GL_ONE_MINUS_DST_COLOR;
+	default: return GL_SRC_ALPHA;
+	}
+}
+
 static void apply_blend(RaveDrawPrivate *priv)
 {
-	assert(priv != nullptr);
+	assert(priv != NULL);
 	int blend = (int)priv->state[9].i; /* kQATag_Blend */
-	auto &ext = gfx_gl_ext();
+	GfxGLExt &ext = gfx_gl_ext();
 	if (blend == 2) {
 		/* OpenGL blend factors - map common GL enums if present */
 		uint32_t src = priv->state[109].i;
 		uint32_t dst = priv->state[110].i;
-		auto map = [](uint32_t f) -> GLenum {
-			switch (f) {
-			case 0: return GL_ZERO;
-			case 1: return GL_ONE;
-			case 0x0300: return GL_SRC_COLOR;
-			case 0x0301: return GL_ONE_MINUS_SRC_COLOR;
-			case 0x0302: return GL_SRC_ALPHA;
-			case 0x0303: return GL_ONE_MINUS_SRC_ALPHA;
-			case 0x0304: return GL_DST_ALPHA;
-			case 0x0305: return GL_ONE_MINUS_DST_ALPHA;
-			case 0x0306: return GL_DST_COLOR;
-			case 0x0307: return GL_ONE_MINUS_DST_COLOR;
-			default: return GL_SRC_ALPHA;
-			}
-		};
 		glEnable(GL_BLEND);
 		if (ext.BlendFuncSeparate)
-			ext.BlendFuncSeparate(map(src), map(dst), GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+			ext.BlendFuncSeparate(rave_gl_blend_factor(src),
+								  rave_gl_blend_factor(dst),
+								  GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
 		else
-			glBlendFunc(map(src), map(dst));
+			glBlendFunc(rave_gl_blend_factor(src),
+						rave_gl_blend_factor(dst));
 	} else {
 		/* The Metal path premultiplies mode-0 shader output then blends with
 		 * ONE. Fixed-function GL emits straight color, so SRC_ALPHA produces
@@ -830,7 +859,7 @@ static void apply_blend(RaveDrawPrivate *priv)
 
 static void apply_depth(RaveDrawPrivate *priv)
 {
-	assert(priv != nullptr);
+	assert(priv != NULL);
 	if (!RaveContextUsesMetalDepthAttachment(priv->flags)) {
 		glDisable(GL_DEPTH_TEST);
 		glDepthMask(GL_FALSE);
@@ -855,7 +884,7 @@ static void apply_depth(RaveDrawPrivate *priv)
 
 static void apply_alpha_test(RaveDrawPrivate *priv)
 {
-	assert(priv != nullptr);
+	assert(priv != NULL);
 	int func = (int)priv->state[31].i;
 	float ref = priv->state[46].f;
 	if (func == 0 || func == 7) {
@@ -874,8 +903,8 @@ static void apply_alpha_test(RaveDrawPrivate *priv)
 static void configure_bound_texture(RaveDrawPrivate *priv,
 									const RaveResourceEntry *entry)
 {
-	assert(priv != nullptr);
-	assert(entry != nullptr);
+	assert(priv != NULL);
+	assert(entry != NULL);
 	const int standardFilter = (int)priv->state[11].i;
 	const bool glSamplerOverride = priv->state[101].i != 0 ||
 								   priv->state[102].i != 0 ||
@@ -921,8 +950,8 @@ static void configure_bound_texture(RaveDrawPrivate *priv,
 
 static GLuint bind_current_texture(RaveDrawPrivate *priv)
 {
-	assert(priv != nullptr);
-	assert(priv->metal != nullptr);
+	assert(priv != NULL);
+	assert(priv->metal != NULL);
 	priv->metal->draw_state_primary_texture_live = false;
 	uint32_t tex_mac = priv->state[13].i; /* kQATag_Texture */
 	if (!tex_mac) {
@@ -1001,11 +1030,11 @@ static GLuint bind_current_texture(RaveDrawPrivate *priv)
 
 static GLuint bind_texture_unit(RaveDrawPrivate *priv, uint32_t tex_mac, int unit)
 {
-	assert(priv != nullptr);
-	assert(priv->metal != nullptr);
+	assert(priv != NULL);
+	assert(priv->metal != NULL);
 	if (unit != 0)
 		priv->metal->draw_state_secondary_texture_live = false;
-	auto &ext = gfx_gl_ext();
+	GfxGLExt &ext = gfx_gl_ext();
 	if (ext.multitex && ext.ActiveTexture)
 		ext.ActiveTexture(GL_TEXTURE0 + unit);
 	if (!tex_mac) {
@@ -1173,7 +1202,7 @@ static float s_current_fog_max_depth = 1.f;
 
 static void apply_fog(RaveDrawPrivate *priv)
 {
-	assert(priv != nullptr);
+	assert(priv != NULL);
 	/* Match rave_draw_context / Metal: FogMode=17, FogColor a/r/g/b=18..21,
 	 * FogStart/End/Density/MaxDepth = 22..25. Mode 0 = off.
 	 * RAVE modes: 1=Alpha, 2=Linear, 3=Exp, 4=Exp2. Metal remaps QD3D's
@@ -1230,8 +1259,8 @@ static void apply_fog(RaveDrawPrivate *priv)
 
 static void apply_draw_state(RaveDrawPrivate *priv, bool textured)
 {
-	assert(priv != nullptr);
-	assert(priv->metal != nullptr);
+	assert(priv != NULL);
+	assert(priv->metal != NULL);
 	RaveMetalState *ms = priv->metal;
 	const bool multi = textured && priv->multiTextureActive &&
 					   priv->multiTextureHandle != 0 &&
@@ -1282,7 +1311,7 @@ static void apply_draw_state(RaveDrawPrivate *priv, bool textured)
 	} else {
 		glDisable(GL_SCISSOR_TEST);
 	}
-	auto &ext = gfx_gl_ext();
+	GfxGLExt &ext = gfx_gl_ext();
 	if (textured && (priv->state[12].i & 2) && ext.SecondaryColor3f)
 		glEnable(GL_COLOR_SUM);
 	else
@@ -1345,7 +1374,7 @@ static void emit_texcoords(const HostV &v)
 	 * Pass (u_ow, v_ow, 0, invW) so s' = u, t' = v - Metal overW parity. */
 	float q = (v.invW > 1e-8f) ? v.invW : 1.f;
 	float q2 = (v.invW2 > 1e-8f) ? v.invW2 : q;
-	auto &ext = gfx_gl_ext();
+	GfxGLExt &ext = gfx_gl_ext();
 	if (ext.multitex && ext.MultiTexCoord4f) {
 		ext.MultiTexCoord4f(GL_TEXTURE0, v.u_ow, v.v_ow, 0.f, q);
 		ext.MultiTexCoord4f(GL_TEXTURE1, v.u2_ow, v.v2_ow, 0.f, q2);
@@ -1382,7 +1411,7 @@ static void emit_v(const HostV &v, bool textured, int texture_op)
 		/* Highlight's +ks term is supplied as the post-texture secondary color
 		 * below when the compatibility context exposes that entry point. */
 	}
-	auto &ext = gfx_gl_ext();
+	GfxGLExt &ext = gfx_gl_ext();
 	if (ext.FogCoordf && s_current_fog_mode == 1)
 		a = 1.f;
 	glColor4f(r, g, b, a);
@@ -1430,7 +1459,7 @@ static void emit_v(const HostV &v, bool textured, int texture_op)
  * batch. State setters only touch priv->state/dirty_flags; any operation that
  * changes live GL state flushes this batch first. */
 static std::vector<HostV> s_draw_batch;
-static RaveDrawPrivate *s_draw_batch_owner = nullptr;
+static RaveDrawPrivate *s_draw_batch_owner = NULL;
 static bool s_draw_batch_textured = false;
 static int s_draw_batch_texture_op = 0;
 static uint32_t s_draw_batch_texture = 0;
@@ -1439,11 +1468,12 @@ static void flush_draw_batch(void)
 {
 	if (s_draw_batch.empty()) return;
 	glBegin(GL_TRIANGLES);
-	for (const HostV &v : s_draw_batch)
-		emit_v(v, s_draw_batch_textured, s_draw_batch_texture_op);
+	for (size_t bi = 0; bi < s_draw_batch.size(); bi++)
+		emit_v(s_draw_batch[bi], s_draw_batch_textured,
+		       s_draw_batch_texture_op);
 	glEnd();
 	s_draw_batch.clear();
-	s_draw_batch_owner = nullptr;
+	s_draw_batch_owner = NULL;
 }
 
 static void queue_draw_triangle(RaveDrawPrivate *priv, bool textured,
@@ -1477,7 +1507,7 @@ static void queue_draw_triangle(RaveDrawPrivate *priv, bool textured,
 static inline bool zsort_enabled(const RaveDrawPrivate *priv)
 {
 	/* Metal path keys on == 1 (kQATag_ZSortedHint); keep same contract. */
-	assert(priv != nullptr);
+	assert(priv != NULL);
 	return priv->state[29].i == 1;
 }
 
@@ -1526,6 +1556,13 @@ static void buffer_zsort_tri(RaveDrawPrivate *priv, const HostV &a, const HostV 
 	tri->filterMode = (int32_t)priv->state[11].i;
 }
 
+/* Back-to-front ordering for the software Z-sort buffer. */
+static bool ZSortTriangleFartherFirst(const ZSortTriangle &x,
+									  const ZSortTriangle &y)
+{
+	return x.sortKey > y.sortKey;
+}
+
 static void flush_zsort_buffer(RaveDrawPrivate *priv)
 {
 	flush_draw_batch();
@@ -1533,9 +1570,7 @@ static void flush_zsort_buffer(RaveDrawPrivate *priv)
 	if (!SharedMetalDevice()) return;
 
 	std::sort(priv->zsortBuffer, priv->zsortBuffer + priv->zsortCount,
-			  [](const ZSortTriangle &x, const ZSortTriangle &y) {
-				  return x.sortKey > y.sortKey; /* back-to-front */
-			  });
+			  ZSortTriangleFartherFirst);
 
 	uint32_t saved_tex = priv->state[13].i;
 	int32_t saved_top = (int32_t)priv->state[12].i;
@@ -1581,7 +1616,7 @@ static void flush_zsort_buffer(RaveDrawPrivate *priv)
 static bool copy_initial_texture(GLuint source, uint32_t w, uint32_t h)
 {
 	if (!source || source == s_overlay_tex) return source == s_overlay_tex;
-	auto &ext = gfx_gl_ext();
+	GfxGLExt &ext = gfx_gl_ext();
 	if (ext.multitex && ext.ActiveTexture)
 		ext.ActiveTexture(GL_TEXTURE0);
 	glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT |
@@ -1649,7 +1684,7 @@ int32_t NativeRenderStart(uint32_t drawContextAddr, uint32_t dirtyRectAddr, uint
 			initialTex = s_last_submitted_tex;
 	}
 	if (!bind_overlay_fbo(ms, w, h)) return 1;
-	assert(s_active_render_pass == nullptr);
+	assert(s_active_render_pass == NULL);
 	s_active_render_pass = ms;
 	/* Clear/load actions must not inherit the previous draw's write mask or
 	 * scissor rectangle. Draw state is re-applied before every draw call. */
@@ -1729,7 +1764,7 @@ int32_t NativeRenderEnd(uint32_t drawContextAddr, uint32_t modifiedRectAddr)
 	RaveMetalState *ms = priv->metal;
 	if (!ms->pass_active) {
 		if (s_active_render_pass == ms)
-			s_active_render_pass = nullptr;
+			s_active_render_pass = NULL;
 		static uint64_t ignored_end_count = 0;
 		if (ACCEL_LOG_VERBOSE || trace_sample(++ignored_end_count, 8, 120))
 			QD3D_RENDER_LOG("RenderEnd ignored: count=%llu frame=%u ctx=0x%08x has no active pass",
@@ -1774,7 +1809,7 @@ int32_t NativeRenderEnd(uint32_t drawContextAddr, uint32_t modifiedRectAddr)
 	if (ms->cpu_composite_frames > 0) {
 		ms->cpu_composite_frames--;
 		assert(s_active_render_pass == ms);
-		s_active_render_pass = nullptr;
+		s_active_render_pass = NULL;
 		MetalCompositorSync3DFramePacingForEngine(kGfxFramePacingEngineRAVE);
 		/* Present may have been deferred during notice callbacks. */
 		MetalCompositorFlushDeferredPresent();
@@ -1846,7 +1881,7 @@ int32_t NativeRenderEnd(uint32_t drawContextAddr, uint32_t modifiedRectAddr)
 		s_overlay_tex = s_overlay_pair[s_write];
 	}
 	assert(s_active_render_pass == ms);
-	s_active_render_pass = nullptr;
+	s_active_render_pass = NULL;
 	MetalCompositorSync3DFramePacingForEngine(kGfxFramePacingEngineRAVE);
 	/* GL shares one context with the compositor: Present is deferred while
 	 * s_active_render_pass is set. Flush any owed frame now that the FBO
@@ -1867,7 +1902,7 @@ int32_t NativeRenderAbort(uint32_t drawContextAddr)
 		ms->pass_active = false;
 	}
 	if (s_active_render_pass == ms)
-		s_active_render_pass = nullptr;
+		s_active_render_pass = NULL;
 	invalidate_draw_state(ms);
 	priv->zsortCount = 0;
 	priv->multiTextureActive = false;
@@ -1908,7 +1943,7 @@ int32_t NativeATIGetDrawBuffer(uint32_t drawContextAddr, uint32_t deviceStructAd
 
 	GfxAccelScreenSurface screen = {};
 	if (!MetalCompositorGetScreenSurface(&screen) ||
-		screen.mac_base == 0 || screen.host_base == nullptr ||
+		screen.mac_base == 0 || screen.host_base == NULL ||
 		screen.row_bytes <= 0 || screen.width <= 0 || screen.height <= 0) {
 		return kQAError;
 	}
@@ -1922,7 +1957,7 @@ int32_t NativeATIGetDrawBuffer(uint32_t drawContextAddr, uint32_t deviceStructAd
 		if (!ms->color_tex || !ensure_draw_buffer_cpu(ms, kRaveNoticePixelRGB32))
 			return kQAError;
 		uint32_t cpuMac = ms->draw_cpu_mac;
-		if (cpuMac == 0 || Mac2HostAddr(cpuMac) == nullptr) return kQAError;
+		if (cpuMac == 0 || Mac2HostAddr(cpuMac) == NULL) return kQAError;
 		WriteMacInt32(deviceStructAddr + 0,  kQADeviceMemory);
 		WriteMacInt32(deviceStructAddr + 4,  ms->w * 4u);
 		WriteMacInt32(deviceStructAddr + 8,  kQAPixel_RGB32);
@@ -1971,7 +2006,7 @@ int32_t NativeATIGetDrawBuffer(uint32_t drawContextAddr, uint32_t deviceStructAd
 							ms->pass_active;
 	if (newContent && ms->color_tex && ms->ati_back_buffer_host &&
 		SharedMetalDevice()) {
-		auto &ext = gfx_gl_ext();
+		GfxGLExt &ext = gfx_gl_ext();
 		if (ext.fbo && ms->fbo) {
 			const uint32_t w = ms->w, h = ms->h;
 			/* The guest may call GetDrawBuffer with a render pass still open
@@ -1983,7 +2018,7 @@ int32_t NativeATIGetDrawBuffer(uint32_t drawContextAddr, uint32_t deviceStructAd
 				glFlush();
 				ms->pass_active = false;
 				if (s_active_render_pass == ms)
-					s_active_render_pass = nullptr;
+					s_active_render_pass = NULL;
 			}
 			ms->readback_bgra.resize((size_t)w * h * 4u);
 			ext.BindFramebuffer(GL_FRAMEBUFFER, ms->fbo);
@@ -1993,7 +2028,7 @@ int32_t NativeATIGetDrawBuffer(uint32_t drawContextAddr, uint32_t deviceStructAd
 			while (glGetError() != GL_NO_ERROR) {}
 			glPixelStorei(GL_PACK_ALIGNMENT, 1);
 			glReadPixels(0, 0, (GLsizei)w, (GLsizei)h,
-						 GL_BGRA, GL_UNSIGNED_BYTE, ms->readback_bgra.data());
+						 GL_BGRA, GL_UNSIGNED_BYTE, vec_data(ms->readback_bgra));
 			glPixelStorei(GL_PACK_ALIGNMENT, old_pack);
 			if (glGetError() == GL_NO_ERROR) {
 				const int32_t dstX = priv->left > 0 ? priv->left : 0;
@@ -2005,7 +2040,7 @@ int32_t NativeATIGetDrawBuffer(uint32_t drawContextAddr, uint32_t deviceStructAd
 				/* GL render targets are bottom-up; the framebuffer contract is
 				 * top-down, so flip rows during the copy. */
 				for (int64_t y = 0; y < copyH; y++) {
-					const uint8_t *s = ms->readback_bgra.data() +
+					const uint8_t *s = vec_data(ms->readback_bgra) +
 									   (size_t)((uint32_t)(h - 1u - (uint32_t)y) * w) * 4u;
 					uint8_t *d = ms->ati_back_buffer_host +
 								 (size_t)(dstY + y) * screen.row_bytes +
@@ -2036,7 +2071,7 @@ int32_t NativeATIGetDrawBuffer(uint32_t drawContextAddr, uint32_t deviceStructAd
 	 * TQADevice->baseAddr fault in vm_write_memory_4. Bail cleanly instead. */
 	if (ms->ati_back_buffer_mac == 0 ||
 		Mac2HostAddr(ms->ati_back_buffer_mac) != ms->ati_back_buffer_host ||
-		ms->ati_back_buffer_host == nullptr) {
+		ms->ati_back_buffer_host == NULL) {
 		RAVE_LOG("ATIGetDrawBuffer: ctx=0x%08x back buffer unavailable (mac=0x%08x host=%p) - aborting",
 				 drawContextAddr, ms->ati_back_buffer_mac,
 				 (void *)ms->ati_back_buffer_host);
@@ -2192,6 +2227,21 @@ int32_t NativeDrawVGouraud(uint32_t drawContextAddr, uint32_t nVertices, uint32_
 	return kQANoErr;
 }
 
+/* One textured vertex, with the second texture unit's coordinates folded in
+ * from the multi-texture staging buffer when that unit is live. */
+static HostV read_tex_mt(RaveDrawPrivate *priv, uint32 verticesAddr,
+						 uint32 stride, uint32 idx)
+{
+	HostV v = read_texture_v(verticesAddr + idx * stride);
+	if (priv->multiTextureActive && priv->multiTexStagingBuffer && idx < priv->multiTexStagingCount) {
+		const float *uv2 = (const float *)priv->multiTexStagingBuffer;
+		v.u2_ow = uv2[idx * 4 + 0];
+		v.v2_ow = uv2[idx * 4 + 1];
+		v.invW2 = uv2[idx * 4 + 2] > 0.f ? uv2[idx * 4 + 2] : v.invW;
+	}
+	return v;
+}
+
 int32_t NativeDrawVTexture(uint32_t drawContextAddr, uint32_t nVertices, uint32_t vertexMode,
 						   uint32_t verticesAddr, uint32_t /*flagsAddr*/)
 {
@@ -2210,21 +2260,10 @@ int32_t NativeDrawVTexture(uint32_t drawContextAddr, uint32_t nVertices, uint32_
 	GLenum mode = map_vertex_mode(vertexMode, fan);
 	const bool zsort = zsort_enabled(priv) && (fan || vertexMode == 3 || vertexMode == 4 || vertexMode == 5);
 
-	auto read_tex_mt = [&](uint32 idx) -> HostV {
-		HostV v = read_texture_v(verticesAddr + idx * stride);
-		if (priv->multiTextureActive && priv->multiTexStagingBuffer && idx < priv->multiTexStagingCount) {
-			const float *uv2 = (const float *)priv->multiTexStagingBuffer;
-			v.u2_ow = uv2[idx * 4 + 0];
-			v.v2_ow = uv2[idx * 4 + 1];
-			v.invW2 = uv2[idx * 4 + 2] > 0.f ? uv2[idx * 4 + 2] : v.invW;
-		}
-		return v;
-	};
-
 	if (fan && nVertices >= 3) {
-		HostV v0 = read_tex_mt(0);
+		HostV v0 = read_tex_mt(priv, verticesAddr, stride, 0);
 		for (uint32 i = 1; i + 1 < nVertices; i++) {
-			HostV a = v0, b = read_tex_mt(i), c = read_tex_mt(i + 1);
+			HostV a = v0, b = read_tex_mt(priv, verticesAddr, stride, i), c = read_tex_mt(priv, verticesAddr, stride, i + 1);
 			if (zsort)
 				buffer_zsort_tri(priv, a, b, c, true);
 			else
@@ -2234,13 +2273,13 @@ int32_t NativeDrawVTexture(uint32_t drawContextAddr, uint32_t nVertices, uint32_
 	}
 	if (zsort && vertexMode == 3) {
 		for (uint32 i = 0; i + 2 < nVertices; i += 3)
-			buffer_zsort_tri(priv, read_tex_mt(i), read_tex_mt(i + 1), read_tex_mt(i + 2), true);
+			buffer_zsort_tri(priv, read_tex_mt(priv, verticesAddr, stride, i), read_tex_mt(priv, verticesAddr, stride, i + 1), read_tex_mt(priv, verticesAddr, stride, i + 2), true);
 		return kQANoErr;
 	}
 	if (zsort && vertexMode == 4 && nVertices >= 3) {
-		HostV prev0 = read_tex_mt(0), prev1 = read_tex_mt(1);
+		HostV prev0 = read_tex_mt(priv, verticesAddr, stride, 0), prev1 = read_tex_mt(priv, verticesAddr, stride, 1);
 		for (uint32 i = 2; i < nVertices; i++) {
-			HostV cur = read_tex_mt(i);
+			HostV cur = read_tex_mt(priv, verticesAddr, stride, i);
 			if ((i & 1) == 0)
 				buffer_zsort_tri(priv, prev0, prev1, cur, true);
 			else
@@ -2253,13 +2292,13 @@ int32_t NativeDrawVTexture(uint32_t drawContextAddr, uint32_t nVertices, uint32_
 	if (vertexMode == 3) {
 		for (uint32 i = 0; i + 2 < nVertices; i += 3)
 			queue_draw_triangle(priv, true, top,
-				read_tex_mt(i), read_tex_mt(i + 1), read_tex_mt(i + 2));
+				read_tex_mt(priv, verticesAddr, stride, i), read_tex_mt(priv, verticesAddr, stride, i + 1), read_tex_mt(priv, verticesAddr, stride, i + 2));
 		return kQANoErr;
 	}
 	if (vertexMode == 4 && nVertices >= 3) {
-		HostV a = read_tex_mt(0), b = read_tex_mt(1);
+		HostV a = read_tex_mt(priv, verticesAddr, stride, 0), b = read_tex_mt(priv, verticesAddr, stride, 1);
 		for (uint32 i = 2; i < nVertices; i++) {
-			HostV c = read_tex_mt(i);
+			HostV c = read_tex_mt(priv, verticesAddr, stride, i);
 			if ((i & 1) == 0)
 				queue_draw_triangle(priv, true, top, a, b, c);
 			else
@@ -2272,7 +2311,7 @@ int32_t NativeDrawVTexture(uint32_t drawContextAddr, uint32_t nVertices, uint32_
 	apply_draw_state(priv, true);
 	glBegin(mode);
 	for (uint32 i = 0; i < nVertices; i++)
-		emit_v(read_tex_mt(i), true, top);
+		emit_v(read_tex_mt(priv, verticesAddr, stride, i), true, top);
 	glEnd();
 	return kQANoErr;
 }
@@ -2551,7 +2590,7 @@ int32_t NativeDrawTriMeshTexture(uint32_t drawContextAddr, uint32_t numTriangles
 	int top = (int)priv->state[12].i;
 	/* Copy staged verts so we can attach multi-tex UVs without mutating staging */
 	std::vector<HostV> local(priv->vertexStagingCount);
-	std::memcpy(local.data(), priv->vertexStagingBuffer, priv->vertexStagingCount * sizeof(HostV));
+	std::memcpy(vec_data(local), priv->vertexStagingBuffer, priv->vertexStagingCount * sizeof(HostV));
 	record_draw(priv, "TriMeshTexture", numTriangles * 3, true, &local[0]);
 	if (priv->multiTextureActive && priv->multiTexStagingBuffer && priv->multiTexStagingCount > 0) {
 		const float *uv2 = (const float *)priv->multiTexStagingBuffer;
@@ -2659,9 +2698,9 @@ int32_t NativeAccessZBuffer(uint32_t drawContextAddr, uint32_t bufferStructAddr)
 		ms->z_cpu_size = bufSize;
 	}
 	std::vector<float> depth((size_t)w * h);
-	auto &ext = gfx_gl_ext();
+	GfxGLExt &ext = gfx_gl_ext();
 	if (ext.fbo) ext.BindFramebuffer(GL_FRAMEBUFFER, ms->fbo);
-	glReadPixels(0, 0, (GLsizei)w, (GLsizei)h, GL_DEPTH_COMPONENT, GL_FLOAT, depth.data());
+	glReadPixels(0, 0, (GLsizei)w, (GLsizei)h, GL_DEPTH_COMPONENT, GL_FLOAT, vec_data(depth));
 	for (uint32_t i = 0; i < w * h; i++) {
 		uint32 bits;
 		std::memcpy(&bits, &depth[i], 4);
@@ -2690,7 +2729,7 @@ int32_t NativeAccessZBufferEnd(uint32_t drawContextAddr, uint32_t /*dirtyRectAdd
 		uint32 bits = ReadMacInt32(ms->z_cpu_mac + i * 4);
 		std::memcpy(&depth[i], &bits, 4);
 	}
-	auto &ext = gfx_gl_ext();
+	GfxGLExt &ext = gfx_gl_ext();
 	if (ext.fbo) ext.BindFramebuffer(GL_FRAMEBUFFER, ms->fbo);
 	/* Write guest depth into the FBO depth attachment via DrawPixels */
 	glPushAttrib(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_PIXEL_MODE_BIT | GL_VIEWPORT_BIT);
@@ -2708,7 +2747,7 @@ int32_t NativeAccessZBufferEnd(uint32_t drawContextAddr, uint32_t /*dirtyRectAdd
 	glLoadIdentity();
 	/* glWindowPos2i if available; else RasterPos with modelview identity */
 	typedef void (APIENTRY *PFNGLWINDOWPOS2IPROC)(GLint, GLint);
-	static PFNGLWINDOWPOS2IPROC pWinPos = nullptr;
+	static PFNGLWINDOWPOS2IPROC pWinPos = NULL;
 	static bool tried = false;
 	if (!tried) {
 		tried = true;
@@ -2720,7 +2759,7 @@ int32_t NativeAccessZBufferEnd(uint32_t drawContextAddr, uint32_t /*dirtyRectAdd
 		pWinPos(0, 0);
 	else
 		glRasterPos2i(0, 0);
-	glDrawPixels((GLsizei)w, (GLsizei)h, GL_DEPTH_COMPONENT, GL_FLOAT, depth.data());
+	glDrawPixels((GLsizei)w, (GLsizei)h, GL_DEPTH_COMPONENT, GL_FLOAT, vec_data(depth));
 	glMatrixMode(GL_MODELVIEW);
 	glPopMatrix();
 	glMatrixMode(GL_PROJECTION);
@@ -2855,7 +2894,7 @@ int32_t NativeTextureNewFromDrawContext(uint32_t drawContextAddr, uint32_t /*fla
 	glBindTexture(GL_TEXTURE_2D, tex);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, (GLsizei)w, (GLsizei)h, 0, GL_BGRA, GL_UNSIGNED_BYTE, nullptr);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, (GLsizei)w, (GLsizei)h, 0, GL_BGRA, GL_UNSIGNED_BYTE, NULL);
 	entry->metal_texture = (void *)(uintptr_t)tex;
 	entry->pixel_type = 4;
 	entry->width = w;
@@ -2882,7 +2921,7 @@ void *RaveCreateMetalTexture(uint32_t width, uint32_t height, uint32_t /*mipLeve
 							 const uint8_t *pixels, uint32_t /*rowBytes*/)
 {
 	flush_draw_batch();
-	if (!SharedMetalDevice()) return nullptr;
+	if (!SharedMetalDevice()) return NULL;
 	invalidate_external_gl_state();
 	GLuint tex = 0;
 	glGenTextures(1, &tex);
@@ -2913,7 +2952,7 @@ void RaveGenerateMipmaps(void *metalTexture)
 	if (!metalTexture || !SharedMetalDevice()) return;
 	invalidate_external_gl_state();
 	glBindTexture(GL_TEXTURE_2D, (GLuint)(uintptr_t)metalTexture);
-	auto &ext = gfx_gl_ext();
+	GfxGLExt &ext = gfx_gl_ext();
 	if (ext.GenerateMipmap)
 		ext.GenerateMipmap(GL_TEXTURE_2D);
 }
@@ -2955,17 +2994,17 @@ void RaveRefreshTextureFromPixmap(RaveResourceEntry *entry)
 	}
 
 	std::vector<uint8_t> expanded((size_t)w * h * 4);
-	ConvertPixels(pixelType, pixmap, expanded.data(), w, h, rowBytes);
-	RaveBGRAImageStats stats = RaveBGRAImageAnalyze(expanded.data(), w * h);
+	ConvertPixels(pixelType, pixmap, vec_data(expanded), w, h, rowBytes);
+	RaveBGRAImageStats stats = RaveBGRAImageAnalyze(vec_data(expanded), w * h);
 	entry->diag_alpha_zero = (w * h) - stats.alpha;
 	entry->diag_rgb_nonzero = stats.rgb;
 
 	if (stats.nonzero != 0) {
 		if (pixelType == 4) /* kQAPixel_ARGB32 */
-			RaveBGRAWhitenAlphaOnlyMask(expanded.data(), w * h);
-		RaveUploadMipLevel(entry->metal_texture, 0, w, h, expanded.data(), w * 4);
+			RaveBGRAWhitenAlphaOnlyMask(vec_data(expanded), w * h);
+		RaveUploadMipLevel(entry->metal_texture, 0, w, h, vec_data(expanded), w * 4);
 		if (entry->mip_levels > 1)
-			RaveUploadGeneratedMips(entry->metal_texture, expanded.data(), w, h,
+			RaveUploadGeneratedMips(entry->metal_texture, vec_data(expanded), w, h,
 									entry->mip_levels);
 		if (!entry->pixels_copied) {
 			if (entry->cpu_pixel_data && entry->cpu_pixel_mac_addr)

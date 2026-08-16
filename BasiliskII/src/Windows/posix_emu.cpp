@@ -552,7 +552,7 @@ static LPTSTR translate( LPCTSTR path, TCHAR *buffer )
 		} else {
 			int len = _tcslen(path);
 			if(len == 0 || path[len-1] == TEXT('\\')) {
-				make_mask( buffer, virtual_root, path, tstr(my_computer).get() );
+				make_mask( buffer, virtual_root, path, to_tstring(my_computer).c_str() );
 			} else {
 				make_mask( buffer, virtual_root, path, 0 );
 			}
@@ -820,11 +820,11 @@ struct dirent *readdir( struct DIR *d )
 struct DIR *opendir( const char *path )
 {
 	DISABLE_ERRORS;
-	auto tpath = tstr(path);
+	tstring tpath = to_tstring(path);
 	DIR *d = new DIR;
 	if(d) {
 		memset( d, 0, sizeof(DIR) );
-		if(*tpath.get() == 0) {
+		if(*tpath.c_str() == 0) {
 			d->vname_list = host_drive_list;
 			if(d->vname_list) {
 				d->h = VIRTUAL_ROOT_ID;
@@ -835,9 +835,9 @@ struct DIR *opendir( const char *path )
 			}
 		} else {
 			TCHAR mask[MAX_PATH_LENGTH];
-			make_mask( mask, MRP(tpath.get()), TEXT("*.*"), 0 );
+			make_mask( mask, MRP(tpath.c_str()), TEXT("*.*"), 0 );
 
-			D(bug(TEXT("opendir path=%s, mask=%s\n"), tpath.get(), mask));
+			D(bug(TEXT("opendir path=%s, mask=%s\n"), tpath.c_str(), mask));
 
 			d->h = FindFirstFile( mask, &d->FindFileData );
 			if(d->h == INVALID_HANDLE_VALUE) {
@@ -847,7 +847,7 @@ struct DIR *opendir( const char *path )
 		}
 	}
 
-	D(bug(TEXT("opendir(%s,%s) = %08x\n"), tpath.get(), MRP(tpath.get()), d));
+	D(bug(TEXT("opendir(%s,%s) = %08x\n"), tpath.c_str(), MRP(tpath.c_str()), d));
 
 	RESTORE_ERRORS;
 
@@ -866,17 +866,17 @@ int my_stat( const char *path, struct my_stat *st )
 {
 	DISABLE_ERRORS;
 
-	auto tpath = tstr(path);
+	tstring tpath = to_tstring(path);
 	int result;
 
-	if(*tpath.get() == 0) {
+	if(*tpath.c_str() == 0) {
 		/// virtual root
 		memset( st, 0, sizeof(struct my_stat) );
 		st->st_mode = _S_IFDIR;
 		result = 0;
 		my_errno = 0;
 	} else {
-		result = _tstat( MRP(tpath.get()), (struct _stat *)st );
+		result = _tstat( MRP(tpath.c_str()), (struct _stat *)st );
 		if(result < 0) {
 			my_errno = errno;
 		} else {
@@ -884,7 +884,7 @@ int my_stat( const char *path, struct my_stat *st )
 		}
 	}
 
-	D(bug(TEXT("stat(%s,%s) = %d\n"), tpath.get(), MRP(tpath.get()), result));
+	D(bug(TEXT("stat(%s,%s) = %d\n"), tpath.c_str(), MRP(tpath.c_str()), result));
 	if(result >= 0) dump_stat( st );
 	RESTORE_ERRORS;
 	return result;
@@ -909,25 +909,25 @@ int my_open( const char *path, int mode, ... )
 {
 	DISABLE_ERRORS;
 	int result;
-	auto tpath = tstr(path);
-	LPCTSTR p = MRP(tpath.get());
+	tstring tpath = to_tstring(path);
+	LPCTSTR p = MRP(tpath.c_str());
 
 	// Windows "open" does not handle _O_CREAT and _O_BINARY as it should
 	if(mode & _O_CREAT) {
 		if(exists(p)) {
 			result = _topen( p, mode & ~_O_CREAT );
-			D(bug(TEXT("open-nocreat(%s,%s,%d) = %d\n"), tpath.get(), p, mode, result));
+			D(bug(TEXT("open-nocreat(%s,%s,%d) = %d\n"), tpath.c_str(), p, mode, result));
 		} else {
 			result = _tcreat( p, _S_IWRITE|_S_IREAD );
 			if(result < 0) {
 				make_folders(p);
 				result = _tcreat( p, _S_IWRITE|_S_IREAD );
 			}
-			D(bug(TEXT("open-creat(%s,%s,%d) = %d\n"), tpath.get(), p, mode, result));
+			D(bug(TEXT("open-creat(%s,%s,%d) = %d\n"), tpath.c_str(), p, mode, result));
 		}
 	} else {
 		result = _topen( p, mode );
-		D(bug(TEXT("open(%s,%s,%d) = %d\n"), tpath.get(), p, mode, result));
+		D(bug(TEXT("open(%s,%s,%d) = %d\n"), tpath.c_str(), p, mode, result));
 	}
 	if(result < 0) {
 		my_errno = errno;
@@ -943,10 +943,10 @@ int my_rename( const char *old_path, const char *new_path )
 {
 	DISABLE_ERRORS;
 	int result = -1;
-	auto told_path = tstr(old_path);
-	auto tnew_path = tstr(new_path);
-	LPCTSTR p_old = MRP(told_path.get());
-	LPCTSTR p_new = MRP2(tnew_path.get());
+	tstring told_path = to_tstring(old_path);
+	tstring tnew_path = to_tstring(new_path);
+	LPCTSTR p_old = MRP(told_path.c_str());
+	LPCTSTR p_new = MRP2(tnew_path.c_str());
 
 	result = my_access(old_path,0);
 	if(result < 0) {
@@ -979,7 +979,7 @@ int my_rename( const char *old_path, const char *new_path )
 			}
 		}
 	}
-	D(bug(TEXT("rename(%s,%s,%s,%s) = %d\n"), told_path.get(), p_old, tnew_path.get(), p_new, result));
+	D(bug(TEXT("rename(%s,%s,%s,%s) = %d\n"), told_path.c_str(), p_old, tnew_path.c_str(), p_new, result));
 	RESTORE_ERRORS;
 	return result;
 }
@@ -987,8 +987,8 @@ int my_rename( const char *old_path, const char *new_path )
 int my_access( const char *path, int mode )
 {
 	DISABLE_ERRORS;
-	auto tpath = tstr(path);
-	LPCTSTR p = MRP(tpath.get());
+	tstring tpath = to_tstring(path);
+	LPCTSTR p = MRP(tpath.c_str());
 	WIN32_FIND_DATA fdata;
 
 	int result;
@@ -1024,7 +1024,7 @@ int my_access( const char *path, int mode )
 		}
 	}
 
-	D(bug(TEXT("access(%s,%s,%d) = %d\n"), tpath.get(), p, mode, result));
+	D(bug(TEXT("access(%s,%s,%d) = %d\n"), tpath.c_str(), p, mode, result));
 	RESTORE_ERRORS;
 	return result;
 }
@@ -1032,8 +1032,8 @@ int my_access( const char *path, int mode )
 int my_mkdir( const char *path, int mode )
 {
 	DISABLE_ERRORS;
-	auto tpath = tstr(path);
-	LPTSTR p = MRP(tpath.get());
+	tstring tpath = to_tstring(path);
+	LPTSTR p = MRP(tpath.c_str());
 	strip_trailing_bs(p);
 	int result = _tmkdir( p );
 	if(result < 0) {
@@ -1045,7 +1045,7 @@ int my_mkdir( const char *path, int mode )
 	} else {
 		my_errno = 0;
 	}
-	D(bug(TEXT("mkdir(%s,%s,%d) = %d\n"), tpath.get(), p, mode, result));
+	D(bug(TEXT("mkdir(%s,%s,%d) = %d\n"), tpath.c_str(), p, mode, result));
 	RESTORE_ERRORS;
 	return result;
 }
@@ -1053,8 +1053,8 @@ int my_mkdir( const char *path, int mode )
 int my_remove( const char *path )
 {
 	DISABLE_ERRORS;
-	auto tpath = tstr(path);
-	LPTSTR p = MRP(tpath.get());
+	tstring tpath = to_tstring(path);
+	LPTSTR p = MRP(tpath.c_str());
 	strip_trailing_bs(p);
 	int result;
 	if(is_dir(p)) {
@@ -1074,7 +1074,7 @@ int my_remove( const char *path )
 			my_errno = ENOENT;
 		}
 	}
-	D(bug(TEXT("remove(%s,%s) = %d\n"), tpath.get(), p, result));
+	D(bug(TEXT("remove(%s,%s) = %d\n"), tpath.c_str(), p, result));
 	RESTORE_ERRORS;
 	return result;
 }
@@ -1082,8 +1082,8 @@ int my_remove( const char *path )
 int my_creat( const char *path, int mode )
 {
 	DISABLE_ERRORS;
-	auto tpath = tstr(path);
-	LPCTSTR p = MRP(tpath.get());
+	tstring tpath = to_tstring(path);
+	LPCTSTR p = MRP(tpath.c_str());
 	int result = _tcreat( p, _S_IWRITE|_S_IREAD ); // note mode
 	if(result < 0) {
 		make_folders(p);
@@ -1095,7 +1095,7 @@ int my_creat( const char *path, int mode )
 		setmode(result, _O_BINARY);
 		my_errno = 0;
 	}
-	D(bug(TEXT("creat(%s,%s,%d) = %d\n"), tpath.get(), p, mode,result));
+	D(bug(TEXT("creat(%s,%s,%d) = %d\n"), tpath.c_str(), p, mode,result));
 	RESTORE_ERRORS;
 	return result;
 }
@@ -1186,8 +1186,8 @@ static FILETIME get_file_time(time_t time) {
 
 int my_utime( const char *path, struct my_utimbuf * my_times )
 {
-	auto tpath = tstr(path);
-	LPCTSTR p = MRP(tpath.get());
+	tstring tpath = to_tstring(path);
+	LPCTSTR p = MRP(tpath.c_str());
 	HANDLE f = CreateFile(p, FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 	if (f != INVALID_HANDLE_VALUE) {
 		FILETIME acTime = get_file_time(my_times->actime);

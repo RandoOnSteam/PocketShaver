@@ -23,7 +23,7 @@
  *      frame deadlines.
  *
  *  Threading: VBL callbacks fire on the main RunLoop thread.  Tick count
- *  and cadence are read from the emul thread via C11 _Atomic.
+ *  and cadence are read from the emul thread via atomic.h.
  *
  *  C-callable throughout: the header can be included from .cpp, .mm, or
  *  Swift-via-bridging-header without pulling in QuartzCore / Metal types.

@@ -122,8 +122,8 @@ struct DMCModeDesc {
 /*
  * Immutable snapshot of the published display state. Readers from any
  * thread obtain the current snapshot via dmc_current_snapshot() and must
- * treat it as read-only. A later revision will replace the pointer with an
- * std::atomic<const DMCModeSnapshot *>; this revision is single-threaded.
+ * treat it as read-only. The published slot itself is a plain pointer
+ * written and read through atomic.h's release/acquire pair.
  */
 struct DMCModeSnapshot {
 	uint32_t       generation;              /* monotonic, bumped per commit; 0 reserved */

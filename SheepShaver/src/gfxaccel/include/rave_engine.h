@@ -539,7 +539,7 @@ extern bool rave_logging_enabled;
 
 #else /* !ACCEL_LOGGING_ENABLED */
 
-static constexpr bool rave_logging_enabled = false;
+static const bool rave_logging_enabled = false;
 #define RAVE_LOG(fmt, ...) do {} while (0)
 #define RAVE_VLOG(fmt, ...) do {} while (0)
 
@@ -604,7 +604,7 @@ struct RaveResourceEntry {
 static inline bool RaveTextureNeedsLivePixmapRefresh(const RaveResourceEntry *entry)
 {
 	return entry &&
-	       entry->metal_texture != nullptr &&
+	       entry->metal_texture != NULL &&
 	       entry->pixmap_mac_addr != 0 &&
 	       !entry->cpu_pixel_data_is_authoritative &&
 	       !entry->pixels_copied;
@@ -624,7 +624,7 @@ extern RaveResourceEntry rave_resource_table[RAVE_MAX_RESOURCES];
 extern uint32_t RaveResourceAlloc(RaveResourceType type);
 // Free a slot. Returns true if found and freed.
 extern bool RaveResourceFree(uint32_t handle);
-// Lookup by handle. Returns nullptr if invalid/free.
+// Lookup by handle. Returns NULL if invalid/free.
 extern RaveResourceEntry *RaveResourceGet(uint32_t handle);
 // Lookup by Mac address. Returns 1-based handle, or 0 if not found.
 extern uint32_t RaveResourceFindByAddr(uint32_t mac_addr);
@@ -632,7 +632,7 @@ extern uint32_t RaveResourceFindByAddr(uint32_t mac_addr);
 extern void RaveForgetRTTResourceHandle(uint32_t handle, uint32_t generation);
 
 // Lookup a RAVE texture entry whose
-// pixmap_mac_addr matches `pixmapAddr`. Returns nullptr if no match
+// pixmap_mac_addr matches `pixmapAddr`. Returns NULL if no match
 // (most common case - not every Q3Pixmap is tracked by a RAVE texture).
 // O(n) over rave_resource_table[0..RAVE_MAX_RESOURCES-1]; n is bounded
 // small (512) so this is cheap enough to run from the Q3Pixmap_Set_Image
@@ -670,7 +670,7 @@ extern void NativeHookQ3PixmapSetImage(uint32_t pixmapAddr,
                                         uint32_t byteCount);
 
 // Deferred texture creation: creates Metal texture from current Mac memory contents.
-// Called at first draw-time use when metal_texture is nullptr and pixmap_mac_addr is set.
+// Called at first draw-time use when metal_texture is NULL and pixmap_mac_addr is set.
 extern void RaveRealizeDeferredTexture(RaveResourceEntry *entry);
 extern void RaveRefreshTextureFromPixmap(RaveResourceEntry *entry);
 extern bool ConvertPixels(uint32_t pixelType, uint32 srcAddr, uint8_t *dst,

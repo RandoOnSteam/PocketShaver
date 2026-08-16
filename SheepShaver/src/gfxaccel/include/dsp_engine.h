@@ -676,7 +676,7 @@ extern bool dsp_logging_enabled;
 } while (0)
 #endif
 #else
-static constexpr bool dsp_logging_enabled = false;
+static const bool dsp_logging_enabled = false;
 #define DSP_LOG(fmt, ...) do {} while (0)
 #define DSP_VLOG(fmt, ...) do {} while (0)
 #endif

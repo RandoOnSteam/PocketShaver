@@ -18,6 +18,7 @@
  *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 #include "sysdeps.h"
+#include "vec_data.h"
 #include "cpu_emulation.h"
 #include "gl_engine.h"
 #include "metal_device_shared.h"
@@ -149,17 +150,17 @@ struct GLMetalState {
 /* The real GL context can contain only one guest context's state at a time.
  * This is a selector, not guest-owned state: switching it always invalidates
  * the newly selected context's cache. */
-static GLContext *s_state_owner = nullptr;
+static GLContext *s_state_owner = NULL;
 
 static GLMetalState *GLMetalGetState(GLContext *ctx)
 {
-  return ctx ? (GLMetalState *)ctx->metal : nullptr;
+  return ctx ? (GLMetalState *)ctx->metal : NULL;
 }
 
 static GLMetalStateCache *GLMetalGetStateCache(GLContext *ctx)
 {
   GLMetalState *ms = GLMetalGetState(ctx);
-  return ms ? &ms->stateCache : nullptr;
+  return ms ? &ms->stateCache : NULL;
 }
 
 static int GLMetalGetTextureUnitCount(GLContext *ctx)
@@ -367,7 +368,7 @@ static bool GLMetalApplyTextureUnit(GLContext *ctx, int unit,
   }
 
   GLTextureUnit &TU = ctx->tex_units[unit];
-  std::unordered_map<uint32_t, GLTextureObject>::iterator it =
+  GLTextureObjectMap::iterator it =
     ctx->texture_objects.find(TU.bound_texture_2d);
   if (TU.enabled_2d && it != ctx->texture_objects.end() &&
       it->second.metal_texture) {
@@ -428,8 +429,8 @@ extern "C" int GLFFPRenderPassActive(void)
 
 static void GLMetalReleaseOverlayTextures(bool clear_drawable)
 {
-  const bool have_host=SharedMetalDevice()!=nullptr;
-  GfxGLExt *ext=have_host?&gfx_gl_ext():nullptr;
+  const bool have_host=SharedMetalDevice()!=NULL;
+  GfxGLExt *ext=have_host?&gfx_gl_ext():NULL;
   if(s_frame_active&&ext&&ext->fbo)ext->BindFramebuffer(GL_FRAMEBUFFER,0);
 
   /* FBO and renderbuffer names belong to the real SDL GL context, not to the
@@ -789,7 +790,7 @@ static void GLMetalDumpDrawState(GLContext *ctx, const char *tag,
 
   const int u0tex = (int)ctx->tex_units[0].bound_texture_2d;
   const int u1tex = (int)ctx->tex_units[1].bound_texture_2d;
-  std::unordered_map<uint32_t, GLTextureObject>::iterator it0 =
+  GLTextureObjectMap::iterator it0 =
     ctx->texture_objects.find(ctx->tex_units[0].bound_texture_2d);
   const bool have0 = (it0 != ctx->texture_objects.end());
 
@@ -1261,7 +1262,7 @@ void GLMetalFlushImmediateMode(GLContext*ctx){
   unsigned texture_unit_mask=0;
   const int texture_unit_count=GLMetalGetTextureUnitCount(ctx);
   for(int unit=0;unit<texture_unit_count;++unit){
-	std::unordered_map<uint32_t,GLTextureObject>::const_iterator it=
+	GLTextureObjectMap::const_iterator it=
 	  ctx->texture_objects.find(ctx->tex_units[unit].bound_texture_2d);
 	if(ctx->tex_units[unit].enabled_2d && it!=ctx->texture_objects.end() &&
 	   it->second.metal_texture)
@@ -1310,7 +1311,7 @@ void GLMetalFlushImmediateMode(GLContext*ctx){
 }
 void GLMetalRelease(GLContext*ctx){
   if(!ctx)return;
-  const bool have_host=SharedMetalDevice()!=nullptr;
+  const bool have_host=SharedMetalDevice()!=NULL;
   if(s_state_owner==ctx){
 	if(s_frame_active){
 	  if(have_host){
@@ -1321,19 +1322,19 @@ void GLMetalRelease(GLContext*ctx){
 	  s_frame_active=false;
 	  s_frame_committed=false;
 	}
-	s_state_owner=nullptr;
+	s_state_owner=NULL;
   }
-  for(std::unordered_map<uint32_t,GLTextureObject>::iterator it=
+  for(GLTextureObjectMap::iterator it=
 		ctx->texture_objects.begin();it!=ctx->texture_objects.end();++it){
 	if(it->second.metal_texture){
 	  GLuint id=(GLuint)(uintptr_t)it->second.metal_texture;
 	  if(have_host)glDeleteTextures(1,&id);
-	  it->second.metal_texture=nullptr;
+	  it->second.metal_texture=NULL;
 	}
 	it->second.sampler_applied=false;
   }
   delete GLMetalGetState(ctx);
-  ctx->metal=nullptr;
+  ctx->metal=NULL;
 }
 void GLMetalUploadTexture(GLContext*ctx,GLTextureObject*texObj,int level,int width,int height,const uint8_t*pixels,int data_len){
 	(void)data_len; if(!ctx||!texObj||!SharedMetalDevice())return;
@@ -1404,7 +1405,7 @@ void GLMetalUpload3DTexture(GLContext*ctx,GLTextureObject*texObj,int level,int w
   glTexParameteri(GL_TEXTURE_3D,GL_TEXTURE_MIN_FILTER,GL_LINEAR);
   glTexParameteri(GL_TEXTURE_3D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
   typedef void (APIENTRY *PFNGLTEXIMAGE3DPROC)(GLenum,GLint,GLint,GLsizei,GLsizei,GLsizei,GLint,GLenum,GLenum,const void*);
-  static PFNGLTEXIMAGE3DPROC pTexImage3D=nullptr; static bool tried=false;
+  static PFNGLTEXIMAGE3DPROC pTexImage3D=NULL; static bool tried=false;
   if(!tried){ tried=true; pTexImage3D=(PFNGLTEXIMAGE3DPROC)SDL_GL_GetProcAddress("glTexImage3D");
 	if(!pTexImage3D) pTexImage3D=(PFNGLTEXIMAGE3DPROC)SDL_GL_GetProcAddress("glTexImage3DEXT"); }
   if(pTexImage3D && pixels)
@@ -1417,7 +1418,7 @@ void GLMetalUploadSubTexture3D(GLContext*ctx,GLTextureObject*texObj,int level,in
 	GLMetalSelectStateOwner(ctx);
   GLMetalSelectTextureUnitZero();
   typedef void (APIENTRY *PFNGLTEXSUBIMAGE3DPROC)(GLenum,GLint,GLint,GLint,GLint,GLsizei,GLsizei,GLsizei,GLenum,GLenum,const void*);
-  static PFNGLTEXSUBIMAGE3DPROC pSub=nullptr; static bool tried=false;
+  static PFNGLTEXSUBIMAGE3DPROC pSub=NULL; static bool tried=false;
   if(!tried){ tried=true; pSub=(PFNGLTEXSUBIMAGE3DPROC)SDL_GL_GetProcAddress("glTexSubImage3D");
 	if(!pSub) pSub=(PFNGLTEXSUBIMAGE3DPROC)SDL_GL_GetProcAddress("glTexSubImage3DEXT"); }
   if(!pSub)return;
@@ -1427,7 +1428,7 @@ void GLMetalUploadSubTexture3D(GLContext*ctx,GLTextureObject*texObj,int level,in
 void GLMetalDestroyTexture(GLTextureObject*texObj){
   if(!texObj||!texObj->metal_texture||!SharedMetalDevice())return;
   GLuint id=(GLuint)(uintptr_t)texObj->metal_texture;
-  glDeleteTextures(1,&id); texObj->metal_texture=nullptr;
+  glDeleteTextures(1,&id); texObj->metal_texture=NULL;
   /* The name is now free for reuse by the next glGenTextures, so a later
    * texture can be handed this same id. Drop the cached binding or the rebind
    * for that new texture would be skipped as a no-op. */
@@ -1451,19 +1452,19 @@ void GLMetalBitmap(GLContext*ctx,int width,int height,const uint8_t*bits,int dat
 }
 uint8_t* GLMetalReadFramebufferRect(GLContext*ctx,int x,int y,int w,int h,int*out_len){
   if(out_len)*out_len=0;
-  if(!ctx||x<0||y<0||w<=0||h<=0)return nullptr;
-  if(!SharedMetalDevice())return nullptr;
+  if(!ctx||x<0||y<0||w<=0||h<=0)return NULL;
+  if(!SharedMetalDevice())return NULL;
   GLMetalBeginFrame(ctx);
-  if(!s_frame_active)return nullptr;
+  if(!s_frame_active)return NULL;
   const int fbw=s_ow?(int)s_ow:ctx->viewport[2];
   const int fbh=s_oh?(int)s_oh:ctx->viewport[3];
-  if(fbw<=0||fbh<=0||x>fbw-w||y>fbh-h)return nullptr;
+  if(fbw<=0||fbh<=0||x>fbw-w||y>fbh-h)return NULL;
   const size_t sw=(size_t)w, sh=(size_t)h;
-  if(sw>std::numeric_limits<size_t>::max()/4/sh)return nullptr;
+  if(sw>std::numeric_limits<size_t>::max()/4/sh)return NULL;
   const size_t bytes=sw*sh*4;
-  if(bytes>(size_t)std::numeric_limits<int>::max())return nullptr;
+  if(bytes>(size_t)std::numeric_limits<int>::max())return NULL;
   uint8_t*p=(uint8_t*)std::malloc(bytes);
-  if(!p)return nullptr;
+  if(!p)return NULL;
   glReadPixels(x,y,w,h,GL_BGRA,GL_UNSIGNED_BYTE,p);
   if(out_len)*out_len=(int)bytes;
   return p;
@@ -1476,7 +1477,7 @@ static void GLMetalCaptureOffscreen(void)
   const bool keep_draw_target_bound=s_frame_active;
   if(ext.fbo&&s_fbo) ext.BindFramebuffer(GL_FRAMEBUFFER,s_fbo);
   s_off_latest.pixels.resize((size_t)s_ow*s_oh*4);
-  glReadPixels(0,0,(GLsizei)s_ow,(GLsizei)s_oh,GL_BGRA,GL_UNSIGNED_BYTE,s_off_latest.pixels.data());
+  glReadPixels(0,0,(GLsizei)s_ow,(GLsizei)s_oh,GL_BGRA,GL_UNSIGNED_BYTE,vec_data(s_off_latest.pixels));
   if(ext.fbo&&!keep_draw_target_bound)ext.BindFramebuffer(GL_FRAMEBUFFER,0);
   s_off_latest.valid=true;
   s_off_latest.width=s_ow; s_off_latest.height=s_oh; s_off_latest.bpp=4;
@@ -1502,7 +1503,7 @@ static uint64_t GLMetalCompositeOffscreenToGuest(uint32_t dstBase, uint32_t dstR
   if(guestBegin<ramBegin||guestBegin>=ramEnd||guestSpan>ramEnd-guestBegin)return 0;
   uint64_t written=0;
   for(int32_t y=0;y<dh;y++){
-	const uint8_t *srow = s_off_latest.pixels.data() + (size_t)(dy+y)*s_off_latest.rowbytes + (size_t)dx*4;
+	const uint8_t *srow = vec_data(s_off_latest.pixels) + (size_t)(dy+y)*s_off_latest.rowbytes + (size_t)dx*4;
 	uint8_t *drow = dst + (size_t)(dy+y)*(size_t)dstRowBytes + (size_t)dx*(size_t)bpp;
 	for(int32_t x=0;x<dw;x++){
 	  uint8_t B=srow[x*4+0], G=srow[x*4+1], R=srow[x*4+2], A=srow[x*4+3];
@@ -1908,7 +1909,7 @@ void NativeGLReadPixels(GLContext*ctx,int32_t x,int32_t y,int32_t w,int32_t h,ui
   if(format==0x80E1||format==0x8000) glfmt=GL_BGRA;
   else if(format==0x1908) glfmt=GL_RGBA;
   else if(format==0x1907) glfmt=GL_RGB;
-  glReadPixels(x,y,w,h,glfmt,gltype,host.data());
+  glReadPixels(x,y,w,h,glfmt,gltype,vec_data(host));
   /* Pack into guest memory big-endian friendly byte stream */
   for(int i=0;i<(int)host.size();i++) WriteMacInt8(pixels+(uint32_t)i, host[(size_t)i]);
 }

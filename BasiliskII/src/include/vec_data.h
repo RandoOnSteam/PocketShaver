@@ -1,7 +1,7 @@
 /*
- *  pso_archive_gl.cpp - PSO archive stub (OpenGL has no MTLBinaryArchive)
+ *  vec_data.h - std::vector<T>::data() for C++98
  *
- *	(C) 2026 Ryan Norton (battlemageloveryt@gmail.com)
+ *  Basilisk II (C) 1997-2008 Christian Bauer
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -17,11 +17,30 @@
  *  along with this program; if not, write to the Free Software
  *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
-#include "pso_archive.h"
 
-int32_t pso_archive_init(void) { return kGfxAccelErrPSOArchiveNotAvailable; }
-void pso_archive_shutdown(void) {}
-void *pso_archive_lookup_render(void *) { return NULL; }
-void *pso_archive_lookup_compute(void *) { return NULL; }
-uint32_t pso_archive_is_available(void) { return 0; }
-void pso_archive_set_on_descriptor(void *) {}
+/*
+ *  std::vector gained data() in C++11; the tree builds as C++98.  Taking
+ *  &v[0] directly is the usual substitute but trips the debug-iterator
+ *  assertions when the vector is empty, which several call sites here allow
+ *  (they pair the pointer with a zero length).  vec_data() hands back a null
+ *  pointer in that case instead.
+ */
+
+#ifndef VEC_DATA_H
+#define VEC_DATA_H
+
+#include <vector>
+
+template <class T>
+inline T *vec_data(std::vector<T> &v)
+{
+	return v.empty() ? (T *)0 : &v[0];
+}
+
+template <class T>
+inline const T *vec_data(const std::vector<T> &v)
+{
+	return v.empty() ? (const T *)0 : &v[0];
+}
+
+#endif /* VEC_DATA_H */

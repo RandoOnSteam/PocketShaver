@@ -50,7 +50,7 @@ extern bool nqd_metal_available;    // true after successful NQDMetalInit()
 #if ACCEL_LOGGING_ENABLED
 extern bool nqd_logging_enabled;    // toggle for NQD_LOG diagnostic output (default true while debugging)
 #else
-static constexpr bool nqd_logging_enabled = false;
+static const bool nqd_logging_enabled = false;
 #endif
 
 // Initialize Metal compute infrastructure: device, command queue, shader pipelines,

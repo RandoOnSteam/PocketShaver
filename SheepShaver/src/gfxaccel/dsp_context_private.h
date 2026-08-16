@@ -37,7 +37,7 @@
 #include "gfxaccel_backend.h"
 
 #include <stdint.h>
-#include <stdatomic.h>
+#include "atomic.h"
 
 #include "dsp_engine.h"       /* DSpContextAttributes + DSpContextState enum */
 

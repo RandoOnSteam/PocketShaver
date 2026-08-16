@@ -9,15 +9,15 @@
 #import "PerformanceCounterObjC.h"
 #import "PocketShaver-Swift-ObjCHeader.h"
 
-#import <stdatomic.h>
+#include "atomic.h"
 
 // Frame/byte tallies are file-static atomics. The writers run OFF the main
 // thread — objc_reportFrameRender() from the Metal compositor present (VBL)
 // path, objc_reportBytesTransferred() from the ether/slirp packet-reception
 // threads — while the read-and-reset runs on the @MainActor 1-second timer.
 // Relaxed ordering suffices: each is a monotonic tally with no dependent memory.
-static _Atomic int s_framesRendered   = 0;
-static _Atomic int s_bytesTransferred = 0;
+static atomic_sint s_framesRendered   = 0;
+static atomic_sint s_bytesTransferred = 0;
 
 static PerformanceCounterObjC *performanceCounter;
 

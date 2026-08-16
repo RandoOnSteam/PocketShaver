@@ -21,7 +21,7 @@
 #ifndef SPCFLAGS_H
 #define SPCFLAGS_H
 
-#include <atomic>
+#include "atomic.h"
 
 /**
  *		Basic special flags
@@ -42,7 +42,7 @@ enum {
 // once per block and only needs to eventually observe a set flag.
 class basic_spcflags
 {
-	std::atomic<uint32> mask;
+	atomic_uint32 mask;
 
 public:
 
@@ -50,25 +50,25 @@ public:
 		{ init(); }
 
 	void init()
-		{ mask.store(0, std::memory_order_relaxed); }
+		{ atomic_store_explicit(&mask, 0, memory_order_relaxed); }
 
 	bool empty() const
-		{ return (mask.load(std::memory_order_relaxed) == 0); }
+		{ return (atomic_load_explicit(&mask, memory_order_relaxed) == 0); }
 
 	bool test(uint32 v) const
-		{ return (mask.load(std::memory_order_relaxed) & v); }
+		{ return (atomic_load_explicit(&mask, memory_order_relaxed) & v) != 0; }
 
 	void init(uint32 v)
-		{ mask.store(v, std::memory_order_relaxed); }
+		{ atomic_store_explicit(&mask, v, memory_order_relaxed); }
 
 	uint32 get() const
-		{ return mask.load(std::memory_order_relaxed); }
+		{ return atomic_load_explicit(&mask, memory_order_relaxed); }
 
 	void set(uint32 v)
-		{ mask.fetch_or(v, std::memory_order_acq_rel); }
+		{ atomic_fetch_or_explicit(&mask, v, memory_order_acq_rel); }
 
 	void clear(uint32 v)
-		{ mask.fetch_and(~v, std::memory_order_acq_rel); }
+		{ atomic_fetch_and_explicit(&mask, ~v, memory_order_acq_rel); }
 };
 
 #endif /* SPCFLAGS_H */

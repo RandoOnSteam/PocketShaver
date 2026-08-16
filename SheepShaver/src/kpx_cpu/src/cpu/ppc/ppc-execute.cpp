@@ -1482,46 +1482,201 @@ void powerpc_cpu::execute_rfi(uint32 opcode)
 static const uint32 PPC_MSR_EE = 0x00008000;
 
 #ifdef SHEEPSHAVER
+
+/*
+ *  Decrementer deadline timer - host mutex, condition and thread
+ *
+ *  There is exactly one waiter (the timer thread) and one signaller (the CPU
+ *  thread), which is what lets the Win32 side stand an auto-reset event in
+ *  for a condition variable: a SetEvent issued between the waiter's unlock
+ *  and its wait stays latched in the event, so no wake-up is lost. The
+ *  POSIX side uses a real condition variable and keeps microsecond timeouts;
+ *  Win32 waits in whole milliseconds. Either way the loop re-tests the
+ *  deadline on every wake, so a coarse or spurious wake-up only costs one
+ *  more trip around it.
+ */
+
+#if defined(_WIN32)
+
+#include <windows.h>
+
+struct powerpc_decrementer_timer {
+	CRITICAL_SECTION mutex;
+	HANDLE           wakeup;      // auto-reset event
+	HANDLE           thread;
+};
+
+static DWORD WINAPI decrementer_timer_entry(LPVOID cpu)
+{
+	((powerpc_cpu *)cpu)->decrementer_timer_loop();
+	return 0;
+}
+
+static powerpc_decrementer_timer *decrementer_timer_create(void)
+{
+	powerpc_decrementer_timer *t = new powerpc_decrementer_timer;
+	InitializeCriticalSection(&t->mutex);
+	t->wakeup = CreateEvent(NULL, FALSE, FALSE, NULL);
+	t->thread = NULL;
+	return t;
+}
+
+static void decrementer_timer_spawn(powerpc_decrementer_timer *t,
+									powerpc_cpu *cpu)
+{
+	t->thread = CreateThread(NULL, 0, decrementer_timer_entry, cpu, 0, NULL);
+}
+
+static void decrementer_timer_join(powerpc_decrementer_timer *t)
+{
+	WaitForSingleObject(t->thread, INFINITE);
+	CloseHandle(t->thread);
+	CloseHandle(t->wakeup);
+	DeleteCriticalSection(&t->mutex);
+	delete t;
+}
+
+static void decrementer_timer_lock(powerpc_decrementer_timer *t)
+	{ EnterCriticalSection(&t->mutex); }
+static void decrementer_timer_unlock(powerpc_decrementer_timer *t)
+	{ LeaveCriticalSection(&t->mutex); }
+static void decrementer_timer_signal(powerpc_decrementer_timer *t)
+	{ SetEvent(t->wakeup); }
+
+// Called with the mutex held; returns with it held.
+static void decrementer_timer_wait(powerpc_decrementer_timer *t, uint64 usec)
+{
+	DWORD msec = INFINITE;
+	if (usec != ~(uint64)0) {
+		uint64 ms = (usec + 999) / 1000;
+		msec = ms > 0 ? (DWORD)ms : 1;
+	}
+	LeaveCriticalSection(&t->mutex);
+	WaitForSingleObject(t->wakeup, msec);
+	EnterCriticalSection(&t->mutex);
+}
+
+#else
+
+#include <pthread.h>
+#include <time.h>
+#ifdef HAVE_SYS_TIME_H
+#include <sys/time.h>
+#endif
+
+struct powerpc_decrementer_timer {
+	pthread_mutex_t mutex;
+	pthread_cond_t  cond;
+	pthread_t       thread;
+};
+
+static void *decrementer_timer_entry(void *cpu)
+{
+	((powerpc_cpu *)cpu)->decrementer_timer_loop();
+	return NULL;
+}
+
+static powerpc_decrementer_timer *decrementer_timer_create(void)
+{
+	powerpc_decrementer_timer *t = new powerpc_decrementer_timer;
+	pthread_mutex_init(&t->mutex, NULL);
+	pthread_cond_init(&t->cond, NULL);
+	return t;
+}
+
+static void decrementer_timer_spawn(powerpc_decrementer_timer *t,
+									powerpc_cpu *cpu)
+{
+	pthread_create(&t->thread, NULL, decrementer_timer_entry, cpu);
+}
+
+static void decrementer_timer_join(powerpc_decrementer_timer *t)
+{
+	pthread_join(t->thread, NULL);
+	pthread_cond_destroy(&t->cond);
+	pthread_mutex_destroy(&t->mutex);
+	delete t;
+}
+
+static void decrementer_timer_lock(powerpc_decrementer_timer *t)
+	{ pthread_mutex_lock(&t->mutex); }
+static void decrementer_timer_unlock(powerpc_decrementer_timer *t)
+	{ pthread_mutex_unlock(&t->mutex); }
+static void decrementer_timer_signal(powerpc_decrementer_timer *t)
+	{ pthread_cond_signal(&t->cond); }
+
+// Called with the mutex held; returns with it held.
+static void decrementer_timer_wait(powerpc_decrementer_timer *t, uint64 usec)
+{
+	if (usec == ~(uint64)0) {
+		pthread_cond_wait(&t->cond, &t->mutex);
+		return;
+	}
+
+	// pthread_cond_timedwait takes an absolute CLOCK_REALTIME point.
+	struct timespec ts;
+#if defined(CLOCK_REALTIME)
+	clock_gettime(CLOCK_REALTIME, &ts);
+#else
+	struct timeval tv;
+	gettimeofday(&tv, NULL);
+	ts.tv_sec = tv.tv_sec;
+	ts.tv_nsec = (long)tv.tv_usec * 1000;
+#endif
+	ts.tv_sec += (time_t)(usec / 1000000);
+	ts.tv_nsec += (long)((usec % 1000000) * 1000);
+	if (ts.tv_nsec >= 1000000000L) {
+		ts.tv_sec += 1;
+		ts.tv_nsec -= 1000000000L;
+	}
+	pthread_cond_timedwait(&t->cond, &t->mutex, &ts);
+}
+
+#endif /* per-platform decrementer timer primitives */
+
 void powerpc_cpu::start_decrementer_timer()
 {
-	if (!decrementer_timer_thread.joinable())
-		decrementer_timer_thread =
-			std::thread(&powerpc_cpu::decrementer_timer_loop, this);
+	if (decrementer_timer)
+		return;
+	// Publish the primitives before the thread that waits on them exists.
+	decrementer_timer = decrementer_timer_create();
+	decrementer_timer_spawn(decrementer_timer, this);
 }
 
 void powerpc_cpu::stop_decrementer_timer()
 {
-	if (!decrementer_timer_thread.joinable())
+	if (!decrementer_timer)
 		return;
-	{
-		std::lock_guard<std::mutex> lock(decrementer_timer_mutex);
-		decrementer_timer_stop = true;
-	}
-	decrementer_timer_cv.notify_one();
-	decrementer_timer_thread.join();
+	decrementer_timer_lock(decrementer_timer);
+	decrementer_timer_stop = true;
+	decrementer_timer_unlock(decrementer_timer);
+	decrementer_timer_signal(decrementer_timer);
+	decrementer_timer_join(decrementer_timer);
+	decrementer_timer = NULL;
 }
 
 void powerpc_cpu::schedule_decrementer_timer(uint64 deadline)
 {
 	start_decrementer_timer();
-	{
-		std::lock_guard<std::mutex> lock(decrementer_timer_mutex);
-		decrementer_timer_deadline = deadline;
-	}
-	decrementer_timer_cv.notify_one();
+	decrementer_timer_lock(decrementer_timer);
+	decrementer_timer_deadline = deadline;
+	decrementer_timer_unlock(decrementer_timer);
+	decrementer_timer_signal(decrementer_timer);
 }
 
 void powerpc_cpu::decrementer_timer_loop()
 {
 	const uint64 no_deadline = ~(uint64)0;
-	std::unique_lock<std::mutex> lock(decrementer_timer_mutex);
+	powerpc_decrementer_timer *timer = decrementer_timer;
+	decrementer_timer_lock(timer);
 	while (!decrementer_timer_stop) {
 		const uint64 deadline = decrementer_timer_deadline;
 		if (deadline == no_deadline) {
-			decrementer_timer_cv.wait(lock, [this, no_deadline] {
-				return decrementer_timer_stop ||
-					decrementer_timer_deadline != no_deadline;
-			});
+			// Predicate loop around the bare wait: the wait may return
+			// spuriously, which is what the predicate overload absorbed.
+			while (!decrementer_timer_stop &&
+				   decrementer_timer_deadline == no_deadline)
+				decrementer_timer_wait(timer, no_deadline);
 			continue;
 		}
 
@@ -1531,10 +1686,10 @@ void powerpc_cpu::decrementer_timer_loop()
 			// advances the wrapping counter and a subsequent DEC write or
 			// successful delivery publishes the next edge.
 			decrementer_timer_deadline = no_deadline;
-			lock.unlock();
+			decrementer_timer_unlock(timer);
 			spcflags().set(SPCFLAG_CPU_DECREMENTER);
 			idle_resume();
-			lock.lock();
+			decrementer_timer_lock(timer);
 			continue;
 		}
 
@@ -1547,12 +1702,9 @@ void powerpc_cpu::decrementer_timer_loop()
 		usec += (remainder * 1000000 + frequency - 1) / frequency;
 		if (usec == 0)
 			usec = 1;
-		decrementer_timer_cv.wait_for(lock,
-			std::chrono::microseconds(usec), [this, deadline] {
-				return decrementer_timer_stop ||
-					decrementer_timer_deadline != deadline;
-			});
+		decrementer_timer_wait(timer, usec);
 	}
+	decrementer_timer_unlock(timer);
 }
 #endif
 

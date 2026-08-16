@@ -23,6 +23,7 @@
  */
 
 #include "sysdeps.h"
+#include "vec_data.h"
 #include "cpu_emulation.h"   /* ReadMacInt32 (guest tick at 0x016a) */
 #include "video.h"
 #include "video_blit.h"
@@ -39,7 +40,7 @@
 #include <SDL_opengl.h>
 #include "gl_ext.h" /* GL_RGBA8 / GL_BGRA / FBO enums for Windows GL 1.1 */
 
-#include <atomic>
+#include "atomic.h"
 #include <cassert>
 #include <cstring>
 #include <cstdio>
@@ -50,8 +51,8 @@
 #define COMPOSITOR_ERR(...) GFX_DEBUG_EMIT("[compositor ERROR] ", __VA_ARGS__)
 
 extern SDL_Window *sdl_window;
-SDL_Window *gl_device_sdl_window = nullptr;
-static SDL_GLContext s_gl_ctx = nullptr;
+SDL_Window *gl_device_sdl_window = NULL;
+static SDL_GLContext s_gl_ctx = NULL;
 static bool s_ready = false;
 /* Opaque sentinels so code that null-checks SharedMetalDevice() still works. */
 static char s_device_sentinel = 1;
@@ -65,7 +66,7 @@ static bool s_present_in_progress = false;
 static int compositor_pixel_width = 0, compositor_pixel_height = 0, compositor_depth = 0;
 static int compositor_row_bytes = 0, compositor_pitch = 0;
 static int compositor_bits_per_pixel = 0;
-static void *compositor_buffer = nullptr;
+static void *compositor_buffer = NULL;
 static uint32_t compositor_buffer_size = 0;
 static GLuint s_fb_tex = 0;
 static GLuint s_screen_write_fbo = 0;
@@ -85,8 +86,8 @@ static bool s_palette_is_placeholder = true;
 static uint8_t s_gamma_lut[768];
 static uint32_t s_last_gamma_gen = UINT32_MAX;
 static bool s_palette_dirty = true;
-static std::atomic<uint64_t> s_present_origin{0};
-static std::atomic<uint64_t> s_present_size{0};
+static atomic_uint64 s_present_origin = 0;
+static atomic_uint64 s_present_size = 0;
 #if QD3D_GRAPHICS_LOGGING_ENABLED
 static uint64_t s_screen_submit_count = 0;
 static uint64_t s_present_count = 0;
@@ -117,7 +118,7 @@ bool GLCompositorDeviceInit(void)
 
 	if (s_gl_ctx) {
 		SDL_GL_DeleteContext(s_gl_ctx);
-		s_gl_ctx = nullptr;
+		s_gl_ctx = NULL;
 	}
 
 	s_gl_ctx = SDL_GL_CreateContext(sdl_window);
@@ -132,7 +133,7 @@ bool GLCompositorDeviceInit(void)
 		QD3D_INIT_LOG("GLCompositorDeviceInit: SDL_GL_MakeCurrent FAILED: %s", SDL_GetError());
 		fprintf(stderr, "[gfxaccel-gl] SDL_GL_MakeCurrent failed: %s\n", SDL_GetError());
 		SDL_GL_DeleteContext(s_gl_ctx);
-		s_gl_ctx = nullptr;
+		s_gl_ctx = NULL;
 		s_ready = false;
 		return false;
 	}
@@ -159,33 +160,33 @@ void GLCompositorDeviceShutdown(void)
 {
 	if (s_gl_ctx) {
 		if (gl_device_sdl_window)
-			SDL_GL_MakeCurrent(gl_device_sdl_window, nullptr);
+			SDL_GL_MakeCurrent(gl_device_sdl_window, NULL);
 		SDL_GL_DeleteContext(s_gl_ctx);
-		s_gl_ctx = nullptr;
+		s_gl_ctx = NULL;
 	}
 	s_ready = false;
 }
 
 bool GLCompositorDeviceIsReady(void)
 {
-	return s_ready && s_gl_ctx != nullptr;
+	return s_ready && s_gl_ctx != NULL;
 }
 
 void GLCompositorDeviceSwap(void)
 {
 	assert(s_ready);
-	assert(s_gl_ctx != nullptr);
-	assert(gl_device_sdl_window != nullptr);
+	assert(s_gl_ctx != NULL);
+	assert(gl_device_sdl_window != NULL);
 	SDL_GL_SwapWindow(gl_device_sdl_window);
 }
 
 void GLCompositorDeviceGetDrawableSize(int *out_w, int *out_h)
 {
 	assert(s_ready);
-	assert(s_gl_ctx != nullptr);
-	assert(gl_device_sdl_window != nullptr);
-	assert(out_w != nullptr);
-	assert(out_h != nullptr);
+	assert(s_gl_ctx != NULL);
+	assert(gl_device_sdl_window != NULL);
+	assert(out_w != NULL);
+	assert(out_h != NULL);
 	SDL_GL_GetDrawableSize(gl_device_sdl_window, out_w, out_h);
 }
 #if defined(__APPLE__) && defined(TARGET_OS_IPHONE)
@@ -236,8 +237,11 @@ public:
 		s_present_in_progress = false;
 	}
 
-	ScopedCompositorPresent(const ScopedCompositorPresent &) = delete;
-	ScopedCompositorPresent &operator=(const ScopedCompositorPresent &) = delete;
+private:
+	/* Declared and never defined: copying a scope guard would run the
+	   destructor twice. */
+	ScopedCompositorPresent(const ScopedCompositorPresent &);
+	ScopedCompositorPresent &operator=(const ScopedCompositorPresent &);
 };
 
 /* Screen resolve and final presentation borrow the same compatibility context
@@ -248,9 +252,12 @@ class ScopedGLScreenTransfer
 {
 public:
 	ScopedGLScreenTransfer()
+		: saved_matrix_mode(GL_MODELVIEW),
+		  saved_active_texture(GL_TEXTURE0),
+		  has_multitexture(false)
 	{
 		glGetIntegerv(GL_MATRIX_MODE, &saved_matrix_mode);
-		auto &ext = gfx_gl_ext();
+		GfxGLExt &ext = gfx_gl_ext();
 		has_multitexture = ext.multitex && ext.ActiveTexture;
 		if (has_multitexture)
 			glGetIntegerv(GL_ACTIVE_TEXTURE, &saved_active_texture);
@@ -279,25 +286,33 @@ public:
 		glPopMatrix();
 		glPopAttrib();
 
-		auto &ext = gfx_gl_ext();
+		GfxGLExt &ext = gfx_gl_ext();
 		if (has_multitexture)
 			ext.ActiveTexture((GLenum)saved_active_texture);
 		glMatrixMode((GLenum)saved_matrix_mode);
 	}
 
-	ScopedGLScreenTransfer(const ScopedGLScreenTransfer &) = delete;
-	ScopedGLScreenTransfer &operator=(const ScopedGLScreenTransfer &) = delete;
-
 private:
-	GLint saved_matrix_mode = GL_MODELVIEW;
-	GLint saved_active_texture = GL_TEXTURE0;
-	bool has_multitexture = false;
+	/* Declared and never defined: copying a scope guard would restore the
+	   borrowed state twice. */
+	ScopedGLScreenTransfer(const ScopedGLScreenTransfer &);
+	ScopedGLScreenTransfer &operator=(const ScopedGLScreenTransfer &);
+
+	GLint saved_matrix_mode;
+	GLint saved_active_texture;
+	bool has_multitexture;
 };
 
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/* Round half away from zero, the rule std::lround follows. */
+static long round_to_long(double v)
+{
+	return (long)(v >= 0.0 ? v + 0.5 : v - 0.5);
+}
 #if QD3D_GRAPHICS_LOGGING_ENABLED
 static bool MetalCompositorShouldTracePresent(uint64_t count)
 {
@@ -334,7 +349,7 @@ static void MetalCompositorEnsureIdentityGamma(void)
 
 static void MetalCompositorDestroyTextures(void)
 {
-	auto &ext = gfx_gl_ext();
+	GfxGLExt &ext = gfx_gl_ext();
 	if (s_screen_write_fbo && ext.fbo) {
 		ext.DeleteFramebuffers(1, &s_screen_write_fbo);
 		s_screen_write_fbo = 0;
@@ -357,7 +372,7 @@ static void MetalCompositorEnsureFrameBufferTexture(void)
 	if (s_fb_tex_width != compositor_pixel_width || s_fb_tex_height != compositor_pixel_height) {
 		glBindTexture(GL_TEXTURE_2D, s_fb_tex);
 		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, compositor_pixel_width, compositor_pixel_height, 0,
-					 GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+					 GL_RGBA, GL_UNSIGNED_BYTE, NULL);
 		s_fb_tex_width = compositor_pixel_width;
 		s_fb_tex_height = compositor_pixel_height;
 	}
@@ -385,7 +400,7 @@ static void expand_framebuffer_rect_rgba(const GuestScreenRect &rect,
 	out.resize((size_t)rect.width * (size_t)rect.height * 4);
 	const uint8_t *src = (const uint8_t *)compositor_buffer;
 	if (!src) {
-		std::memset(out.data(), 0, out.size());
+		std::memset(vec_data(out), 0, out.size());
 		return;
 	}
 
@@ -396,7 +411,7 @@ static void expand_framebuffer_rect_rgba(const GuestScreenRect &rect,
 		for (int y = 0; y < rect.height; y++) {
 			const uint8_t *row =
 				src + (size_t)(rect.y + y) * rb + (size_t)rect.x * 4;
-			uint8_t *dst = out.data() + (size_t)y * rect.width * 4;
+			uint8_t *dst = vec_data(out) + (size_t)y * rect.width * 4;
 			for (int x = 0; x < rect.width; x++) {
 				dst[x * 4 + 0] = row[x * 4 + 1];
 				dst[x * 4 + 1] = row[x * 4 + 2];
@@ -411,7 +426,7 @@ static void expand_framebuffer_rect_rgba(const GuestScreenRect &rect,
 		for (int y = 0; y < rect.height; y++) {
 			const uint8_t *row =
 				src + (size_t)(rect.y + y) * rb + (size_t)rect.x * 2;
-			uint8_t *dst = out.data() + (size_t)y * rect.width * 4;
+			uint8_t *dst = vec_data(out) + (size_t)y * rect.width * 4;
 			for (int x = 0; x < rect.width; x++) {
 				const uint16_t be = (uint16_t)((row[x * 2] << 8) | row[x * 2 + 1]);
 				dst[x * 4 + 0] = (uint8_t)(((be >> 10) & 0x1f) * 255 / 31);
@@ -426,7 +441,7 @@ static void expand_framebuffer_rect_rgba(const GuestScreenRect &rect,
 	/* Indexed 1/2/4/8 — resolve CLUT only, no display gamma. */
 	for (int y = 0; y < rect.height; y++) {
 		const uint8_t *row = src + (size_t)(rect.y + y) * (size_t)rb;
-		uint8_t *dst = out.data() + (size_t)y * rect.width * 4;
+		uint8_t *dst = vec_data(out) + (size_t)y * rect.width * 4;
 		for (int dx = 0; dx < rect.width; dx++) {
 			const int x = rect.x + dx;
 			uint8_t index = 0;
@@ -469,7 +484,7 @@ static bool upload_guest_screen_to_texture(void)
 	expand_framebuffer_rect_rgba(screen, rgba);
 	glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0,
 					compositor_pixel_width, compositor_pixel_height,
-					GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+					GL_RGBA, GL_UNSIGNED_BYTE, vec_data(rgba));
 	return true;
 }
 
@@ -493,7 +508,7 @@ static void draw_textured_quad(void)
  */
 static void prepare_present_state(void)
 {
-	auto &ext = gfx_gl_ext();
+	GfxGLExt &ext = gfx_gl_ext();
 	if (ext.fbo)
 		ext.BindFramebuffer(GL_FRAMEBUFFER, 0);
 
@@ -524,7 +539,7 @@ static bool bind_screen_write_target(void)
 {
 	if (!s_fb_tex || !SharedMetalDevice())
 		return false;
-	auto &ext = gfx_gl_ext();
+	GfxGLExt &ext = gfx_gl_ext();
 	if (!ext.fbo)
 		return false;
 	if (!s_screen_write_fbo)
@@ -551,7 +566,7 @@ static bool bind_screen_write_target(void)
 
 static void unbind_screen_write_target(void)
 {
-	auto &ext = gfx_gl_ext();
+	GfxGLExt &ext = gfx_gl_ext();
 	ext.BindFramebuffer(GL_FRAMEBUFFER, 0);
 	glDrawBuffer(GL_BACK);
 	glReadBuffer(GL_BACK);
@@ -621,7 +636,7 @@ static int synchronize_screen_rect_to_guest(int left, int top,
 	glPixelStorei(GL_PACK_ALIGNMENT, 1);
 	while (glGetError() != GL_NO_ERROR) {}
 	glReadPixels(left, top, width, height,
-				 GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+				 GL_RGBA, GL_UNSIGNED_BYTE, vec_data(rgba));
 	glPixelStorei(GL_PACK_ALIGNMENT, old_pack);
 	const bool ok = glGetError() == GL_NO_ERROR;
 	unbind_screen_write_target();
@@ -630,7 +645,7 @@ static int synchronize_screen_rect_to_guest(int left, int top,
 
 	uint8_t *guest = static_cast<uint8_t *>(compositor_buffer);
 	for (int y = 0; y < height; y++) {
-		const uint8_t *src = rgba.data() + (size_t)y * width * 4u;
+		const uint8_t *src = vec_data(rgba) + (size_t)y * width * 4u;
 		uint8_t *dst = guest + (size_t)(top + y) * compositor_row_bytes +
 			(size_t)left * (size_t)(compositor_bits_per_pixel / 8);
 		if (compositor_bits_per_pixel == 16) {
@@ -710,7 +725,7 @@ static int32_t publish_layer_to_guest_screen(const CompositeLayer *layer)
 	if (!bind_screen_write_target())
 		return kGfxAccelErrPipelineUnavailable;
 
-	auto &ext = gfx_gl_ext();
+	GfxGLExt &ext = gfx_gl_ext();
 	if (ext.multitex && ext.ActiveTexture) {
 		/* A RAVE/AGL frame may finish with its second texture unit enabled.
 		 * The screen resolve is a one-texture transfer, not another guest
@@ -975,11 +990,11 @@ int MetalCompositorInit(int width, int height, int depth, int row_bytes,
 	sub.name = "compositor";
 	sub.on_mode_exit = MetalCompositor_OnModeExit;
 	sub.on_mode_enter = MetalCompositor_OnModeEnter;
-	sub.ctx = nullptr;
+	sub.ctx = NULL;
 	dmc_subscribe(&sub);
 
 	/* VBL source - SDL-driven from Present. */
-	vbl_source_init(nullptr, nullptr, nullptr);
+	vbl_source_init(NULL, NULL, NULL);
 
 	s_init = true;
 	COMPOSITOR_LOG("Init tick=%u %dx%d depth=%d rb=%d pitch=%d bpp=%d",
@@ -1133,20 +1148,20 @@ void MetalCompositorPresent_(bool presentvbltick = true)
 	if (window_w <= 0) window_w = compositor_pixel_width;
 	if (window_h <= 0) window_h = compositor_pixel_height;
 	const int window_x = dw > 0
-		? (int)std::lround((double)present_x * window_w / dw) : 0;
+		? (int)round_to_long((double)present_x * window_w / dw) : 0;
 	const int window_y = dh > 0
-		? (int)std::lround((double)present_y * window_h / dh) : 0;
+		? (int)round_to_long((double)present_y * window_h / dh) : 0;
 	const int window_present_w = dw > 0
-		? (int)std::lround((double)present_w * window_w / dw) : window_w;
+		? (int)round_to_long((double)present_w * window_w / dw) : window_w;
 	const int window_present_h = dh > 0
-		? (int)std::lround((double)present_h * window_h / dh) : window_h;
+		? (int)round_to_long((double)present_h * window_h / dh) : window_h;
 	atomic_store_explicit(&s_present_origin,
 		((uint64_t)(uint32_t)window_x << 32) | (uint32_t)window_y,
-		std::memory_order_relaxed);
+		memory_order_relaxed);
 	atomic_store_explicit(&s_present_size,
 		((uint64_t)(uint32_t)window_present_w << 32) |
 			(uint32_t)window_present_h,
-		std::memory_order_relaxed);
+		memory_order_relaxed);
 }
 
 void MetalCompositorShutdown(void)
@@ -1160,7 +1175,7 @@ void MetalCompositorShutdown(void)
 		vbl_source_shutdown();
 		dmc_unsubscribe("compositor");
 		s_init = false;
-		compositor_buffer = nullptr;
+		compositor_buffer = NULL;
 		COMPOSITOR_LOG("Shutdown tick=%u", ReadMacInt32(0x016a));
 	}
 
@@ -1208,7 +1223,7 @@ int MetalCompositorIsInitialized(void)
  * the NQD hooks and mode switches that update compositor_buffer. */
 int MetalCompositorGetGuestSurface(uint32_t *out_mac_base, uint32_t *out_byte_size)
 {
-	if (!s_init || compositor_buffer == nullptr || compositor_buffer_size == 0)
+	if (!s_init || compositor_buffer == NULL || compositor_buffer_size == 0)
 		return -1;
 	*out_mac_base = Host2MacAddr((uint8 *)compositor_buffer);
 	*out_byte_size = compositor_buffer_size;
@@ -1301,7 +1316,7 @@ int MetalCompositorSubmitFrame_AcquireCachedOverlay(struct CompositeLayer *out_l
 													void **out_tex_retained)
 {
 	if (out_layer) std::memset(out_layer, 0, sizeof(*out_layer));
-	if (out_tex_retained) *out_tex_retained = nullptr;
+	if (out_tex_retained) *out_tex_retained = NULL;
 	return 0;
 }
 
@@ -1340,7 +1355,7 @@ extern "C" void MetalCompositorFlushDeferredPresent(void)
 
 void *MetalCompositorGetLayer(void)
 {
-	return s_init ? (void *)(uintptr_t)1 : nullptr;
+	return s_init ? (void *)(uintptr_t)1 : NULL;
 }
 
 int MetalCompositorGetScreenSurface(GfxAccelScreenSurface *out_surface)
@@ -1364,7 +1379,7 @@ void MetalCompositorPaletteLatch(void)
 	 * one display-policy update without modifying canonical screen bytes. */
 	s_palette_dirty = false;
 	const DMCModeSnapshot *snap = dmc_current_snapshot();
-	if (snap != nullptr && snap->gamma_gen != s_last_gamma_gen) {
+	if (snap != NULL && snap->gamma_gen != s_last_gamma_gen) {
 		GfxColorBuildDisplayGammaLUT(
 			snap->gamma_lut,
 			snap->fade_active != 0,
@@ -1397,22 +1412,22 @@ void MetalCompositorRefreshPresentRect(void)
 		h = drawable_h;
 	}
 	if (drawable_w > 0 && drawable_h > 0) {
-		x = (int)std::lround((double)x * window_w / drawable_w);
-		y = (int)std::lround((double)y * window_h / drawable_h);
-		w = (int)std::lround((double)w * window_w / drawable_w);
-		h = (int)std::lround((double)h * window_h / drawable_h);
+		x = (int)round_to_long((double)x * window_w / drawable_w);
+		y = (int)round_to_long((double)y * window_h / drawable_h);
+		w = (int)round_to_long((double)w * window_w / drawable_w);
+		h = (int)round_to_long((double)h * window_h / drawable_h);
 	}
 	atomic_store_explicit(&s_present_origin,
 		((uint64_t)(uint32_t)x << 32) | (uint32_t)y,
-		std::memory_order_relaxed);
+		memory_order_relaxed);
 	atomic_store_explicit(&s_present_size,
-		((uint64_t)(uint32_t)w << 32) | (uint32_t)h, std::memory_order_relaxed);
+		((uint64_t)(uint32_t)w << 32) | (uint32_t)h, memory_order_relaxed);
 }
 
 void MetalCompositorGetPresentRect(int *out_x, int *out_y, int *out_w, int *out_h)
 {
-	uint64_t o = atomic_load_explicit(&s_present_origin, std::memory_order_relaxed);
-	uint64_t s = atomic_load_explicit(&s_present_size, std::memory_order_relaxed);
+	uint64_t o = atomic_load_explicit(&s_present_origin, memory_order_relaxed);
+	uint64_t s = atomic_load_explicit(&s_present_size, memory_order_relaxed);
 	if (out_x) *out_x = (int)(uint32_t)(o >> 32);
 	if (out_y) *out_y = (int)(uint32_t)(o & 0xffffffffu);
 	if (out_w) *out_w = (int)(uint32_t)(s >> 32);

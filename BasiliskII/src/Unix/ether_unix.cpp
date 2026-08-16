@@ -416,11 +416,11 @@ bool ether_init(void)
 	char *init_group = NULL;
 	mode_t mode = 0700;
 
-	struct vde_open_args args = {
-		.port = port,
-		.group = init_group,
-		.mode = mode,
-	};
+	/* Member order per <libvdeplug.h>: port, group, mode. */
+	struct vde_open_args args;
+	args.port = port;
+	args.group = init_group;
+	args.mode = mode;
 
 	if (net_if_type == NET_IF_VDE) {
 		/* calling vde open to open the vde connection to the vde switch */

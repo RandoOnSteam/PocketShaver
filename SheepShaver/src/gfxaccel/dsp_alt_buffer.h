@@ -59,7 +59,7 @@ struct DSpAltBufferRecord {
 };
 
 
-/* Resolve a 1-based alt-buffer handle to its record (nullptr if invalid or not
+/* Resolve a 1-based alt-buffer handle to its record (NULL if invalid or not
  * in use). Mirrors DSpGetContext. */
 DSpAltBufferRecord *DSpGetAltBuffer(uint32_t handle);
 

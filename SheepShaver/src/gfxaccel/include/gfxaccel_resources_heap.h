@@ -22,12 +22,12 @@
  *    - Three-tier eviction: LRU purge -> PSO flush -> loud assert.
  *    - Memory-warning C shim called from Swift observer.
  *    - Compositor handshake via dispatch_semaphore.
- *    - In-memory PSO cache (std::unordered_map).
+ *    - In-memory PSO cache (std::map).
  *    - Engine attach/detach plugs into the resource fan-out.
  *
  *  Threading: single-writer from PPC emul thread. Memory-warning
  *  handler marshals main -> emul via dispatch_async onto a serial queue
- *  owned by this module. NO std::mutex, NO std::atomic.
+ *  owned by this module. NO mutex, NO atomics.
  *
  *  C-callable throughout: the header can be included from .cpp, .mm, or
  *  Swift-via-bridging-header without pulling in Metal types; id<MTLHeap>,

@@ -51,7 +51,7 @@ int32_t DSpInstallCLUTOnDisplay(const uint8_t clut_rgb[768],
 
 int32_t DSpInstallContextCLUTOnDisplay(DSpContextPrivate *ctx)
 {
-	if (ctx == nullptr)
+	if (ctx == NULL)
 		return kDSpInvalidContextErr;
 	const uint32_t display_depth = DSpDisplayModeDepth(
 		ctx->attr.backBufferBestDepth, ctx->attr.displayBestDepth);
@@ -84,8 +84,8 @@ int32_t DSpSetCLUTCore(DSpContextPrivate *ctx,
 					   uint32_t first, uint32_t last,
 					   const uint8_t *entries_host_range)
 {
-	if (ctx == nullptr) return kDSpInvalidContextErr;
-	if (entries_host_range == nullptr) return kDSpInvalidAttributesErr;
+	if (ctx == NULL) return kDSpInvalidContextErr;
+	if (entries_host_range == NULL) return kDSpInvalidAttributesErr;
 	if (first > 255 || last > 255) return kDSpInvalidAttributesErr;
 	if (first > last) return kDSpInvalidAttributesErr;
 
@@ -170,7 +170,7 @@ extern "C" int32_t DSpContext_SetCLUTEntriesHandler(uint32_t ctxRef,
 	/* Validate ctxRef first so a bad handle + NULL entriesAddr reports
 	 * the more specific kDSpInvalidContextErr. */
 	DSpContextPrivate *ctx = DSpGetContext(ctxRef);
-	if (ctx == nullptr) {
+	if (ctx == NULL) {
 		DSP_LOG("SetCLUTEntries: invalid ctxRef=%u -> kDSpInvalidContextErr",
 				ctxRef);
 		return kDSpInvalidContextErr;
@@ -267,8 +267,8 @@ int32_t DSpGetCLUTCore(DSpContextPrivate *ctx,
 							   uint32_t first, uint32_t last,
 							   uint8_t *entries_out_host_range)
 {
-	if (ctx == nullptr) return kDSpInvalidContextErr;
-	if (entries_out_host_range == nullptr) return kDSpInvalidAttributesErr;
+	if (ctx == NULL) return kDSpInvalidContextErr;
+	if (entries_out_host_range == NULL) return kDSpInvalidAttributesErr;
 	if (first > 255 || last > 255) return kDSpInvalidAttributesErr;
 	if (first > last) return kDSpInvalidAttributesErr;
 
@@ -333,7 +333,7 @@ extern "C" int32_t DSpContext_GetCLUTEntriesHandler(uint32_t ctxRef,
 	/* Validate ctxRef first so a bad handle + NULL entriesOutAddr reports
 	 * the more specific kDSpInvalidContextErr. */
 	DSpContextPrivate *ctx = DSpGetContext(ctxRef);
-	if (ctx == nullptr) {
+	if (ctx == NULL) {
 		DSP_LOG("GetCLUTEntries: invalid ctxRef=%u -> kDSpInvalidContextErr",
 				ctxRef);
 		return kDSpInvalidContextErr;

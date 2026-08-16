@@ -164,6 +164,7 @@ void powerpc_cpu::init_registers()
 	decrementer_write_count = 0;
 	decrementer_delivery_count = 0;
 #ifdef SHEEPSHAVER
+	decrementer_timer = NULL;
 	decrementer_timer_deadline = ~(uint64)0;
 	decrementer_timer_stop = false;
 #endif

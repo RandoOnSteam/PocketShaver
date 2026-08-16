@@ -35,14 +35,14 @@ struct OverlaySlot {
 };
 
 static OverlaySlot s_overlays[kGfxEngineCount];
-static GfxAccelLifecycleHookFn s_bg_hook = nullptr, s_fg_hook = nullptr;
-static void *s_bg_ctx = nullptr, *s_fg_ctx = nullptr;
-static void *s_fb_host = nullptr;
+static GfxAccelLifecycleHookFn s_bg_hook = NULL, s_fg_hook = NULL;
+static void *s_bg_ctx = NULL, *s_fg_ctx = NULL;
+static void *s_fb_host = NULL;
 
 extern "C" void gfxaccel_resources_mm_init_metal_state(void)
 {
 	std::memset(s_overlays, 0, sizeof(s_overlays));
-	s_fb_host = nullptr;
+	s_fb_host = NULL;
 }
 
 extern "C" void gfxaccel_resources_mm_shutdown_metal_state(void)
@@ -77,7 +77,7 @@ static GLuint make_tex(uint32_t w, uint32_t h)
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, (GLsizei)w, (GLsizei)h, 0,
-				 GL_BGRA, GL_UNSIGNED_BYTE, nullptr);
+				 GL_BGRA, GL_UNSIGNED_BYTE, NULL);
 	return tex;
 }
 
@@ -93,7 +93,7 @@ void *gfxaccel_resources_vend_overlay_texture_indexed(uint32_t engine_id,
 													  uint32_t width, uint32_t height,
 													  uint32_t pixel_format)
 {
-	if (engine_id >= kGfxEngineCount || texture_index > 1) return nullptr;
+	if (engine_id >= kGfxEngineCount || texture_index > 1) return NULL;
 	OverlaySlot &s = s_overlays[engine_id];
 	if (s.w != width || s.h != height || s.format != pixel_format) {
 		for (int i = 0; i < 2; i++) {
@@ -105,7 +105,7 @@ void *gfxaccel_resources_vend_overlay_texture_indexed(uint32_t engine_id,
 	}
 	if (!s.tex[texture_index]) {
 		s.tex[texture_index] = make_tex(width, height);
-		if (!s.tex[texture_index]) return nullptr;
+		if (!s.tex[texture_index]) return NULL;
 	}
 	return (void *)(uintptr_t)s.tex[texture_index];
 }

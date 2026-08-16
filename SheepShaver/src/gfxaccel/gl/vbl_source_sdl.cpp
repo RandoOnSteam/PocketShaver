@@ -2,7 +2,8 @@
  *  vbl_source_sdl.cpp - SDL/timer-based VBL source (OpenGL backend)
  *
  *  Replaces CAMetalDisplayLink / CADisplayLink with a paced tick counter
- *  driven from MetalCompositorPresent (and optionally an SDL timer).
+ *  driven from MetalCompositorPresent. Timing comes from the port's own
+ *  GetTicks_usec/Delay_usec (sysdeps.h), not from SDL.
  *
  *	(C) 2026 Ryan Norton (battlemageloveryt@gmail.com)
  *
@@ -25,32 +26,38 @@
 #include "vbl_source.h"
 #include "gfx_log.h"
 
-#include <SDL.h>
-#include <atomic>
-#include <chrono>
-#include <thread>
+#include "atomic.h"
 #include <cstring>
 
-static VBLSourceCallbackFn s_primary_cb = nullptr;
-static void *s_primary_ctx = nullptr;
+static VBLSourceCallbackFn s_primary_cb = NULL;
+static void *s_primary_ctx = NULL;
 static VBLSourceCallbackFn s_secondary[VBL_SECONDARY_CALLBACK_MAX] = {};
 static void *s_secondary_ctx[VBL_SECONDARY_CALLBACK_MAX] = {};
 static int s_secondary_count = 0;
 
-static std::atomic<uint64_t> s_tick_count{0};
-static std::atomic<uint64_t> s_cadence_usec{16667};
-static std::atomic<uint64_t> s_last_tick_usec{0};
-static std::atomic<int> s_paused{0};
-static std::atomic<int> s_in_callback{0};
+static atomic_uint64 s_tick_count = 0;
+static atomic_uint64 s_cadence_usec = 16667;
+static atomic_uint64 s_last_tick_usec = 0;
+static atomic_sint s_paused = 0;
+static atomic_sint s_in_callback = 0;
 static bool s_initialized = false;
 
 /* Per-engine next deadlines on the steady-clock microsecond timeline. */
 static uint64_t s_engine_deadline_usec[kGfxFramePacingEngineCount] = {};
 
+/* GetTicks_usec and Delay_usec are the tree's own per-platform monotonic
+ * clock and sleep (declared in each port's sysdeps.h). */
 static uint64_t now_usec(void)
 {
-	return (uint64_t)std::chrono::duration_cast<std::chrono::microseconds>(
-		std::chrono::steady_clock::now().time_since_epoch()).count();
+	return (uint64_t)GetTicks_usec();
+}
+
+/* Sleep to an absolute deadline on that same timeline. */
+static void sleep_until_usec(uint64_t deadline)
+{
+	const uint64_t now = now_usec();
+	if (deadline > now)
+		Delay_usec(deadline - now);
 }
 
 int32_t vbl_source_init(void * /*cametal_layer*/,
@@ -61,12 +68,12 @@ int32_t vbl_source_init(void * /*cametal_layer*/,
 		return kGfxAccelErrVBLAlreadyRunning;
 	s_primary_cb = callback;
 	s_primary_ctx = ctx;
-	s_tick_count.store(0);
-	s_cadence_usec.store(16667);
-	s_last_tick_usec.store(0);
+	atomic_store_explicit(&s_tick_count, 0, memory_order_seq_cst);
+	atomic_store_explicit(&s_cadence_usec, 16667, memory_order_seq_cst);
+	atomic_store_explicit(&s_last_tick_usec, 0, memory_order_seq_cst);
 	std::memset(s_engine_deadline_usec, 0,
 				sizeof(s_engine_deadline_usec));
-	s_paused.store(0);
+	atomic_store_explicit(&s_paused, 0, memory_order_seq_cst);
 	s_initialized = true;
 	return 0; /* kGfxAccelNoErr */
 }
@@ -74,25 +81,25 @@ int32_t vbl_source_init(void * /*cametal_layer*/,
 void vbl_source_shutdown(void)
 {
 	s_initialized = false;
-	s_primary_cb = nullptr;
-	s_primary_ctx = nullptr;
+	s_primary_cb = NULL;
+	s_primary_ctx = NULL;
 	s_secondary_count = 0;
 	std::memset(s_secondary, 0, sizeof(s_secondary));
 	std::memset(s_secondary_ctx, 0, sizeof(s_secondary_ctx));
-	s_tick_count.store(0);
-	s_last_tick_usec.store(0);
+	atomic_store_explicit(&s_tick_count, 0, memory_order_seq_cst);
+	atomic_store_explicit(&s_last_tick_usec, 0, memory_order_seq_cst);
 	std::memset(s_engine_deadline_usec, 0,
 				sizeof(s_engine_deadline_usec));
 }
 
 uint64_t vbl_source_get_cadence_usec(void)
 {
-	return s_cadence_usec.load();
+	return atomic_load_explicit(&s_cadence_usec, memory_order_seq_cst);
 }
 
 uint64_t vbl_source_get_tick_count(void)
 {
-	return s_tick_count.load();
+	return atomic_load_explicit(&s_tick_count, memory_order_seq_cst);
 }
 
 int vbl_source_uses_metal_display_link(void)
@@ -102,12 +109,12 @@ int vbl_source_uses_metal_display_link(void)
 
 void vbl_source_set_paused(int paused)
 {
-	s_paused.store(paused ? 1 : 0);
+	atomic_store_explicit(&s_paused, paused ? 1 : 0, memory_order_seq_cst);
 }
 
 int vbl_source_in_callback_chain(void)
 {
-	return s_in_callback.load();
+	return atomic_load_explicit(&s_in_callback, memory_order_seq_cst);
 }
 
 void vbl_source_signal_3d_pacing(void)
@@ -115,7 +122,7 @@ void vbl_source_signal_3d_pacing(void)
 	/* A VBL signal anchors the live cadence grid. It must not also advance
 	 * every engine's private deadline: doing both makes the next sync wait
 	 * for the following boundary and creates a structural half-rate cap. */
-	s_last_tick_usec.store(now_usec());
+	atomic_store_explicit(&s_last_tick_usec, now_usec(), memory_order_seq_cst);
 }
 
 int32_t vbl_source_sync_3d_pacing_for_engine(int32_t engine_id)
@@ -128,8 +135,8 @@ int32_t vbl_source_sync_3d_pacing_for_engine(int32_t engine_id)
 	const uint64_t now = now_usec();
 	uint64_t deadline = s_engine_deadline_usec[engine_id];
 	const uint64_t cad = GfxFramePacingClampCadenceUsec(
-		s_cadence_usec.load());
-	const uint64_t last_tick = s_last_tick_usec.load();
+		atomic_load_explicit(&s_cadence_usec, memory_order_seq_cst));
+	const uint64_t last_tick = atomic_load_explicit(&s_last_tick_usec, memory_order_seq_cst);
 	const bool tick_is_fresh = last_tick != 0 &&
 		now <= last_tick + cad * GFX_FRAME_PACING_STALE_TICKS;
 	if (!tick_is_fresh) {
@@ -155,9 +162,7 @@ int32_t vbl_source_sync_3d_pacing_for_engine(int32_t engine_id)
 
 	while (deadline <= now)
 		deadline += cad;
-	std::this_thread::sleep_until(
-		std::chrono::steady_clock::time_point(
-			std::chrono::microseconds(deadline)));
+	sleep_until_usec(deadline);
 	s_engine_deadline_usec[engine_id] = deadline + cad;
 	return 0;
 }
@@ -197,12 +202,12 @@ void vbl_source_unregister_secondary_callback(VBLSourceCallbackFn cb)
  */
 extern "C" void vbl_source_sdl_tick(double target_ts)
 {
-	if (!s_initialized || s_paused.load())
+	if (!s_initialized || atomic_load_explicit(&s_paused, memory_order_seq_cst))
 		return;
 	/* Match FireVBLCallbackChain on the Metal backend. Guest callbacks can
 	 * pump the event loop and encounter another VBL on this same thread; the
 	 * nested chain must not run the DSp drains or primary callback twice. */
-	if (s_in_callback.exchange(1) != 0) {
+	if (atomic_exchange_explicit(&s_in_callback, 1, memory_order_seq_cst) != 0) {
 #if QD3D_GRAPHICS_LOGGING_ENABLED
 		static uint64_t s_nested_tick_count = 0;
 		++s_nested_tick_count;
@@ -216,15 +221,15 @@ extern "C" void vbl_source_sdl_tick(double target_ts)
 		return;
 	}
 
-	s_tick_count.fetch_add(1);
+	atomic_fetch_add_explicit(&s_tick_count, 1, memory_order_seq_cst);
 	vbl_source_signal_3d_pacing();
 
 	if (s_primary_cb)
-		s_primary_cb(s_primary_ctx, nullptr, target_ts);
+		s_primary_cb(s_primary_ctx, NULL, target_ts);
 
 	for (int i = 0; i < s_secondary_count; i++) {
 		if (s_secondary[i])
-			s_secondary[i](s_secondary_ctx[i], nullptr, target_ts);
+			s_secondary[i](s_secondary_ctx[i], NULL, target_ts);
 	}
-	s_in_callback.store(0);
+	atomic_store_explicit(&s_in_callback, 0, memory_order_seq_cst);
 }

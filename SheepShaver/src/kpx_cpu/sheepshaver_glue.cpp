@@ -208,9 +208,9 @@ public:
 	const char *enter_exception_vector(uint32 vector, uint32 handler_slot,
 		uint32 saved_pc, uint32 saved_msr);
 	void exception_step(void);
-	void return_from_exception(uint32 saved_pc, uint32 saved_msr) override;
-	bool decrementer_exception() override;
-	bool external_interrupt() override;
+	void return_from_exception(uint32 saved_pc, uint32 saved_msr);
+	bool decrementer_exception();
+	bool external_interrupt();
 	bool exception_step_trampoline_ready(void);
 	void exception_diagnostic_state(const char *reason, uint64 now);
 	void exception_idle_diagnostic(void);

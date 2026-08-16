@@ -23,6 +23,7 @@
  */
 
 #include "sysdeps.h"
+#include "vec_data.h"
 #include "cpu_emulation.h"
 #include "nqd_accel.h"
 #include "main.h"
@@ -610,9 +611,9 @@ void NQDMetalBitblt(uint32 p)
 		!(src_begin == dst_begin && srb == drb)) {
 		overlap_scratch.resize((size_t)width_bytes * h);
 		for (int y = 0; y < h; y++)
-			std::memcpy(overlap_scratch.data() + (size_t)y * width_bytes,
+			std::memcpy(vec_data(overlap_scratch) + (size_t)y * width_bytes,
 						src + (size_t)y * srb, (size_t)width_bytes);
-		src = overlap_scratch.data();
+		src = vec_data(overlap_scratch);
 		srb = width_bytes;
 	}
 
@@ -723,7 +724,7 @@ void NQDMetalFillRect(uint32 p)
 		/* Build a solid pattern row from the selected pen color */
 		std::vector<uint8> pat((size_t)width_bytes);
 		if (pb == 1) {
-			std::memset(pat.data(), (int)(pen & 0xff), (size_t)width_bytes);
+			std::memset(vec_data(pat), (int)(pen & 0xff), (size_t)width_bytes);
 		} else if (pb == 2) {
 			for (int x = 0; x < width_bytes; x += 2) {
 				pat[x] = (uint8)((pen >> 8) & 0xff);
@@ -739,7 +740,7 @@ void NQDMetalFillRect(uint32 p)
 		}
 		for (int y = 0; y < h; y++) {
 			uint8 *d = dst + (size_t)y * drb;
-			uint8 *s = pat.data();
+			uint8 *s = vec_data(pat);
 			switch (m) {
 			case 0: std::memcpy(d, s, (size_t)width_bytes); break;
 			case 1: for (int i = 0; i < width_bytes; i++) d[i] |= s[i]; break;
@@ -947,7 +948,7 @@ void NQDMetalBltMask(uint32 p)
 	int rgn_left, rgn_top;
 	nqd_region_origin_for_dest(p, dx, dy, rgn_left, rgn_top);
 	if (!nqd_decode_region(mask_addr, rgn_left, rgn_top, w, h, mask_stride,
-						   dps, pixel_cols, mask.data(), mask.size())) {
+						   dps, pixel_cols, vec_data(mask), mask.size())) {
 		NQD_LOG("NQDMetalBltMask DROP (region decode) p=%08x mask=%08x -> stale pixels possible",
 			p, mask_addr);
 		return;
@@ -967,9 +968,9 @@ void NQDMetalBltMask(uint32 p)
 		if (src_begin < dst_end && dst_begin < src_end) {
 			overlap_scratch.resize((size_t)src_width_bytes * (size_t)h);
 			for (int y = 0; y < h; y++)
-				std::memcpy(overlap_scratch.data() + (size_t)y * src_width_bytes,
+				std::memcpy(vec_data(overlap_scratch) + (size_t)y * src_width_bytes,
 							src + (size_t)y * srb, (size_t)src_width_bytes);
-			src = overlap_scratch.data();
+			src = vec_data(overlap_scratch);
 			srb = src_width_bytes;
 		}
 	}
@@ -980,7 +981,7 @@ void NQDMetalBltMask(uint32 p)
 		const uint32 hilite = (mode == 50) ? nqd_pack_hilite_color(bpp) : 0;
 		NQDOpColor op = (mode == 32) ? nqd_read_op_color() : NQDOpColor{0, 0, 0};
 		for (int y = 0; y < h; y++) {
-			const uint8 *m = mask.data() + (size_t)y * mask_stride;
+			const uint8 *m = vec_data(mask) + (size_t)y * mask_stride;
 			uint8 *s = src + (size_t)y * srb;
 			uint8 *d = dst + (size_t)y * drb;
 			for (int x = 0; x < w; x++) {
@@ -1001,7 +1002,7 @@ void NQDMetalBltMask(uint32 p)
 	const int unit = pixel_cols ? bpp : 1;
 	const int units = pixel_cols ? w : dst_width_bytes;
 	for (int y = 0; y < h; y++) {
-		const uint8 *m = mask.data() + (size_t)y * mask_stride;
+		const uint8 *m = vec_data(mask) + (size_t)y * mask_stride;
 		uint8 *s = src + (size_t)y * srb;
 		uint8 *d = dst + (size_t)y * drb;
 		for (int x = 0; x < units; x++) {
@@ -1056,7 +1057,7 @@ void NQDMetalFillMask(uint32 p)
 	int rgn_left, rgn_top;
 	nqd_region_origin_for_dest(p, dx, dy, rgn_left, rgn_top);
 	if (!nqd_decode_region(mask_addr, rgn_left, rgn_top, w, h, mask_stride,
-						   dps, pixel_cols, mask.data(), mask.size())) {
+						   dps, pixel_cols, vec_data(mask), mask.size())) {
 		NQD_LOG("NQDMetalFillMask DROP (region decode) p=%08x mask=%08x -> stale pixels possible",
 			p, mask_addr);
 		return;
@@ -1075,7 +1076,7 @@ void NQDMetalFillMask(uint32 p)
 		const uint32 hilite = (mode == 50) ? nqd_pack_hilite_color(bpp) : 0;
 		NQDOpColor op = (mode == 32) ? nqd_read_op_color() : NQDOpColor{0, 0, 0};
 		for (int y = 0; y < h; y++) {
-			const uint8 *m = mask.data() + (size_t)y * mask_stride;
+			const uint8 *m = vec_data(mask) + (size_t)y * mask_stride;
 			uint8 *d = dst + (size_t)y * drb;
 			for (int x = 0; x < w; x++) {
 				if (!m[x]) continue;
@@ -1091,7 +1092,7 @@ void NQDMetalFillMask(uint32 p)
 	/* Pattern modes 8-15: solid pen through the mask. Per pixel at >=8bpp,
 	 * per packed byte (low pen byte, Metal parity) below 8bpp. */
 	for (int y = 0; y < h; y++) {
-		const uint8 *m = mask.data() + (size_t)y * mask_stride;
+		const uint8 *m = vec_data(mask) + (size_t)y * mask_stride;
 		uint8 *d = dst + (size_t)y * drb;
 		if (pixel_cols) {
 			for (int x = 0; x < w; x++) {

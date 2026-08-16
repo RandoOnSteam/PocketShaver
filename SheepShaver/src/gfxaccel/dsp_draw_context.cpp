@@ -11,8 +11,8 @@
  *
  *  Pattern source:
  *    - rave_draw_context.mm:43-75 (context-table shape; 1-based handles,
- *      slot 0 reserved, linear-scan free-list via nullptr slots)
- *    - VBL-bounded release FIFO with _Atomic uint32_t head/tail
+ *      slot 0 reserved, linear-scan free-list via NULL slots)
+ *    - VBL-bounded release FIFO with atomic_uint32 head/tail
  *    - Metal texture view must be released BEFORE the underlying buffer -
  *      ARC order matters on some iOS Metal drivers
  *
@@ -57,11 +57,7 @@
 #include <cstring>
 #include <cassert>                 /* alignedRB <= 0x3FFF invariant assert */
 
-#if defined(_MSC_VER)
-#include "gfxaccel_msvc.h"
-#else
-#include <stdatomic.h>
-#endif
+#include "atomic.h"
 #if defined(__WIN32__)
 #include <windows.h>
 #define usleep(usecs) Sleep((usecs) / 1000)
@@ -71,7 +67,7 @@
 
 static void DSpReleaseFrontBufferCGrafPtr(DSpContextPrivate *ctx)
 {
-	if (ctx == nullptr) return;
+	if (ctx == NULL) return;
 	ctx->front_cgrafptr_mac_addr = 0;
 	ctx->front_pixmap_mac_addr = 0;
 	ctx->front_pixmap_handle_mac_addr = 0;
@@ -136,7 +132,7 @@ static int                dsp_context_count                   = 0;
  * Single-writer emul-thread: DSpVBLServiceCallback fires from the VBL
  * secondary-callback drain on the emul thread.
  *
- * C11 _Atomic primitive per the read-mostly precedent - exact
+ * atomic.h primitive per the read-mostly precedent - exact
  * mirror of vbl_source.mm's s_tick_count pattern (documented inline
  * in that file as the sanctioned minimal
  * primitive). NO mutex, NO MTLFence, NO MTLSharedEvent, NO
@@ -145,11 +141,11 @@ static int                dsp_context_count                   = 0;
  * p.81. The 64-bit-internal/32-bit-external split prevents ABA
  * confusion across long sessions (session > 828 days at 60 Hz before
  * the 32-bit counter wraps; 64-bit effectively never wraps). */
-static _Atomic(uint64_t) s_dsp_vbl_count = 0;
+static atomic_uint64 s_dsp_vbl_count = 0;
 
 extern "C" DSpContextPrivate *DSpGetContext(uint32_t handle)
 {
-	if (handle == 0 || handle > DSP_MAX_CONTEXTS) return nullptr;
+	if (handle == 0 || handle > DSP_MAX_CONTEXTS) return NULL;
 	return dsp_context_table[handle - 1];
 }
 
@@ -163,13 +159,13 @@ extern "C" DSpContextPrivate *DSpGetContext(uint32_t handle)
 extern "C" uint32_t DSpGetContextEnumerationIndex(uint32_t ctxRef)
 {
 	DSpContextPrivate *ctx = DSpGetContext(ctxRef);
-	if (ctx == nullptr) return DSP_ENUMERATION_INDEX_NONE;
+	if (ctx == NULL) return DSP_ENUMERATION_INDEX_NONE;
 	return ctx->enumeration_mode_index;
 }
 
 static bool DSpIsInactiveMetadataOnlyContext(const DSpContextPrivate *ctx)
 {
-	return ctx != nullptr &&
+	return ctx != NULL &&
 		   ctx->state == (uint32_t)kDSpContextState_Inactive &&
 		   ctx->back_buffer == NULL &&
 		   ctx->back_texture == NULL;
@@ -178,7 +174,7 @@ static bool DSpIsInactiveMetadataOnlyContext(const DSpContextPrivate *ctx)
 static uint32_t DSpAllocContextHandle(DSpContextPrivate *ctx)
 {
 	for (int i = 0; i < DSP_MAX_CONTEXTS; i++) {
-		if (dsp_context_table[i] == nullptr) {
+		if (dsp_context_table[i] == NULL) {
 			dsp_context_table[i] = ctx;
 			ctx->handle = (uint32_t)(i + 1);
 			return (uint32_t)(i + 1);
@@ -190,12 +186,12 @@ static uint32_t DSpAllocContextHandle(DSpContextPrivate *ctx)
 static void DSpFreeContextHandle(uint32_t handle)
 {
 	if (handle > 0 && handle <= DSP_MAX_CONTEXTS) {
-		dsp_context_table[handle - 1] = nullptr;
+		dsp_context_table[handle - 1] = NULL;
 	}
 }
 
 
-/* --- VBL-bounded release FIFO (single-writer, _Atomic head/tail) --- */
+/* --- VBL-bounded release FIFO (single-writer, atomic head/tail) --- */
 
 struct DSpReleaseEntry {
 	void*       back_buffer;
@@ -204,8 +200,8 @@ struct DSpReleaseEntry {
 };
 
 static DSpReleaseEntry    dsp_release_queue[DSP_RELEASE_QUEUE_CAPACITY];
-static _Atomic(uint32_t)   dsp_release_head = 0;  /* producer writes */
-static _Atomic(uint32_t)   dsp_release_tail = 0;  /* VBL drain writes */
+static atomic_uint32       dsp_release_head = 0;  /* producer writes */
+static atomic_uint32       dsp_release_tail = 0;  /* VBL drain writes */
 
 /* Set across DSpDrainLifecycleSync's drain calls. The background edge
  * runs after gfxaccel_handle_background_enter Step 2 committed an empty
@@ -296,7 +292,7 @@ static void DSpQueueReleaseAtVBL(DSpContextPrivate *ctx)
 /*
  *  Partial-release variant.
  *
- *  Identical to DSpQueueReleaseAtVBL EXCEPT ctx_to_free = nullptr. The
+ *  Identical to DSpQueueReleaseAtVBL EXCEPT ctx_to_free = NULL. The
  *  DSpContextPrivate struct survives the background window (kept alive
  *  in dsp_context_table); only the MTLBuffer + MTLTexture are released
  *  via the VBL drain. Foreground restore re-allocates fresh Metal
@@ -337,7 +333,7 @@ static void DSpQueueReleaseAtVBLPartial(DSpContextPrivate *ctx)
 	}
 	dsp_release_queue[head].back_buffer  = ctx->back_buffer;
 	dsp_release_queue[head].back_texture = ctx->back_texture;
-	dsp_release_queue[head].ctx_to_free  = nullptr;   /* KEY: struct stays alive */
+	dsp_release_queue[head].ctx_to_free  = NULL;   /* KEY: struct stays alive */
 	ctx->back_buffer  = NULL;
 	ctx->back_texture = NULL;
 	DSpReleaseBackBufferStaging(ctx);
@@ -362,9 +358,9 @@ extern "C" void DSpVBLReleaseCallback(void * /*ctx*/,
 		}
 		DSpContextPrivateReleaseBackBufferVariables(&entry->back_texture,
 													&entry->back_buffer);
-		if (entry->ctx_to_free != nullptr) {
+		if (entry->ctx_to_free != NULL) {
 			delete entry->ctx_to_free;
-			entry->ctx_to_free = nullptr;
+			entry->ctx_to_free = NULL;
 		}
 		tail = (tail + 1) % DSP_RELEASE_QUEUE_CAPACITY;
 	}
@@ -402,7 +398,7 @@ extern "C" void DSpVBLClutLatchCallback(void *cb_ctx, void *drawable, double ts)
 	(void)cb_ctx; (void)drawable; (void)ts;
 	for (uint32_t i = 0; i < DSP_MAX_CONTEXTS; i++) {
 		DSpContextPrivate *ctx = dsp_context_table[i];
-		if (ctx == nullptr) continue;
+		if (ctx == NULL) continue;
 		/* Snapshot every context (not just Active) - Paused contexts
 		 * have a valid stale CLUT the app can Get between Pause and
 		 * Resume; the snapshot is correct for both states because
@@ -414,11 +410,11 @@ extern "C" void DSpVBLClutLatchCallback(void *cb_ctx, void *drawable, double ts)
 
 extern "C" int32_t DSpGetActiveCLUTSnapshot(uint8_t out_clut_bytes[768])
 {
-	if (out_clut_bytes == nullptr) return kDSpInvalidAttributesErr;
+	if (out_clut_bytes == NULL) return kDSpInvalidAttributesErr;
 
 	for (uint32_t i = 0; i < DSP_MAX_CONTEXTS; i++) {
 		DSpContextPrivate *ctx = dsp_context_table[i];
-		if (ctx == nullptr) continue;
+		if (ctx == NULL) continue;
 		if (ctx->state != (uint32_t)kDSpContextState_Active) continue;
 		memcpy(out_clut_bytes, ctx->clut_bytes, 768);
 		return kDSpNoErr;
@@ -561,7 +557,7 @@ static void DSpComputeFadeGammaTargetLUT(uint8_t color_r,
 static void DSpCopyDriverGammaLUT(uint8_t out_lut[768])
 {
 	const struct DMCModeSnapshot *snap = dmc_current_snapshot();
-	if (snap != nullptr) {
+	if (snap != NULL) {
 		memcpy(out_lut, snap->driver_gamma_lut, 768);
 		return;
 	}
@@ -622,7 +618,7 @@ static void DSpInitFadeStateCore(DSpContextPrivate *ctx,
 	} else {
 		/* Fresh fade - snapshot DMC current gamma. */
 		const struct DMCModeSnapshot *snap = dmc_current_snapshot();
-		if (snap != nullptr) {
+		if (snap != NULL) {
 			memcpy(ctx->fade_state.start_lut, snap->gamma_lut, 768);
 		} else {
 			/* DMC Quiescent - fall back to identity LUT (no-op gamma). */
@@ -688,7 +684,7 @@ extern "C" void DSpVBLGammaFadeCallback(void *cb_ctx, void *drawable, double ts)
 	uint32_t any_still_fading = 0u;
 	for (uint32_t i = 0; i < DSP_MAX_CONTEXTS; i++) {
 		DSpContextPrivate *ctx = dsp_context_table[i];
-		if (ctx == nullptr || ctx->fade_state.active == 0) continue;
+		if (ctx == NULL || ctx->fade_state.active == 0) continue;
 		/* (uint32_t) widen so the +1 cannot wrap the uint16_t counter. */
 		uint32_t after = (uint32_t)ctx->fade_state.elapsed_vbls + 1u;
 		if (after < (uint32_t)ctx->fade_state.duration_vbls) {
@@ -699,7 +695,7 @@ extern "C" void DSpVBLGammaFadeCallback(void *cb_ctx, void *drawable, double ts)
 
 	for (uint32_t i = 0; i < DSP_MAX_CONTEXTS; i++) {
 		DSpContextPrivate *ctx = dsp_context_table[i];
-		if (ctx == nullptr) continue;
+		if (ctx == NULL) continue;
 
 		/* Per-context fade advancement. Runs on the emul thread per VBL
 		 * tick after DSpVBLClutLatchCallback. Single-writer invariant
@@ -842,7 +838,7 @@ extern "C" void DSpVBLServiceCallback(void *cb_ctx, void *drawable, double ts)
 
 	for (uint32_t i = 0; i < DSP_MAX_CONTEXTS; i++) {
 		DSpContextPrivate *ctx = dsp_context_table[i];
-		if (ctx == nullptr) continue;
+		if (ctx == NULL) continue;
 
 		/* Only Active contexts fire VBLProcs per DSp 1.7 spec p.81
 		 * ("VBLProcs are dispatched only while the context is in the
@@ -912,7 +908,7 @@ extern "C" int32_t DSpContext_SetVBLProcHandler(uint32_t ctxRef,
 												 uint32_t refCon)
 {
 	DSpContextPrivate *ctx = DSpGetContext(ctxRef);
-	if (ctx == nullptr) {
+	if (ctx == NULL) {
 		DSP_LOG("SetVBLProc: invalid ctxRef=%u -> kDSpInvalidContextErr",
 				ctxRef);
 		return kDSpInvalidContextErr;
@@ -961,7 +957,7 @@ extern "C" int32_t DSpContext_GetVBLProcHandler(uint32_t ctxRef,
 												 uint32_t refConOutAddr)
 {
 	DSpContextPrivate *ctx = DSpGetContext(ctxRef);
-	if (ctx == nullptr) {
+	if (ctx == NULL) {
 		DSP_LOG("GetVBLProc: invalid ctxRef=%u -> kDSpInvalidContextErr",
 				ctxRef);
 		return kDSpInvalidContextErr;
@@ -1080,7 +1076,7 @@ extern "C" int32_t DSpProcessEventHandler(uint32_t inEventAddr,
 				 * raw dsp_context_table[] array. */
 				for (uint32_t i = 0; i < DSP_MAX_CONTEXTS; i++) {
 					DSpContextPrivate *ctx = DSpGetContext(i + 1u);
-					if (ctx == nullptr) continue;
+					if (ctx == NULL) continue;
 					if (ctx->state != (uint32_t)kDSpContextState_Paused) continue;
 					if (ctx->paused_by_background == 0) continue;
 					(void)DSpContext_SetStateHandler(ctx->handle,
@@ -1095,7 +1091,7 @@ extern "C" int32_t DSpProcessEventHandler(uint32_t inEventAddr,
 				 * Uses DSpGetContext(i+1) to match the background drain. */
 				for (uint32_t i = 0; i < DSP_MAX_CONTEXTS; i++) {
 					DSpContextPrivate *ctx = DSpGetContext(i + 1u);
-					if (ctx == nullptr) continue;
+					if (ctx == NULL) continue;
 					if (ctx->state != (uint32_t)kDSpContextState_Active) continue;
 					(void)DSpContext_SetStateHandler(ctx->handle,
 						(uint32_t)kDSpContextState_Paused);
@@ -1137,7 +1133,7 @@ extern "C" void DSpHandleBackgroundFromEmulThread(void)
 {
 	for (uint32_t i = 0; i < DSP_MAX_CONTEXTS; i++) {
 		DSpContextPrivate *ctx = dsp_context_table[i];
-		if (ctx == nullptr) continue;
+		if (ctx == NULL) continue;
 		if (ctx->state != (uint32_t)kDSpContextState_Active) continue;
 
 		/* Persist metadata - attr + palette/gamma generation counters.
@@ -1200,7 +1196,7 @@ extern "C" void DSpHandleForegroundFromEmulThread(void)
 {
 	for (uint32_t i = 0; i < DSP_MAX_CONTEXTS; i++) {
 		DSpContextPrivate *ctx = dsp_context_table[i];
-		if (ctx == nullptr) continue;
+		if (ctx == NULL) continue;
 		if (ctx->state != (uint32_t)kDSpContextState_Paused) continue;
 		if (ctx->persisted.invalidated_full == 0u) continue;
 
@@ -1328,7 +1324,7 @@ static void DSpApplyReserveColorTable(DSpContextPrivate *ctx,
 									  uint32_t colorTableHandle,
 									  uint32_t depth_bits)
 {
-	if (ctx == nullptr || colorTableHandle == 0) return;
+	if (ctx == NULL || colorTableHandle == 0) return;
 	if (depth_bits != 1 && depth_bits != 2 &&
 		depth_bits != 4 && depth_bits != 8) {
 		return;
@@ -1456,11 +1452,11 @@ static void DSpApplyReserveColorTable(DSpContextPrivate *ctx,
 static int32_t DSpContext_Reserve_OnHandle_Core(DSpContextPrivate *ctx,
 												 const DSpContextAttributes *attr)
 {
-	if (attr == nullptr) {
+	if (attr == NULL) {
 		DSP_LOG("Reserve_OnHandle: NULL attr ptr");
 		return kDSpInvalidAttributesErr;
 	}
-	if (ctx == nullptr) {
+	if (ctx == NULL) {
 		DSP_LOG("Reserve_OnHandle: NULL ctx");
 		return kDSpInvalidContextErr;
 	}
@@ -1613,7 +1609,7 @@ extern "C" int32_t DSpContext_ReserveHandler(uint32_t ctxRef,
 		return kDSpInvalidAttributesErr;
 	}
 	DSpContextPrivate *ctx = DSpGetContext(ctxRef);
-	if (ctx == nullptr) {
+	if (ctx == NULL) {
 		DSP_LOG("Reserve: invalid ctxRef=%u - kDSpInvalidContextErr",
 				ctxRef);
 		return kDSpInvalidContextErr;
@@ -1676,7 +1672,7 @@ extern "C" int32_t DSpContext_ReserveHandler(uint32_t ctxRef,
 extern "C" uint32_t DSpAllocFirstContextHandle(const DSpContextAttributes *attr,
 												uint32_t enumeration_mode_index)
 {
-	if (attr == nullptr) return 0;
+	if (attr == NULL) return 0;
 
 	DSpContextPrivate *ctx = new DSpContextPrivate();
 	ctx->attr  = *attr;
@@ -1712,7 +1708,7 @@ extern "C" uint32_t DSpAllocMetadataContextHandle(
 	const DSpContextAttributes *attr,
 	uint32_t enumeration_mode_index)
 {
-	if (attr == nullptr) return 0;
+	if (attr == NULL) return 0;
 
 	uint32_t handle = DSpAllocFirstContextHandle(attr, enumeration_mode_index);
 	if (handle != 0) return handle;
@@ -1747,7 +1743,7 @@ extern "C" uint32_t DSpAllocMetadataContextHandle(
 extern "C" int32_t DSpContext_ReleaseHandler(uint32_t ctxRef)
 {
 	DSpContextPrivate *ctx = DSpGetContext(ctxRef);
-	if (ctx == nullptr) {
+	if (ctx == NULL) {
 		DSP_LOG("Release: invalid ctxRef=%u", ctxRef);
 		return kDSpInvalidContextErr;
 	}
@@ -1776,7 +1772,7 @@ extern "C" int32_t DSpContext_GetBackBufferHandler(uint32_t ctxRef,
 	/* PDF: options are reserved in DSp 1.7; ignore but don't error. */
 	(void)options;
 	DSpContextPrivate *ctx = DSpGetContext(ctxRef);
-	if (ctx == nullptr || outBufAddr == 0) {
+	if (ctx == NULL || outBufAddr == 0) {
 		DSP_LOG("GetBackBuffer: invalid ctxRef=%u or outBufAddr=0x%08x",
 				ctxRef, outBufAddr);
 		return kDSpInvalidContextErr;
@@ -1891,7 +1887,7 @@ int32_t DSpRevalidateSwapContext(uint32_t ctxRef,
 										const char *site)
 {
 	DSpContextPrivate *fresh = DSpGetContext(ctxRef);
-	if (fresh == nullptr || fresh != expected) {
+	if (fresh == NULL || fresh != expected) {
 		DSP_LOG("SwapBuffers: ctxRef=%u was released/replaced during %s",
 				ctxRef, site);
 		return kDSpInvalidContextErr;
@@ -1913,7 +1909,7 @@ int32_t DSpRevalidateSwapContext(uint32_t ctxRef,
 				ctxRef, site);
 		return kDSpInternalErr;
 	}
-	if (outCtx != nullptr) {
+	if (outCtx != NULL) {
 		*outCtx = fresh;
 	}
 	return kDSpNoErr;
@@ -2048,7 +2044,7 @@ static uint32_t DSpResolvePixMapRecord(uint32_t cgrafptr_mac)
 static bool DSpResolveBlitSide(uint32_t cgrafptr_mac, uint32_t rect_mac,
 							   DSpBlitSide *out)
 {
-	if (cgrafptr_mac == 0 || rect_mac == 0 || out == nullptr) return false;
+	if (cgrafptr_mac == 0 || rect_mac == 0 || out == NULL) return false;
 
 	uint16_t port_version =
 		(uint16_t)ReadMacInt16(cgrafptr_mac + DSP_CGRAFPORT_OFF_PORT_VERSION);
@@ -2287,9 +2283,9 @@ extern "C" int32_t DSpBlit_FasterHandler(uint32_t inBlitInfo,
 
 static void DSpRestoreBackBufferFromUnderlay(DSpContextPrivate *ctx)
 {
-	if (ctx == nullptr || ctx->underlay_alt_buffer == 0) return;
+	if (ctx == NULL || ctx->underlay_alt_buffer == 0) return;
 	DSpAltBufferRecord *u = DSpGetAltBuffer(ctx->underlay_alt_buffer);
-	if (u == nullptr) {
+	if (u == NULL) {
 		/* Stale designation (underlay disposed) - clear it defensively. */
 		ctx->underlay_alt_buffer = 0;
 		return;
@@ -2474,7 +2470,7 @@ static void DSpWriteIndexedPixel(uint8_t *row, uint32_t x,
 extern "C" bool DSpCopyBackBufferToCanonicalScreen(
 	DSpContextPrivate *ctx)
 {
-	if (ctx == nullptr || ctx->back_buffer == nullptr ||
+	if (ctx == NULL || ctx->back_buffer == NULL ||
 		cur_mode < 0 || VModes[cur_mode].viType == DIS_INVALID ||
 		screen_base == 0) {
 		return false;
@@ -2516,7 +2512,7 @@ extern "C" bool DSpCopyBackBufferToCanonicalScreen(
 	const uint8_t *source =
 		(const uint8_t *)DSpGetBackingContents(ctx->back_buffer);
 	uint8_t *screen = Mac2HostAddr(screen_base);
-	if (source == nullptr || screen == nullptr)
+	if (source == NULL || screen == NULL)
 		return false;
 
 	/*
@@ -2613,8 +2609,8 @@ extern "C" bool DSpCopyBackBufferToCanonicalScreen(
  */
 static bool DSpSetContextBackdropWindow(DSpContextPrivate *ctx, bool visible)
 {
-	if (ctx == nullptr || visible == (ctx->guest_window != 0))
-		return ctx != nullptr;
+	if (ctx == NULL || visible == (ctx->guest_window != 0))
+		return ctx != NULL;
 
 	if (!visible) {
 		if (!video_dispose_guest_window(ctx->guest_window)) {
@@ -2739,7 +2735,7 @@ extern "C" void DSpContext_SetStateSwitchHandoff(uint32_t oldCtxRef)
 extern "C" int32_t DSpContext_SetStateHandler(uint32_t ctxRef, uint32_t state)
 {
 	DSpContextPrivate *ctx = DSpGetContext(ctxRef);
-	if (ctx == nullptr) {
+	if (ctx == NULL) {
 		DSP_LOG("SetState: invalid ctxRef=%u", ctxRef);
 		return kDSpInvalidContextErr;
 	}
@@ -2786,7 +2782,7 @@ extern "C" int32_t DSpContext_SetStateHandler(uint32_t ctxRef, uint32_t state)
 	bool any_active = false;
 	for (uint32_t i = 0; i < DSP_MAX_CONTEXTS; i++) {
 		DSpContextPrivate *other_ctx = dsp_context_table[i];
-		if (other_ctx == nullptr) continue;
+		if (other_ctx == NULL) continue;
 		if (other_ctx->state == (uint32_t)kDSpContextState_Active)
 			was_any_active = true;
 		const uint32_t projected_state =
@@ -3000,7 +2996,7 @@ extern "C" void DSpShutdownContexts(void)
 	 * the ordinary VBL-safe resource path. */
 	for (uint32_t i = 0; i < DSP_MAX_CONTEXTS; i++) {
 		DSpContextPrivate *ctx = dsp_context_table[i];
-		if (ctx == nullptr ||
+		if (ctx == NULL ||
 			ctx->state != (uint32_t)kDSpContextState_Active) {
 			continue;
 		}
@@ -3014,7 +3010,7 @@ extern "C" void DSpShutdownContexts(void)
 
 	for (uint32_t i = 0; i < DSP_MAX_CONTEXTS; i++) {
 		DSpContextPrivate *ctx = dsp_context_table[i];
-		if (ctx == nullptr)
+		if (ctx == NULL)
 			continue;
 		const int32_t err = DSpContext_ReleaseHandler(ctx->handle);
 		if (err != kDSpNoErr) {
@@ -3039,7 +3035,7 @@ extern "C" int32_t DSpContext_GetStateHandler(uint32_t ctxRef,
 											   uint32_t outStateAddr)
 {
 	DSpContextPrivate *ctx = DSpGetContext(ctxRef);
-	if (ctx == nullptr || outStateAddr == 0) {
+	if (ctx == NULL || outStateAddr == 0) {
 		DSP_LOG("GetState: invalid ctxRef=%u or outStateAddr=0x%08x",
 				ctxRef, outStateAddr);
 		return kDSpInvalidContextErr;
@@ -3063,7 +3059,7 @@ extern "C" int32_t DSpContext_IsBusyHandler(uint32_t ctxRef,
 											 uint32_t outBusyAddr)
 {
 	DSpContextPrivate *ctx = DSpGetContext(ctxRef);
-	if (ctx == nullptr || outBusyAddr == 0) {
+	if (ctx == NULL || outBusyAddr == 0) {
 		DSP_LOG("IsBusy: invalid ctxRef=%u or outBusyAddr=0x%08x",
 				ctxRef, outBusyAddr);
 		return kDSpInvalidContextErr;
@@ -3092,7 +3088,7 @@ extern "C" int32_t DSpContext_GetDisplayIDHandler(uint32_t ctxRef,
 												   uint32_t outIDAddr)
 {
 	DSpContextPrivate *ctx = DSpGetContext(ctxRef);
-	if (ctx == nullptr || outIDAddr == 0) {
+	if (ctx == NULL || outIDAddr == 0) {
 		DSP_LOG("GetDisplayID: invalid ctxRef=%u or outIDAddr=0x%08x",
 				ctxRef, outIDAddr);
 		return kDSpInvalidContextErr;
@@ -3123,7 +3119,7 @@ extern "C" int32_t DSpContext_GetDirtyRectGridUnitsHandler(uint32_t ctxRef,
 														   uint32_t hAddr)
 {
 	DSpContextPrivate *ctx = DSpGetContext(ctxRef);
-	if (ctx == nullptr || wAddr == 0 || hAddr == 0) {
+	if (ctx == NULL || wAddr == 0 || hAddr == 0) {
 		DSP_LOG("GetDirtyRectGridUnits: invalid ctxRef=%u or wAddr=0x%08x "
 				"hAddr=0x%08x", ctxRef, wAddr, hAddr);
 		return kDSpInvalidContextErr;
@@ -3143,7 +3139,7 @@ extern "C" int32_t DSpContext_GetMaxFrameRateHandler(uint32_t ctxRef,
 													 uint32_t outAddr)
 {
 	DSpContextPrivate *ctx = DSpGetContext(ctxRef);
-	if (ctx == nullptr || outAddr == 0) {
+	if (ctx == NULL || outAddr == 0) {
 		DSP_LOG("GetMaxFrameRate: invalid ctxRef=%u or outAddr=0x%08x",
 				ctxRef, outAddr);
 		return kDSpInvalidContextErr;
@@ -3161,7 +3157,7 @@ extern "C" int32_t DSpContext_SetMaxFrameRateHandler(uint32_t ctxRef,
 													 uint32_t inMaxFPS)
 {
 	DSpContextPrivate *ctx = DSpGetContext(ctxRef);
-	if (ctx == nullptr) {
+	if (ctx == NULL) {
 		DSP_LOG("SetMaxFrameRate: invalid ctxRef=%u", ctxRef);
 		return kDSpInvalidContextErr;
 	}
@@ -3190,7 +3186,7 @@ extern "C" int32_t DSpContext_GetMonitorFrequencyHandler(uint32_t ctxRef,
 														 uint32_t outFixedAddr)
 {
 	DSpContextPrivate *ctx = DSpGetContext(ctxRef);
-	if (ctx == nullptr || outFixedAddr == 0) {
+	if (ctx == NULL || outFixedAddr == 0) {
 		DSP_LOG("GetMonitorFrequency: invalid ctxRef=%u or outFixedAddr=0x%08x",
 				ctxRef, outFixedAddr);
 		return kDSpInvalidContextErr;
@@ -3221,7 +3217,7 @@ extern "C" int32_t DSpContext_SetDirtyRectGridSizeHandler(uint32_t ctxRef,
 														  uint32_t h)
 {
 	DSpContextPrivate *ctx = DSpGetContext(ctxRef);
-	if (ctx == nullptr) {
+	if (ctx == NULL) {
 		DSP_LOG("SetDirtyRectGridSize: invalid ctxRef=%u", ctxRef);
 		return kDSpInvalidContextErr;
 	}
@@ -3241,7 +3237,7 @@ extern "C" int32_t DSpContext_GetDirtyRectGridSizeHandler(uint32_t ctxRef,
 														  uint32_t hAddr)
 {
 	DSpContextPrivate *ctx = DSpGetContext(ctxRef);
-	if (ctx == nullptr || wAddr == 0 || hAddr == 0) {
+	if (ctx == NULL || wAddr == 0 || hAddr == 0) {
 		DSP_LOG("GetDirtyRectGridSize: invalid ctxRef=%u or wAddr=0x%08x "
 				"hAddr=0x%08x", ctxRef, wAddr, hAddr);
 		return kDSpInvalidContextErr;
@@ -3374,15 +3370,15 @@ extern "C" uint32_t DSpEmitSurfaceCGrafPort(uint32_t baseAddr_mac,
 	WriteMacInt32(cgrafptr_addr + DSP_CGRAFPORT_OFF_FG_COLOR, 0xffffffffu);
 	WriteMacInt32(cgrafptr_addr + DSP_CGRAFPORT_OFF_BK_COLOR, 0x00000000u);
 
-	if (out_pixmap_mac != nullptr) *out_pixmap_mac = pixmap_addr;
-	if (out_pixmap_handle_mac != nullptr)
+	if (out_pixmap_mac != NULL) *out_pixmap_mac = pixmap_addr;
+	if (out_pixmap_handle_mac != NULL)
 		*out_pixmap_handle_mac = pixmap_handle_addr;
 	return cgrafptr_addr;
 }
 
 static uint32_t DSpGetFrontBufferCGrafPtr(DSpContextPrivate *ctx)
 {
-	if (ctx == nullptr ||
+	if (ctx == NULL ||
 		ctx->state != (uint32_t)kDSpContextState_Active) {
 		return 0;
 	}
@@ -3417,7 +3413,7 @@ static uint32_t DSpGetFrontBufferCGrafPtr(DSpContextPrivate *ctx)
 	const uint32_t row_bytes = VModes[cur_mode].viRowBytes;
 	const uint32_t baseAddr_mac = screen_base;
 
-	if (baseAddr_mac == 0 || Mac2HostAddr(baseAddr_mac) == nullptr) {
+	if (baseAddr_mac == 0 || Mac2HostAddr(baseAddr_mac) == NULL) {
 		DSP_LOG("DSpGetFrontBufferCGrafPtr: canonical video framebuffer "
 				"is unavailable (base=0x%08x)", baseAddr_mac);
 		return 0;
@@ -3480,7 +3476,7 @@ extern "C" int32_t DSpContext_GetFrontBufferHandler(uint32_t ctxRef,
 													uint32_t outCGrafPtrAddr)
 {
 	DSpContextPrivate *ctx = DSpGetContext(ctxRef);
-	if (ctx == nullptr || outCGrafPtrAddr == 0) {
+	if (ctx == NULL || outCGrafPtrAddr == 0) {
 		DSP_LOG("GetFrontBuffer: invalid ctxRef=%u or outCGrafPtrAddr=0x%08x",
 				ctxRef, outCGrafPtrAddr);
 		return kDSpInvalidContextErr;
@@ -3521,7 +3517,7 @@ extern "C" int32_t DSpGetCurrentContextHandler(uint32_t displayID,
 	uint32_t active_handle = 0;
 	for (uint32_t i = 0; i < DSP_MAX_CONTEXTS; i++) {
 		DSpContextPrivate *ctx = dsp_context_table[i];
-		if (ctx == nullptr) continue;
+		if (ctx == NULL) continue;
 		if (ctx->state != (uint32_t)kDSpContextState_Active) continue;
 		active_handle = ctx->handle;
 		break;
@@ -3587,7 +3583,7 @@ extern "C" int32_t DSpContext_GlobalToLocalHandler(uint32_t ctxRef,
 												   uint32_t ioPointAddr)
 {
 	DSpContextPrivate *ctx = DSpGetContext(ctxRef);
-	if (ctx == nullptr || ioPointAddr == 0) {
+	if (ctx == NULL || ioPointAddr == 0) {
 		DSP_LOG("GlobalToLocal: invalid ctxRef=%u or ioPointAddr=0x%08x",
 				ctxRef, ioPointAddr);
 		return kDSpInvalidContextErr;
@@ -3612,7 +3608,7 @@ extern "C" int32_t DSpContext_LocalToGlobalHandler(uint32_t ctxRef,
 												   uint32_t ioPointAddr)
 {
 	DSpContextPrivate *ctx = DSpGetContext(ctxRef);
-	if (ctx == nullptr || ioPointAddr == 0) {
+	if (ctx == NULL || ioPointAddr == 0) {
 		DSP_LOG("LocalToGlobal: invalid ctxRef=%u or ioPointAddr=0x%08x",
 				ctxRef, ioPointAddr);
 		return kDSpInvalidContextErr;
@@ -3638,7 +3634,7 @@ static uint32_t DSpResolveContextHandleAtPoint(int16_t v, int16_t h)
 {
 	for (uint32_t i = 0; i < DSP_MAX_CONTEXTS; i++) {
 		DSpContextPrivate *ctx = dsp_context_table[i];
-		if (ctx == nullptr) continue;
+		if (ctx == NULL) continue;
 		if (ctx->state != (uint32_t)kDSpContextState_Active) continue;
 		if (ctx->back_buffer == NULL) continue;
 		/* Mac Point: v = vertical (row), h = horizontal (column). On a single
@@ -3893,7 +3889,7 @@ static void DSpInvalBackBufferRect_Accumulate(DSpContextPrivate *ctx,
 											   int16_t top, int16_t left,
 											   int16_t bottom, int16_t right)
 {
-	if (ctx == nullptr) return;
+	if (ctx == NULL) return;
 
 	/* ASVS V5 input validation - clamp to back-buffer bounds.
 	 * Integer-max right/bottom values get clipped; negative top/left
@@ -3937,7 +3933,7 @@ extern "C" int32_t DSpContext_InvalBackBufferRectHandler(uint32_t ctxRef,
 														  uint32_t rectAddr)
 {
 	DSpContextPrivate *ctx = DSpGetContext(ctxRef);
-	if (ctx == nullptr || rectAddr == 0) {
+	if (ctx == NULL || rectAddr == 0) {
 		DSP_LOG("InvalBackBufferRect: invalid ctxRef=%u or rectAddr=0",
 				ctxRef);
 		return kDSpInvalidContextErr;
@@ -4033,10 +4029,10 @@ extern "C" int32_t DSpContext_GetAttributesHandler(uint32_t ctxRef,
 				"kDSpInvalidAttributesErr", ctxRef);
 		return kDSpInvalidAttributesErr;
 	}
-	/* DSpGetContext returns nullptr on invalid handle;
+	/* DSpGetContext returns NULL on invalid handle;
 	 * no write to guest RAM happens on this path. */
 	DSpContextPrivate *ctx = DSpGetContext(ctxRef);
-	if (ctx == nullptr) {
+	if (ctx == NULL) {
 		DSP_LOG("GetAttributes: invalid ctxRef=%u -> kDSpInvalidContextErr",
 				ctxRef);
 		return kDSpInvalidContextErr;
@@ -4124,7 +4120,7 @@ extern "C" int32_t DSpContext_FadeGammaInHandler(uint32_t ctxRef,
 		return kDSpNoErr;
 	}
 	DSpContextPrivate *ctx = DSpGetContext(ctxRef);
-	if (ctx == nullptr) {
+	if (ctx == NULL) {
 		DSP_LOG("FadeGammaIn: invalid ctxRef=%u -> kDSpInvalidContextErr",
 				ctxRef);
 		return kDSpInvalidContextErr;
@@ -4198,7 +4194,7 @@ extern "C" int32_t DSpContext_FadeGammaOutHandler(uint32_t ctxRef,
 		return kDSpNoErr;
 	}
 	DSpContextPrivate *ctx = DSpGetContext(ctxRef);
-	if (ctx == nullptr) {
+	if (ctx == NULL) {
 		DSP_LOG("FadeGammaOut: invalid ctxRef=%u -> kDSpInvalidContextErr",
 				ctxRef);
 		return kDSpInvalidContextErr;
@@ -4329,7 +4325,7 @@ extern "C" int32_t DSpContext_FadeGammaHandler(uint32_t ctxRef,
 		return kDSpNoErr;
 	}
 	DSpContextPrivate *ctx = DSpGetContext(ctxRef);
-	if (ctx == nullptr) {
+	if (ctx == NULL) {
 		DSP_LOG("FadeGamma: invalid ctxRef=%u -> kDSpInvalidContextErr",
 				ctxRef);
 		return kDSpInvalidContextErr;
@@ -4422,7 +4418,7 @@ static DSpPixelStagingPoolBlock *DSpFindPixelStagingBlock(uint32_t mac_addr)
 		DSpPixelStagingPoolBlock *block = &s_dsp_pixel_staging_pool[i];
 		if (block->mac_addr == mac_addr) return block;
 	}
-	return nullptr;
+	return NULL;
 }
 
 static DSpPixelStagingPoolBlock *DSpFindEmptyPixelStagingBlock(void)
@@ -4431,7 +4427,7 @@ static DSpPixelStagingPoolBlock *DSpFindEmptyPixelStagingBlock(void)
 		DSpPixelStagingPoolBlock *block = &s_dsp_pixel_staging_pool[i];
 		if (block->mac_addr == 0) return block;
 	}
-	return nullptr;
+	return NULL;
 }
 
 /* Keep one idle floor-sized block parked in the pool. Guest-visible back and
@@ -4447,7 +4443,7 @@ static void DSpPrewarmPixelStagingSpare(void)
 			return;                    /* an idle spare already exists */
 	}
 	DSpPixelStagingPoolBlock *slot = DSpFindEmptyPixelStagingBlock();
-	if (slot == nullptr)
+	if (slot == NULL)
 		return;
 	uint32_t mac_addr = Mac_sysalloc(kDSpPixelStagingAllocFloor);
 	if (mac_addr == 0)
@@ -4492,7 +4488,7 @@ extern "C" uint32_t DSpReserveGuestPixelStaging(uint32_t size)
 	if (mac_addr == 0) return 0;
 
 	DSpPixelStagingPoolBlock *slot = DSpFindEmptyPixelStagingBlock();
-	if (slot != nullptr) {
+	if (slot != NULL) {
 		slot->mac_addr = mac_addr;
 		slot->size = size;
 		slot->alloc_size = alloc_request; /* ground truth; never grown afterwards */
@@ -4516,7 +4512,7 @@ extern "C" uint32_t DSpGuardStagingWrite(uint32_t mac_addr, uint32_t size,
 	if (mac_addr == 0 || size == 0) return size;
 
 	DSpPixelStagingPoolBlock *block = DSpFindPixelStagingBlock(mac_addr);
-	if (block == nullptr) {
+	if (block == NULL) {
 		/* Write targets an address that is not a tracked staging block.
 		 * We cannot bound it - flag it so the field log shows an untracked
 		 * staging write (itself suspicious). */
@@ -4545,7 +4541,7 @@ extern "C" void DSpQuarantineGuestPixelStaging(
 	if (mac_addr == 0) return;
 
 	DSpPixelStagingPoolBlock *block = DSpFindPixelStagingBlock(mac_addr);
-	if (block != nullptr) {
+	if (block != NULL) {
 		if (size > block->size) block->size = size;
 		block->in_use = false;
 		block->ever_exposed_to_guest = true;
@@ -4558,7 +4554,7 @@ extern "C" void DSpQuarantineGuestPixelStaging(
 	}
 
 	DSpPixelStagingPoolBlock *slot = DSpFindEmptyPixelStagingBlock();
-	if (slot != nullptr) {
+	if (slot != NULL) {
 		slot->mac_addr = mac_addr;
 		slot->size = size;
 		slot->alloc_size = size;   /* best-known true size for untracked block */
@@ -4590,7 +4586,7 @@ extern "C" void DSpDiscardUnusedGuestPixelStaging(
 	if (mac_addr == 0) return;
 
 	DSpPixelStagingPoolBlock *block = DSpFindPixelStagingBlock(mac_addr);
-	if (block != nullptr) {
+	if (block != NULL) {
 		if (block->ever_exposed_to_guest) {
 			block->in_use = false;
 			DSP_LOG("DSpDiscardUnusedGuestPixelStaging: retained "
@@ -4612,7 +4608,7 @@ extern "C" void DSpDiscardUnusedGuestPixelStaging(
 
 extern "C" void DSpReleaseBackBufferStaging(DSpContextPrivate *ctx)
 {
-	if (ctx == nullptr || ctx->staging_mac_addr == 0) return;
+	if (ctx == NULL || ctx->staging_mac_addr == 0) return;
 	DSpQuarantineGuestPixelStaging(ctx->staging_mac_addr,
 								   ctx->staging_size,
 								   ctx->staging_owned_sysheap);

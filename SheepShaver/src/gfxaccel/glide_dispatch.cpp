@@ -20,6 +20,7 @@
  */
 
 #include "sysdeps.h"
+#include "vec_data.h"
 #include "cpu_emulation.h"
 #include "thunks.h"        /* SheepMem */
 #include "macos_util.h"
@@ -33,7 +34,6 @@
 #include <cstdio>
 #include <cmath>          /* pow (guFogTableIndexToW) */
 #include <vector>
-#include <chrono>
 
 #if !defined(GFXACCEL_USE_OPENGL)
 /* Metal Glide raster path is not implemented yet; keep dispatch linkable. */
@@ -316,18 +316,21 @@ static uint32_t handle_grGet(uint32_t pname, uint32_t plength, uint32_t paramsPt
 	return required;
 }
 
+/* Copy a static C string into SheepMem once, then reuse the reservation. */
+static uint32_t ensure(uint32_t &slot, const char *text)
+{
+	if (slot) return slot;
+	size_t n = strlen(text) + 1;
+	slot = SheepMem::Reserve((uint32)((n + 3) & ~3u));
+	uint8 *p = Mac2HostAddr(slot);
+	if (p) memcpy(p, text, n);
+	return slot;
+}
+
 static uint32_t handle_grGetString(uint32_t pname)
 {
 	/* Return a Mac pointer to a static C string in SheepMem once allocated. */
 	static uint32_t s_vendor = 0, s_renderer = 0, s_version = 0, s_ext = 0;
-	auto ensure = [](uint32_t &slot, const char *text) -> uint32_t {
-		if (slot) return slot;
-		size_t n = strlen(text) + 1;
-		slot = SheepMem::Reserve((uint32)((n + 3) & ~3u));
-		uint8 *p = Mac2HostAddr(slot);
-		if (p) memcpy(p, text, n);
-		return slot;
-	};
 	/* Official grGetString tokens are 0xa0-0xa4. */
 	switch (pname) {
 	case GR_EXTENSION:
@@ -804,8 +807,7 @@ uint32_t GlideDispatch(uint32_t r3, uint32_t r4, uint32_t r5,
 		static uint32_t s_vr_calls = 0;
 		static uint64_t s_vr_epoch_ms = 0;
 		++s_vr_calls;
-		const uint64_t now_ms = (uint64_t)std::chrono::duration_cast<std::chrono::milliseconds>(
-			std::chrono::steady_clock::now().time_since_epoch()).count();
+		const uint64_t now_ms = GetTicks_usec() / 1000u;
 		if (s_vr_epoch_ms == 0)
 			s_vr_epoch_ms = now_ms;
 		const uint64_t phase = (now_ms - s_vr_epoch_ms) % 16ull;
@@ -823,8 +825,7 @@ uint32_t GlideDispatch(uint32_t r3, uint32_t r4, uint32_t r5,
 		static uint32_t s_vl_calls = 0;
 		static uint64_t s_vl_epoch_ms = 0;
 		++s_vl_calls;
-		const uint64_t now_ms = (uint64_t)std::chrono::duration_cast<std::chrono::milliseconds>(
-			std::chrono::steady_clock::now().time_since_epoch()).count();
+		const uint64_t now_ms = GetTicks_usec() / 1000u;
 		if (s_vl_epoch_ms == 0)
 			s_vl_epoch_ms = now_ms;
 		const int h = GlideStateHeight() > 0 ? GlideStateHeight() : 480;
@@ -868,20 +869,20 @@ uint32_t GlideDispatch(uint32_t r3, uint32_t r4, uint32_t r5,
 		return 0;
 
 	case kGlide_grDrawPoint: {
-		const void *a = r3 ? Mac2HostAddr(r3) : nullptr;
+		const void *a = r3 ? Mac2HostAddr(r3) : NULL;
 		if (a) { GlideMetalDrawPoint(a); GlideMetalMarkContent(); }
 		return 0;
 	}
 	case kGlide_grDrawLine: {
-		const void *a = r3 ? Mac2HostAddr(r3) : nullptr;
-		const void *b = r4 ? Mac2HostAddr(r4) : nullptr;
+		const void *a = r3 ? Mac2HostAddr(r3) : NULL;
+		const void *b = r4 ? Mac2HostAddr(r4) : NULL;
 		if (a && b) { GlideMetalDrawLine(a, b); GlideMetalMarkContent(); }
 		return 0;
 	}
 	case kGlide_grDrawTriangle: {
-		const void *a = r3 ? Mac2HostAddr(r3) : nullptr;
-		const void *b = r4 ? Mac2HostAddr(r4) : nullptr;
-		const void *c = r5 ? Mac2HostAddr(r5) : nullptr;
+		const void *a = r3 ? Mac2HostAddr(r3) : NULL;
+		const void *b = r4 ? Mac2HostAddr(r4) : NULL;
+		const void *c = r5 ? Mac2HostAddr(r5) : NULL;
 		if (a && b && c) {
 			GlideMetalDrawTriangle(a, b, c);
 			GlideMetalMarkContent();
@@ -889,9 +890,9 @@ uint32_t GlideDispatch(uint32_t r3, uint32_t r4, uint32_t r5,
 		return 0;
 	}
 	case kGlide_grAADrawTriangle: {
-		const void *a = r3 ? Mac2HostAddr(r3) : nullptr;
-		const void *b = r4 ? Mac2HostAddr(r4) : nullptr;
-		const void *c = r5 ? Mac2HostAddr(r5) : nullptr;
+		const void *a = r3 ? Mac2HostAddr(r3) : NULL;
+		const void *b = r4 ? Mac2HostAddr(r4) : NULL;
+		const void *c = r5 ? Mac2HostAddr(r5) : NULL;
 		if (a && b && c) {
 			GlideMetalDrawTriangle(a, b, c);
 			GlideMetalMarkContent();
@@ -915,7 +916,7 @@ uint32_t GlideDispatch(uint32_t r3, uint32_t r4, uint32_t r5,
 	case kGlide_grDrawPolygonVertexList: {
 		/* void grDrawPolygonVertexList(int nverts, const GrVertex vlist[]); */
 		const int n = (int)r3;
-		const void *v = r4 ? Mac2HostAddr(r4) : nullptr;
+		const void *v = r4 ? Mac2HostAddr(r4) : NULL;
 		if (v && n >= 3)
 			GlideMetalDrawPolygonContiguous(n, v, 0);
 		GlideMetalMarkContent();
@@ -1278,7 +1279,7 @@ uint32_t GlideDispatch(uint32_t r3, uint32_t r4, uint32_t r5,
 			return 0;
 		}
 		const uint32_t data_mac = ReadMacInt32(info + 16);
-		const uint8_t *data = data_mac ? Mac2HostAddr(data_mac) : nullptr;
+		const uint8_t *data = data_mac ? Mac2HostAddr(data_mac) : NULL;
 		if (!data) return 0;
 		/* Download each LOD from large->small; data packs levels sequentially. */
 		GlideTexObserveLodRange(small_lod, large_lod);
@@ -1314,7 +1315,7 @@ uint32_t GlideDispatch(uint32_t r3, uint32_t r4, uint32_t r5,
 			return 0;
 		}
 		const uint32_t data_mac = r10 ? r10 : r9; /* tolerate swapped */
-		const uint8_t *data = data_mac ? Mac2HostAddr(data_mac) : nullptr;
+		const uint8_t *data = data_mac ? Mac2HostAddr(data_mac) : NULL;
 		if (!data) {
 			GlideLog("grTexDownloadMipMapLevel NO DATA start=%08x r9=%08x r10=%08x",
 					  start, r9, r10);
@@ -1338,7 +1339,7 @@ uint32_t GlideDispatch(uint32_t r3, uint32_t r4, uint32_t r5,
 			type = (int)r4;
 			data_mac = r5;
 		}
-		const void *data = data_mac ? Mac2HostAddr(data_mac) : nullptr;
+		const void *data = data_mac ? Mac2HostAddr(data_mac) : NULL;
 		GlideMetalTexDownloadTable(type, data);
 		return 0;
 	}
@@ -1443,9 +1444,9 @@ uint32_t GlideDispatch(uint32_t r3, uint32_t r4, uint32_t r5,
 		host_ptrs.resize(count);
 		for (uint32_t i = 0; i < count; i++) {
 			const uint32_t mac = ReadMacInt32(ptrs_mac + i * 4);
-			host_ptrs[i] = mac ? Mac2HostAddr(mac) : nullptr;
+			host_ptrs[i] = mac ? Mac2HostAddr(mac) : NULL;
 		}
-		GlideMetalDrawVertexArray(mode, count, host_ptrs.data());
+		GlideMetalDrawVertexArray(mode, count, vec_data(host_ptrs));
 		GlideMetalMarkContent();
 		return 0;
 	}
@@ -1454,7 +1455,7 @@ uint32_t GlideDispatch(uint32_t r3, uint32_t r4, uint32_t r5,
 		 *                                  void *vertices, FxU32 stride) */
 		const uint32_t mode = r3;
 		const uint32_t count = r4;
-		const void *verts = r5 ? Mac2HostAddr(r5) : nullptr;
+		const void *verts = r5 ? Mac2HostAddr(r5) : NULL;
 		const uint32_t stride = r6;
 		if (verts && count && count <= 65536u) {
 			GlideMetalDrawVertexArrayContiguous(mode, count, verts, stride);
@@ -1551,7 +1552,7 @@ uint32_t GlideDispatch(uint32_t r3, uint32_t r4, uint32_t r5,
 		const int w = (int)r6, h = (int)r7;
 		const int stride = (int)r8;
 		const uint32_t data_mac = r9 ? r9 : stack9;
-		void *dst = data_mac ? Mac2HostAddr(data_mac) : nullptr;
+		void *dst = data_mac ? Mac2HostAddr(data_mac) : NULL;
 		const bool ok = GlideStateLfbReadRegion(buf, x, y, w, h, stride, dst);
 		GlideLog("grLfbReadRegion %dx%d @%d,%d -> %s", w, h, x, y, ok ? "OK" : "FAIL");
 		return ok ? FXTRUE : FXFALSE;
@@ -1572,7 +1573,7 @@ uint32_t GlideDispatch(uint32_t r3, uint32_t r4, uint32_t r5,
 			stride = (int)r9;
 			data_mac = r10;
 		}
-		const void *src = data_mac ? Mac2HostAddr(data_mac) : nullptr;
+		const void *src = data_mac ? Mac2HostAddr(data_mac) : NULL;
 		const bool ok = GlideStateLfbWriteRegion(buf, x, y, fmt, w, h, stride, src);
 		if (ok) {
 			int uw = 0, uh = 0, upitch = 0;

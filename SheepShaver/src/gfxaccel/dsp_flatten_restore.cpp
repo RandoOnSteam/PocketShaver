@@ -64,7 +64,7 @@ extern "C" int32_t DSpContext_GetFlattenedSizeHandler(uint32_t ctxRef,
 		return kDSpInvalidAttributesErr;
 	}
 	DSpContextPrivate *ctx = DSpGetContext(ctxRef);
-	if (ctx == nullptr) {
+	if (ctx == NULL) {
 		DSP_LOG("GetFlattenedSize: invalid ctxRef=%u -> kDSpInvalidContextErr",
 				ctxRef);
 		return kDSpInvalidContextErr;
@@ -91,7 +91,7 @@ extern "C" int32_t DSpContext_FlattenHandler(uint32_t ctxRef,
 		return kDSpInvalidAttributesErr;
 	}
 	DSpContextPrivate *ctx = DSpGetContext(ctxRef);
-	if (ctx == nullptr) {
+	if (ctx == NULL) {
 		DSP_LOG("Flatten: invalid ctxRef=%u -> kDSpInvalidContextErr", ctxRef);
 		return kDSpInvalidContextErr;
 	}
@@ -176,7 +176,7 @@ extern "C" int32_t DSpContext_RestoreHandler(uint32_t inFlatContext,
 		return kDSpContextNotFoundErr;
 	}
 	DSpContextPrivate *ctx = DSpGetContext(newRef);
-	if (ctx != nullptr) {
+	if (ctx != NULL) {
 		ctx->max_frame_rate = ReadMacInt32(inFlatContext + DSP_FLAT_OFF_max_frame_rate);
 		ctx->dirty_grid_w   = ReadMacInt32(inFlatContext + DSP_FLAT_OFF_dirty_grid_w);
 		ctx->dirty_grid_h   = ReadMacInt32(inFlatContext + DSP_FLAT_OFF_dirty_grid_h);
@@ -215,7 +215,7 @@ extern "C" int32_t DSpContext_RestoreHandler(uint32_t inFlatContext,
 static bool DSpApplyDesiredAttributesToChild(DSpContextPrivate *child,
 											 uint32_t inDesiredAttributes)
 {
-	if (child == nullptr || inDesiredAttributes == 0) return false;
+	if (child == NULL || inDesiredAttributes == 0) return false;
 	/* Queue may legally target the same already-Reserved context (Diablo II
 	 * does exactly this while selecting a renderer). Its optional desired
 	 * attributes describe the switch/display request; they must not relabel
@@ -226,7 +226,7 @@ static bool DSpApplyDesiredAttributesToChild(DSpContextPrivate *child,
 	 * Resource-bearing fields therefore remain tied to the allocation until
 	 * a real Reserve/reallocation occurs. Metadata-only children still accept
 	 * the complete desired drawing environment below. */
-	const bool preserve_backing_layout = child->back_buffer != nullptr;
+	const bool preserve_backing_layout = child->back_buffer != NULL;
 	const uint32_t backing_width = child->attr.backBufferWidth;
 	const uint32_t backing_height = child->attr.backBufferHeight;
 	const uint32_t backing_depth = child->attr.backBufferBestDepth;
@@ -297,7 +297,7 @@ static int32_t DSpQueueCore(uint32_t parentCtx, uint32_t childCtx)
 {
 	DSpContextPrivate *parent = DSpGetContext(parentCtx);
 	DSpContextPrivate *child  = DSpGetContext(childCtx);
-	if (parent == nullptr || child == nullptr) {
+	if (parent == NULL || child == NULL) {
 		DSP_LOG("Queue: unresolved parent=%u (%p) or child=%u (%p) -> "
 				"kDSpInvalidContextErr", parentCtx, (void *)parent,
 				childCtx, (void *)child);
@@ -326,7 +326,7 @@ extern "C" int32_t DSpContext_QueueHandler(uint32_t parentCtx, uint32_t childCtx
 	 * null-guard inside DSpQueueCore). Apply optional attributes to the child
 	 * only when the ptr is non-zero (never deref NULL). */
 	DSpContextPrivate *child = DSpGetContext(childCtx);
-	if (DSpGetContext(parentCtx) == nullptr || child == nullptr) {
+	if (DSpGetContext(parentCtx) == NULL || child == NULL) {
 		DSP_LOG("Queue: unresolved parent=%u or child=%u -> "
 				"kDSpInvalidContextErr", parentCtx, childCtx);
 		return kDSpInvalidContextErr;
@@ -360,7 +360,7 @@ static int32_t DSpSwitchCore(uint32_t oldCtx, uint32_t newCtx)
 {
 	DSpContextPrivate *old = DSpGetContext(oldCtx);
 	DSpContextPrivate *neu = DSpGetContext(newCtx);
-	if (old == nullptr || neu == nullptr) {
+	if (old == NULL || neu == NULL) {
 		DSP_LOG("Switch: unresolved old=%u (%p) or new=%u (%p) -> "
 				"kDSpInvalidContextErr", oldCtx, (void *)old,
 				newCtx, (void *)neu);

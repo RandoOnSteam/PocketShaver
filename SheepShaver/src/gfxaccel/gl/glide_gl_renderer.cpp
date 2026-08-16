@@ -22,6 +22,7 @@
  */
 
 #include "sysdeps.h"
+#include "vec_data.h"
 #include "cpu_emulation.h"
 #include "glide_engine.h"
 #include "metal_compositor.h"
@@ -113,7 +114,8 @@ static void GlideUnpackColorRGB(uint32_t color, int color_format,
 static void GlideReleaseTextureCache(void)
 {
 	if (SharedMetalDevice()) {
-		for (const GlideMetalTextureCacheEntry &entry : glide_texture_cache) {
+		for (size_t ei = 0; ei < glide_texture_cache.size(); ei++) {
+			const GlideMetalTextureCacheEntry &entry = glide_texture_cache[ei];
 			if (entry.texture)
 				glDeleteTextures(1, &entry.texture);
 		}
@@ -232,7 +234,7 @@ static void GlideReleaseOverlay(void)
 		glide_has_context = false;
 		return;
 	}
-	auto &ext = gfx_gl_ext();
+	GfxGLExt &ext = gfx_gl_ext();
 	if (glide_fbo) {
 		if (ext.fbo) ext.BindFramebuffer(GL_FRAMEBUFFER, 0);
 		if (ext.DeleteFramebuffers) ext.DeleteFramebuffers(1, &glide_fbo);
@@ -268,7 +270,7 @@ static void GlidePublishFrontFromDraw(void)
 	if (!glide_fbo || !glide_color_tex || !glide_front_tex ||
 		!SharedMetalDevice())
 		return;
-	auto &ext = gfx_gl_ext();
+	GfxGLExt &ext = gfx_gl_ext();
 	if (!ext.fbo)
 		return;
 	/* Read from the draw color texture via the FBO; copy into the front tex. */
@@ -311,7 +313,7 @@ static bool GlideEnsureOverlay(uint32_t w, uint32_t h)
 	glide_width = w;
 	glide_height = h;
 
-	auto &ext = gfx_gl_ext();
+	GfxGLExt &ext = gfx_gl_ext();
 	if (!ext.fbo) {
 		QD3D_INIT_LOG("GlideMetal: FBO extension missing");
 		GlideReleaseOverlay();
@@ -342,7 +344,7 @@ static bool GlideEnsureOverlay(uint32_t w, uint32_t h)
 static bool GlideBindDrawFBO(void)
 {
 	if (!glide_fbo || !glide_color_tex || !SharedMetalDevice()) return false;
-	auto &ext = gfx_gl_ext();
+	GfxGLExt &ext = gfx_gl_ext();
 	ext.BindFramebuffer(GL_FRAMEBUFFER, glide_fbo);
 	ext.FramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
 							 GL_TEXTURE_2D, glide_color_tex, 0);
@@ -763,7 +765,7 @@ void GlideMetalFinish(void)
 
 int GlideMetalInit(void)
 {
-	glide_is_ready = SharedMetalDevice() != nullptr;
+	glide_is_ready = SharedMetalDevice() != NULL;
 	QD3D_INIT_LOG("GlideMetalInit: ready=%d", glide_is_ready ? 1 : 0);
 	return glide_is_ready ? 0 : -1;
 }
@@ -794,7 +796,7 @@ int GlideMetalWinOpen(int width, int height, int origin_upper_left)
 		return -1;
 	glClearColor(0.f, 0.f, 0.f, 1.f);
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-	auto &ext = gfx_gl_ext();
+	GfxGLExt &ext = gfx_gl_ext();
 	ext.BindFramebuffer(GL_FRAMEBUFFER, 0);
 	glide_is_in_frame = false;
 	glide_has_context = false;
@@ -1324,7 +1326,7 @@ void GlideMetalBufferSwap(int swap_interval)
 {
 	if (!glide_color_tex || !SharedMetalDevice()) return;
 
-	auto &ext = gfx_gl_ext();
+	GfxGLExt &ext = gfx_gl_ext();
 	glFlush();
 	if (ext.fbo)
 		ext.BindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -1377,7 +1379,7 @@ void GlideMetalBufferClear(uint32_t color, uint32_t alpha, uint32_t depth)
 	 */
 	glide_has_context = true;
 	{
-		auto &ext = gfx_gl_ext();
+		GfxGLExt &ext = gfx_gl_ext();
 		if (ext.fbo)
 			ext.BindFramebuffer(GL_FRAMEBUFFER, 0);
 		glide_is_in_frame = false;
@@ -1399,7 +1401,7 @@ void GlideMetalUploadLfbAndPresent(const uint8_t *bgra, int w, int h, int pitch,
 
 	/* Upload into the current write color texture (BGRA8). Unbind FBO so
 	 * the texture is not both attachment and upload target. */
-	auto &ext = gfx_gl_ext();
+	GfxGLExt &ext = gfx_gl_ext();
 	if (ext.fbo)
 		ext.BindFramebuffer(GL_FRAMEBUFFER, 0);
 	glide_is_in_frame = false;
@@ -1504,7 +1506,7 @@ static void GlideDecodeTextureLevel(const uint8_t *src, int w, int h, int format
 	const uint8_t tex_hi_g = tex0_g > tex1_g ? tex0_g : tex1_g;
 	const uint8_t tex_lo_b = tex0_b < tex1_b ? tex0_b : tex1_b;
 	const uint8_t tex_hi_b = tex0_b > tex1_b ? tex0_b : tex1_b;
-	uint8_t *d = rgba.data();
+	uint8_t *d = vec_data(rgba);
 	const uint8_t *s = src;
 	for (int i = 0; i < w * h; i++) {
 		uint8_t R = 255, G = 255, B = 255, A = 255;
@@ -1611,7 +1613,7 @@ static void GlideUploadCachedTexture(GlideMetalTextureCacheEntry &entry,
 		GlideDecodeTextureLevel(src + offset, width, height, entry.format,
 							   chroma_mode, chroma_value, color_format, rgba);
 		glTexImage2D(GL_TEXTURE_2D, uploaded, GL_RGBA, width, height, 0,
-					 GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+					 GL_RGBA, GL_UNSIGNED_BYTE, vec_data(rgba));
 		uploaded++;
 		if (lod == entry.small_lod) break;
 	}
@@ -1634,8 +1636,9 @@ void GlideMetalSetChromakey(void)
 	const int chroma_mode = GlideStateChromaMode();
 	const uint32_t chroma_value = GlideStateChromaValue();
 	const int color_format = GlideStateColorFormat();
-	GlideMetalTextureCacheEntry *bound = nullptr;
-	for (GlideMetalTextureCacheEntry &entry : glide_texture_cache) {
+	GlideMetalTextureCacheEntry *bound = NULL;
+	for (size_t ei = 0; ei < glide_texture_cache.size(); ei++) {
+		GlideMetalTextureCacheEntry &entry = glide_texture_cache[ei];
 		/* This entry point is also used for range/mode changes, whose values
 		 * are intentionally not duplicated in each cache key. */
 		entry.dirty = true;
@@ -1679,7 +1682,7 @@ void GlideMetalTexDownloadLevel(uint32_t start_addr, int lod, int large_lod,
 	const uint32_t level_addr = start_addr + level_offset;
 	uint32_t old_avail = 0;
 	const uint8_t *old_data = GlideStateTmuPtr(level_addr, &old_avail);
-	const bool changed = old_data == nullptr || old_avail < need ||
+	const bool changed = old_data == NULL || old_avail < need ||
 		std::memcmp(old_data, data, need) != 0;
 	if (changed && !GlideStateTmuWrite(level_addr, data, need)) {
 		QD3D_INIT_LOG("GlideMetalTexDownloadLevel FAIL addr=%08x need=%u",
@@ -1690,7 +1693,8 @@ void GlideMetalTexDownloadLevel(uint32_t start_addr, int lod, int large_lod,
 	const uint64_t write_begin = level_addr;
 	const uint64_t write_end = write_begin + need;
 	if (changed) {
-		for (GlideMetalTextureCacheEntry &entry : glide_texture_cache) {
+		for (size_t ei = 0; ei < glide_texture_cache.size(); ei++) {
+			GlideMetalTextureCacheEntry &entry = glide_texture_cache[ei];
 			const uint64_t entry_begin = entry.address;
 			const uint64_t entry_end = entry_begin + entry.chain_size;
 			if (write_begin < entry_end && write_end > entry_begin)
@@ -1725,8 +1729,9 @@ void GlideMetalTexSource(uint32_t start_addr, int even_odd, int small_lod,
 	const int chroma_mode = GlideStateChromaMode();
 	const uint32_t chroma_value = GlideStateChromaValue();
 	const int color_format = GlideStateColorFormat();
-	GlideMetalTextureCacheEntry *cached = nullptr;
-	for (GlideMetalTextureCacheEntry &entry : glide_texture_cache) {
+	GlideMetalTextureCacheEntry *cached = NULL;
+	for (size_t ei = 0; ei < glide_texture_cache.size(); ei++) {
+		GlideMetalTextureCacheEntry &entry = glide_texture_cache[ei];
 		if (entry.address == start_addr && entry.width == w &&
 			entry.height == h && entry.format == format &&
 			entry.small_lod == small_lod && entry.large_lod == large_lod &&
@@ -1820,14 +1825,15 @@ void GlideMetalTexDownloadTable(int type, const void *data)
 		}
 		/* Store on state via re-export - write through palette setter. */
 		const uint32_t *old_palette = GlideStateTexPalette();
-		const bool changed = old_palette == nullptr ||
+		const bool changed = old_palette == NULL ||
 			std::memcmp(old_palette, pal, sizeof(pal)) != 0;
 		extern void GlideStateTexSetPalette(const uint32_t *argb256);
 		GlideStateTexSetPalette(pal);
 		if (changed) {
 			/* Palette changes affect every resident paletted texture. */
-			GlideMetalTextureCacheEntry *bound = nullptr;
-			for (GlideMetalTextureCacheEntry &entry : glide_texture_cache) {
+			GlideMetalTextureCacheEntry *bound = NULL;
+			for (size_t ei = 0; ei < glide_texture_cache.size(); ei++) {
+				GlideMetalTextureCacheEntry &entry = glide_texture_cache[ei];
 				if (entry.format == 0x05) {
 					entry.dirty = true;
 					if (entry.texture == glide_gl_texture)

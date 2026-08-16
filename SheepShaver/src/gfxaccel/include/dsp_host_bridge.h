@@ -45,7 +45,7 @@ extern "C" {
  *  Threading: single-writer emul-thread (DSpContext_SetStateHandler
  *  always runs on emul thread) + single-reader
  *  main-thread (DSpIdleTimerService reads on foreground re-apply).
- *  The flag is stored as `_Atomic bool` with relaxed memory ordering -
+ *  The flag is stored as `atomic_uint32` with relaxed memory ordering -
  *  matches the single-word read-mostly cross-thread flag pattern
  *  (minimum primitive sufficient;
  *  no happens-before requirements beyond monotonic writes).

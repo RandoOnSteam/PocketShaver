@@ -2149,7 +2149,7 @@ static void display_alert(int title_id, const char *text, int flags)
 static void display_alert(int title_id, const wchar_t *text, int flags)
 {
 	HWND hMainWnd = GetMainWindowHandle();
-	MessageBoxW(hMainWnd, text, GetStringW(title_id).get(), MB_OK | flags);
+	MessageBoxW(hMainWnd, text, GetStringW(title_id).c_str(), MB_OK | flags);
 }
 #endif
 

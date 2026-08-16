@@ -21,7 +21,7 @@
  *  this .cpp file.
  *
  *  Threading (documented carve-out):
- *    Single-threaded from the PPC emul thread. No std::mutex, no atomic.
+ *    Single-threaded from the PPC emul thread. No mutex, no atomics.
  *    The DMC threading exception remains the ONLY
  *    acceleration-code module with concurrency primitives.
  */

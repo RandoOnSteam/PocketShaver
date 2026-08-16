@@ -66,7 +66,7 @@ static bool rave_last_cl8_color_table_valid = false;
 
 static void RaveRememberCL8ColorTableSnapshot(const uint32_t *clut, uint32_t count)
 {
-	if (clut == nullptr || count != 256)
+	if (clut == NULL || count != 256)
 		return;
 
 	for (uint32_t i = 0; i < 256; i++) {
@@ -80,7 +80,7 @@ static void RaveRememberCL8ColorTableSnapshot(const uint32_t *clut, uint32_t cou
 
 bool RaveGetLastCL8ColorTableRGBSnapshot(uint8_t outRGB[768])
 {
-	if (!rave_last_cl8_color_table_valid || outRGB == nullptr)
+	if (!rave_last_cl8_color_table_valid || outRGB == NULL)
 		return false;
 	memcpy(outRGB, rave_last_cl8_color_table_rgb, sizeof(rave_last_cl8_color_table_rgb));
 	return true;
@@ -477,26 +477,26 @@ bool RaveResourceFree(uint32_t handle) {
 	if (entry->type == kRaveResourceFree) return false;
 
 	// Release Metal texture
-	if (entry->metal_texture != nullptr) {
+	if (entry->metal_texture != NULL) {
 		RaveReleaseTexture(entry->metal_texture);
-		entry->metal_texture = nullptr;
+		entry->metal_texture = NULL;
 	}
 	// Free CPU pixel buffer (Mac address space)
 	if (entry->cpu_pixel_mac_addr != 0) {
 		Mac_sysfree(entry->cpu_pixel_mac_addr);
-		entry->cpu_pixel_data = nullptr;
+		entry->cpu_pixel_data = NULL;
 		entry->cpu_pixel_mac_addr = 0;
 		entry->cpu_pixel_data_size = 0;
 	}
 	// Free retained indexed pixel data
-	if (entry->original_pixels != nullptr) {
+	if (entry->original_pixels != NULL) {
 		delete[] entry->original_pixels;
-		entry->original_pixels = nullptr;
+		entry->original_pixels = NULL;
 	}
 	// Free CLUT data
-	if (entry->clut_data != nullptr) {
+	if (entry->clut_data != NULL) {
 		delete[] entry->clut_data;
-		entry->clut_data = nullptr;
+		entry->clut_data = NULL;
 	}
 
 	// Zero entire entry
@@ -505,9 +505,9 @@ bool RaveResourceFree(uint32_t handle) {
 }
 
 RaveResourceEntry *RaveResourceGet(uint32_t handle) {
-	if (handle == 0 || handle > RAVE_MAX_RESOURCES) return nullptr;
+	if (handle == 0 || handle > RAVE_MAX_RESOURCES) return NULL;
 	RaveResourceEntry *entry = &rave_resource_table[handle - 1];
-	if (entry->type == kRaveResourceFree) return nullptr;
+	if (entry->type == kRaveResourceFree) return NULL;
 	return entry;
 }
 
@@ -537,7 +537,7 @@ uint32_t RaveResourceFindByAddr(uint32_t mac_addr) {
  *  Lookup a RAVE texture entry whose
  *  pixmap_mac_addr matches `pixmapAddr`.
  *
- *  Returns the first matching texture entry, or nullptr if no match.
+ *  Returns the first matching texture entry, or NULL if no match.
  *  Bitmap and color-table entries are excluded (they don't use
  *  pixmap_mac_addr in the same sense - bitmap data is eager-copied, so
  *  we only care about the deferred-direct-format texture path that
@@ -545,7 +545,7 @@ uint32_t RaveResourceFindByAddr(uint32_t mac_addr) {
  */
 RaveResourceEntry *RaveFindTextureByPixmapAddr(uint32_t pixmapAddr)
 {
-	if (pixmapAddr == 0) return nullptr;
+	if (pixmapAddr == 0) return NULL;
 	for (int i = 0; i < RAVE_MAX_RESOURCES; i++) {
 		RaveResourceEntry *e = &rave_resource_table[i];
 		if (e->type == kRaveResourceTexture &&
@@ -553,7 +553,7 @@ RaveResourceEntry *RaveFindTextureByPixmapAddr(uint32_t pixmapAddr)
 			return e;
 		}
 	}
-	return nullptr;
+	return NULL;
 }
 
 /*
@@ -850,7 +850,7 @@ void RaveUploadGeneratedMips(void *metalTexture, const uint8_t *level0,
 
 	uint32_t sw = w, sh = h;
 	const uint8_t *src = level0;       // level 0 is caller-owned; never freed here
-	uint8_t *prevOwned = nullptr;      // owned downsampled buffers for levels >= 1
+	uint8_t *prevOwned = NULL;      // owned downsampled buffers for levels >= 1
 
 	// One pass break for the whole chain, not one per level (D-R-4).
 	RaveTextureUploadBatchBegin();
@@ -1164,7 +1164,7 @@ static void RaveCreateTextureFromImages(uint32_t flags, uint32_t pixelType,
 		}
 
 		// Metal texture deferred until BindColorTable
-		entry->metal_texture = nullptr;
+		entry->metal_texture = NULL;
 		RAVE_VLOG("TextureNew indexed (pixelType=%d) %dx%d mips=%d rowBytes=%d pixmap=0x%08x",
 				  pixelType, w, h, mipLevels, rowBytes, pixmap);
 	} else {
@@ -1172,7 +1172,7 @@ static void RaveCreateTextureFromImages(uint32_t flags, uint32_t pixelType,
 		// converted data; otherwise keep the existing deferred path for clients
 		// that hand RAVE an empty buffer and fill it shortly after TextureNew.
 		entry->pixmap_mac_addr = pixmap;
-		entry->metal_texture = nullptr;
+		entry->metal_texture = NULL;
 		entry->pixels_copied = false;
 
 		uint8_t *expanded = new uint8_t[w * h * 4];
@@ -1199,7 +1199,7 @@ static void RaveCreateTextureFromImages(uint32_t flags, uint32_t pixelType,
 				// app's per-mip images (which were garbage/black -> black world).
 				RaveUploadGeneratedMips(entry->metal_texture, expanded, w, h, mipLevels);
 			}
-			entry->pixels_copied = (entry->metal_texture != nullptr);
+			entry->pixels_copied = (entry->metal_texture != NULL);
 			RAVE_VLOG("TextureNew direct snapshot (pixelType=%d) %dx%d mips=%d pixmap=0x%08x -> metal=%p nz=%u a=%u rgb=%u white=%u first[nz/a/rgb]=%u/%u/%u alphaMaskWhite=%d",
 					  pixelType, w, h, mipLevels, pixmap, entry->metal_texture,
 					  sourceStats.nonzero, sourceStats.alpha, sourceStats.rgb, sourceStats.white,
@@ -1254,7 +1254,7 @@ static void RaveCreateTextureFromImages(uint32_t flags, uint32_t pixelType,
  *  RaveRealizeDeferredTexture - create Metal texture from deferred pixel data
  *
  *  Called at first draw-time use (from ApplyDirtyState) when metal_texture is
- *  nullptr and pixmap_mac_addr is set.  Reads from the ORIGINAL pixmap address
+ *  NULL and pixmap_mac_addr is set.  Reads from the ORIGINAL pixmap address
  *  in Mac memory - by this point QD3D has written the real texture content.
  */
 void RaveRealizeDeferredTexture(RaveResourceEntry *entry)
@@ -1375,7 +1375,7 @@ static void RaveCreateBitmapFromImage(uint32_t pixelType, uint32 imageAddr,
 		for (uint32_t b = 0; b < totalSize; b++) {
 			entry->original_pixels[b] = ReadMacInt8(pixmap + b);
 		}
-		entry->metal_texture = nullptr;
+		entry->metal_texture = NULL;
 		RAVE_LOG("BitmapNew indexed (pixelType=%d) %dx%d rowBytes=%d pixmap=0x%08x",
 			   pixelType, w, h, rowBytes, pixmap);
 	} else {
@@ -1468,9 +1468,9 @@ static void RaveReExpandWithCLUT(RaveResourceEntry *texEntry, RaveResourceEntry 
 	uint32_t h = texEntry->height;
 
 	// Release existing Metal texture if any
-	if (texEntry->metal_texture != nullptr) {
+	if (texEntry->metal_texture != NULL) {
 		RaveReleaseTexture(texEntry->metal_texture);
-		texEntry->metal_texture = nullptr;
+		texEntry->metal_texture = NULL;
 	}
 
 	// Expand level 0

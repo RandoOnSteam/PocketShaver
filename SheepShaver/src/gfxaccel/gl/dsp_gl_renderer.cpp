@@ -122,7 +122,7 @@ bool DSpDoAllocateBackBuffer(uint32_t w, uint32_t h, uint32_t bpp,
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, (GLsizei)w, (GLsizei)h, 0,
-					 GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+					 GL_RGBA, GL_UNSIGNED_BYTE, NULL);
 	}
 	if (!tex) {
 		gfxaccel_resources_heap_mm_free_buffer(kHeapEngineDSp, buf);
@@ -161,9 +161,9 @@ void DSpReleaseBackBufferNow(DSpContextPrivate *ctx)
 	if (ctx->back_buffer) {
 		gfxaccel_resources_clear_buffer_owner(ctx->back_buffer);
 		gfxaccel_resources_heap_mm_free_buffer(kHeapEngineDSp, ctx->back_buffer);
-		ctx->back_buffer = nullptr;
+		ctx->back_buffer = NULL;
 	}
-	ctx->back_texture = nullptr;
+	ctx->back_texture = NULL;
 	DSpReleaseBackBufferStaging(ctx);
 	ctx->cgrafptr_mac_addr = 0;
 	ctx->front_cgrafptr_mac_addr = 0;
@@ -317,7 +317,7 @@ extern "C" void DSpHostBridgeShutdown(void)
 bool DSpAllocAltBufferBacking(DSpAltBufferRecord *rec,
 	uint32_t w, uint32_t h) {
 	bool res;
-	if (rec == nullptr || w == 0 || h == 0) return false;
+	if (rec == NULL || w == 0 || h == 0) return false;
 	if (w > DSP_ALT_MAX_DIM || h > DSP_ALT_MAX_DIM) {
 		fprintf(stderr, "DSpAllocAltBufferBacking: "
 			"dims %ux%u exceed DSP_ALT_MAX_DIM\n", w, h);

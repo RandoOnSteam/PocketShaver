@@ -33,7 +33,7 @@
  *       LAST (fans out to engines to detach their resources).
  *
  *  Scope caveats:
- *    - Single-threaded from the PPC emul thread. No std::mutex, no atomic.
+ *    - Single-threaded from the PPC emul thread. No mutex, no atomics.
  *      The DMC carve-out in the Threading section remains the ONLY
  *      acceleration-code module with concurrency primitives.
  *    - Dual-ownership of the framebuffer MTLBuffer is tolerated initially:

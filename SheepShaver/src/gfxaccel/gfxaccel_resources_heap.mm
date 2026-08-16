@@ -45,7 +45,7 @@
 #include <cstdio>
 #include <dispatch/dispatch.h>
 #include <array>
-#include <atomic>
+#include "atomic.h"
 
 #include "gfxaccel_resources_heap.h"
 #include "metal_device_shared.h"
@@ -59,7 +59,7 @@ static id<MTLHeap> g_heaps[kHeapCount] = { nil, nil, nil, nil, nil };
 // Per-heap monotonic bump offset (bump allocator).
 // Reset to 0 on DMC on_mode_exit. All allocations
 // compute their aligned start offset from this counter and advance it.
-// No std::atomic: single-writer invariant (emul serial queue).
+// No atomic: single-writer invariant (emul serial queue).
 static NSUInteger g_next_offset[kHeapCount] = { 0, 0, 0, 0, 0 };
 
 // Per-heap live sub-allocation count. A placement heap's bump offset can only
@@ -83,7 +83,7 @@ static bool g_heap_purgeable_empty[kHeapCount] = { false, false, false, false, f
 // later. pending is single-writer on the emul thread; completed is
 // bumped from Metal's completion-handler thread, hence atomic.
 static uint64_t g_gpu_commits_pending[kHeapCount] = { 0, 0, 0, 0, 0 };
-static std::atomic<uint64_t> g_gpu_commits_completed[kHeapCount];
+static atomic_uint64 g_gpu_commits_completed[kHeapCount];
 
 // Heap sizes (initial = ceiling constants from header; overridable via
 // gfxaccel_heap_testing_set_ceiling for tests).
@@ -115,7 +115,7 @@ static os_log_t gfxaccel_heap_log(void)
 	return log;
 }
 
-static std::atomic_bool g_eviction_pending(false);
+static atomic_uint32 g_eviction_pending = 0;
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -166,7 +166,7 @@ static bool restore_heap_if_purgeable(uint32_t heap_id)
 extern "C" void gfxaccel_resources_heap_mm_init(void)
 {
 	// No-op: heaps are lazy.
-	g_eviction_pending.store(false, std::memory_order_release);
+	atomic_store_explicit(&g_eviction_pending, 0, memory_order_release);
 }
 
 extern "C" void gfxaccel_resources_heap_mm_shutdown(void)
@@ -196,7 +196,7 @@ extern "C" void gfxaccel_resources_heap_mm_shutdown(void)
 	}
 
 	// Reset eviction state.
-	g_eviction_pending.store(false, std::memory_order_release);
+	atomic_store_explicit(&g_eviction_pending, 0, memory_order_release);
 }
 
 extern "C" void *gfxaccel_resources_heap_mm_get(uint32_t heap_id)
@@ -350,7 +350,7 @@ static uint64_t heap_mm_reset_internal(uint32_t heap_id,
 		return 0;
 	}
 	if (!gpu_idle_asserted &&
-		g_gpu_commits_completed[heap_id].load(std::memory_order_acquire) <
+		atomic_load_explicit(&g_gpu_commits_completed[heap_id], memory_order_acquire) <
 			g_gpu_commits_pending[heap_id]) {
 		// In-flight GPU reads of heap memory: deferring keeps offset 0
 		// from aliasing bytes a committed blit may still touch. Expected
@@ -385,11 +385,11 @@ extern "C" void gfxaccel_resources_heap_note_gpu_commit(uint32_t heap_id,
 		return;
 	}
 	id<MTLCommandBuffer> cmd = (__bridge id<MTLCommandBuffer>)command_buffer;
-	std::atomic<uint64_t> *completed = &g_gpu_commits_completed[heap_id];
+	atomic_uint64 *completed = &g_gpu_commits_completed[heap_id];
 	g_gpu_commits_pending[heap_id]++;
 	[cmd addCompletedHandler:^(id<MTLCommandBuffer> completedCommandBuffer) {
 		(void)completedCommandBuffer;
-		completed->fetch_add(1, std::memory_order_release);
+		atomic_fetch_add_explicit(completed, 1, memory_order_release);
 	}];
 }
 
@@ -444,13 +444,13 @@ extern "C" void gfxaccel_resources_heap_mm_lru_purge(void)
 
 extern "C" void gfxaccel_handle_memory_warning(void)
 {
-	g_eviction_pending.store(true, std::memory_order_release);
+	atomic_store_explicit(&g_eviction_pending, 1, memory_order_release);
 }
 
 extern "C" int32_t gfxaccel_heap_wait_for_eviction(uint64_t frame_interval_usec)
 {
 	(void)frame_interval_usec;
-	if (!g_eviction_pending.exchange(false, std::memory_order_acq_rel)) {
+	if (!atomic_exchange_explicit(&g_eviction_pending, 0, memory_order_acq_rel)) {
 		return kGfxAccelResNoErr;
 	}
 

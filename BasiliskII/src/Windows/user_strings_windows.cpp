@@ -173,17 +173,19 @@ const char *GetString(int num)
 /*
  *  Convert text to wide string, given the string number
  */
-std::unique_ptr<wchar_t[]> GetStringW(int num)
+std::wstring GetStringW(int num)
 {
-	auto str = GetString(num);
-	if (str == nullptr)
-		return nullptr;
+	const char *str = GetString(num);
+	if (str == NULL)
+		return std::wstring();
 
-	auto length = MultiByteToWideChar(CP_ACP, 0, str, -1, nullptr, 0);
-	if (length == 0)
-		return nullptr;
+	/* Excludes the terminator: std::wstring supplies its own. */
+	int len = (int)strlen(str);
+	int wlen = MultiByteToWideChar(CP_ACP, 0, str, len, NULL, 0);
+	if (wlen <= 0)
+		return std::wstring();
 
-	auto p = std::unique_ptr<wchar_t[]>(new wchar_t[length]);
-	MultiByteToWideChar(CP_ACP, 0, str, -1, p.get(), length);
-	return p;
+	std::wstring w(wlen, L'\0');
+	MultiByteToWideChar(CP_ACP, 0, str, len, &w[0], wlen);
+	return w;
 }

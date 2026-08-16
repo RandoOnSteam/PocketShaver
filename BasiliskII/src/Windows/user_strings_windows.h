@@ -23,10 +23,10 @@
 
 #ifdef __cplusplus
 #if __cplusplus >= 201103L || _MSC_VER >= 1600
-#include <memory>
+#include <string>
 
  // Convert text to wide string, given the string number
-extern std::unique_ptr<wchar_t[]> GetStringW(int num);
+extern std::wstring GetStringW(int num);
 #endif
 #endif
 

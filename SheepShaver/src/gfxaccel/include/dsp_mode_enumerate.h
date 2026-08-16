@@ -93,7 +93,7 @@ extern int32_t DSpGetNextContextHandler(uint32_t prevCtxRef,
  *    - Invokes DSpFindBestContext_Core (Tier 0 = depth-mask overlap, Tier 1
  *      = bit-depth preference, Tier 2 = resolution match, Tier 3 = refresh
  *      no-op under the frequency=0 policy).
- *    - Core returning nullptr -> kDSpContextNotFoundErr (canonical).
+ *    - Core returning NULL -> kDSpContextNotFoundErr (canonical).
  *    - Core returning a mode -> allocate a DSpContextPrivate via
  *      DSpAllocFirstContextHandle, populate ctx->attr from the matched
  *      mode, write handle to outContextRefAddr via WriteMacInt32, return
@@ -123,7 +123,7 @@ extern size_t DSpUserSelectableModeCount(
  *
  *  Semantics (PDF p.65-67):
  *    - outAttrAddr == 0: return kDSpInvalidAttributesErr.
- *    - DSpGetContext(ctxRef) == nullptr: return kDSpInvalidContextErr.
+ *    - DSpGetContext(ctxRef) == NULL: return kDSpInvalidContextErr.
  *    - Otherwise: write ctx->attr through PDF-p.65 offsets via
  *      WriteMacInt32/WriteMacInt16/WriteMacInt8 and return kDSpNoErr.
  *

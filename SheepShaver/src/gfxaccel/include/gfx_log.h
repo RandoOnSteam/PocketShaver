@@ -40,15 +40,14 @@ extern "C" __declspec(dllimport) void __stdcall OutputDebugStringA(
 inline bool accel_log_subsystem_on(const char *name) {
     const char *env = getenv("GFXACCEL_LOG");
     if (!env || !*env) return true;
-    /* Comma-wrap the value and the name and substring-search. Uses C strings
-     * only: pulling <string> drags in libc++ <atomic>, which conflicts with
-     * <stdatomic.h> in some TUs (e.g. the compositor) before C++23. */
+    /* Comma-wrap the value and the name and substring-search, using C
+     * strings only so this header never drags <string> into every TU. */
     char hay[256];
     snprintf(hay, sizeof(hay), ",%s,", env);
     if (strstr(hay, ",all,")) return true;
     char needle[40];
     snprintf(needle, sizeof(needle), ",%s,", name);
-    return strstr(hay, needle) != nullptr;
+    return strstr(hay, needle) != NULL;
 }
 
 /* True if GFXACCEL_LOG_VERBOSE is set to a truthy value (1/t/y). */
@@ -59,8 +58,9 @@ inline bool accel_log_verbose_env() {
 }
 
 /* Shared verbose flag, read once from the environment on first use. The
- * thread-safe local static is a single instance across all TUs (C++14),
- * so no per-subsystem wiring is needed. */
+ * function-local static is a single instance across all TUs, so no
+ * per-subsystem wiring is needed. It is initialised on the first call, which
+ * happens on the emul thread before any other thread logs. */
 inline bool accel_log_verbose() {
     static bool v = accel_log_verbose_env(); return v; }
 

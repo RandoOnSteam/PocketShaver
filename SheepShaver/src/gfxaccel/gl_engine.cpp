@@ -19,6 +19,7 @@
  */
 
 #include "sysdeps.h"
+#include "vec_data.h"
 #include "cpu_emulation.h"
 #include "macos_util.h"
 #include "gl_engine.h"
@@ -239,8 +240,8 @@ static uint32_t agl_device_handle = 0;
 
 #define GL_MAX_CONTEXTS 4
 
-static GLContext *gl_contexts[GL_MAX_CONTEXTS] = { nullptr };
-GLContext *gl_current_context = nullptr;
+static GLContext *gl_contexts[GL_MAX_CONTEXTS] = { NULL };
+GLContext *gl_current_context = NULL;
 
 // Mac-side handles (one per context slot)
 static uint32_t gl_context_mac_handles[GL_MAX_CONTEXTS] = { 0 };
@@ -489,7 +490,7 @@ static bool GLOtherDrawableBound(int except_idx)
 {
 	for (int i = 0; i < GL_MAX_CONTEXTS; ++i) {
 		if (i != except_idx &&
-			gl_contexts[i] != nullptr &&
+			gl_contexts[i] != NULL &&
 			agl_ctx_state[i].agl_drawable != 0) {
 			return true;
 		}
@@ -536,6 +537,13 @@ static void GLFinishDrawableUnbind(int idx)
 }
 
 
+/* Matrix-stack identity fill - the initial value of every stack level. */
+static void setIdentity(float m[16])
+{
+	memset(m, 0, sizeof(float) * 16);
+	m[0] = m[5] = m[10] = m[15] = 1.0f;
+}
+
 /*
  *  GLContextNew - Allocate and initialize a GLContext with GL 1.2 defaults
  *
@@ -544,18 +552,13 @@ static void GLFinishDrawableUnbind(int idx)
 static GLContext *GLContextNew(int width, int height)
 {
 	GLContext *ctx = new GLContext();
-	// Note: Do NOT memset here. GLContext contains std::unordered_map and
+	// Note: Do NOT memset here. GLContext contains std::map and
 	// std::vector members whose internal state would be destroyed by memset.
 	// Value-initialization via new GLContext() already zero-inits POD members,
 	// and the explicit assignments below set all fields to GL 1.2 defaults.
 
 	// ---- Matrix stacks ----
 	// Identity matrix for modelview[0], projection[0], texture[unit][0]
-	auto setIdentity = [](float m[16]) {
-		memset(m, 0, sizeof(float) * 16);
-		m[0] = m[5] = m[10] = m[15] = 1.0f;
-	};
-
 	setIdentity(ctx->modelview_stack[0]);
 	ctx->modelview_depth = 0;
 
@@ -743,7 +746,7 @@ static GLContext *GLContextNew(int width, int height)
 	ctx->list_base = 0;
 
 	// ---- Metal state ----
-	ctx->metal = nullptr;
+	ctx->metal = NULL;
 
 	// ---- Pixel store ----
 	ctx->pixel_store.pack_alignment = 4;
@@ -1022,7 +1025,7 @@ uint32_t NativeAGLCreateContext(uint32_t pixelFormat, uint32_t shareContext)
 	// Find a free context slot
 	int slot = -1;
 	for (int i = 0; i < GL_MAX_CONTEXTS; i++) {
-		if (gl_contexts[i] == nullptr) {
+		if (gl_contexts[i] == NULL) {
 			slot = i;
 			break;
 		}
@@ -1045,7 +1048,7 @@ uint32_t NativeAGLCreateContext(uint32_t pixelFormat, uint32_t shareContext)
 	uint32_t mac_handle = Mac_sysalloc(GL_CTX_HANDLE_SIZE);
 	if (mac_handle == 0) {
 		delete ctx;
-		gl_contexts[slot] = nullptr;
+		gl_contexts[slot] = NULL;
 		GL_LOG("aglCreateContext: Mac_sysalloc failed");
 		gl_agl_last_error = AGL_BAD_ALLOC;
 		return 0;
@@ -1075,14 +1078,14 @@ uint32_t NativeAGLCreateContext(uint32_t pixelFormat, uint32_t shareContext)
 
 /*
  *  Helper: look up GLContext from Mac-side handle
- *  Returns context pointer and sets out_idx to 0-based index, or nullptr on error.
+ *  Returns context pointer and sets out_idx to 0-based index, or NULL on error.
  */
-static GLContext *GLContextFromHandle(uint32_t mac_handle, int *out_idx = nullptr)
+static GLContext *GLContextFromHandle(uint32_t mac_handle, int *out_idx = NULL)
 {
-	if (mac_handle == 0) return nullptr;
+	if (mac_handle == 0) return NULL;
 
 	uint32_t one_based = ReadMacInt32(mac_handle);
-	if (one_based == 0 || one_based > GL_MAX_CONTEXTS) return nullptr;
+	if (one_based == 0 || one_based > GL_MAX_CONTEXTS) return NULL;
 
 	int idx = one_based - 1;
 	if (out_idx) *out_idx = idx;
@@ -1095,7 +1098,7 @@ extern "C" int GLContextGetOffscreenDrawable(GLContext *context,
 											 uint32_t *outRowbytes,
 											 uint32_t *outBaseaddr)
 {
-	if (context == nullptr) return 0;
+	if (context == NULL) return 0;
 
 	for (int i = 0; i < GL_MAX_CONTEXTS; i++) {
 		if (gl_contexts[i] != context) continue;
@@ -1131,7 +1134,7 @@ uint32_t NativeAGLSetCurrentContext(uint32_t ctx)
 	GL_LOG("aglSetCurrentContext: ctx=0x%08x", ctx);
 
 	if (ctx == 0) {
-		gl_current_context = nullptr;
+		gl_current_context = NULL;
 		gl_current_context_idx = -1;
 		GL_LOG("aglSetCurrentContext: unbound current context");
 		gl_agl_last_error = AGL_NO_ERROR;
@@ -1296,7 +1299,7 @@ uint32_t NativeAGLSwapBuffers(uint32_t ctx)
  *  (2) Shared-overlay refcount release deleted; GL uses the per-engine
  *      overlay path.
  *  (3) Accum buffer: freed here (raw malloc'd by gl_accum_ensure_allocated)
- *  (4) delete context: releases std::unordered_map/std::vector members via dtors
+ *  (4) delete context: releases std::map/std::vector members via dtors
  *      (host texture handles were released above; display lists are CPU-only)
  */
 uint32_t NativeAGLDestroyContext(uint32_t ctx)
@@ -1313,7 +1316,7 @@ uint32_t NativeAGLDestroyContext(uint32_t ctx)
 
 	// If this is the current context, unbind it
 	if (gl_current_context == context) {
-		gl_current_context = nullptr;
+		gl_current_context = NULL;
 		gl_current_context_idx = -1;
 	}
 
@@ -1329,7 +1332,7 @@ uint32_t NativeAGLDestroyContext(uint32_t ctx)
 	// nulled it out above and no other contexts exist, we unbind.
 	bool any_remaining = false;
 	for (int i = 0; i < GL_MAX_CONTEXTS; ++i) {
-		if (gl_contexts[i] != nullptr && gl_contexts[i] != context) {
+		if (gl_contexts[i] != NULL && gl_contexts[i] != context) {
 			any_remaining = true;
 			break;
 		}
@@ -1344,12 +1347,12 @@ uint32_t NativeAGLDestroyContext(uint32_t ctx)
 	// Free accumulation buffer (raw malloc'd, not managed by ARC or C++ dtors)
 	if (context->accum_buffer) {
 		free(context->accum_buffer);
-		context->accum_buffer = nullptr;
+		context->accum_buffer = NULL;
 		context->accum_allocated = false;
 	}
 
 	delete context;
-	gl_contexts[idx] = nullptr;
+	gl_contexts[idx] = NULL;
 	gl_context_mac_handles[idx] = 0;
 
 	GL_LOG("aglDestroyContext: destroyed context %d", idx + 1);
@@ -1452,7 +1455,7 @@ uint32_t NativeAGLDescribePixelFormat(uint32_t pix, uint32_t attrib, uint32_t va
 	}
 
 	// Look up pixel format by matching mac_addr
-	GLPixelFormatInfo *pf = nullptr;
+	GLPixelFormatInfo *pf = NULL;
 	for (int i = 0; i < gl_pixel_format_count; i++) {
 		if (gl_pixel_formats[i].mac_addr == pix) {
 			pf = &gl_pixel_formats[i];
@@ -3712,7 +3715,7 @@ void NativeGLTexImage2D_Direct(GLContext *ctx, uint32_t target, int32_t level,
 
 	if (texName == 0) return;
 
-	auto it = ctx->texture_objects.find(texName);
+	GLTextureObjectMap::iterator it = ctx->texture_objects.find(texName);
 	if (it == ctx->texture_objects.end()) return;
 
 	GLTextureObject &tex = it->second;
@@ -3797,7 +3800,7 @@ uint32_t NativeGLUBuild2DMipmaps(GLContext *ctx,
 
 	if (texName == 0) return 0;
 
-	auto texIt = ctx->texture_objects.find(texName);
+	GLTextureObjectMap::iterator texIt = ctx->texture_objects.find(texName);
 	if (texIt == ctx->texture_objects.end()) return 0;
 	GLTextureObject &tex = texIt->second;
 	tex.has_mipmaps = true;
@@ -3817,7 +3820,7 @@ uint32_t NativeGLUBuild2DMipmaps(GLContext *ctx,
 	free(baseBGRA);
 
 	GLMetalUploadTexture(ctx, &tex, 0, width, height,
-						 current.data(), (int)current.size());
+						 vec_data(current), (int)current.size());
 
 	// Generate mipmap chain by box filtering canonical BGRA8 upload pixels.
 	// This preserves legacy/packed source interpretation from the base
@@ -3848,9 +3851,9 @@ uint32_t NativeGLUBuild2DMipmaps(GLContext *ctx,
 		}
 
 		GLMetalUploadTexture(ctx, &tex, level, nw, nh,
-							 next.data(), (int)next.size());
+							 vec_data(next), (int)next.size());
 
-		current = std::move(next);
+		current.swap(next);
 		w = nw;
 		h = nh;
 		level++;
@@ -3976,11 +3979,11 @@ uint32_t NativeGLUNewQuadric()
 
 static GLUQuadricState *GLUQuadricFromHandle(uint32_t mac_handle)
 {
-	if (mac_handle == 0) return nullptr;
+	if (mac_handle == 0) return NULL;
 	uint32_t one_based = ReadMacInt32(mac_handle);
-	if (one_based == 0 || one_based > GLU_MAX_QUADRICS) return nullptr;
+	if (one_based == 0 || one_based > GLU_MAX_QUADRICS) return NULL;
 	int idx = one_based - 1;
-	if (!glu_quadrics[idx].in_use) return nullptr;
+	if (!glu_quadrics[idx].in_use) return NULL;
 	return &glu_quadrics[idx];
 }
 
@@ -4314,11 +4317,11 @@ void NativeGLUPartialDisk(GLContext *ctx, uint32_t quad_handle,
 
 static GLUTessState *GLUTessFromHandle(uint32_t mac_handle)
 {
-	if (mac_handle == 0) return nullptr;
+	if (mac_handle == 0) return NULL;
 	uint32_t one_based = ReadMacInt32(mac_handle);
-	if (one_based == 0 || one_based > GLU_MAX_TESS) return nullptr;
+	if (one_based == 0 || one_based > GLU_MAX_TESS) return NULL;
 	int idx = one_based - 1;
-	if (!glu_tess[idx].in_use) return nullptr;
+	if (!glu_tess[idx].in_use) return NULL;
 	return &glu_tess[idx];
 }
 
@@ -4559,9 +4562,9 @@ static bool ear_clip_point_in_triangle(float px, float py,
 // (the fallback for the non-callback gluTessEndPolygon consumer).
 static void ear_clip_triangulate(GLContext *ctx, const std::vector<GLUTessVertex3> &verts,
 								 float nx, float ny, float nz,
-								 GLUTessState *cb_tess = nullptr)
+								 GLUTessState *cb_tess = NULL)
 {
-	const bool use_callbacks = (cb_tess != nullptr);
+	const bool use_callbacks = (cb_tess != NULL);
 	int n = (int)verts.size();
 	if (n < 3) {
 		GL_LOG("ear_clip_triangulate: degenerate polygon with %d vertices, no geometry emitted", n);
@@ -4672,11 +4675,21 @@ static void ear_clip_triangulate(GLContext *ctx, const std::vector<GLUTessVertex
 }
 
 // Bridge-edge merge: merge outer contour with inner contours (holes) into a single polygon
+// Project one vertex onto the plane that drops `drop_axis`.
+static void tess_get_uv(int drop_axis, const GLUTessVertex3 &v, float &u, float &vv)
+{
+	switch (drop_axis) {
+		case 0: u = v.y; vv = v.z; break;
+		case 1: u = v.x; vv = v.z; break;
+		case 2: u = v.x; vv = v.y; break;
+	}
+}
+
 // by finding bridge edges that connect each inner contour to the outer contour.
 static std::vector<GLUTessVertex3> tess_merge_contours(const std::vector<GLUTessContour> &contours,
 														float nx, float ny, float nz)
 {
-	if (contours.empty()) return {};
+	if (contours.empty()) return std::vector<GLUTessVertex3>();
 	if (contours.size() == 1) return contours[0].vertices;
 
 	// Determine dominant axis for 2D projection
@@ -4685,14 +4698,6 @@ static std::vector<GLUTessVertex3> tess_merge_contours(const std::vector<GLUTess
 	if (anx >= any && anx >= anz) drop_axis = 0;
 	else if (any >= anx && any >= anz) drop_axis = 1;
 	else drop_axis = 2;
-
-	auto get_uv = [drop_axis](const GLUTessVertex3 &v, float &u, float &vv) {
-		switch (drop_axis) {
-			case 0: u = v.y; vv = v.z; break;
-			case 1: u = v.x; vv = v.z; break;
-			case 2: u = v.x; vv = v.y; break;
-		}
-	};
 
 	// Start with the outer contour (contour 0)
 	std::vector<GLUTessVertex3> merged = contours[0].vertices;
@@ -4707,19 +4712,19 @@ static std::vector<GLUTessVertex3> tess_merge_contours(const std::vector<GLUTess
 		float inner_max_u = -1e30f;
 		for (int i = 0; i < (int)inner.size(); i++) {
 			float u, v;
-			get_uv(inner[i], u, v);
+			tess_get_uv(drop_axis, inner[i], u, v);
 			if (u > inner_max_u) { inner_max_u = u; inner_rightmost = i; }
 		}
 
 		// Find the closest vertex in the merged polygon to bridge to
 		float inner_u, inner_v;
-		get_uv(inner[inner_rightmost], inner_u, inner_v);
+		tess_get_uv(drop_axis, inner[inner_rightmost], inner_u, inner_v);
 
 		int best_outer = 0;
 		float best_dist = 1e30f;
 		for (int i = 0; i < (int)merged.size(); i++) {
 			float ou, ov;
-			get_uv(merged[i], ou, ov);
+			tess_get_uv(drop_axis, merged[i], ou, ov);
 			float dx = ou - inner_u, dy = ov - inner_v;
 			float dist = dx * dx + dy * dy;
 			if (dist < best_dist) { best_dist = dist; best_outer = i; }
@@ -4750,7 +4755,7 @@ static std::vector<GLUTessVertex3> tess_merge_contours(const std::vector<GLUTess
 			new_merged.push_back(merged[i]);
 		}
 
-		merged = std::move(new_merged);
+		merged.swap(new_merged);
 	}
 
 	return merged;
@@ -4780,7 +4785,8 @@ void NativeGLUTessEndPolygon(uint32_t tess)
 
 	// Count total vertices
 	int total_verts = 0;
-	for (const auto &c : t->contours) total_verts += (int)c.vertices.size();
+	for (size_t ci = 0; ci < t->contours.size(); ci++)
+		total_verts += (int)t->contours[ci].vertices.size();
 	if (total_verts < 3) {
 		GL_LOG("gluTessEndPolygon: degenerate polygon with %d total vertices, no geometry emitted", total_verts);
 		// Report the malformed-polygon error to the guest GLU_TESS_ERROR
@@ -4837,7 +4843,7 @@ void NativeGLUTessEndPolygon(uint32_t tess)
 	// registered, pass `t` so the emit path fires the guest callbacks via
 	// call_macos*; otherwise the immediate-mode fallback is used unchanged.
 	ear_clip_triangulate(gl_current_context, merged, nx, ny, nz,
-						 emit_via_callbacks ? t : nullptr);
+						 emit_via_callbacks ? t : NULL);
 
 	// Clean up
 	t->contours.clear();
@@ -4874,11 +4880,11 @@ void NativeGLUNextContour(uint32_t tess, uint32_t type)
 
 static GLUNurbsState *GLUNurbsFromHandle(uint32_t mac_handle)
 {
-	if (mac_handle == 0) return nullptr;
+	if (mac_handle == 0) return NULL;
 	uint32_t one_based = ReadMacInt32(mac_handle);
-	if (one_based == 0 || one_based > GLU_MAX_NURBS) return nullptr;
+	if (one_based == 0 || one_based > GLU_MAX_NURBS) return NULL;
 	int idx = one_based - 1;
-	if (!glu_nurbs[idx].in_use) return nullptr;
+	if (!glu_nurbs[idx].in_use) return NULL;
 	return &glu_nurbs[idx];
 }
 
@@ -5232,13 +5238,13 @@ void NativeGLUEndSurface(uint32_t nurb)
 					}
 				}
 				// Evaluate s-direction curve at u_param
-				de_boor_evaluate(ns->s_knots.data(), s_control.data(), s_cp, ns->s_order,
+				de_boor_evaluate(vec_data(ns->s_knots), vec_data(s_control), s_cp, ns->s_order,
 								 dim, u_param, &t_curve_control[tj * dim]);
 			}
 
 			// Evaluate t-direction curve at v_param
 			float point[4];
-			de_boor_evaluate(ns->t_knots.data(), t_curve_control.data(), t_cp, ns->t_order,
+			de_boor_evaluate(vec_data(ns->t_knots), vec_data(t_curve_control), t_cp, ns->t_order,
 							 dim, v_param, point);
 
 			// Store result (project if dim==4)
@@ -5374,7 +5380,7 @@ void NativeGLUEndCurve(uint32_t nurb)
 	for (int i = 0; i <= steps; i++) {
 		float t = t_min + (t_max - t_min) * i / steps;
 		float point[4];
-		de_boor_evaluate(ns->curve_knots.data(), ns->curve_control.data(), n_cp, ns->curve_order,
+		de_boor_evaluate(vec_data(ns->curve_knots), vec_data(ns->curve_control), n_cp, ns->curve_order,
 						 dim, t, point);
 
 		if (dim == 4 && fabsf(point[3]) > 1e-10f) {

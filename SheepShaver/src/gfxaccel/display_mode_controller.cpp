@@ -31,9 +31,11 @@
  *      current snapshot so they start observably in-sync.
  *
  *  Concurrency primitives:
- *    - `s_write_mutex` (std::mutex) serializes every public write API
- *      via std::lock_guard at function entry; readers stay lock-free.
- *    - `s_current` is `std::atomic<const DMCModeSnapshot *>`; writers
+ *    - `s_write_mutex` (dmc_mutex_t: an SRWLOCK on Win32, a
+ *      pthread_mutex_t elsewhere) serializes every public write API via the
+ *      DMCLock scope guard at function entry; readers stay lock-free.
+ *    - `s_current` is a `const DMCModeSnapshot *` slot published with
+ *      atomic.h's release store and read with its acquire load; writers
  *      publish via memory_order_release, readers load via
  *      memory_order_acquire. The snapshot structure is IMMUTABLE once
  *      published (mutations allocate a fresh snapshot then swap, rather
@@ -43,10 +45,10 @@
  *      guarantees a reader that held the snapshot pointer at N-1 keeps
  *      a valid pointer for at least one VBL grace period (matches
  *      maximumDrawableCount=3 triple-buffering rhythm).
- *    - `DMCReentryScope` + `s_in_dmc_call` (thread_local) guards against
- *      subscriber callbacks re-entering the controller; the inner call
- *      returns kDMCErrReentrantRequest BEFORE touching the mutex
- *      (avoiding deadlock under non-recursive std::mutex semantics).
+ *    - `DMCReentryScope` + `s_in_dmc_call` (thread-local storage) guards
+ *      against subscriber callbacks re-entering the controller; the inner
+ *      call returns kDMCErrReentrantRequest BEFORE touching the mutex
+ *      (avoiding deadlock under non-recursive mutex semantics).
  *    - `s_emul_thread` captured at first dmc_create; subsequent write
  *      calls from any other thread trigger an assertion.
  *
@@ -64,17 +66,28 @@
 #include <vector>
 
 // Concurrency primitives
-#include <mutex>
-#include <atomic>
+#include "atomic.h"
 #include <cassert>
 #if defined(_WIN32)
 #include <windows.h>
 typedef uintptr_t dmc_thread_id_t;
 static inline dmc_thread_id_t dmc_thread_self(void) { return (dmc_thread_id_t)GetCurrentThreadId(); }
+// SRWLOCK and pthread_mutex_t both have a static initialiser, so the writer
+// mutex needs no construction pass and no init-order guard.
+typedef SRWLOCK dmc_mutex_t;
+#define DMC_MUTEX_INIT      SRWLOCK_INIT
+#define DMC_MUTEX_LOCK(m)   AcquireSRWLockExclusive(&(m))
+#define DMC_MUTEX_UNLOCK(m) ReleaseSRWLockExclusive(&(m))
+#define DMC_THREAD_LOCAL    __declspec(thread)
 #else
 #include <pthread.h>
 typedef pthread_t dmc_thread_id_t;
 static inline dmc_thread_id_t dmc_thread_self(void) { return pthread_self(); }
+typedef pthread_mutex_t dmc_mutex_t;
+#define DMC_MUTEX_INIT      PTHREAD_MUTEX_INITIALIZER
+#define DMC_MUTEX_LOCK(m)   pthread_mutex_lock(&(m))
+#define DMC_MUTEX_UNLOCK(m) pthread_mutex_unlock(&(m))
+#define DMC_THREAD_LOCAL    __thread
 #endif
 
 #define DEBUG 0
@@ -97,8 +110,18 @@ static inline dmc_thread_id_t dmc_thread_self(void) { return pthread_self(); }
 // when mutating any of the non-atomic state AND when publishing to s_current;
 // readers ONLY load s_current and never touch the rest.
 // ---------------------------------------------------------------------------
-static std::mutex                             s_write_mutex;
-static std::atomic<const DMCModeSnapshot *>   s_current{NULL};
+static dmc_mutex_t                            s_write_mutex = DMC_MUTEX_INIT;
+static const DMCModeSnapshot * volatile       s_current = NULL;
+
+// Scoped writer lock; the sole replacement for std::lock_guard<std::mutex>.
+class DMCLock {
+	dmc_mutex_t &m;
+	DMCLock(const DMCLock &);
+	DMCLock &operator=(const DMCLock &);
+public:
+	DMCLock(dmc_mutex_t &mutex) : m(mutex) { DMC_MUTEX_LOCK(m); }
+	~DMCLock() { DMC_MUTEX_UNLOCK(m); }
+};
 static DMCState                               s_state = kDMCStateQuiescent;
 static uint32_t                               s_next_generation = 1;
 static bool                                   s_dmc_initialized = false;
@@ -130,10 +153,10 @@ static std::vector<DMCSubscriber>             s_subscribers;
 static const DMCModeSnapshot *                s_retired[2] = { NULL, NULL };
 
 // Re-entry guard (subscriber callback re-enters a dmc_*
-// write API). thread_local so a cross-thread writer doesn't see the flag
+// write API). Thread-local so a cross-thread writer doesn't see the flag
 // set by a different thread's outer call (defense-in-depth; all writers are
 // on the emul thread today).
-static thread_local bool                      s_in_dmc_call = false;
+static DMC_THREAD_LOCAL bool                  s_in_dmc_call = false;
 
 
 // Thread-identity baseline (assertion gate). Captured on the first
@@ -430,7 +453,7 @@ static void dmc_internal_compensate_rejected_transition(
 	if (rejected != NULL) {
 		dmc_internal_fire_exit_events(rejected);
 	}
-	s_current.store(restored, std::memory_order_release);
+	atomic_store_explicit(&s_current, restored, memory_order_release);
 	s_state = restored_state;
 	dmc_internal_fire_enter_events_advisory(restored, reason);
 }
@@ -441,7 +464,7 @@ static void dmc_internal_compensate_rejected_transition(
 // Every public write entry point follows the same preamble:
 //   1. DMCReentryScope reentry;
 //      if (!reentry.installed) return kDMCErrReentrantRequest;
-//   2. std::lock_guard<std::mutex> guard(s_write_mutex);
+//   2. DMCLock guard(s_write_mutex);
 //   3. DMC_ASSERT_EMUL_THREAD();
 //   4. FSM / validation checks.
 //   5. Allocate incoming snapshot, fire exits, publish (atomic release),
@@ -456,7 +479,7 @@ int32_t dmc_create(const struct DMCModeDesc *initial_mode) {
 	if (!reentry.installed) {
 		return kDMCErrReentrantRequest;
 	}
-	std::lock_guard<std::mutex> guard(s_write_mutex);
+	DMCLock guard(s_write_mutex);
 	// (No DMC_ASSERT_EMUL_THREAD here: production captures s_emul_thread
 	// on the FIRST dmc_create call. Subsequent writes assert.)
 
@@ -484,7 +507,7 @@ int32_t dmc_create(const struct DMCModeDesc *initial_mode) {
 
 	// T1 has no outgoing snapshot (source state is Quiescent), so there is
 	// nothing to exit.
-	s_current.store(snap, std::memory_order_release);
+	atomic_store_explicit(&s_current, snap, memory_order_release);
 	s_state = kDMCStateQuickDrawOwner;
 	s_dmc_initialized = true;
 
@@ -509,7 +532,7 @@ int32_t dmc_shutdown(void) {
 	if (!reentry.installed) {
 		return kDMCErrReentrantRequest;
 	}
-	std::lock_guard<std::mutex> guard(s_write_mutex);
+	DMCLock guard(s_write_mutex);
 	DMC_ASSERT_EMUL_THREAD();
 
 	if (!s_dmc_initialized) {
@@ -519,11 +542,12 @@ int32_t dmc_shutdown(void) {
 	// registration order. There is NO incoming snapshot in Quiescent, so
 	// we do not fire enter (reverse enter is conditional on an incoming
 	// snapshot).
-	const DMCModeSnapshot *cur = s_current.load(std::memory_order_relaxed);
+	const DMCModeSnapshot *cur = atomic_load_explicit(&s_current, memory_order_relaxed);
 	if (cur != NULL) {
 		dmc_internal_fire_exit_events(cur);
 	}
-	s_current.store(NULL, std::memory_order_release);
+	atomic_store_explicit(&s_current, (const DMCModeSnapshot *)NULL,
+	                      memory_order_release);
 	s_state = kDMCStateQuiescent;
 	s_dmc_initialized = false;
 	s_mode_switch_prepared = false;
@@ -553,7 +577,7 @@ int32_t dmc_subscribe(const struct DMCSubscriber *sub) {
 	if (!reentry.installed) {
 		return kDMCErrReentrantRequest;
 	}
-	std::lock_guard<std::mutex> guard(s_write_mutex);
+	DMCLock guard(s_write_mutex);
 	DMC_ASSERT_EMUL_THREAD();
 
 	if (!s_dmc_initialized) {
@@ -579,7 +603,7 @@ int32_t dmc_subscribe(const struct DMCSubscriber *sub) {
 	// a mid-init subscriber cannot veto an already-committed state - it
 	// must deal with whatever mode is currently published or fail in its
 	// own init path.
-	const DMCModeSnapshot *cur = s_current.load(std::memory_order_relaxed);
+	const DMCModeSnapshot *cur = atomic_load_explicit(&s_current, memory_order_relaxed);
 	if (cur != NULL && copy.on_mode_enter != NULL) {
 		(void)copy.on_mode_enter(cur, copy.ctx);
 	}
@@ -591,7 +615,7 @@ int32_t dmc_unsubscribe(const char *name) {
 	if (!reentry.installed) {
 		return kDMCErrReentrantRequest;
 	}
-	std::lock_guard<std::mutex> guard(s_write_mutex);
+	DMCLock guard(s_write_mutex);
 	DMC_ASSERT_EMUL_THREAD();
 
 	if (!s_dmc_initialized) {
@@ -613,7 +637,7 @@ int32_t dmc_unsubscribe(const char *name) {
 // Reader path - lock-free. Callable from any thread. The returned pointer
 // is valid until at LEAST the next VBL (ring-buffer retirement guarantee).
 const struct DMCModeSnapshot *dmc_current_snapshot(void) {
-	return s_current.load(std::memory_order_acquire);
+	return atomic_load_explicit(&s_current, memory_order_acquire);
 }
 
 int32_t dmc_prepare_mode_switch(const struct DMCModeDesc *new_mode) {
@@ -621,7 +645,7 @@ int32_t dmc_prepare_mode_switch(const struct DMCModeDesc *new_mode) {
 	if (!reentry.installed) {
 		return kDMCErrReentrantRequest;
 	}
-	std::lock_guard<std::mutex> guard(s_write_mutex);
+	DMCLock guard(s_write_mutex);
 	DMC_ASSERT_EMUL_THREAD();
 
 	if (!s_dmc_initialized) {
@@ -639,7 +663,7 @@ int32_t dmc_prepare_mode_switch(const struct DMCModeDesc *new_mode) {
 	}
 
 	const DMCModeSnapshot *outgoing =
-		s_current.load(std::memory_order_relaxed);
+		atomic_load_explicit(&s_current, memory_order_relaxed);
 	s_mode_switch_source_state = s_state;
 	s_mode_switch_requested = *new_mode;
 	s_mode_switch_prepared = true;
@@ -656,7 +680,7 @@ int32_t dmc_cancel_prepared_mode_switch(void) {
 	if (!reentry.installed) {
 		return kDMCErrReentrantRequest;
 	}
-	std::lock_guard<std::mutex> guard(s_write_mutex);
+	DMCLock guard(s_write_mutex);
 	DMC_ASSERT_EMUL_THREAD();
 
 	if (!s_dmc_initialized) {
@@ -668,7 +692,7 @@ int32_t dmc_cancel_prepared_mode_switch(void) {
 	}
 
 	const DMCModeSnapshot *outgoing =
-		s_current.load(std::memory_order_relaxed);
+		atomic_load_explicit(&s_current, memory_order_relaxed);
 	s_state = s_mode_switch_source_state;
 	s_mode_switch_prepared = false;
 	memset(&s_mode_switch_requested, 0, sizeof(s_mode_switch_requested));
@@ -682,7 +706,7 @@ int32_t dmc_request_mode_switch(const struct DMCModeDesc *new_mode) {
 	if (!reentry.installed) {
 		return kDMCErrReentrantRequest;
 	}
-	std::lock_guard<std::mutex> guard(s_write_mutex);
+	DMCLock guard(s_write_mutex);
 	DMC_ASSERT_EMUL_THREAD();
 
 	if (!s_dmc_initialized) {
@@ -704,7 +728,7 @@ int32_t dmc_request_mode_switch(const struct DMCModeDesc *new_mode) {
 	if (verr != kDMCNoErr) {
 		if (prepared) {
 			const DMCModeSnapshot *outgoing =
-				s_current.load(std::memory_order_relaxed);
+				atomic_load_explicit(&s_current, memory_order_relaxed);
 			s_state = s_mode_switch_source_state;
 			s_mode_switch_prepared = false;
 			memset(&s_mode_switch_requested, 0,
@@ -717,7 +741,7 @@ int32_t dmc_request_mode_switch(const struct DMCModeDesc *new_mode) {
 
 	// Read current snapshot via relaxed (mutex is held; readers only see
 	// release-published values).
-	const DMCModeSnapshot *outgoing = s_current.load(std::memory_order_relaxed);
+	const DMCModeSnapshot *outgoing = atomic_load_explicit(&s_current, memory_order_relaxed);
 	DMCState         src_state = prepared
 		? s_mode_switch_source_state : s_state;
 	uint32_t prior_owner = (outgoing != NULL) ? outgoing->active_owner : (uint32_t)kDMCOwnerQuickDraw;
@@ -788,7 +812,7 @@ int32_t dmc_request_mode_switch(const struct DMCModeDesc *new_mode) {
 	s_next_generation++;
 
 	// Publish (atomic release-store).
-	s_current.store(incoming, std::memory_order_release);
+	atomic_store_explicit(&s_current, incoming, memory_order_release);
 	DMCState target = dmc_target_state_for_owner(new_owner);
 	s_state = target;
 	s_mode_switch_prepared = false;
@@ -824,7 +848,7 @@ int32_t dmc_set_active_owner(uint32_t owner) {
 	if (!reentry.installed) {
 		return kDMCErrReentrantRequest;
 	}
-	std::lock_guard<std::mutex> guard(s_write_mutex);
+	DMCLock guard(s_write_mutex);
 	DMC_ASSERT_EMUL_THREAD();
 
 	if (!s_dmc_initialized) {
@@ -847,7 +871,7 @@ int32_t dmc_set_active_owner(uint32_t owner) {
 		return kDMCErrTransitionInProgress;
 	}
 
-	const DMCModeSnapshot *outgoing = s_current.load(std::memory_order_relaxed);
+	const DMCModeSnapshot *outgoing = atomic_load_explicit(&s_current, memory_order_relaxed);
 	// Idempotent early-return when the requested
 	// owner + the current FSM state already match. Once engines
 	// start vending overlays per frame (which drives a dmc_set_active_owner call
@@ -867,7 +891,7 @@ int32_t dmc_set_active_owner(uint32_t owner) {
 		return kDMCErrOutOfMemory;
 	}
 	s_next_generation++;
-	s_current.store(incoming, std::memory_order_release);
+	atomic_store_explicit(&s_current, incoming, memory_order_release);
 	DMCState target = dmc_target_state_for_owner(owner);
 	s_state = target;
 
@@ -884,7 +908,7 @@ int32_t dmc_request_blanking(const uint8_t rgba[4]) {
 	if (!reentry.installed) {
 		return kDMCErrReentrantRequest;
 	}
-	std::lock_guard<std::mutex> guard(s_write_mutex);
+	DMCLock guard(s_write_mutex);
 	DMC_ASSERT_EMUL_THREAD();
 
 	if (!s_dmc_initialized) {
@@ -897,7 +921,7 @@ int32_t dmc_request_blanking(const uint8_t rgba[4]) {
 		return kDMCErrTransitionInProgress;
 	}
 
-	const DMCModeSnapshot *outgoing = s_current.load(std::memory_order_relaxed);
+	const DMCModeSnapshot *outgoing = atomic_load_explicit(&s_current, memory_order_relaxed);
 
 	DMCModeSnapshot *incoming = dmc_clone_snapshot_with_owner(outgoing,
 															  s_next_generation,
@@ -907,7 +931,7 @@ int32_t dmc_request_blanking(const uint8_t rgba[4]) {
 		return kDMCErrOutOfMemory;
 	}
 	s_next_generation++;
-	s_current.store(incoming, std::memory_order_release);
+	atomic_store_explicit(&s_current, incoming, memory_order_release);
 	s_state = kDMCStateBlanking;
 
 	/* Blanking changes visible policy, not framebuffer identity. Preserve all
@@ -921,7 +945,7 @@ int32_t dmc_end_blanking(void) {
 	if (!reentry.installed) {
 		return kDMCErrReentrantRequest;
 	}
-	std::lock_guard<std::mutex> guard(s_write_mutex);
+	DMCLock guard(s_write_mutex);
 	DMC_ASSERT_EMUL_THREAD();
 
 	if (!s_dmc_initialized) {
@@ -931,7 +955,7 @@ int32_t dmc_end_blanking(void) {
 		return kDMCErrNotBlanking;
 	}
 
-	const DMCModeSnapshot *outgoing = s_current.load(std::memory_order_relaxed);
+	const DMCModeSnapshot *outgoing = atomic_load_explicit(&s_current, memory_order_relaxed);
 
 	DMCModeSnapshot *incoming = dmc_clone_snapshot_with_owner(outgoing,
 															  s_next_generation,
@@ -941,7 +965,7 @@ int32_t dmc_end_blanking(void) {
 		return kDMCErrOutOfMemory;
 	}
 	s_next_generation++;
-	s_current.store(incoming, std::memory_order_release);
+	atomic_store_explicit(&s_current, incoming, memory_order_release);
 	s_state = kDMCStateQuickDrawOwner;
 
 	dmc_retire_snapshot(outgoing, incoming->generation);
@@ -963,13 +987,13 @@ int32_t dmc_record_palette_change(void) {
 	if (!reentry.installed) {
 		return kDMCErrReentrantRequest;
 	}
-	std::lock_guard<std::mutex> guard(s_write_mutex);
+	DMCLock guard(s_write_mutex);
 	DMC_ASSERT_EMUL_THREAD();
 
 	if (!s_dmc_initialized) {
 		return kDMCErrNotInitialized;
 	}
-	const DMCModeSnapshot *old = s_current.load(std::memory_order_relaxed);
+	const DMCModeSnapshot *old = atomic_load_explicit(&s_current, memory_order_relaxed);
 	if (old == NULL) {
 		return kDMCErrNotInitialized;
 	}
@@ -981,7 +1005,7 @@ int32_t dmc_record_palette_change(void) {
 	fresh->generation  = s_next_generation++;
 	fresh->palette_gen = old->palette_gen + 1;
 
-	s_current.store(fresh, std::memory_order_release);
+	atomic_store_explicit(&s_current, fresh, memory_order_release);
 	dmc_retire_snapshot(old, fresh->generation);
 	return kDMCNoErr;
 }
@@ -989,7 +1013,7 @@ int32_t dmc_record_palette_change(void) {
 // Companion to
 // dmc_record_gamma_change_with_lut that ALSO publishes a fade_active flag in
 // the SAME snapshot bump. Clone-mutate-publish under the EXISTING s_write_mutex
-// (no NEW MTLFence / MTLSharedEvent / std::mutex / @synchronized / _Atomic - the
+// (no NEW MTLFence / MTLSharedEvent / mutex / @synchronized / atomic - the
 // flag rides the existing atomic-release publish). Publishing fade_active
 // and the interpolated LUT together avoids a frame where the LUT is mid-fade
 // but the flag is stale, which would warp one fade frame: a separate
@@ -999,13 +1023,13 @@ int32_t dmc_record_gamma_change_with_lut_fade(const uint8_t *lut, int fade_activ
 	if (!reentry.installed) {
 		return kDMCErrReentrantRequest;
 	}
-	std::lock_guard<std::mutex> guard(s_write_mutex);
+	DMCLock guard(s_write_mutex);
 	DMC_ASSERT_EMUL_THREAD();
 
 	if (!s_dmc_initialized) {
 		return kDMCErrNotInitialized;
 	}
-	const DMCModeSnapshot *old = s_current.load(std::memory_order_relaxed);
+	const DMCModeSnapshot *old = atomic_load_explicit(&s_current, memory_order_relaxed);
 	if (old == NULL) {
 		return kDMCErrNotInitialized;
 	}
@@ -1023,7 +1047,7 @@ int32_t dmc_record_gamma_change_with_lut_fade(const uint8_t *lut, int fade_activ
 	}
 	// If lut == NULL, the memcpy from old already carried the existing LUT
 
-	s_current.store(fresh, std::memory_order_release);
+	atomic_store_explicit(&s_current, fresh, memory_order_release);
 	dmc_retire_snapshot(old, fresh->generation);
 	return kDMCNoErr;
 }
@@ -1055,13 +1079,13 @@ int32_t dmc_record_driver_gamma_change(const uint8_t *lut) {
 	if (!reentry.installed) {
 		return kDMCErrReentrantRequest;
 	}
-	std::lock_guard<std::mutex> guard(s_write_mutex);
+	DMCLock guard(s_write_mutex);
 	DMC_ASSERT_EMUL_THREAD();
 
 	if (!s_dmc_initialized) {
 		return kDMCErrNotInitialized;
 	}
-	const DMCModeSnapshot *old = s_current.load(std::memory_order_relaxed);
+	const DMCModeSnapshot *old = atomic_load_explicit(&s_current, memory_order_relaxed);
 	if (old == NULL) {
 		return kDMCErrNotInitialized;
 	}
@@ -1079,7 +1103,7 @@ int32_t dmc_record_driver_gamma_change(const uint8_t *lut) {
 		memcpy(fresh->gamma_lut, lut, 768);
 	}
 
-	s_current.store(fresh, std::memory_order_release);
+	atomic_store_explicit(&s_current, fresh, memory_order_release);
 	dmc_retire_snapshot(old, fresh->generation);
 	return apply_now ? kDMCNoErr : kDMCDriverGammaDeferred;
 }
@@ -1101,7 +1125,7 @@ int32_t dmc_record_gamma_change(void) {
 //
 // Reuses the EXISTING DMC single-writer primitive (s_write_mutex +
 // DMCReentryScope + DMC_ASSERT_EMUL_THREAD); adds ZERO new MTLFence /
-// MTLSharedEvent / std::mutex / @synchronized / _Atomic. The DMC is the
+// MTLSharedEvent / mutex / @synchronized / atomic. The DMC is the
 // documented single-writer exception, so this is compliant.
 //
 // No subscriber events are fired - this is a pure snapshot field update, not an
@@ -1111,7 +1135,7 @@ int32_t dmc_set_blanking_color(const uint8_t rgba[4]) {
 	if (!reentry.installed) {
 		return kDMCErrReentrantRequest;
 	}
-	std::lock_guard<std::mutex> guard(s_write_mutex);
+	DMCLock guard(s_write_mutex);
 	DMC_ASSERT_EMUL_THREAD();
 
 	if (!s_dmc_initialized) {
@@ -1120,7 +1144,7 @@ int32_t dmc_set_blanking_color(const uint8_t rgba[4]) {
 	if (rgba == NULL) {
 		return kDMCErrInvalidModeDesc;   /* defensive: param-invalid */
 	}
-	const DMCModeSnapshot *old = s_current.load(std::memory_order_relaxed);
+	const DMCModeSnapshot *old = atomic_load_explicit(&s_current, memory_order_relaxed);
 	if (old == NULL) {
 		return kDMCErrNotInitialized;
 	}
@@ -1132,7 +1156,7 @@ int32_t dmc_set_blanking_color(const uint8_t rgba[4]) {
 	fresh->generation = s_next_generation++;
 	memcpy(fresh->blanking_rgba, rgba, 4);
 
-	s_current.store(fresh, std::memory_order_release);
+	atomic_store_explicit(&s_current, fresh, memory_order_release);
 	dmc_retire_snapshot(old, fresh->generation);
 	return kDMCNoErr;
 }

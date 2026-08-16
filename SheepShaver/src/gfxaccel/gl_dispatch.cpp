@@ -15,6 +15,7 @@
  */
 
 #include <cstring>
+#include "vec_data.h"
 #include <cstdio>
 
 #include "sysdeps.h"
@@ -975,14 +976,23 @@ static void GLRecordCommand(GLContext *ctx, uint32_t sub_opcode,
 				cmd.data[b] = ReadMacInt8(mac_ptr + b);
 			// Append float bits after pointer data
 			if (flt_bytes > 0)
-				memcpy(cmd.data.data() + ptr_data_size, float_bits, flt_bytes);
+				memcpy(vec_data(cmd.data) + ptr_data_size, float_bits, flt_bytes);
 		}
 	} else if (flt_bytes > 0) {
 		cmd.data.resize(flt_bytes);
-		memcpy(cmd.data.data(), float_bits, flt_bytes);
+		memcpy(vec_data(cmd.data), float_bits, flt_bytes);
 	}
 
-	ctx->display_lists[ctx->current_list_name].commands.push_back(std::move(cmd));
+	/* push_back copies, and cmd owns a payload vector. Append an empty
+	 * command and hand the payload over by swap so the buffer moves rather
+	 * than being reallocated and copied. cmd dies at the end of this call. */
+	std::vector<GLCommand> &list =
+		ctx->display_lists[ctx->current_list_name].commands;
+	list.push_back(GLCommand());
+	GLCommand &slot = list.back();
+	slot.opcode = cmd.opcode;
+	slot.args = cmd.args;
+	slot.data.swap(cmd.data);
 }
 
 
@@ -1012,7 +1022,7 @@ void GLReplayCommand(GLContext *ctx, const GLCommand &cmd)
 	int ptr_arg_index = -1;
 	int ptr_data_size = PointerDataSize(cmd.opcode, r3, r4, r5, ptr_arg_index);
 
-	const uint32_t *float_bits = nullptr;
+	const uint32_t *float_bits = NULL;
 	int num_float_args = 0;
 
 	if (ptr_data_size > 0 && ptr_arg_index >= 0 && (int)cmd.data.size() >= ptr_data_size) {
@@ -1035,12 +1045,12 @@ void GLReplayCommand(GLContext *ctx, const GLCommand &cmd)
 
 		// Float bits follow pointer data in cmd.data
 		if ((int)cmd.data.size() > ptr_data_size) {
-			float_bits = (const uint32_t *)(cmd.data.data() + ptr_data_size);
+			float_bits = (const uint32_t *)(vec_data(cmd.data) + ptr_data_size);
 			num_float_args = ((int)cmd.data.size() - ptr_data_size) / 4;
 		}
 	} else if (!cmd.data.empty()) {
 		// No pointer data -- cmd.data contains only float bits
-		float_bits = (const uint32_t *)cmd.data.data();
+		float_bits = (const uint32_t *)vec_data(cmd.data);
 		num_float_args = (int)cmd.data.size() / 4;
 	}
 

@@ -19,6 +19,7 @@
  */
 
 #include "sysdeps.h"
+#include "vec_data.h"
 
 #include <vector>
 
@@ -172,7 +173,7 @@ static void do_putscrap(uint32 type, void *scrap, int32 length)
 	HANDLE hData = GlobalAlloc(GMEM_DDESHARE, clip_data.size());
 	if (hData) {
 		uint8 *data = (uint8 *)GlobalLock(hData);
-		memcpy(data, clip_data.data(), clip_data.size());
+		memcpy(data, vec_data(clip_data), clip_data.size());
 		GlobalUnlock(hData);
 		if (!SetClipboardData(uFormat, hData))
 			GlobalFree(hData);

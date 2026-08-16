@@ -1913,7 +1913,8 @@ bool VideoInit(bool classic)
 			* width/height/caps. Real drivers never exceeded 3-4 records. */
 #if TARGET_OS_IPHONE
 		std::vector<MonitorResolution> ios_resolutions = objc_getAllMonitorResolutions();
-		for(const MonitorResolution& resolution : ios_resolutions) {
+		for (size_t r = 0; r < ios_resolutions.size(); r++) {
+			const MonitorResolution &resolution = ios_resolutions[r];
 			for (int d = VIDEO_DEPTH_8BIT; d <= default_depth; d++)
 				add_mode(display_type, resolution.width, resolution.height, resolution.index, TrivialBytesPerRow(resolution.width, (video_depth)d), d);
 		}

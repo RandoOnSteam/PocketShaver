@@ -52,7 +52,7 @@ extern "C" {
  * read attributes later; Myth II does), so a full mode walk consumes
  * modes+1 slots. Stale enumeration contexts are recycled under table
  * pressure by DSpAllocMetadataContextHandle. Per-slot cost is one
- * pointer; the VBL walks over the table are nullptr-skip cheap. */
+ * pointer; the VBL walks over the table are NULL-skip cheap. */
 #define DSP_MAX_CONTEXTS 64
 #endif
 extern struct DSpContextPrivate *DSpGetContext(uint32_t handle);
@@ -535,7 +535,7 @@ extern void     DSpHandleForegroundFromEmulThread(void);
 
 /*
  *  Atomic bridge. Implementation lives in
- *  dsp_engine.cpp so the _Atomic uint32_t flag is owned by the engine
+ *  dsp_engine.cpp so the atomic_uint32 flag is owned by the engine
  *  lifecycle module; dsp_draw_context.mm calls this from the drain paths
  *  to read + clear the pending state in one acquire-ordered exchange.
  *  Returns a kDSpPending* bitmask (0 = none pending).

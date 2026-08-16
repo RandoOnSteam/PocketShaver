@@ -11,8 +11,15 @@
 cmake_minimum_required(VERSION 3.16)
 project(macemu VERSION 1.0 LANGUAGES C CXX)
 
-# video_sdl2.cpp uses designated initializers
-set(CMAKE_CXX_STANDARD 20)
+# The C++ in this tree is written to C++98: no <atomic>/<thread>/<chrono>/
+# <unordered_map>, no auto/lambdas/nullptr/constexpr/range-for/move.  See
+# SheepShaver/src/include/atomic.h for the per-platform stand-in for C11
+# <stdatomic.h>.
+#
+# The C stays at C99. Every .c file in the build is vendored or generated -
+# slirp (BSD), ppc-dis.c (binutils), sshpty/strlcpy (OpenSSH) - and each uses
+# // comments, `inline` or <stdbool.h>, which -std=c90 rejects outright.
+set(CMAKE_CXX_STANDARD 98)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_C_STANDARD 99)
 

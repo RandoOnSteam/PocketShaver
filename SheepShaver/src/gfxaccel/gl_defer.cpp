@@ -348,7 +348,8 @@ int record_size(const GLDeferDesc &d) {
 void GLDeferBuildDescriptors(void) {
 	std::memset(gl_defer_desc, 0, sizeof(gl_defer_desc));
 
-	for (const GLDeferRow &row : kRows) {
+	for (size_t r = 0; r < sizeof(kRows) / sizeof(kRows[0]); r++) {
+		const GLDeferRow &row = kRows[r];
 		assert(row.op < GL_MAX_SUBOPCODE && "descriptor opcode out of range");
 		GLDeferDesc &d = gl_defer_desc[row.op];
 		// No opcode should be authored twice.

@@ -37,7 +37,7 @@
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_syswm.h>
 
-#include <stdatomic.h>
+#include "atomic.h"
 
 #include "sysdeps.h"
 #include "video.h"
@@ -159,8 +159,8 @@ static bool                         compositor_initialized = false;
 // so neither pair tears.
 // ---------------------------------------------------------------------------
 
-static _Atomic uint64_t s_present_rect_origin = 0;   // (x << 32) | y, window points
-static _Atomic uint64_t s_present_rect_size   = 0;   // (w << 32) | h, window points
+static atomic_uint64 s_present_rect_origin = 0;   // (x << 32) | y, window points
+static atomic_uint64 s_present_rect_size   = 0;   // (w << 32) | h, window points
 
 extern "C" void MetalCompositorRefreshPresentRect(void)
 {
@@ -202,12 +202,12 @@ extern "C" void MetalCompositorGetPresentRect(int *out_x, int *out_y,
 // the device. Writers on the current main==emul thread apply complete/partial
 // updates to the back buffer. The VBL callback, also on main==emul today,
 // promotes the back buffer only when dirty. Reader (compositor encode) binds
-// front buffer to fragment shader. C11 _Atomic for index/dirty latching is
+// front buffer to fragment shader. atomic.h for index/dirty latching is
 // kept as a minimal future-thread-split/test primitive.
 static id<MTLBuffer>                s_palette_buffers[2] = { nil, nil };
-static _Atomic uint8_t              s_palette_front_idx  = 0;
-static _Atomic uint8_t              s_palette_dirty      = 0;
-static _Atomic uint8_t              s_palette_back_in_sync = 1;
+static atomic_uint32                s_palette_front_idx  = 0;
+static atomic_uint32                s_palette_dirty      = 0;
+static atomic_uint32                s_palette_back_in_sync = 1;
 
 static void reset_palette_latch_state(void)
 {
@@ -1199,7 +1199,8 @@ void MetalCompositorUpdatePalette(const uint8_t *pal, int num_colors)
     // Write to back buffer. Palette updates may be partial, so after a latch
     // the old front buffer must be copied into the new back buffer before
     // applying the next update.
-    uint8_t back = 1 - atomic_load_explicit(&s_palette_front_idx, memory_order_relaxed);
+    uint8_t back = (uint8_t)(1u - atomic_load_explicit(&s_palette_front_idx,
+                                                       memory_order_relaxed));
     if (!atomic_load_explicit(&s_palette_back_in_sync, memory_order_acquire)) {
         uint8_t front = 1 - back;
         memcpy(s_palette_buffers[back].contents,
@@ -1229,8 +1230,8 @@ void MetalCompositorUpdatePalette(const uint8_t *pal, int num_colors)
 void MetalCompositorPaletteLatch(void)
 {
     if (!atomic_load_explicit(&s_palette_dirty, memory_order_acquire)) return;
-    uint8_t old = atomic_load_explicit(&s_palette_front_idx, memory_order_relaxed);
-    atomic_store_explicit(&s_palette_front_idx, 1 - old, memory_order_release);
+    uint32_t old = atomic_load_explicit(&s_palette_front_idx, memory_order_relaxed);
+    atomic_store_explicit(&s_palette_front_idx, 1u - old, memory_order_release);
     atomic_store_explicit(&s_palette_dirty, 0, memory_order_release);
     atomic_store_explicit(&s_palette_back_in_sync, 0, memory_order_release);
 }
@@ -1324,7 +1325,8 @@ void MetalCompositorPresent(void)
 
     if (compositor_depth <= VIDEO_DEPTH_8BIT) {
         // Indexed mode: bind VBL-latched front palette buffer + uniforms
-        uint8_t front = atomic_load_explicit(&s_palette_front_idx, memory_order_acquire);
+        uint8_t front = (uint8_t)atomic_load_explicit(&s_palette_front_idx,
+                                                      memory_order_acquire);
         [enc setFragmentBuffer:s_palette_buffers[front] offset:0 atIndex:0];
         uint32_t bpp = (uint32_t)compositor_bits_per_pixel;
         [enc setFragmentBytes:&bpp length:sizeof(bpp) atIndex:1];

@@ -1759,28 +1759,30 @@ uint32_t NativeGLGetError(GLContext *ctx)
 	return err;
 }
 
+// Allocate a Mac-side copy of a GL query string once, then hand back the
+// same address on every later query.
+//
+// A prior per-iteration clear loop used a 4-byte WriteMacInt32 over
+// [0, len), writing len*4 bytes into a len-byte SheepMem allocation and
+// overrunning it by 3*len bytes. The clear was also redundant: the memcpy
+// below writes all len bytes (string + NUL). Removed to match the
+// NativeAGLErrorString analog (gl_engine.cpp:1689) which does
+// Mac_sysalloc(len) + memcpy(host_ptr, str, len) with no clear.
+static uint32_t alloc_string(uint32_t &addr, const char *str)
+{
+	if (addr == 0) {
+		uint32_t len = (uint32_t)strlen(str) + 1;
+		addr = Mac_sysalloc(len);
+		if (addr) {
+			uint8 *host_ptr = Mac2HostAddr(addr);
+			memcpy(host_ptr, str, len);
+		}
+	}
+	return addr;
+}
+
 uint32_t NativeGLGetString(GLContext *ctx, uint32_t name)
 {
-	// Allocate Mac-side strings once
-	auto alloc_string = [](uint32_t &addr, const char *str) {
-		if (addr == 0) {
-			uint32_t len = (uint32_t)strlen(str) + 1;
-			addr = Mac_sysalloc(len);
-			if (addr) {
-				// A prior per-iteration clear loop used a 4-byte
-				// WriteMacInt32 over [0, len), writing len*4 bytes into a
-				// len-byte SheepMem allocation and overrunning it by 3*len
-				// bytes. The clear was also redundant: the memcpy below writes
-				// all len bytes (string + NUL). Removed to match the
-				// NativeAGLErrorString analog (gl_engine.cpp:1689) which does
-				// Mac_sysalloc(len) + memcpy(host_ptr, str, len) with no clear.
-				uint8 *host_ptr = Mac2HostAddr(addr);
-				memcpy(host_ptr, str, len);
-			}
-		}
-		return addr;
-	};
-
 	switch (name) {
 	case GL_VENDOR:     return alloc_string(gl_string_vendor_addr,   "ATI Technologies Inc.");
 	case GL_RENDERER:   return alloc_string(gl_string_renderer_addr, "ATI Rage 128 Pro OpenGL Engine");
@@ -2329,10 +2331,10 @@ void NativeGLDeleteTextures(GLContext *ctx, uint32_t n, uint32_t mac_ptr)
 		uint32_t name = ReadMacInt32(mac_ptr + i * 4);
 		if (name == 0) continue;
 
-		auto it = ctx->texture_objects.find(name);
+		GLTextureObjectMap::iterator it = ctx->texture_objects.find(name);
 		if (it != ctx->texture_objects.end()) {
 			// Log deletion for debugging texture lifecycle
-			bool had_metal = (it->second.metal_texture != nullptr);
+			bool had_metal = (it->second.metal_texture != NULL);
 			GL_LOG("glDeleteTextures: deleting tex %u (had_metal=%d, %dx%d)",
 				   name, had_metal, it->second.width, it->second.height);
 
@@ -2420,7 +2422,7 @@ void NativeGLTexParameteri(GLContext *ctx, uint32_t target, uint32_t pname, int3
 
 	if (texName == 0) return;
 
-	auto it = ctx->texture_objects.find(texName);
+	GLTextureObjectMap::iterator it = ctx->texture_objects.find(texName);
 	if (it == ctx->texture_objects.end()) return;
 
 	GLTextureObject &tex = it->second;
@@ -2690,7 +2692,7 @@ static void GLForceOpaqueIfInternalFormatLacksAlpha(const GLTextureObject &tex,
 													uint8_t *bgra,
 													int dataLen)
 {
-	if (!tex.internal_format_opaque || bgra == nullptr || dataLen <= 0)
+	if (!tex.internal_format_opaque || bgra == NULL || dataLen <= 0)
 		return;
 	for (int i = 3; i < dataLen; i += 4)
 		bgra[i] = 0xFF;
@@ -2717,7 +2719,7 @@ static void GLLogUploadedTextureAlphaHistogram(const GLTextureObject &tex,
 											   const uint8_t *bgra,
 											   int dataLen)
 {
-	if (bgra == nullptr || dataLen < 4 || width <= 0 || height <= 0)
+	if (bgra == NULL || dataLen < 4 || width <= 0 || height <= 0)
 		return;
 	/* Generous cap: the interesting uploads are often LATE (Quake 3 creates its
 	 * quit-screen font atlas thousands of draws in), and a low cap silently
@@ -2831,7 +2833,7 @@ static bool GLDetectLegacyUnsignedShortExactDuplicatedByteTexture(
 		}
 	}
 
-	if (outStats != nullptr)
+	if (outStats != NULL)
 		*outStats = stats;
 
 	return !hasExplicitPalette &&
@@ -2861,13 +2863,13 @@ static uint8_t *ConvertPixelsToBGRA8(uint32_t mac_pixels, int width, int height,
 									  const GLPixelStore &ps,
 									  const GLContext *ctx,
 									  int *outLen,
-									  GLTextureObject *textureObject = nullptr,
+									  GLTextureObject *textureObject = NULL,
 									  int32_t textureLevel = 0,
 									  bool updateTextureLegacyState = false)
 {
 	int dstBytes = width * height * 4;
 	uint8_t *dst = (uint8_t *)malloc(dstBytes);
-	if (!dst) { *outLen = 0; return nullptr; }
+	if (!dst) { *outLen = 0; return NULL; }
 	*outLen = dstBytes;
 
 	int srcBpp = GLPixelSourceBytesPerPixel(format, type);
@@ -2885,7 +2887,7 @@ static uint8_t *ConvertPixelsToBGRA8(uint32_t mac_pixels, int width, int height,
 	int rowStride = ComputeRowStride(width, srcBpp, ps.unpack_alignment, ps.unpack_row_length);
 	uint32_t srcBase = mac_pixels + ps.unpack_skip_rows * rowStride + ps.unpack_skip_pixels * srcBpp;
 	const bool hasExplicitColorIndexPalette =
-		ctx != nullptr &&
+		ctx != NULL &&
 		(ctx->color_table_enabled || ctx->color_tables[0].defined ||
 		 GLColorIndexPixelMapsDefined(ctx->pixel_map_i_to_r_size,
 									 ctx->pixel_map_i_to_g_size,
@@ -2917,22 +2919,22 @@ static uint8_t *ConvertPixelsToBGRA8(uint32_t mac_pixels, int width, int height,
 	bool legacyUnsignedShortBGR332 = false;
 	bool legacyUnsignedShortIndexGray = false;
 	bool legacyUnsignedShortScalarNoPalette = false;
-	const uint8_t *colorIndexPalette = useActiveDSpCLUT ? activeDSpCLUT : nullptr;
+	const uint8_t *colorIndexPalette = useActiveDSpCLUT ? activeDSpCLUT : NULL;
 	int colorIndexPaletteEntries = useActiveDSpCLUT ? 256 : 0;
-	const char *legacyPaletteSource = nullptr;
+	const char *legacyPaletteSource = NULL;
 	const bool forceLegacyUnsignedShortPaletteIndex =
 		legacyUnsignedShortEligible &&
-		textureObject != nullptr &&
+		textureObject != NULL &&
 		textureLevel > 0 &&
 		textureObject->legacy_ushort_palette_index_chain;
 	const bool forceLegacyUnsignedShortBGR332 =
 		legacyUnsignedShortEligible &&
-		textureObject != nullptr &&
+		textureObject != NULL &&
 		textureLevel > 0 &&
 		textureObject->legacy_ushort_bgr332_chain;
 	const bool forceLegacyUnsignedShortIndexGray =
 		legacyUnsignedShortEligible &&
-		textureObject != nullptr &&
+		textureObject != NULL &&
 		textureLevel > 0 &&
 		textureObject->legacy_ushort_index_gray_chain;
 	const bool forceLegacyUnsignedShortLayout =
@@ -3128,7 +3130,7 @@ static uint8_t *ConvertPixelsToBGRA8(uint32_t mac_pixels, int width, int height,
 	}
 	if (legacyUnsignedShortEligible &&
 		updateTextureLegacyState &&
-		textureObject != nullptr &&
+		textureObject != NULL &&
 		textureLevel == 0) {
 		const bool previousPalette =
 			textureObject->legacy_ushort_palette_index_chain;
@@ -3234,14 +3236,14 @@ uint8_t *GLConvertMacPixelsToBGRA8(GLContext *ctx,
 								   uint32_t type,
 								   int *outLen)
 {
-	if (!outLen) return nullptr;
+	if (!outLen) return NULL;
 	if (ctx)
 		return ConvertPixelsToBGRA8(mac_pixels, width, height, format, type,
 									ctx->pixel_store, ctx, outLen);
 
 	GLPixelStore ps = {4, 0, 0, 0, 4, 0, 0, 0};
 	return ConvertPixelsToBGRA8(mac_pixels, width, height, format, type,
-								ps, nullptr, outLen);
+								ps, NULL, outLen);
 }
 
 
@@ -3326,7 +3328,7 @@ void NativeGLTexImage2D(GLContext *ctx, uint32_t target, int32_t level,
 
 	if (texName == 0) return;
 
-	auto it = ctx->texture_objects.find(texName);
+	GLTextureObjectMap::iterator it = ctx->texture_objects.find(texName);
 	if (it == ctx->texture_objects.end()) { GL_LOG("NativeGLTexImage2D: texture %u not found in map", texName); return; }
 
 	GLTextureObject &tex = it->second;
@@ -3409,7 +3411,7 @@ void NativeGLTexSubImage2D(GLContext *ctx, uint32_t target, int32_t level,
 		texName = ctx->tex_units[ctx->active_texture].bound_texture_2d;
 	if (texName == 0) return;
 
-	auto it = ctx->texture_objects.find(texName);
+	GLTextureObjectMap::iterator it = ctx->texture_objects.find(texName);
 	if (it == ctx->texture_objects.end()) return;
 
 	GLTextureObject &tex = it->second;
@@ -3474,7 +3476,7 @@ void NativeGLCopyTexImage2D(GLContext *ctx, uint32_t target, int32_t level,
 		: ctx->tex_units[ctx->active_texture].bound_texture_1d;
 	if (texName == 0) { free(bgra); return; }
 
-	auto it = ctx->texture_objects.find(texName);
+	GLTextureObjectMap::iterator it = ctx->texture_objects.find(texName);
 	if (it == ctx->texture_objects.end()) { free(bgra); return; }
 
 	GLTextureObject &tex = it->second;
@@ -3506,7 +3508,7 @@ void NativeGLCopyTexSubImage2D(GLContext *ctx, uint32_t target, int32_t level,
 		: ctx->tex_units[ctx->active_texture].bound_texture_1d;
 	if (texName == 0) { free(bgra); return; }
 
-	auto it = ctx->texture_objects.find(texName);
+	GLTextureObjectMap::iterator it = ctx->texture_objects.find(texName);
 	if (it == ctx->texture_objects.end()) { free(bgra); return; }
 
 	GLTextureObject &tex = it->second;
@@ -4417,7 +4419,7 @@ void NativeGLPixelMapusv(GLContext *ctx, uint32_t map, int32_t mapsize, uint32_t
 }
 void NativeGLGetPixelMapfv(GLContext *ctx, uint32_t map, uint32_t values)
 {
-	const float *src = nullptr; int sz = 0;
+	const float *src = NULL; int sz = 0;
 	switch (map) {
 	case GL_PIXEL_MAP_I_TO_R: src = ctx->pixel_map_i_to_r; sz = ctx->pixel_map_i_to_r_size; break;
 	case GL_PIXEL_MAP_I_TO_G: src = ctx->pixel_map_i_to_g; sz = ctx->pixel_map_i_to_g_size; break;
@@ -4433,7 +4435,7 @@ void NativeGLGetPixelMapfv(GLContext *ctx, uint32_t map, uint32_t values)
 }
 void NativeGLGetPixelMapuiv(GLContext *ctx, uint32_t map, uint32_t values)
 {
-	const float *src = nullptr; int sz = 0;
+	const float *src = NULL; int sz = 0;
 	switch (map) {
 	case GL_PIXEL_MAP_I_TO_R: src = ctx->pixel_map_i_to_r; sz = ctx->pixel_map_i_to_r_size; break;
 	case GL_PIXEL_MAP_I_TO_G: src = ctx->pixel_map_i_to_g; sz = ctx->pixel_map_i_to_g_size; break;
@@ -4449,7 +4451,7 @@ void NativeGLGetPixelMapuiv(GLContext *ctx, uint32_t map, uint32_t values)
 }
 void NativeGLGetPixelMapusv(GLContext *ctx, uint32_t map, uint32_t values)
 {
-	const float *src = nullptr; int sz = 0;
+	const float *src = NULL; int sz = 0;
 	switch (map) {
 	case GL_PIXEL_MAP_I_TO_R: src = ctx->pixel_map_i_to_r; sz = ctx->pixel_map_i_to_r_size; break;
 	case GL_PIXEL_MAP_I_TO_G: src = ctx->pixel_map_i_to_g; sz = ctx->pixel_map_i_to_g_size; break;
@@ -4509,7 +4511,7 @@ void NativeGLPrioritizeTextures(GLContext *ctx, int32_t n, uint32_t textures_ptr
 	for (int32_t i = 0; i < n; i++) {
 		uint32_t name = ReadMacInt32(textures_ptr + i * 4);
 		// Priority is stored but not used by Metal runtime
-		auto it = ctx->texture_objects.find(name);
+		GLTextureObjectMap::iterator it = ctx->texture_objects.find(name);
 		if (it != ctx->texture_objects.end()) {
 			// Accept and ignore priority (Metal manages memory automatically)
 		}
@@ -4533,11 +4535,12 @@ extern void GLReplayCommand(GLContext *ctx, const GLCommand &cmd);
 
 void NativeGLCallList(GLContext *ctx, uint32_t list)
 {
-	auto it = ctx->display_lists.find(list);
+	GLDisplayListMap::iterator it = ctx->display_lists.find(list);
 	if (it == ctx->display_lists.end()) return;
 
-	for (const GLCommand &cmd : it->second.commands) {
-		GLReplayCommand(ctx, cmd);
+	const std::vector<GLCommand> &cmds = it->second.commands;
+	for (size_t i = 0; i < cmds.size(); i++) {
+		GLReplayCommand(ctx, cmds[i]);
 	}
 }
 
@@ -4702,7 +4705,7 @@ void NativeGLGetTexImage(GLContext *ctx, uint32_t target, int32_t level, uint32_
 	// Return zeroed data with warning - full Metal texture readback not yet implemented
 	GL_LOG("WARNING: glGetTexImage returning zeroes (known limitation)");
 	uint32_t tex = ctx->tex_units[ctx->active_texture].bound_texture_2d;
-	auto it = ctx->texture_objects.find(tex);
+	GLTextureObjectMap::iterator it = ctx->texture_objects.find(tex);
 	if (it != ctx->texture_objects.end() && p != 0) {
 		int w = it->second.width;
 		int h = it->second.height;
@@ -4713,7 +4716,7 @@ void NativeGLGetTexImage(GLContext *ctx, uint32_t target, int32_t level, uint32_
 void NativeGLGetTexLevelParameterfv(GLContext *ctx, uint32_t target, int32_t level, uint32_t pname, uint32_t p)
 {
 	uint32_t tex = ctx->tex_units[ctx->active_texture].bound_texture_2d;
-	auto it = ctx->texture_objects.find(tex);
+	GLTextureObjectMap::iterator it = ctx->texture_objects.find(tex);
 	if (it == ctx->texture_objects.end()) { WriteMacFloat(p, 0.0f); return; }
 	GLTextureObject &obj = it->second;
 	switch (pname) {
@@ -4727,7 +4730,7 @@ void NativeGLGetTexLevelParameterfv(GLContext *ctx, uint32_t target, int32_t lev
 void NativeGLGetTexLevelParameteriv(GLContext *ctx, uint32_t target, int32_t level, uint32_t pname, uint32_t p)
 {
 	uint32_t tex = ctx->tex_units[ctx->active_texture].bound_texture_2d;
-	auto it = ctx->texture_objects.find(tex);
+	GLTextureObjectMap::iterator it = ctx->texture_objects.find(tex);
 	if (it == ctx->texture_objects.end()) { WriteMacInt32(p, 0); return; }
 	GLTextureObject &obj = it->second;
 	switch (pname) {
@@ -4743,7 +4746,7 @@ void NativeGLGetTexParameterfv(GLContext *ctx, uint32_t target, uint32_t pname, 
 {
 	(void)target;
 	uint32_t tex = ctx->tex_units[ctx->active_texture].bound_texture_2d;
-	auto it = ctx->texture_objects.find(tex);
+	GLTextureObjectMap::iterator it = ctx->texture_objects.find(tex);
 	if (it == ctx->texture_objects.end()) { WriteMacFloat(mac_ptr, 0.0f); return; }
 	GLTextureObject &obj = it->second;
 	switch (pname) {
@@ -4759,7 +4762,7 @@ void NativeGLGetTexParameteriv(GLContext *ctx, uint32_t target, uint32_t pname, 
 {
 	(void)target;
 	uint32_t tex = ctx->tex_units[ctx->active_texture].bound_texture_2d;
-	auto it = ctx->texture_objects.find(tex);
+	GLTextureObjectMap::iterator it = ctx->texture_objects.find(tex);
 	if (it == ctx->texture_objects.end()) { WriteMacInt32(mac_ptr, 0); return; }
 	GLTextureObject &obj = it->second;
 	switch (pname) {
@@ -5005,7 +5008,7 @@ void NativeGLGetMapiv(GLContext *ctx, uint32_t target, uint32_t query, uint32_t 
 void NativeGLGetDoublev(GLContext *ctx, uint32_t pname, uint32_t mac_ptr)
 {
 	// Matrix queries
-	float *m = nullptr;
+	float *m = NULL;
 	if (pname == GL_MODELVIEW_MATRIX) m = ctx->modelview_stack[ctx->modelview_depth];
 	else if (pname == GL_PROJECTION_MATRIX) m = ctx->projection_stack[ctx->projection_depth];
 	else if (pname == GL_TEXTURE_MATRIX) m = ctx->texture_stack[ctx->active_texture][ctx->texture_depth[ctx->active_texture]];
@@ -5436,7 +5439,7 @@ static uint8_t *dxt_decompress_image(const uint8_t *src, int w, int h, uint32_t 
 
 	*outLen = w * h * 4;
 	uint8_t *dst = (uint8_t *)malloc(*outLen);
-	if (!dst) { *outLen = 0; return nullptr; }
+	if (!dst) { *outLen = 0; return NULL; }
 	memset(dst, 0xFF, *outLen); // default opaque white
 
 	for (int by = 0; by < bh; by++) {
@@ -5492,7 +5495,7 @@ void NativeGLCompressedTexImage2DARB(GLContext *ctx, uint32_t target, int32_t le
 
 	uint32_t texName = ctx->tex_units[ctx->active_texture].bound_texture_2d;
 	if (texName == 0) return;
-	auto it = ctx->texture_objects.find(texName);
+	GLTextureObjectMap::iterator it = ctx->texture_objects.find(texName);
 	if (it == ctx->texture_objects.end()) return;
 	GLTextureObject &tex = it->second;
 
@@ -5538,7 +5541,7 @@ void NativeGLCompressedTexSubImage2DARB(GLContext *ctx, uint32_t target, int32_t
 
 	uint32_t texName = ctx->tex_units[ctx->active_texture].bound_texture_2d;
 	if (texName == 0) return;
-	auto it = ctx->texture_objects.find(texName);
+	GLTextureObjectMap::iterator it = ctx->texture_objects.find(texName);
 	if (it == ctx->texture_objects.end()) return;
 	GLTextureObject &tex = it->second;
 
@@ -6320,7 +6323,7 @@ void NativeGLTexImage3DEXT(GLContext *ctx, uint32_t target, int32_t level, int32
 
 	uint32_t texName = ctx->tex_units[ctx->active_texture].bound_texture_3d;
 	if (texName == 0) return;
-	auto it = ctx->texture_objects.find(texName);
+	GLTextureObjectMap::iterator it = ctx->texture_objects.find(texName);
 	if (it == ctx->texture_objects.end()) return;
 	GLTextureObject &tex = it->second;
 
@@ -6382,7 +6385,7 @@ void NativeGLTexSubImage3DEXT(GLContext *ctx, uint32_t target, int32_t level,
 
 	uint32_t texName = ctx->tex_units[ctx->active_texture].bound_texture_3d;
 	if (texName == 0) return;
-	auto it = ctx->texture_objects.find(texName);
+	GLTextureObjectMap::iterator it = ctx->texture_objects.find(texName);
 	if (it == ctx->texture_objects.end()) return;
 	GLTextureObject &tex = it->second;
 	if (!tex.metal_texture) return;
@@ -6430,7 +6433,7 @@ void NativeGLCopyTexSubImage3DEXT(GLContext *ctx, uint32_t target, int32_t level
 
 	uint32_t texName = ctx->tex_units[ctx->active_texture].bound_texture_3d;
 	if (texName != 0) {
-		auto it = ctx->texture_objects.find(texName);
+		GLTextureObjectMap::iterator it = ctx->texture_objects.find(texName);
 		if (it != ctx->texture_objects.end()) {
 			GLMetalUploadSubTexture3D(ctx, &it->second, level, xoff, yoff, zoff, w, h, 1, bgra, w * 4, w * h * 4);
 		}

@@ -19,23 +19,23 @@
  *    - Observer closure runs on main queue (queue: .main in addObserver
  *      call) - UIApplication.shared.isIdleTimerDisabled write happens on
  *      main thread per UIKit's main-thread contract.
- *    - Getter: single-word _Atomic bool read (memory_order_relaxed);
+ *    - Getter: single-word atomic_uint32 read (memory_order_relaxed);
  *      callable from any thread.
  *
- *  Threading rationale for `_Atomic bool`:
+ *  Threading rationale for the atomic flag:
  *    - Single writer: DSpContext_SetStateHandler on emul thread
  *      (NATIVE_DSP_DISPATCH serialized).
  *    - Readers: DSpIdleTimerService on main thread via the
  *      willEnterForegroundNotification observer; the emul-thread
  *      conditional-set read in DSpContext_SetStateHandler (both via
  *      DSpHostBridge_GetActiveFullscreen).
- *    - Cross-thread single-word bool - `_Atomic bool` with
+ *    - Cross-thread single-word bool - the atomic flag with
  *      memory_order_relaxed is the minimum sanctioned primitive per the
  *      read-mostly precedent. The threading-grep CI gate
  *      (MTLFence|MTLSharedEvent|std::mutex|@synchronized) does not
- *      match _Atomic by design.
+ *      match the atomic flag by design.
  *
- *  The `_Atomic bool s_dsp_active_fullscreen` flag is kept
+ *  The `atomic_uint32 s_dsp_active_fullscreen` flag is kept
  *  because DSpIdleTimerService re-reads it on willEnterForegroundNotification
  *  - the notification post path alone would miss the case where DSp
  *  transitioned to Active-fullscreen WHILE the app was backgrounded (no
@@ -47,24 +47,24 @@
 
 #import "dsp_host_bridge.h"
 
-#include <stdatomic.h>
+#include "atomic.h"
 
 /* Module-scope storage - single writer emul-thread; readers: main-thread
  * Swift observer on foreground re-apply, plus the emul-thread
  * conditional-set read via the getter. Initial state = false (no DSp
  * context is Active at DSp boot time; DSpContext_Reserve's default
  * state is Inactive). */
-static _Atomic bool s_dsp_active_fullscreen = false;
+static atomic_uint32 s_dsp_active_fullscreen = 0;
 
 extern "C" void DSpHostBridge_SetActiveFullscreen(bool active)
 {
 	/* Write the flag first so readers (including the observer
 	 * closure that the notification post will trigger) see the new value
-	 * atomically. _Atomic bool with memory_order_relaxed is the minimum
+	 * atomically. atomic_uint32 with memory_order_relaxed is the minimum
 	 * sanctioned primitive - the Swift observer's queue: .main hop
 	 * provides the happens-before for the subsequent UIApplication write
 	 * (main-runloop iteration boundary is a synchronization point). */
-	atomic_store_explicit(&s_dsp_active_fullscreen, active,
+	atomic_store_explicit(&s_dsp_active_fullscreen, active ? 1u : 0u,
 	                      memory_order_relaxed);
 
 	/* Post notification to DSpIdleTimerService. Uses the
@@ -87,5 +87,5 @@ extern "C" void DSpHostBridge_SetActiveFullscreen(bool active)
 extern "C" bool DSpHostBridge_GetActiveFullscreen(void)
 {
 	return atomic_load_explicit(&s_dsp_active_fullscreen,
-	                            memory_order_relaxed);
+	                            memory_order_relaxed) != 0;
 }

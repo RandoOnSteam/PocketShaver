@@ -9,7 +9,7 @@
  *  (at your option) any later version.
  *
  *  Pure C++ companion to gfxaccel_resources_heap.mm. Owns:
- *    - PSO cache: std::unordered_map keyed by shader pair +
+ *    - PSO cache: std::map keyed by shader pair +
  *      vertex descriptor + color format tuple.
  *    - LRU purgeable bookkeeping: std::deque of purgeable
  *      entries with last-use frame tracking.
@@ -20,8 +20,8 @@
  *  reached via forward-declared extern "C" helpers. No id<MTLHeap> /
  *  id<MTLBuffer> / id<MTLTexture> types cross this .cpp file.
  *
- *  Threading: single-writer from PPC emul thread. No std::mutex,
- *  no std::atomic. The emul serial queue in the .mm side is the
+ *  Threading: single-writer from PPC emul thread. No mutex,
+ *  no atomics. The emul serial queue in the .mm side is the
  *  synchronization primitive for memory-warning dispatch.
  */
 
@@ -30,7 +30,7 @@
 
 #include <cstdio>
 #include <cstring>
-#include <unordered_map>
+#include <map>
 #include <deque>
 #include <vector>
 
@@ -73,25 +73,25 @@ struct PSOCacheKey {
 	}
 };
 
-struct PSOCacheKeyHash {
-	size_t operator()(const PSOCacheKey &k) const {
-		// FNV-1a inspired hash combining all fields
-		size_t h = 14695981039346656037ULL;
-		h ^= k.shader_pair_hash;
-		h *= 1099511628211ULL;
-		h ^= k.vertex_descriptor_hash;
-		h *= 1099511628211ULL;
+// Ordering for the std::map below: lexicographic over the same fields
+// operator== compares, so equal keys are neither less nor greater.
+struct PSOCacheKeyLess {
+	bool operator()(const PSOCacheKey &a, const PSOCacheKey &b) const {
+		if (a.shader_pair_hash != b.shader_pair_hash)
+			return a.shader_pair_hash < b.shader_pair_hash;
+		if (a.vertex_descriptor_hash != b.vertex_descriptor_hash)
+			return a.vertex_descriptor_hash < b.vertex_descriptor_hash;
 		for (int i = 0; i < 4; ++i) {
-			h ^= (size_t)k.color_format[i];
-			h *= 1099511628211ULL;
+			if (a.color_format[i] != b.color_format[i])
+				return a.color_format[i] < b.color_format[i];
 		}
-		return h;
+		return false;
 	}
 };
 
 // Values are void* (id<MTLRenderPipelineState> as void* -- the .mm side
 // manages the ARC lifetime via CFBridgingRetain/Release).
-static std::unordered_map<PSOCacheKey, void*, PSOCacheKeyHash> g_pso_cache;
+static std::map<PSOCacheKey, void*, PSOCacheKeyLess> g_pso_cache;
 
 // ---------------------------------------------------------------------------
 // LRU purgeable list
