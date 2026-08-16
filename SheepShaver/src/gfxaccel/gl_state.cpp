@@ -2345,6 +2345,7 @@ void NativeGLDeleteTextures(GLContext *ctx, uint32_t n, uint32_t mac_ptr)
 			for (int u = 0; u < 4; u++) {
 				if (ctx->tex_units[u].bound_texture_2d == name) {
 					ctx->tex_units[u].bound_texture_2d = 0;
+					ctx->tex_units[u].bound_object_2d = NULL;
 					gl_clear_prepared_texture_2d_for_draw(ctx, u);
 					gl_clear_latched_texture_2d_for_array_draw(ctx, u);
 				}
@@ -2369,6 +2370,7 @@ void NativeGLBindTexture(GLContext *ctx, uint32_t target, uint32_t texture)
 		// Unbind: use default (no texture)
 		if (target == GL_TEXTURE_2D) {
 			ctx->tex_units[ctx->active_texture].bound_texture_2d = 0;
+			ctx->tex_units[ctx->active_texture].bound_object_2d = NULL;
 			gl_clear_prepared_texture_2d_for_draw(ctx, ctx->active_texture);
 			gl_clear_latched_texture_2d_for_array_draw(ctx, ctx->active_texture);
 		} else if (target == GL_TEXTURE_1D) {
@@ -2378,16 +2380,14 @@ void NativeGLBindTexture(GLContext *ctx, uint32_t target, uint32_t texture)
 	}
 
 	// Create texture object entry if not yet in map (GL spec: first bind creates)
-	if (ctx->texture_objects.find(texture) == ctx->texture_objects.end()) {
-		GLTextureObject obj;
-		memset(&obj, 0, sizeof(obj));
+	GLTextureObject &obj = ctx->texture_objects[texture];
+	if (obj.name != texture) {
 		obj.name = texture;
 		obj.min_filter = GL_NEAREST_MIPMAP_LINEAR;  // GL default
 		obj.mag_filter = GL_LINEAR;                   // GL default
 		obj.wrap_s = GL_REPEAT;
 		obj.wrap_t = GL_REPEAT;
 		obj.env_mode = GL_MODULATE;
-		ctx->texture_objects[texture] = obj;
 	}
 
 	if (target == GL_TEXTURE_2D) {
@@ -2400,6 +2400,7 @@ void NativeGLBindTexture(GLContext *ctx, uint32_t target, uint32_t texture)
 			}
 		}
 		ctx->tex_units[ctx->active_texture].bound_texture_2d = texture;
+		ctx->tex_units[ctx->active_texture].bound_object_2d = &obj;
 	} else if (target == GL_TEXTURE_1D) {
 		ctx->tex_units[ctx->active_texture].bound_texture_1d = texture;
 	}

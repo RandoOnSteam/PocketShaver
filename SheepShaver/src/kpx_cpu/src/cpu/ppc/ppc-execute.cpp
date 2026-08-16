@@ -1659,9 +1659,16 @@ void powerpc_cpu::schedule_decrementer_timer(uint64 deadline)
 {
 	start_decrementer_timer();
 	decrementer_timer_lock(decrementer_timer);
+	// The timer only has to be woken when the edge it is already waiting for
+	// moves closer. A later deadline (no_deadline included) is picked up when
+	// the current wait expires and the loop re-reads it, so the common case -
+	// the nanokernel rewriting DEC on every quantum - costs no kernel wake at
+	// all. This path runs over a million times a session.
+	const bool wake = deadline < decrementer_timer_deadline;
 	decrementer_timer_deadline = deadline;
 	decrementer_timer_unlock(decrementer_timer);
-	decrementer_timer_signal(decrementer_timer);
+	if (wake)
+		decrementer_timer_signal(decrementer_timer);
 }
 
 void powerpc_cpu::decrementer_timer_loop()

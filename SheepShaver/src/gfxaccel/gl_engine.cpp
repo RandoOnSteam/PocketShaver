@@ -646,6 +646,7 @@ static GLContext *GLContextNew(int width, int height)
 		GLTextureUnit &T = ctx->tex_units[u];
 		T.bound_texture_1d = 0;
 		T.bound_texture_2d = 0;
+		T.bound_object_2d = NULL;
 		T.enabled_1d = false;
 		T.enabled_2d = false;
 		T.env_mode = GL_MODULATE;
@@ -1322,6 +1323,12 @@ uint32_t NativeAGLDestroyContext(uint32_t ctx)
 
 	// Release backend resources for this context (textures and host-state caches)
 	GLMetalRelease(context);
+
+	// The Metal backend empties texture_objects in there, so a unit's resolved
+	// GLTextureObject pointer must not outlive it. Kept on this side of the
+	// call so one line covers both backends.
+	for (int u = 0; u < 4; u++)
+		context->tex_units[u].bound_object_2d = NULL;
 
 	// Release the per-engine overlay texture on the last live context
 	// destruction. NativeAGLSetDrawable(ctx, 0) typically fires

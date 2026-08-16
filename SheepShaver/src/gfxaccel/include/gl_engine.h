@@ -881,6 +881,7 @@ struct GLMaterial {
 struct GLTextureUnit {
     uint32_t bound_texture_1d;   // name of bound GL_TEXTURE_1D
     uint32_t bound_texture_2d;   // name of bound GL_TEXTURE_2D
+    GLTextureObject *bound_object_2d; // bound_texture_2d texture_objects entry
     uint32_t bound_texture_3d;   // name of bound GL_TEXTURE_3D_EXT
     bool     enabled_1d;
     bool     enabled_2d;

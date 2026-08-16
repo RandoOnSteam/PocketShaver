@@ -368,16 +368,14 @@ static bool GLMetalApplyTextureUnit(GLContext *ctx, int unit,
   }
 
   GLTextureUnit &TU = ctx->tex_units[unit];
-  GLTextureObjectMap::iterator it =
-    ctx->texture_objects.find(TU.bound_texture_2d);
-  if (TU.enabled_2d && it != ctx->texture_objects.end() &&
-      it->second.metal_texture) {
-    const GLuint tex = (GLuint)(uintptr_t)it->second.metal_texture;
+  if (TU.enabled_2d && TU.bound_object_2d &&
+      TU.bound_object_2d->metal_texture) {
+    const GLuint tex = (GLuint)(uintptr_t)TU.bound_object_2d->metal_texture;
     const GLint env = GLMetalMapTextureEnvMode(TU.env_mode);
     if (!cache_ok || !C.tex_enabled[unit]) glEnable(GL_TEXTURE_2D);
     if (!cache_ok || C.tex[unit] != tex) glBindTexture(GL_TEXTURE_2D, tex);
 
-    GLTextureObject &TO = it->second;
+    GLTextureObject &TO = *TU.bound_object_2d;
     const GLint magf = GLMetalMapTextureMagFilter(TO.mag_filter);
     const GLint minf = GLMetalMapTextureMinFilter(TO.min_filter);
     const GLint ws = GLMetalMapTextureWrap(TO.wrap_s);
@@ -784,15 +782,13 @@ static void GLMetalDumpDrawState(GLContext *ctx, const char *tag,
                                  uint32_t mode, size_t nverts,
                                  bool force_opaque, bool unit1_live)
 {
+  if (!gl_logging_enabled) return;
   if (!ctx) return;
   GLMetalState *ms = GLMetalGetState(ctx);
-  if (!ms) return;
+  if (!ms || ms->dumpCount >= 600) return;
 
   const int u0tex = (int)ctx->tex_units[0].bound_texture_2d;
   const int u1tex = (int)ctx->tex_units[1].bound_texture_2d;
-  GLTextureObjectMap::iterator it0 =
-    ctx->texture_objects.find(ctx->tex_units[0].bound_texture_2d);
-  const bool have0 = (it0 != ctx->texture_objects.end());
 
   /* Dump on CHANGE, not "first N draws".
    *
@@ -818,8 +814,10 @@ static void GLMetalDumpDrawState(GLContext *ctx, const char *tag,
     ms->lastDumpSignature = sig;
     ms->dumpSignatureRepeat = 0;
   }
-  if (ms->dumpCount >= 600) return;
   ms->dumpCount++;
+
+  const GLTextureObject *t0 = ctx->tex_units[0].bound_object_2d;
+  const bool have0 = (t0 != NULL);
 
   GL_LOG("[drawdump #%d %s] mode=0x%x nverts=%d forceOpaque=%d unit1Live=%d",
          ms->dumpCount, tag, mode, (int)nverts, force_opaque ? 1 : 0,
@@ -830,11 +828,11 @@ static void GLMetalDumpDrawState(GLContext *ctx, const char *tag,
          "unit1: enabled2d=%d bound=%d envMode=0x%04x",
          ctx->tex_units[0].enabled_2d ? 1 : 0, u0tex,
          ctx->tex_units[0].env_mode,
-         have0 ? (unsigned)(uintptr_t)it0->second.metal_texture : 0u,
+         have0 ? (unsigned)(uintptr_t)t0->metal_texture : 0u,
          ctx->tex_units[1].enabled_2d ? 1 : 0, u1tex,
          ctx->tex_units[1].env_mode);
   if (have0) {
-    const GLTextureObject &T = it0->second;
+    const GLTextureObject &T = *t0;
     GL_LOG("  unit0 texobj: %dx%d srcFmt=0x%04x srcType=0x%04x mips=%d "
            "opaqueIfmt=%d min=0x%04x mag=0x%04x wrapS=0x%04x wrapT=0x%04x "
            "samplerApplied=%d appliedMin=0x%04x appliedMag=0x%04x "
@@ -935,23 +933,28 @@ static void GLMetalDumpDrawState(GLContext *ctx, const char *tag,
   }
 }
 
-static void GLMetalApplyState(GLContext *ctx)
+/* Returns the bitmask of texture units this call left sampling a real
+ * texture, so a caller that needs to know does not have to re-derive it. */
+static unsigned GLMetalApplyState(GLContext *ctx)
 {
-  if (!ctx) return;
+  if (!ctx) return 0;
   GLMetalLoadMatrices(ctx);
 
   GLMetalStateCache *cache = GLMetalGetStateCache(ctx);
-  if (!cache) return;
+  if (!cache) return 0;
   GLMetalStateCache &C = *cache;
   const bool cache_ok = C.valid;
 
   /* The guest exposes four ARB texture units.  Apply all of them and always
    * return the host selector to unit zero for the non-multitexture calls below. */
+  unsigned texture_unit_mask = 0;
   GfxGLExt &ext = gfx_gl_ext();
-  GLMetalApplyTextureUnit(ctx, 0, C, cache_ok);
+  if (GLMetalApplyTextureUnit(ctx, 0, C, cache_ok))
+    texture_unit_mask |= 1u;
   if (ext.multitex && ext.ActiveTexture) {
     for (int unit = 1; unit < GLMetalGetTextureUnitCount(ctx); ++unit)
-      GLMetalApplyTextureUnit(ctx, unit, C, cache_ok);
+      if (GLMetalApplyTextureUnit(ctx, unit, C, cache_ok))
+        texture_unit_mask |= 1u << unit;
     ext.ActiveTexture(GL_TEXTURE0);
   }
 
@@ -1194,7 +1197,7 @@ static void GLMetalApplyState(GLContext *ctx)
 	if (!cache_ok || C.lighting) glDisable(GL_LIGHTING);
 	C.lighting = false;
 	C.valid = true;
-	return;
+	return texture_unit_mask;
   }
   C.lighting = true;
   C.valid = true;
@@ -1246,28 +1249,20 @@ static void GLMetalApplyState(GLContext *ctx)
 	  glDisable(GL_COLOR_MATERIAL);
 	}
   }
+  return texture_unit_mask;
 }
 
 void GLMetalFlushImmediateMode(GLContext*ctx){
   if(!ctx||!SharedMetalDevice()||ctx->im_vertices.empty())return;
   GLMetalBeginFrame(ctx);
   if(!s_frame_active)return;
-  GLMetalApplyState(ctx);
+  const unsigned texture_unit_mask=GLMetalApplyState(ctx);
   /*
    * Preserve guest vertex alpha even for unblended draws. The onscreen
    * drawable is made opaque only when submitted to the compositor; modifying
    * fragment alpha here corrupts glReadPixels and later guest blending.
    */
   const bool force_opaque=false;
-  unsigned texture_unit_mask=0;
-  const int texture_unit_count=GLMetalGetTextureUnitCount(ctx);
-  for(int unit=0;unit<texture_unit_count;++unit){
-	GLTextureObjectMap::const_iterator it=
-	  ctx->texture_objects.find(ctx->tex_units[unit].bound_texture_2d);
-	if(ctx->tex_units[unit].enabled_2d && it!=ctx->texture_objects.end() &&
-	   it->second.metal_texture)
-	  texture_unit_mask|=1u<<unit;
-  }
   const bool unit1_live=(texture_unit_mask&(1u<<1))!=0;
 
   const std::vector<GLVertex> &in=ctx->im_vertices;

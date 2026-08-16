@@ -55,9 +55,11 @@ static uint64_t now_usec(void)
 /* Sleep to an absolute deadline on that same timeline. */
 static void sleep_until_usec(uint64_t deadline)
 {
-	const uint64_t now = now_usec();
-	if (deadline > now)
+	uint64_t now = now_usec();
+	while (deadline > now + 1000) {
 		Delay_usec(deadline - now);
+		now = now_usec();
+	}
 }
 
 int32_t vbl_source_init(void * /*cametal_layer*/,
