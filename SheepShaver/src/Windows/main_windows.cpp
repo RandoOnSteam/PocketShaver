@@ -701,11 +701,13 @@ static DWORD WINAPI tick_func(void *arg)
 			WriteMacInt32(0x20c, TimerDateTime());
 		}
 
-		// Trigger 60Hz interrupt
-		if (ReadMacInt32(XLM_IRQ_NEST) == 0) {
-			SetInterruptFlag(INTFLAG_VIA);
-			TriggerInterrupt();
-		}
+		// The VIA interrupt is a level, not an edge which disappears while
+		// the processor has external interrupts masked. Latch it here and
+		// let the CPU-side interrupt arbiter accept it at the first eligible
+		// instruction boundary. InterruptFlags is a bitmask, so multiple VBLs
+		// while masked still coalesce rather than being replayed as a burst.
+		SetInterruptFlag(INTFLAG_VIA);
+		TriggerInterrupt();
 	}
 
 	uint64 end = GetTicks_usec();

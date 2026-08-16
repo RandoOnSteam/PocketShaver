@@ -36,7 +36,9 @@ int64 TimebaseSpeed = 25000000;
 uint32 PVR = 0x000c0000;
 bool PrefsFindBool(const char *) { return false; }
 uint64 GetTicks_usec(void) { return clock(); }
-void HandleInterrupt(powerpc_registers *) {}
+bool HandleInterrupt(powerpc_registers *) { return true; }
+void idle_resume(void) {}
+bool PPCGuestAddressValid(uint32, uint32) { return true; }
 
 // iOS/Catalyst app-bridge stubs referenced by ppc-execute.cpp (C++ linkage,
 // matching the header declarations)
@@ -326,6 +328,12 @@ static uint32 mfcr(int d){return X(31,d,0,0,19,0);}
 static uint32 mtcrf(int mask,int s){return (31<<26)|(s<<21)|(mask<<12)|(144<<1);}
 static uint32 mfspr(int d,int spr){return X(31,d,spr&31,(spr>>5)&31,339,0);}
 static uint32 mtspr(int spr,int s){return X(31,s,spr&31,(spr>>5)&31,467,0);}
+static uint32 mfmsr(int d){return X(31,d,0,0,83,0);}
+static uint32 mtmsr(int s){return X(31,s,0,0,146,0);}
+static uint32 mfsr(int d,int sr){return (31<<26)|(d<<21)|((sr&15)<<16)|(595<<1);}
+static uint32 mfsrin(int d,int b){return X(31,d,0,b,659,0);}
+static uint32 mtsr(int sr,int s){return (31<<26)|(s<<21)|((sr&15)<<16)|(210<<1);}
+static uint32 mtsrin(int s,int b){return X(31,s,0,b,242,0);}
 // branch: b/bc (relative), blr, bclr/bcctr (register targets)
 static uint32 b_(int disp,int lk){return (18<<26)|(disp&0x03fffffc)|lk;}
 static uint32 bc(int bo,int bi,int disp,int lk){return (16<<26)|(bo<<21)|(bi<<16)|(disp&0xfffc)|lk;}
@@ -962,6 +970,35 @@ int main(int argc, char **argv)
 		if (diff(nm, ai, aj)) failed++;
 	}
 
+	// --- suite 3c: exception-entry SPRs, MSR, and segment registers. These
+	// take the generic JIT path matching the interpreter semantics used by the
+	// ROM exception vectors.
+	for (int t = 0; t < 200; t++) {
+		uint32 ops[24]; int n = 0;
+		static const int sprs[6] = { 26, 27, 272, 273, 274, 275 };
+		for (int i = 0; i < 6; i++)
+			ops[n++] = mtspr(sprs[i], 3 + i);
+		for (int i = 0; i < 6; i++)
+			ops[n++] = mfspr(10 + i, sprs[i]);
+		ops[n++] = mtmsr(9);
+		ops[n++] = mfmsr(16);
+		ops[n++] = mtsr(3, 17);
+		ops[n++] = mfsr(18, 3);
+		ops[n++] = mtsrin(19, 20);
+		ops[n++] = mfsrin(21, 20);
+		ops[n++] = POWERPC_BLR;
+		regfile in;
+		for (int i = 0; i < 32; i++) in.gpr[i] = rnd();
+		in.lr = 0; in.ctr = rnd(); in.cr = rnd(); in.xer = rnd() & 0xe000007f;
+		load_snippet(ops, n);
+		regfile ai, aj;
+		seed(interp, in); run(interp); snapshot(interp, ai);
+		seed(jit, in);    run(jit);    snapshot(jit, aj);
+		total++;
+		char nm[32]; snprintf(nm, sizeof nm, "exception-spr#%d", t);
+		if (diff(nm, ai, aj)) failed++;
+	}
+
 	// --- suite 4: branches — counted loops, conditional skips, chaining ---
 	for (int t = 0; t < 1000; t++) {
 		uint32 ops[24]; int n = 0;
@@ -1312,7 +1349,6 @@ int main(int argc, char **argv)
 			failed++;
 		}
 	}
-
 	// --- suite 13: NEON AltiVec — element-wise arith/logic/minmax/compare,
 	// splats, vsel/vperm; VRs seeded with random bits (float ops get
 	// float-biased patterns via rnd_fp splits) and fully compared ---

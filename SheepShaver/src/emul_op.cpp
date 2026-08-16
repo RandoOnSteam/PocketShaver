@@ -19,7 +19,6 @@
  */
 
 #include <stdio.h>
-
 #include "sysdeps.h"
 #include "main.h"
 #include "version.h"
@@ -58,67 +57,34 @@ void PlayStartupSound();
 // TVector of MakeExecutable
 static uint32 MakeExecutableTvec;
 
-
-// How long the emulator has spent parked in idle_wait(), and how often it went
-// there.  Sampled around an exception delivery to tell a handler chain that is
-// computing apart from one that is waiting to be let go again.
+// Passive idle telemetry used by the PPC exception diagnostics. This measures
+// host time spent in the normal idle_wait() path; it never changes guest time,
+// skips a wait, or changes how the emulator is resumed.
 uint64 IdleWaitUsec = 0;
 unsigned long IdleWaitCount = 0;
-unsigned long IdleWaitSkipCount = 0;
-unsigned long ExceptionVblCount = 0;
 
-// SynchIdleTime runs only when EventQueue is empty.  WaitNextEvent and
-// MetroNub's OSDispatch $3A wait then compare Ticks (0x16a).  SystemTask
-// already walks the VBL queue and switches processes when Ticks has
-// moved — that is the Toolbox path.  Bump Ticks so those waits can
-// complete.  A new trap/trace (ExceptionNoteHandlerEnter) starts a
-// handshake burst; only after a long empty spin do we treat it as the
-// user sitting at the breakpoint and park.  200 ms was too short: the
-// IDE's empty WNE poll is the handshake, and parking mid-poll made
-// some steps take a second and others not.
-static const uint64 EXC_IDLE_WORK_GAP_USEC = 2000;
-static const uint64 EXC_IDLE_SIT_USEC = 2000000;
-static uint64 exc_last_idle_call = 0;
-static uint64 exc_spin_started = 0;
-static bool exc_idle_was_active = false;
+// Both counters live entirely on the emulation thread: OP_IRQ calls EmulOp(),
+// and the exception diagnostics which sample them run from that same thread.
+// The host tick thread communicates only through the existing atomic
+// InterruptFlags/TriggerInterrupt path.
+static uint64 op_irq_entry_count = 0;
+static uint64 via_service_count = 0;
 
-void ExceptionNoteHandlerEnter(void)
+void GetInterruptServiceDiagnostics(InterruptServiceDiagnostics &d)
 {
-	exc_idle_was_active = false;
-	exc_last_idle_call = 0;
-	exc_spin_started = 0;
+	d.op_irq_entries = op_irq_entry_count;
+	d.via_services = via_service_count;
 }
 
 static void IdleWaitMeasured(void)
 {
 #if EMULATED_PPC
-	if (ExceptionDeliveryActive()) {
-		const uint64 now = GetTicks_usec();
-		if (!exc_idle_was_active) {
-			exc_idle_was_active = true;
-			exc_last_idle_call = 0;
-			exc_spin_started = now;
-		}
-		if (exc_last_idle_call != 0 && now - exc_last_idle_call >= EXC_IDLE_WORK_GAP_USEC)
-			exc_spin_started = now;
-		if (now - exc_spin_started < EXC_IDLE_SIT_USEC) {
-			WriteMacInt32(0x16a, ReadMacInt32(0x16a) + 1);
-			ExceptionVblCount++;
-			IdleWaitSkipCount++;
-			exc_last_idle_call = GetTicks_usec();
-			return;
-		}
-	} else {
-		exc_idle_was_active = false;
-	}
+	PPCExceptionIdleDiagnostic();
 #endif
-	const uint64 t0 = GetTicks_usec();
+	const uint64 started = GetTicks_usec();
 	idle_wait();
-	IdleWaitUsec += GetTicks_usec() - t0;
+	IdleWaitUsec += GetTicks_usec() - started;
 	IdleWaitCount++;
-#if EMULATED_PPC
-	exc_last_idle_call = GetTicks_usec();
-#endif
 }
 
 
@@ -391,6 +357,7 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 			break;
 
 		case OP_IRQ:			// Level 1 interrupt
+			op_irq_entry_count++;
 			WriteMacInt16(ReadMacInt32(KernelDataAddr + 0x67c), 0);	// Clear interrupt
 			r->d[0] = 0;
 			if (HasMacStarted()) {
@@ -400,6 +367,7 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 				}
 				if (InterruptFlags & INTFLAG_VIA) {
 					ClearInterruptFlag(INTFLAG_VIA);
+					via_service_count++;
 #if !PRECISE_TIMING
 					TimerInterrupt();
 #endif

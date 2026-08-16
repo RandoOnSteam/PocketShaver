@@ -105,7 +105,7 @@ uint32 NativeOpcode(int selector)
   	case NATIVE_R_GET_RESOURCE:
 	case NATIVE_GET_NAMED_RESOURCE:
 	case NATIVE_GET_1_NAMED_RESOURCE:
-  	case NATIVE_MAKE_EXECUTABLE:
+	case NATIVE_MAKE_EXECUTABLE:
 		opcode = POWERPC_NATIVE_OP(1, selector);
 		break;
 	case NATIVE_RAVE_DISPATCH:
@@ -114,10 +114,9 @@ uint32 NativeOpcode(int selector)
 	case NATIVE_OPENGL_DISPATCH:
 		opcode = POWERPC_NATIVE_OP(0, selector);
 		break;
-	case NATIVE_EXCEPTION_RESUME:
-		// FN=0: the handler picks the resume address itself, so it wants the
-		// plain pc += 4 rather than a return through LR (which it must leave
-		// holding the interrupted routine's link register).
+	case NATIVE_EXCEPTION_STEP:
+		// The handler supplies the exact next PC after executing one guest
+		// instruction, so the normal FN=0 pc += 4 does not apply.
 		opcode = POWERPC_NATIVE_OP(0, selector);
 		break;
 	case NATIVE_DSP_DISPATCH:

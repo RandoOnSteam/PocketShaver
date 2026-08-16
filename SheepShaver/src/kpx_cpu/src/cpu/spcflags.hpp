@@ -33,6 +33,7 @@ enum {
 	SPCFLAG_CPU_HANDLE_INTERRUPT	= 1 << 2,	// Call user interrupt handler
 	SPCFLAG_CPU_ENTER_MON			= 1 << 3,	// Enter cxmon
 	SPCFLAG_JIT_EXEC_RETURN			= 1 << 4,	// Return from compiled code
+	SPCFLAG_CPU_DECREMENTER			= 1 << 5,	// Recheck the PowerPC decrementer
 };
 
 // Flags are set from other threads (e.g. the 60 Hz tick thread triggering

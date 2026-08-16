@@ -119,4 +119,12 @@ const uint16 M68K_EMUL_OP_JOY_CLOSE = M68K_EMUL_BREAK + OP_JOY_CLOSE;
 
 extern "C" void EmulOp(M68kRegisters *r, uint32 pc, int selector);
 
+// Emulation-thread telemetry for the 68K OP_IRQ service path.
+struct InterruptServiceDiagnostics {
+	uint64 op_irq_entries;
+	uint64 via_services;
+};
+
+extern void GetInterruptServiceDiagnostics(InterruptServiceDiagnostics &d);
+
 #endif

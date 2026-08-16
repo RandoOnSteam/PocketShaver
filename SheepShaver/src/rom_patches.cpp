@@ -983,9 +983,10 @@ static bool patch_nanokernel_boot(void)
 	lp = (uint32 *)(ROMBaseHost + base);
 	*lp = htonl(0x39c00000);		// li	r14,0
 
-	// Don't write to DEC
+	// The emulated CPU implements DEC. Preserve the nanokernel's initial
+	// quantum and follow the branch after the original mtdec instruction.
 	lp = (uint32 *)(ROMBaseHost + loc + 0x70);
-	*lp++ = htonl(POWERPC_NOP);
+	lp++;
 	loc = (ntohl(lp[0]) & 0xffff) + (uintptr)lp - (uintptr)ROMBaseHost;
 	D(bug("loc %08lx\n", loc));
 
@@ -1408,15 +1409,9 @@ static bool patch_nanokernel(void)
 	static const uint8 mdec_dat[] = {0x7f, 0xf6, 0x02, 0xa6, 0x2c, 0x08, 0x00, 0x00, 0x93, 0xe1, 0x06, 0x68, 0x7d, 0x16, 0x03, 0xa6};
 	if ((base = find_rom_data(0x310000, 0x314000, mdec_dat, sizeof(mdec_dat))) == 0) return false;
 	D(bug("mdec %08lx\n", base));
-	lp = (uint32 *)(ROMBaseHost + base);		// Don't modify DEC
-	lp[0] = htonl(0x3be00000);					// li	r31,0
-#if 1
-	lp[3] = htonl(POWERPC_NOP);
-	lp[4] = htonl(POWERPC_NOP);
-#else
-	lp[3] = htonl(0x39000040);					// li	r8,0x40
-	lp[4] = htonl(0x990600e4);					// stb	r8,0xe4(r6)
-#endif
+	// Preserve mfdec/mtdec and the expired-quantum helper. The CPU core now
+	// models the architectural register and its edge-triggered 0x900 exception,
+	// so each nanokernel context retains its actual remaining quantum.
 
 	static const uint8 restore_fpu_caller_dat[] = {0x81, 0x06, 0x00, 0xf4, 0x81, 0x46, 0x00, 0xfc, 0x7d, 0x09, 0x03, 0xa6, 0x40};
 	if ((base = find_rom_data(0x310000, 0x314000, restore_fpu_caller_dat, sizeof(restore_fpu_caller_dat))) == 0) return false;
@@ -1460,24 +1455,14 @@ static bool patch_nanokernel(void)
 	lp = (uint32 *)(ROMBaseHost + base + 4);
 	*lp = htonl((ntohl(*lp) & 0xffff) | 0x48000000);	// bgt -> b
 
-	// Patch trap return routine
+	// The PowerPC core now implements SRR0, SRR1 and rfi.  Leave the
+	// nanokernel's architectural return sequence intact; return_from_exception
+	// performs SheepShaver's XLM_IRQ_NEST bookkeeping as part of rfi itself.
+	// The historical bctr detour used to be necessary only because those
+	// registers and rfi were not emulated.
 	static const uint8 trap_return_dat[] = {0x80, 0xc1, 0x00, 0x18, 0x80, 0x21, 0x00, 0x04, 0x4c, 0x00, 0x00, 0x64};
 	if ((base = find_rom_data(0x312000, 0x320000, trap_return_dat, sizeof(trap_return_dat))) == 0) return false;
 	D(bug("trap_return %08lx\n", base + 8));
-	lp = (uint32 *)(ROMBaseHost + base + 8);	// Replace rfi
-	*lp = htonl(POWERPC_BCTR);
-
-	while (ntohl(*lp) != 0x7d5a03a6) lp--;
-	*lp++ = htonl(0x7d4903a6);					// mtctr	r10
-	*lp++ = htonl(0x7daff120);					// mtcr	r13
-	*lp = htonl(0x48000000 + ((0x318000 - ((uintptr)lp - (uintptr)ROMBaseHost)) & 0x03fffffc));	// b		ROMBase+0x318000
-	uint32 npc = (uintptr)(lp + 1) - (uintptr)ROMBaseHost;
-
-	lp = (uint32 *)(ROMBaseHost + 0x318000);
-	*lp++ = htonl(0x81400000 + XLM_IRQ_NEST);	// lwz	r10,XLM_IRQ_NEST
-	*lp++ = htonl(0x394affff);					// subi	r10,r10,1
-	*lp++ = htonl(0x91400000 + XLM_IRQ_NEST);	// stw	r10,XLM_IRQ_NEST
-	*lp = htonl(0x48000000 + ((npc - 0x31800c) & 0x03fffffc));	// b		ROMBase+0x312c2c
 
 	// Patch FEOA opcode, selector 0x0A (virtual->physical page index)
 	static const uint8 fe0a_0a_dat[] = {0x55, 0x23, 0xa3, 0x3e, 0x4b};

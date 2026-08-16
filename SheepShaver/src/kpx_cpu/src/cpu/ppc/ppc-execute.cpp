@@ -37,6 +37,8 @@
 #include "cpu/ppc/ppc-execute.hpp"
 #include "cpu/ppc/ppc-stfiwx.hpp"
 
+static inline uint64 get_tb_ticks(void);
+
 #ifndef SHEEPSHAVER
 #include "basic-kernel.hpp"
 #endif
@@ -45,6 +47,7 @@
 #include "main.h"
 #include "prefs.h"
 #include "cpu_emulation.h"
+#include "timer.h"
 #endif
 
 #ifdef TARGET_OS_IPHONE
@@ -106,6 +109,19 @@ void powerpc_cpu::execute_illegal(uint32 opcode)
 // Context dump + "ignore or abort" policy, shared by execute_illegal() and by
 // execute_trap_taken() (a taken trap is a fault we cannot deliver, but it is
 // not an illegal opcode, so it prints its own headline).
+#ifdef SHEEPSHAVER
+extern bool PPCGuestAddressValid(uint32 addr, uint32 len);
+#endif
+
+static inline bool fault_guest_addr_ok(uint32 addr, uint32 len)
+{
+#ifdef SHEEPSHAVER
+	return PPCGuestAddressValid(addr, len);
+#else
+	return addr <= 0xffffffffu - len;
+#endif
+}
+
 void powerpc_cpu::execute_fault_report(uint32 opcode)
 {
 #ifdef SHEEPSHAVER
@@ -121,12 +137,15 @@ void powerpc_cpu::execute_fault_report(uint32 opcode)
 		uint32 sp = gpr(1);
 		uint32 ret_lr = lr();
 		gfx_log_emit("[crash] ", "    frame 0: PC=0x%08x LR=0x%08x SP=0x%08x\n", pc(), ret_lr, sp);
-		for (int frame = 1; frame < 12 && sp != 0 && sp < 0x50000000; frame++) {
+		for (int frame = 1; frame < 12 && sp != 0 && sp < 0x50000000 &&
+			 fault_guest_addr_ok(sp, 4); frame++) {
 			uint32 prev_sp = vm_read_memory_4(sp);  // backchain pointer
 			if (prev_sp == 0 || prev_sp <= sp || prev_sp >= 0x50000000) break;
+			if (!fault_guest_addr_ok(prev_sp + 8, 4)) break;
 			uint32 saved_lr = vm_read_memory_4(prev_sp + 8);  // saved LR in caller's frame
 			uint32 call_instr = 0;
-			if (saved_lr >= 4 && saved_lr < 0x50000000)
+			if (saved_lr >= 4 && saved_lr < 0x50000000 &&
+				fault_guest_addr_ok(saved_lr - 4, 4))
 				call_instr = vm_read_memory_4(saved_lr - 4);
 			gfx_log_emit("[crash] ", "    frame %d: saved_LR=0x%08x SP=0x%08x call_instr=0x%08x\n",
 					frame, saved_lr, prev_sp, call_instr);
@@ -148,15 +167,22 @@ void powerpc_cpu::execute_fault_report(uint32 opcode)
 	gfx_log_emit("[crash] ", "  Instructions around PC:\n");
 	for (int di = -4; di <= 4; di++) {
 		uint32 addr = pc() + di * 4;
-		uint32 instr = vm_read_memory_4(addr);
-		gfx_log_emit("[crash] ", "    [0x%08x] %08x%s\n", addr, instr, di == 0 ? " <-- CRASH" : "");
+		if (fault_guest_addr_ok(addr, 4))
+			gfx_log_emit("[crash] ", "    [0x%08x] %08x%s\n", addr,
+				vm_read_memory_4(addr), di == 0 ? " <-- CRASH" : "");
+		else
+			gfx_log_emit("[crash] ", "    [0x%08x] <unmapped>%s\n", addr,
+				di == 0 ? " <-- CRASH" : "");
 	}
 	// Dump a few words at LR to help understand call chain
 	gfx_log_emit("[crash] ", "  Instructions at LR 0x%08x:\n", lr());
 	for (int di = -2; di <= 2; di++) {
 		uint32 addr = lr() + di * 4;
-		uint32 instr = vm_read_memory_4(addr);
-		gfx_log_emit("[crash] ", "    [0x%08x] %08x\n", addr, instr);
+		if (fault_guest_addr_ok(addr, 4))
+			gfx_log_emit("[crash] ", "    [0x%08x] %08x\n", addr,
+				vm_read_memory_4(addr));
+		else
+			gfx_log_emit("[crash] ", "    [0x%08x] <unmapped>\n", addr);
 	}
 
 	// Cross-TOC import calls reach here through a TVector held in r12
@@ -165,7 +191,8 @@ void powerpc_cpu::execute_fault_report(uint32 opcode)
 	// container header ('Joy!') so the dead fragment can be identified.
 	{
 		uint32 tv = gpr(12);
-		if (tv >= 0x1000 && tv < 0x50000000) {
+		if (tv >= 0x1000 && tv < 0x50000000 &&
+			fault_guest_addr_ok(tv - 8, 8 * 4)) {
 			gfx_log_emit("[crash] ", "  TVector neighborhood (r12=0x%08x):\n", tv);
 			for (int di = -2; di <= 5; di++) {
 				uint32 addr = tv + di * 4;
@@ -177,12 +204,17 @@ void powerpc_cpu::execute_fault_report(uint32 opcode)
 			uint32 base = pc() & ~0xfffu;
 			bool found = false;
 			for (int pages = 0; pages < 8192 && base >= 0x1000; pages++, base -= 0x1000) {
+				if (!fault_guest_addr_ok(base, 4))
+					break;
 				if (vm_read_memory_4(base) == 0x4a6f7921) {	// 'Joy!'
 					gfx_log_emit("[crash] ", "  PEF container candidate at 0x%08x (pc offset +0x%x):\n",
 							base, pc() - base);
-					for (int di = 0; di < 8; di++)
-						gfx_log_emit("[crash] ", "    [0x%08x] %08x\n", base + di * 4,
-								vm_read_memory_4(base + di * 4));
+					for (int di = 0; di < 8; di++) {
+						const uint32 addr = base + di * 4;
+						if (fault_guest_addr_ok(addr, 4))
+							gfx_log_emit("[crash] ", "    [0x%08x] %08x\n", addr,
+								vm_read_memory_4(addr));
+					}
 					found = true;
 					break;
 				}
@@ -1218,10 +1250,10 @@ void powerpc_cpu::execute_trap_taken(uint32 opcode)
 	// (0x7e800008) over the first instruction of a routine and waits for the
 	// exception, and it is also how Debugger()/DebugStr() reach MacsBug.
 	//
-	// SheepShaver never arms the PPC exception table (patch_nanokernel() in
-	// rom_patches.cpp) and this core models no MSR/SRR0/SRR1, so the exception
-	// cannot arrive by itself.  Call the ROM's dispatcher directly instead --
-	// it walks the same chain, so a handler that is listening still sees it.
+	// SheepShaver does not leave SPRG3 armed globally because its nanokernel
+	// entry is adapted for the emulator. The glue supplies SRR0/SRR1/SPRG3 and
+	// transfers control to the ROM's program-exception vector, which performs
+	// the normal nanokernel context handoff and handler dispatch.
 	const char *why = "not built for SheepShaver";
 #ifdef SHEEPSHAVER
 	{
@@ -1395,8 +1427,229 @@ void powerpc_cpu::execute_mffs(uint32 opcode)
 
 void powerpc_cpu::execute_mfmsr(uint32 opcode)
 {
-	operand_RD::set(this, opcode, 0xf072);
+	operand_RD::set(this, opcode, msr());
 	increment_pc(4);
+}
+
+void powerpc_cpu::execute_mtmsr(uint32 opcode)
+{
+	msr() = operand_RS::get(this, opcode);
+	increment_pc(4);
+	if (decrementer_pending && (msr() & 0x00008000) != 0)
+		spcflags().set(SPCFLAG_CPU_DECREMENTER);
+}
+
+void powerpc_cpu::execute_mfsr(uint32 opcode)
+{
+	operand_RD::set(this, opcode, sr(SR_field::extract(opcode)));
+	increment_pc(4);
+}
+
+void powerpc_cpu::execute_mfsrin(uint32 opcode)
+{
+	const uint32 index = operand_RB::get(this, opcode) >> 28;
+	operand_RD::set(this, opcode, sr(index));
+	increment_pc(4);
+}
+
+void powerpc_cpu::execute_mtsr(uint32 opcode)
+{
+	sr(SR_field::extract(opcode)) = operand_RS::get(this, opcode);
+	increment_pc(4);
+}
+
+void powerpc_cpu::execute_mtsrin(uint32 opcode)
+{
+	const uint32 index = operand_RB::get(this, opcode) >> 28;
+	sr(index) = operand_RS::get(this, opcode);
+	increment_pc(4);
+}
+
+void powerpc_cpu::return_from_exception(uint32 saved_pc, uint32 saved_msr)
+{
+	// rfi restores only the architecturally defined SRR1 fields.
+	static const uint32 rfi_msr_mask = 0x87c0ffff;
+	msr() = (msr() & ~rfi_msr_mask) | (saved_msr & rfi_msr_mask);
+	pc() = saved_pc & ~3u;
+}
+
+void powerpc_cpu::execute_rfi(uint32 opcode)
+{
+	return_from_exception(srr0(), srr1());
+	service_decrementer();
+}
+
+static const uint32 PPC_MSR_EE = 0x00008000;
+
+#ifdef SHEEPSHAVER
+void powerpc_cpu::start_decrementer_timer()
+{
+	if (!decrementer_timer_thread.joinable())
+		decrementer_timer_thread =
+			std::thread(&powerpc_cpu::decrementer_timer_loop, this);
+}
+
+void powerpc_cpu::stop_decrementer_timer()
+{
+	if (!decrementer_timer_thread.joinable())
+		return;
+	{
+		std::lock_guard<std::mutex> lock(decrementer_timer_mutex);
+		decrementer_timer_stop = true;
+	}
+	decrementer_timer_cv.notify_one();
+	decrementer_timer_thread.join();
+}
+
+void powerpc_cpu::schedule_decrementer_timer(uint64 deadline)
+{
+	start_decrementer_timer();
+	{
+		std::lock_guard<std::mutex> lock(decrementer_timer_mutex);
+		decrementer_timer_deadline = deadline;
+	}
+	decrementer_timer_cv.notify_one();
+}
+
+void powerpc_cpu::decrementer_timer_loop()
+{
+	const uint64 no_deadline = ~(uint64)0;
+	std::unique_lock<std::mutex> lock(decrementer_timer_mutex);
+	while (!decrementer_timer_stop) {
+		const uint64 deadline = decrementer_timer_deadline;
+		if (deadline == no_deadline) {
+			decrementer_timer_cv.wait(lock, [this, no_deadline] {
+				return decrementer_timer_stop ||
+					decrementer_timer_deadline != no_deadline;
+			});
+			continue;
+		}
+
+		const uint64 now = get_tb_ticks();
+		if (now >= deadline) {
+			// Consume this publication before waking the CPU. read_decrementer()
+			// advances the wrapping counter and a subsequent DEC write or
+			// successful delivery publishes the next edge.
+			decrementer_timer_deadline = no_deadline;
+			lock.unlock();
+			spcflags().set(SPCFLAG_CPU_DECREMENTER);
+			idle_resume();
+			lock.lock();
+			continue;
+		}
+
+		const uint64 frequency = TimebaseSpeed > 0
+			? (uint64)TimebaseSpeed : 1;
+		const uint64 delta = deadline - now;
+		const uint64 whole_seconds = delta / frequency;
+		const uint64 remainder = delta % frequency;
+		uint64 usec = whole_seconds * 1000000;
+		usec += (remainder * 1000000 + frequency - 1) / frequency;
+		if (usec == 0)
+			usec = 1;
+		decrementer_timer_cv.wait_for(lock,
+			std::chrono::microseconds(usec), [this, deadline] {
+				return decrementer_timer_stop ||
+					decrementer_timer_deadline != deadline;
+			});
+	}
+}
+#endif
+
+uint32 powerpc_cpu::read_decrementer()
+{
+	if (!decrementer_initialized)
+		return decrementer_base;
+
+	const uint64 now = get_tb_ticks();
+	if (!decrementer_pending && now >= decrementer_next_underflow) {
+		decrementer_pending = true;
+		spcflags().set(SPCFLAG_CPU_DECREMENTER);
+#ifdef SHEEPSHAVER
+		schedule_decrementer_timer(~(uint64)0);
+#endif
+
+		// DEC is a wrapping 32-bit counter. Keep the following edge correct
+		// even if the host was suspended for more than one complete period.
+		const uint64 period = (uint64)1 << 32;
+		const uint64 periods = (now - decrementer_next_underflow) / period + 1;
+		if (periods <= (~(uint64)0 - decrementer_next_underflow) / period)
+			decrementer_next_underflow += periods * period;
+		else
+			decrementer_next_underflow = ~(uint64)0;
+	}
+	return decrementer_base - (uint32)(now - decrementer_base_ticks);
+}
+
+void powerpc_cpu::write_decrementer(uint32 value)
+{
+	const uint32 old_value = read_decrementer();
+	const uint64 now = get_tb_ticks();
+	decrementer_last_write = value;
+	if (value < decrementer_minimum_write)
+		decrementer_minimum_write = value;
+	if (value > decrementer_maximum_write)
+		decrementer_maximum_write = value;
+	decrementer_write_count++;
+
+	decrementer_base = value;
+	decrementer_base_ticks = now;
+	decrementer_next_underflow = now + (uint64)value + 1;
+	decrementer_initialized = true;
+
+	// 6xx/7xx DEC is edge-triggered. A write which crosses from a
+	// non-negative value to a negative one asserts the same exception
+	// condition as natural completion of the countdown. The nanokernel uses
+	// exactly this sequence when restoring an already-expired task quantum.
+	if ((int32)old_value >= 0 && (int32)value < 0)
+		decrementer_pending = true;
+	if (decrementer_pending)
+		spcflags().set(SPCFLAG_CPU_DECREMENTER);
+#ifdef SHEEPSHAVER
+	schedule_decrementer_timer(decrementer_pending
+		? ~(uint64)0 : decrementer_next_underflow);
+#endif
+}
+
+bool powerpc_cpu::decrementer_exception()
+{
+	return false;
+}
+
+bool powerpc_cpu::service_decrementer()
+{
+	(void)read_decrementer();
+	if (execute_depth > 1)
+		return false;
+	if (!decrementer_pending || (msr() & PPC_MSR_EE) == 0)
+		return false;
+
+	// 6xx/7xx processors clear the edge-triggered request on delivery. If the
+	// embedding cannot enter its vector yet (during early boot), retain it.
+	decrementer_pending = false;
+	spcflags().clear(SPCFLAG_CPU_DECREMENTER);
+	if (decrementer_exception()) {
+		decrementer_delivery_count++;
+#ifdef SHEEPSHAVER
+		schedule_decrementer_timer(decrementer_next_underflow);
+#endif
+		return true;
+	}
+	decrementer_pending = true;
+	return false;
+}
+
+void powerpc_cpu::get_decrementer_diagnostics(decrementer_diagnostics_t &d)
+{
+	d.current = read_decrementer();
+	d.last_write = decrementer_last_write;
+	d.minimum_write = decrementer_write_count != 0
+		? decrementer_minimum_write : 0;
+	d.maximum_write = decrementer_write_count != 0
+		? decrementer_maximum_write : 0;
+	d.write_count = decrementer_write_count;
+	d.delivery_count = decrementer_delivery_count;
+	d.pending = decrementer_pending;
 }
 
 template< class SPR >
@@ -1408,6 +1661,13 @@ void powerpc_cpu::execute_mfspr(uint32 opcode)
 	case powerpc_registers::SPR_XER:	d = xer().get();break;
 	case powerpc_registers::SPR_LR:		d = lr();		break;
 	case powerpc_registers::SPR_CTR:	d = ctr();		break;
+	case powerpc_registers::SPR_DEC:	d = read_decrementer(); break;
+	case powerpc_registers::SPR_SRR0:	d = srr0();		break;
+	case powerpc_registers::SPR_SRR1:	d = srr1();		break;
+	case powerpc_registers::SPR_SPRG0:	d = sprg(0);		break;
+	case powerpc_registers::SPR_SPRG1:	d = sprg(1);		break;
+	case powerpc_registers::SPR_SPRG2:	d = sprg(2);		break;
+	case powerpc_registers::SPR_SPRG3:	d = sprg(3);		break;
 	case powerpc_registers::SPR_VRSAVE:	d = vrsave();	break;
 #ifdef SHEEPSHAVER
 	case powerpc_registers::SPR_SDR1:	d = 0xdead001f;	break;
@@ -1435,6 +1695,13 @@ void powerpc_cpu::execute_mtspr(uint32 opcode)
 	case powerpc_registers::SPR_XER:	xer().set(s);	break;
 	case powerpc_registers::SPR_LR:		lr() = s;		break;
 	case powerpc_registers::SPR_CTR:	ctr() = s;		break;
+	case powerpc_registers::SPR_DEC:	write_decrementer(s); break;
+	case powerpc_registers::SPR_SRR0:	srr0() = s;		break;
+	case powerpc_registers::SPR_SRR1:	srr1() = s;		break;
+	case powerpc_registers::SPR_SPRG0:	sprg(0) = s;	break;
+	case powerpc_registers::SPR_SPRG1:	sprg(1) = s;	break;
+	case powerpc_registers::SPR_SPRG2:	sprg(2) = s;	break;
+	case powerpc_registers::SPR_SPRG3:	sprg(3) = s;	break;
 	case powerpc_registers::SPR_VRSAVE:	vrsave() = s;	break;
 #ifndef SHEEPSHAVER
 	default: execute_illegal(opcode);

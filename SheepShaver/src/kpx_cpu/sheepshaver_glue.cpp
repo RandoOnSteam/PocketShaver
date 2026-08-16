@@ -89,7 +89,7 @@ extern "C" {
 
 #if EMUL_TIME_STATS
 static clock_t emul_start_time;
-static uint32 interrupt_count = 0, ppc_interrupt_count = 0;
+static uint32 interrupt_count = 0;
 static clock_t interrupt_time = 0;
 static uint32 exec68k_count = 0;
 static clock_t exec68k_time = 0;
@@ -108,9 +108,6 @@ static void enter_mon(void)
 #endif
 }
 
-// From main_*.cpp
-extern uintptr SignalStackBase();
-
 // From rsrc_patches.cpp
 extern "C" void check_load_invoc(uint32 type, int16 id, uint32 h);
 extern "C" void named_check_load_invoc(uint32 type, uint32 name, uint32 h);
@@ -127,11 +124,31 @@ const uint32 POWERPC_EXEC_RETURN = POWERPC_EMUL_OP | 1;
 // Interrupts in EMUL_OP mode?
 #define INTERRUPTS_IN_EMUL_OP_MODE 1
 
-// Interrupts in native mode?
-#define INTERRUPTS_IN_NATIVE_MODE 1
-
 // Pointer to Kernel Data
 static KernelData * kernel_data;
+
+// patch_nanokernel() replaces the ROM's SPRG3 writes with XLM_RUN_MODE writes.
+// Mirror the two original table values when entering a hardware vector: the
+// native-PPC and 68K emulator contexts have different low-level handlers.
+static const uint32 PPC_NATIVE_EXCEPTION_TABLE_OFFSET = 0x420;
+static const uint32 PPC_68K_EXCEPTION_TABLE_OFFSET = 0x360;
+
+// Aggregate rather than logging each 60 Hz request. Deferred counts are CPU
+// boundary retries of one coalesced level, not queued VBL events.
+static uint64 external_interrupt_accepted_count;
+static uint64 external_interrupt_nest_deferred_count;
+static uint64 external_interrupt_native_vector_count;
+static uint64 external_interrupt_68k_accepted_count;
+static uint64 external_interrupt_emul_accepted_count;
+static uint64 external_interrupt_68k_deferred_count;
+static uint64 external_interrupt_mode_deferred_count;
+static uint64 external_interrupt_accepted_snapshot;
+static uint64 external_interrupt_nest_deferred_snapshot;
+static uint64 external_interrupt_native_vector_snapshot;
+static uint64 external_interrupt_68k_accepted_snapshot;
+static uint64 external_interrupt_emul_accepted_snapshot;
+static uint64 external_interrupt_68k_deferred_snapshot;
+static uint64 external_interrupt_mode_deferred_snapshot;
 
 // SIGSEGV handler
 sigsegv_return_t sigsegv_handler(sigsegv_address_t, sigsegv_address_t);
@@ -188,10 +205,53 @@ public:
 
 	// Hand a taken trap to the MacOS exception handler chain
 	const char *deliver_trap_exception(uint32 opcode);
-	void exception_snapshot(const struct exception_frame &f);
-	void exception_restore(const struct exception_frame &f);
-	void exception_begin(uint32 raw_kind, const struct exception_frame &f);
-	void exception_resume(void);
+	const char *enter_exception_vector(uint32 vector, uint32 handler_slot,
+		uint32 saved_pc, uint32 saved_msr);
+	void exception_step(void);
+	void return_from_exception(uint32 saved_pc, uint32 saved_msr) override;
+	bool decrementer_exception() override;
+	bool external_interrupt() override;
+	bool exception_step_trampoline_ready(void);
+	void exception_diagnostic_state(const char *reason, uint64 now);
+	void exception_idle_diagnostic(void);
+	void record_rfi_site(uint32 return_pc, uint32 run_mode);
+	void report_and_reset_rfi_sites(void);
+	void preserve_system_ticks(void);
+
+	bool exception_step_active;
+	bool exception_step_trap;
+	uint32 exception_step_opcode;
+	uint32 exception_step_trampoline;
+	uint32 exception_step_pc;
+	bool exception_step_pending;
+	// Hardware-style entries which have not yet crossed an rfi boundary.
+	// This is architectural nesting, not debugger-handler lifetime.
+	uint32 exception_entry_depth;
+	uint64 exception_last_program_usec;
+	uint64 exception_last_vector_usec;
+	uint64 exception_idle_snapshot_usec;
+	unsigned long exception_idle_snapshot_count;
+	uint32 exception_tick_snapshot;
+	uint32 exception_last_vector;
+	uint32 exception_returns_since_program;
+	uint32 exception_traces_since_program;
+	uint32 exception_decrementers_since_program;
+	uint64 exception_stall_last_usec;
+	InterruptServiceDiagnostics exception_service_snapshot;
+	enum { EXCEPTION_RFI_SITE_COUNT = 32 };
+	struct exception_rfi_site_t {
+		uint32 pc;
+		uint32 mode;
+		uint64 count;
+	} exception_rfi_sites[EXCEPTION_RFI_SITE_COUNT];
+	uint64 exception_rfi_site_overflow;
+	bool system_ticks_valid;
+	uint32 system_ticks_high_water;
+	uint64 system_tick_correction_count;
+	uint64 system_tick_recovered_total;
+	uint32 system_tick_max_rollback;
+	uint64 system_tick_correction_snapshot;
+	uint64 system_tick_recovered_snapshot;
 
 #if PPC_ENABLE_JIT
 	// Compile one instruction
@@ -200,9 +260,6 @@ public:
 	// Resource manager thunk
 	void get_resource(uint32 old_get_resource);
 	static void call_get_resource(powerpc_cpu * cpu, uint32 old_get_resource);
-
-	// Handle MacOS interrupt
-	void interrupt(uint32 entry);
 
 	// Diagnostic accessors (crash-context dump, vm watch logging)
 	uint32 cur_pc()			{ return pc(); }
@@ -216,6 +273,36 @@ public:
 sheepshaver_cpu::sheepshaver_cpu()
 {
 	init_decoder();
+	sprg(0) = KernelDataAddr;
+	sprg(3) = KernelDataAddr + PPC_68K_EXCEPTION_TABLE_OFFSET;
+	exception_step_active = false;
+	exception_step_trap = false;
+	exception_step_opcode = 0;
+	exception_step_trampoline = 0;
+	exception_step_pc = 0;
+	exception_step_pending = false;
+	exception_entry_depth = 0;
+	exception_last_program_usec = 0;
+	exception_last_vector_usec = 0;
+	exception_idle_snapshot_usec = 0;
+	exception_idle_snapshot_count = 0;
+	exception_tick_snapshot = 0;
+	exception_last_vector = 0;
+	exception_returns_since_program = 0;
+	exception_traces_since_program = 0;
+	exception_decrementers_since_program = 0;
+	exception_stall_last_usec = 0;
+	memset(&exception_service_snapshot, 0,
+		sizeof(exception_service_snapshot));
+	memset(exception_rfi_sites, 0, sizeof(exception_rfi_sites));
+	exception_rfi_site_overflow = 0;
+	system_ticks_valid = false;
+	system_ticks_high_water = 0;
+	system_tick_correction_count = 0;
+	system_tick_recovered_total = 0;
+	system_tick_max_rollback = 0;
+	system_tick_correction_snapshot = 0;
+	system_tick_recovered_snapshot = 0;
 
 #if PPC_ENABLE_JIT
 	if (PrefsFindBool("jit"))
@@ -261,6 +348,10 @@ void sheepshaver_cpu::call_execute_emul_op(powerpc_cpu * cpu, uint32 emul_op) {
 void sheepshaver_cpu::execute_emul_op(uint32 emul_op)
 {
 	M68kRegisters r68;
+	// The 68K side services VBL and therefore owns the newest system Ticks
+	// value.  Observe it before crossing into a host EmulOp; a later PowerPC
+	// context return must not expose an older process-context copy.
+	preserve_system_ticks();
 	WriteMacInt32(XLM_68K_R25, gpr(25));
 	WriteMacInt32(XLM_RUN_MODE, MODE_EMUL_OP);
 	for (int i = 0; i < 8; i++)
@@ -297,7 +388,13 @@ void sheepshaver_cpu::execute_sheep(uint32 opcode)
 		break;
 
 	case 2:		// EXEC_NATIVE
-		execute_native_op(NATIVE_OP_field::extract(opcode));
+		{
+			const uint32 selector = NATIVE_OP_field::extract(opcode);
+			execute_native_op(selector);
+			// The single-step trampoline performs a dynamic control transfer.
+			if (selector == NATIVE_EXCEPTION_STEP)
+				return;
+		}
 		if (FN_field::test(opcode))
 			pc() = lr();
 		else
@@ -346,6 +443,11 @@ int sheepshaver_cpu::compile1(codegen_context_t & cg_context)
 
 	case 2: {	// EXEC_NATIVE
 		uint32 selector = NATIVE_OP_field::extract(opcode);
+		// The step NativeOp changes PC dynamically. Compile it through the
+		// generic execute_sheep() call so the block ends and interpreter/JIT
+		// semantics stay identical.
+		if (selector == NATIVE_EXCEPTION_STEP)
+			return COMPILE_FAILURE;
 		switch (selector) {
 #if !PPC_REENTRANT_JIT
 		// Filter out functions that may invoke Execute68k() or
@@ -525,69 +627,6 @@ int sheepshaver_cpu::compile1(codegen_context_t & cg_context)
 }
 #endif
 
-// Handle MacOS interrupt
-void sheepshaver_cpu::interrupt(uint32 entry)
-{
-#if EMUL_TIME_STATS
-	ppc_interrupt_count++;
-	const clock_t interrupt_start = clock();
-#endif
-
-	// Save program counters and branch registers
-	uint32 saved_pc = pc();
-	uint32 saved_lr = lr();
-	uint32 saved_ctr= ctr();
-	uint32 saved_sp = gpr(1);
-
-	// Initialize stack pointer to SheepShaver alternate stack base
-	gpr(1) = SignalStackBase() - 64;
-
-	// Build trampoline to return from interrupt
-	SheepVar32 trampoline = POWERPC_EXEC_RETURN;
-
-	// Prepare registers for nanokernel interrupt routine
-	WriteMacInt32(KERNEL_DATA_BASE + 0x004, gpr(1));
-	WriteMacInt32(KERNEL_DATA_BASE + 0x018, gpr(6));
-
-	gpr(6) = ReadMacInt32(KERNEL_DATA_BASE + 0x65c);
-	assert(gpr(6) != 0);
-	WriteMacInt32(gpr(6) + 0x13c, gpr(7));
-	WriteMacInt32(gpr(6) + 0x144, gpr(8));
-	WriteMacInt32(gpr(6) + 0x14c, gpr(9));
-	WriteMacInt32(gpr(6) + 0x154, gpr(10));
-	WriteMacInt32(gpr(6) + 0x15c, gpr(11));
-	WriteMacInt32(gpr(6) + 0x164, gpr(12));
-	WriteMacInt32(gpr(6) + 0x16c, gpr(13));
-
-	gpr(1)  = KernelDataAddr;
-	gpr(7)  = ReadMacInt32(KERNEL_DATA_BASE + 0x660);
-	gpr(8)  = 0;
-	gpr(10) = trampoline.addr();
-	gpr(12) = trampoline.addr();
-	gpr(13) = get_cr();
-
-	// rlwimi. r7,r7,8,0,0
-	uint32 result = op_ppc_rlwimi::apply(gpr(7), 8, 0x80000000, gpr(7));
-	record_cr0(result);
-	gpr(7) = result;
-
-	gpr(11) = 0xf072; // MSR (SRR1)
-	cr().set((gpr(11) & 0x0fff0000) | (get_cr() & ~0x0fff0000));
-
-	// Enter nanokernel
-	execute(entry);
-
-	// Restore program counters and branch registers
-	pc() = saved_pc;
-	lr() = saved_lr;
-	ctr()= saved_ctr;
-	gpr(1) = saved_sp;
-
-#if EMUL_TIME_STATS
-	interrupt_time += (clock() - interrupt_start);
-#endif
-}
-
 // Execute 68k routine
 void sheepshaver_cpu::execute_68k(uint32 entry, M68kRegisters *r)
 {
@@ -738,448 +777,609 @@ uint32 sheepshaver_cpu::execute_macos_code(uint32 tvect, int nargs, uint32 const
 }
 
 /*
- *  Hand a taken trap to the MacOS PowerPC exception handler chain
+ *  Deliver PowerPC program and trace exceptions through the nanokernel.
  *
- *  On real hardware the nanokernel would snapshot the machine state and call
- *  the ROM's SystemExceptionDispatcher, which runs the system handler
- *  (InstallSystemExceptionHandler -- CodeWarrior's MetroNub) and then the
- *  per-process one (InstallExceptionHandler).  SheepShaver never arms the PPC
- *  exception table, so we build the same snapshot here and make that call
- *  ourselves.  rom_patches.cpp supplies the dispatcher's ROM address and, via
- *  a NativeOp on the Install...Handler entry points, the fragment's TOC.
+ *  SheepShaver already runs the ROM nanokernel for interrupts, but historically
+ *  patched out SPRG3 and the final rfi because the CPU core did not model the
+ *  corresponding architectural registers. A taken trap must enter that same
+ *  path: LowLevelExceptionHandler and the nanokernel perform the context handoff
+ *  which allows a debugger process to run while its target is stopped.
  *
- *  Returns true if the chain claimed the exception (r3 == 0), in which case
- *  the machine state it left behind -- which is how a debugger resumes you
- *  somewhere else, or restores the instruction its breakpoint replaced -- has
- *  been written back and execution continues from it.
+ *  The CPU core now executes the nanokernel's original SRR0/SRR1/rfi return
+ *  sequence. If rfi restores MSR[SE], return_from_exception redirects it to a
+ *  generic one-instruction trampoline; that instruction is followed by the
+ *  real trace vector. No guest clock, application, or System resource is
+ *  modified.
  */
 
-// Structure layout, all per MachineExceptions.h and confirmed against the
-// ROM's own LowLevelExceptionHandler, which fills exactly these offsets.
-enum {
-	// ExceptionInformation
-	EXC_KIND		= 0x00,
-	EXC_MACHINE		= 0x04,
-	EXC_REGISTERS	= 0x08,
-	EXC_FPU			= 0x0c,
-	EXC_INFO		= 0x10,
-	EXC_VECTOR		= 0x14,
-	EXC_SIZE		= 0x18,
-	// MachineInformation (CTR/LR/PC/DAR/Reserved are 64-bit; we use the low half)
-	MACH_CTR_LO		= 0x04,
-	MACH_LR_LO		= 0x0c,
-	MACH_PC_LO		= 0x14,
-	MACH_CR			= 0x18,
-	MACH_XER		= 0x1c,
-	MACH_MSR		= 0x20,
-	MACH_SIZE		= 0x40,
-	// RegisterInformation: 32 * UnsignedWide, FPUInformation: 32 * double + FPSCR
-	REGS_SIZE		= 32 * 8,
-	FPU_FPSCR		= 32 * 8,
-	FPU_SIZE		= 32 * 8 + 8,
-	// The dispatcher writes PC/LR/R3/R4 back into the nanokernel frame when
-	// nothing claimed the exception; it never reads it for a trap.
-	CTX_SIZE		= 0xd0
-};
+static const uint32 PPC_MSR_SE = 1u << (31 - 21);
+static const uint32 PPC_SRR1_PROGRAM_TRAP = 0x00020000;
 
-/*
- *  Locating the exception fragment at run time
- *
- *  Mac OS keeps its PowerPC exception plumbing in a small CFM fragment
- *  exporting GetCurrentProcessFragContext, SystemExceptionDispatcher,
- *  InstallExceptionHandler, InstallSystemExceptionHandler and
- *  LowLevelExceptionHandler, in that order.  The ROM carries a copy, but Mac OS
- *  9 runs a newer build out of the System file, and the two differ in every
- *  detail that matters -- the system handler slot is at TOC+0xac in the ROM
- *  build and TOC+0xdc in the System one, and the exception-kind table is behind
- *  a pointer at TOC-0x10 in the first and inline at TOC+0x7c in the second.
- *  Nothing here may be taken from the ROM: it is all read from whichever
- *  fragment CFM actually prepared.
- *
- *  Only two things are needed to drive it:
- *
- *    - SystemExceptionDispatcher's TVector.  CFM does not export the
- *      dispatcher under any library name, but it does export its two
- *      neighbours, and the fragment's TVectors sit consecutively in export
- *      order, so the dispatcher is one slot below InstallExceptionHandler.
- *      That is checked, not assumed: InstallSystemExceptionHandler must land
- *      one slot above, all three must share our TOC, and the dispatcher must
- *      start with the mflr r0 that opens it in both known builds.
- *
- *    - the raw exception number that the dispatcher maps to kTrapException.
- *      The mapping table is found by decoding the dispatcher's own indexed
- *      load, which covers the inline and behind-a-pointer forms alike, and the
- *      result is validated as a kind table before it is believed.
- */
+// Exception entry and rfi semantics for a 32-bit PowerPC implementation.
+// SRR1 carries MSR bits 0, 5-9 and 16-31; bits 1-4 and 10-15 contain
+// exception-specific information. The new exception context clears POW, EE,
+// PR, FP, FE0, SE, BE, FE1, IR, DR, RI and LE, then copies ILE to LE.
+static const uint32 PPC_RFI_MSR_MASK = 0x87c0ffff;
+static const uint32 PPC_MSR_ILE = 1u << (31 - 15);
+static const uint32 PPC_MSR_LE = 1u << (31 - 31);
+static const uint32 PPC_EXCEPTION_MSR_CLEAR_MASK = 0x0004ef33;
 
-static const uint32 kTrapException = 2;
-static const uint32 kTraceException = 9;
-static const uint32 PPC_MFLR_R0 = 0x7c0802a6;
-
-// MSR[SE], bit 21 counting from the msb.  A handler sets it in the machine
-// state it returns to ask for the next instruction to be single stepped -- see
-// LowLevelExceptionHandler, whose resume path masks exactly this bit out of
-// MachineInformation.MSR (rlwinm rX,rX,0,21,21) and hands it to the nanokernel.
-static const uint32 MSR_SE = 1u << (31 - 21);
-
-static uint32 ExceptionDispatcherCode = 0;	// resolved once, then reused
-static uint32 ExceptionLibTOC = 0;
-static uint32 ExceptionTrampoline = 0;		// guest return site of the dispatcher
-static uint32 ExceptionTrapRawKind = 0;
-static uint32 ExceptionTraceRawKind = 0;
-
-// A kind table maps small raw numbers to ExceptionKinds, so every entry is a
-// small integer and entry 0 is kUnknownException.  Both known builds start
-// 0, 2, 2, 13, 1, 8 ... -- but only the shape is required here.
-static bool kind_table_scan(uint32 table, uint32 *trap, uint32 *trace)
+static uint32 ppc_exception_msr(uint32 old_msr)
 {
-	if (table < 0x1000 || table >= 0x80000000)
-		return false;
-	if (ReadMacInt32(table) != 0)
-		return false;
-	*trap = *trace = 0;
-	for (uint32 i = 1; i < 24; i++) {
-		const uint32 v = ReadMacInt32(table + i * 4);
-		if (v >= 32)
-			return false;		// not a table of ExceptionKinds
-		if (v == kTrapException && *trap == 0)
-			*trap = i;
-		else if (v == kTraceException && *trace == 0)
-			*trace = i;
-	}
-	return *trap != 0 && *trace != 0;
+	uint32 new_msr = old_msr & ~PPC_EXCEPTION_MSR_CLEAR_MASK;
+	if ((old_msr & PPC_MSR_ILE) != 0)
+		new_msr |= PPC_MSR_LE;
+	return new_msr;
 }
 
-// The dispatcher indexes the table with `lwzx rD,rA,rB` after scaling the raw
-// kind by 4.  Whichever of rA/rB is the base was set from r2 a few
-// instructions earlier, either as `addi rB,r2,d` (table inline in the data
-// section) or `lwz rB,d(r2)` (table behind a pointer).
-static bool find_raw_kinds(uint32 code, uint32 toc)
+static uint32 ppc_exception_srr1(uint32 old_msr, uint32 cause)
 {
-	for (int i = 0; i < 48; i++) {
-		const uint32 insn = ReadMacInt32(code + i * 4);
-		if ((insn & 0xfc0007fe) != 0x7c00002e)		// lwzx
-			continue;
-		const uint32 regs[2] = { (insn >> 16) & 0x1f, (insn >> 11) & 0x1f };
-		for (int which = 0; which < 2; which++) {
-			for (int j = i - 1; j >= 0; j--) {
-				const uint32 def = ReadMacInt32(code + j * 4);
-				if (((def >> 21) & 0x1f) != regs[which] || ((def >> 16) & 0x1f) != 2)
-					continue;
-				uint32 table = 0;
-				if ((def >> 26) == 14)				// addi rD,r2,d
-					table = toc + (int32)(int16)(def & 0xffff);
-				else if ((def >> 26) == 32)			// lwz rD,d(r2)
-					table = ReadMacInt32(toc + (int32)(int16)(def & 0xffff));
-				else
-					break;							// rD set some other way
-				if (kind_table_scan(table, &ExceptionTrapRawKind, &ExceptionTraceRawKind)) {
-					gfx_log_emit("[exception] ", "kind table at %08x: raw %u = trap, "
-							"raw %u = trace\n", table,
-							ExceptionTrapRawKind, ExceptionTraceRawKind);
-					return true;
-				}
-				break;
-			}
-		}
-	}
-	return false;
+	return (old_msr & PPC_RFI_MSR_MASK) | cause;
 }
 
-static bool resolve_exception_fragment(void)
+static const uint32 PPC_EXTERNAL_VECTOR = 0x00300500;
+static const uint32 PPC_PROGRAM_VECTOR = 0x00300700;
+static const uint32 PPC_DECREMENTER_VECTOR = 0x00300900;
+static const uint32 PPC_TRACE_VECTOR = 0x00300d00;
+static const uint32 PPC_EXTERNAL_HANDLER_SLOT = 0x14;
+static const uint32 PPC_PROGRAM_HANDLER_SLOT = 0x1c;
+static const uint32 PPC_DECREMENTER_HANDLER_SLOT = 0x24;
+static const uint32 PPC_TRACE_HANDLER_SLOT = 0x34;
+static const uint32 PPC_VECTOR_TAG_OFFSET = 0x24;
+
+static const char *ppc_exception_vector_name(uint32 vector)
 {
-	static bool asked = false;
-	if (ExceptionDispatcherCode != 0)
-		return true;
-	if (asked)
-		return false;
-	asked = true;
-
-	if (!PrefsFindBool("ppcexceptions")) {
-		gfx_log_emit("[exception] ", "trap delivery disabled by preference\n");
-		return false;
-	}
-
-	const uint32 install = FindLibSymbol("\014InterfaceLib", "\027InstallExceptionHandler");
-	const uint32 install_sys = FindLibSymbol("\023PrivateInterfaceLib",
-			"\035InstallSystemExceptionHandler");
-	if (install == 0 || install_sys == 0) {
-		gfx_log_emit("[exception] ", "CFM has no Install%sExceptionHandler\n",
-				install == 0 ? "" : "System");
-		return false;
-	}
-
-	const uint32 toc = ReadMacInt32(install + 4);
-	const uint32 dispatcher = install - 8;
-	if (install_sys != install + 8 || ReadMacInt32(install_sys + 4) != toc ||
-		ReadMacInt32(dispatcher + 4) != toc) {
-		gfx_log_emit("[exception] ", "TVectors not consecutive: install=%08x "
-				"install_sys=%08x toc=%08x\n", install, install_sys, toc);
-		return false;
-	}
-	const uint32 code = ReadMacInt32(dispatcher);
-	if (ReadMacInt32(code) != PPC_MFLR_R0) {
-		gfx_log_emit("[exception] ", "no dispatcher prologue at %08x (found %08x)\n",
-				code, ReadMacInt32(code));
-		return false;
-	}
-
-	// The system handler slot displacement lives in InstallSystemExceptionHandler's
-	// own first instruction (addi r12,r2,d), so reporting who is registered costs
-	// nothing and does not assume a layout.
-	uint32 registered = 0;
-	const uint32 slot_insn = ReadMacInt32(ReadMacInt32(install_sys));
-	if ((slot_insn & 0xffff0000) == 0x39820000)
-		registered = ReadMacInt32(toc + (int32)(int16)(slot_insn & 0xffff));
-
-	if (!find_raw_kinds(code, toc)) {
-		gfx_log_emit("[exception] ", "no exception-kind table found in the dispatcher "
-				"at %08x\n", code);
-		return false;
-	}
-
-	// One-instruction guest trampoline: the dispatcher returns into it, which
-	// hands control back to exception_resume().
-	ExceptionTrampoline = SheepMem::ReserveProc(4);
-	WriteMacInt32(ExceptionTrampoline, NativeOpcode(NATIVE_EXCEPTION_RESUME));
-	ExceptionDispatcherCode = code;
-	ExceptionLibTOC = toc;
-	gfx_log_emit("[exception] ", "dispatcher %08x (code %08x) toc %08x, "
-			"system handler %08x, trampoline %08x\n", dispatcher, code, toc,
-			registered, ExceptionTrampoline);
-	return true;
+	if (vector == PPC_EXTERNAL_VECTOR)
+		return "external";
+	if (vector == PPC_TRACE_VECTOR)
+		return "trace";
+	if (vector == PPC_DECREMENTER_VECTOR)
+		return "decrementer";
+	return "program";
 }
 
-/*
- *  Running the handler chain
- *
- *  The obvious way to call the dispatcher is execute_macos_code(), and the
- *  first version did.  It is unusably slow: PPC_REENTRANT_JIT is 0, so
- *  powerpc_cpu::execute() only uses the block engines at execute_depth == 1,
- *  and a nested call runs the pure interpreter.  The handler chain does not
- *  return until the user resumes, so *everything* Mac OS does while stopped at
- *  a breakpoint -- the IDE's event loop, its window updates, the whole Toolbox
- *  -- would be interpreted.  Measured at about five seconds per source-line
- *  step.
- *
- *  So the dispatcher is not called; control is handed to it. The trapped state
- *  is snapshotted, the guest is pointed at the dispatcher with LR aimed at a
- *  one-instruction trampoline, and the trap handler simply returns.  The outer
- *  execute() -- still at depth 1, still JIT compiled -- runs the dispatcher and
- *  everything it reaches at full speed, and lands in the trampoline when the
- *  chain is done.  exception_resume() then applies the machine state the
- *  handler left behind, single steps if it asked for it, and either dispatches
- *  again or resumes the program.
- */
-
-struct exception_frame {
-	uint32 block, exc, mach, regs, fpu, ctx;
-	uint32 saved_sp, trap_pc, trap_opcode;
-	unsigned long steps;
-	uint64 entered_usec, entered_idle_usec;
-	unsigned long entered_idle_count, entered_idle_skip, entered_flushes, entered_vbls;
-};
-
-// Time the emulator spent asleep in idle_wait(), from emul_op.cpp
+static bool guest_addr_ok(uint32 a, uint32 len);
 extern uint64 IdleWaitUsec;
 extern unsigned long IdleWaitCount;
-extern unsigned long IdleWaitSkipCount;
-extern unsigned long ExceptionVblCount;
 
-// MakeExecutable/FlushCodeCache calls seen while a handler chain is running.
-// If MetroNub flushes the pages it rewrites, a full JIT wipe on resume is
-// unnecessary; the count tells us whether that is safe to try.
-static unsigned long ExceptionCodeFlushes = 0;
-
-// When the program was last let go; the gap to the next trap is how long it ran
-// between stops, which separates a slow handler chain from a program that blew
-// past a breakpoint whose translation had not been invalidated.
-static uint64 ExceptionLastResume = 0;
-
-// Nesting is bounded: a trap taken while the chain runs is legitimate (stepping
-// onto a breakpoint), an unbounded chain of them is not.
-static exception_frame exc_stack[4];
-static int exc_depth = 0;
-
-bool ExceptionDeliveryActive(void)
+void sheepshaver_cpu::record_rfi_site(uint32 return_pc, uint32 run_mode)
 {
-	return exc_depth > 0;
+	for (unsigned i = 0; i < EXCEPTION_RFI_SITE_COUNT; i++) {
+		if (exception_rfi_sites[i].count != 0 &&
+			exception_rfi_sites[i].pc == return_pc &&
+			exception_rfi_sites[i].mode == run_mode) {
+			exception_rfi_sites[i].count++;
+			return;
+		}
+	}
+	for (unsigned i = 0; i < EXCEPTION_RFI_SITE_COUNT; i++) {
+		if (exception_rfi_sites[i].count == 0) {
+			exception_rfi_sites[i].pc = return_pc;
+			exception_rfi_sites[i].mode = run_mode;
+			exception_rfi_sites[i].count = 1;
+			return;
+		}
+	}
+	exception_rfi_site_overflow++;
 }
 
-void sheepshaver_cpu::exception_snapshot(const exception_frame &f)
+void sheepshaver_cpu::report_and_reset_rfi_sites(void)
 {
-	for (uint32 a = f.block; a < f.ctx + CTX_SIZE; a += 4)
-		WriteMacInt32(a, 0);
-
-	WriteMacInt32(f.mach + MACH_CTR_LO, ctr());
-	WriteMacInt32(f.mach + MACH_LR_LO, lr());
-	WriteMacInt32(f.mach + MACH_PC_LO, pc());
-	WriteMacInt32(f.mach + MACH_CR, get_cr());
-	WriteMacInt32(f.mach + MACH_XER, get_xer());
-	// Real LowLevelExceptionHandler stores the interrupted user's MSR.
-	// This core reports 0xf072 from mfmsr (EE/PR on, SE off).  Leaving
-	// zero made MetroNub treat the machine as running with interrupts
-	// disabled and take its 60-tick OSDispatch poll instead of yielding.
-	WriteMacInt32(f.mach + MACH_MSR, 0xf072);
-	for (int i = 0; i < 32; i++)
-		WriteMacInt32(f.regs + i * 8 + 4, gpr(i));
-	for (int i = 0; i < 32; i++)
-		WriteMacInt64(f.fpu + i * 8, fpr_dw(i));
-	WriteMacInt32(f.fpu + FPU_FPSCR, fpscr());
-
-	WriteMacInt32(f.exc + EXC_MACHINE, f.mach);
-	WriteMacInt32(f.exc + EXC_REGISTERS, f.regs);
-	WriteMacInt32(f.exc + EXC_FPU, f.fpu);
+	bool reported[EXCEPTION_RFI_SITE_COUNT];
+	memset(reported, 0, sizeof(reported));
+	for (unsigned rank = 0; rank < 12; rank++) {
+		unsigned best = EXCEPTION_RFI_SITE_COUNT;
+		for (unsigned i = 0; i < EXCEPTION_RFI_SITE_COUNT; i++) {
+			if (!reported[i] && exception_rfi_sites[i].count != 0 &&
+				(best == EXCEPTION_RFI_SITE_COUNT ||
+				exception_rfi_sites[i].count > exception_rfi_sites[best].count))
+				best = i;
+		}
+		if (best == EXCEPTION_RFI_SITE_COUNT)
+			break;
+		reported[best] = true;
+		gfx_log_emit("[exception-rfi] ",
+			"rank %u: return %08x, mode %u, %llu occurrence(s)\n",
+			rank + 1, exception_rfi_sites[best].pc,
+			exception_rfi_sites[best].mode,
+			(unsigned long long)exception_rfi_sites[best].count);
+	}
+	if (exception_rfi_site_overflow != 0)
+		gfx_log_emit("[exception-rfi] ",
+			"%llu return(s) used sites beyond the %u-entry exact table\n",
+			(unsigned long long)exception_rfi_site_overflow,
+			(unsigned)EXCEPTION_RFI_SITE_COUNT);
+	memset(exception_rfi_sites, 0, sizeof(exception_rfi_sites));
+	exception_rfi_site_overflow = 0;
 }
 
-void sheepshaver_cpu::exception_restore(const exception_frame &f)
+/*
+ * Low-memory Ticks is system time, not part of a process's private context.
+ * The real nanokernel can change address spaces on rfi. SheepShaver has a flat
+ * guest address space instead, and Mac OS's software context handoff can expose
+ * an older low-memory image after the VBL was serviced in the 68K context.
+ *
+ * Never manufacture time here: accept only values the guest VBL handler has
+ * already reached, and prevent a later context restore from moving that value
+ * backwards. The signed subtraction is the standard wrap-safe comparison for
+ * the 32-bit counter (valid for deltas shorter than half its wrap period).
+ */
+void sheepshaver_cpu::preserve_system_ticks(void)
 {
-	ctr() = ReadMacInt32(f.mach + MACH_CTR_LO);
-	lr() = ReadMacInt32(f.mach + MACH_LR_LO);
-	pc() = ReadMacInt32(f.mach + MACH_PC_LO);
-	set_cr(ReadMacInt32(f.mach + MACH_CR));
-	set_xer(ReadMacInt32(f.mach + MACH_XER));
-	for (int i = 0; i < 32; i++)
-		gpr(i) = ReadMacInt32(f.regs + i * 8 + 4);
-	for (int i = 0; i < 32; i++)
-		fpr_dw(i) = ReadMacInt64(f.fpu + i * 8);
-	fpscr() = ReadMacInt32(f.fpu + FPU_FPSCR);
-}
-
-// Set up the call into the dispatcher.  pc is left to the caller: entering from
-// the trap handler sets it directly, while the trampoline has to bias it (see
-// exception_resume).
-void sheepshaver_cpu::exception_begin(uint32 raw_kind, const exception_frame &f)
-{
-	WriteMacInt32(f.exc + EXC_KIND, raw_kind);
-	gpr(1) = f.block - 64;			// linkage area for the dispatcher's frame
-	gpr(2) = ExceptionLibTOC;
-	gpr(3) = f.ctx;
-	gpr(4) = f.exc;
-	lr() = ExceptionTrampoline;
-}
-
-// The trampoline, reached when the handler chain returns.
-void sheepshaver_cpu::exception_resume(void)
-{
-	if (exc_depth <= 0)				// can't happen; don't make it fatal
+	if (!HasMacStarted()) {
+		system_ticks_valid = false;
 		return;
-	exception_frame &f = exc_stack[exc_depth - 1];
-	const uint32 result = gpr(3);
-
-	exception_restore(f);
-	uint32 next_pc;
-
-	if (result != 0) {
-		// Nobody claimed it.  Resuming past the trap is not an option -- the
-		// instruction a breakpoint overwrote never ran -- so report and stop,
-		// with the CPU back in its trapped state so the dump is the real one.
-		gfx_log_emit("[crash] ", "Trap taken at %08x, opcode = %08x%s -- "
-				"the handler chain declined it (%d)\n", f.trap_pc, f.trap_opcode,
-				f.trap_opcode == 0x7e800008 ? " (debugger breakpoint)" : "",
-				(int32)result);
-		report_fault(f.trap_opcode);		// aborts unless ignoreillegal is set
-		next_pc = f.trap_pc + 4;
-		exc_depth--;
-	}
-	else if ((ReadMacInt32(f.mach + MACH_MSR) & MSR_SE) != 0) {
-		// MSR[SE] means "single step from here".  There is no hardware to do
-		// it and no MSR in this core, so run one instruction and raise the
-		// trace exception ourselves, exactly as the nanokernel would --
-		// repeating for as long as the handler keeps asking, which is how a
-		// debugger walks a source line or steps over a call.
-		execute_one_instruction();
-		f.steps++;
-		exception_snapshot(f);
-		exception_begin(ExceptionTraceRawKind, f);
-		ExceptionNoteHandlerEnter();
-		next_pc = ExceptionDispatcherCode;
-	}
-	else {
-		// Done.  The debugger rewrites the code it is stopped in (restoring
-		// what a breakpoint replaced), so no translation of the resume site
-		// may survive.
-		next_pc = pc();
-		// Do not wipe the whole JIT.  A full invalidate_cache() is cheap
-		// (0 ms) but the next handler chain then re-translates MetroNub,
-		// the IDE and the Toolbox -- that is the compounding 3-6 s of
-		// non-idle time.  MetroNub never calls MakeExecutable (count is
-		// always 0), so we:
-		//   1. drop translations of the resume/trap pages (the original
-		//      instruction was restored; a scan for `tw` would miss it);
-		//   2. drop any other block that now contains a planted CW
-		//      breakpoint (0x7e800008) or Debugger() (0x7f810808).
-		const uint64 inv_t0 = GetTicks_usec();
-		invalidate_cache_range(f.trap_pc, f.trap_pc + 4);
-		if (next_pc != f.trap_pc)
-			invalidate_cache_range(next_pc, next_pc + 4);
-		const unsigned planted = invalidate_opcode_sites(0x7e800008, 0x7f810808);
-		const unsigned long inv_ms = (unsigned long)((GetTicks_usec() - inv_t0) / 1000);
-		ExceptionLastResume = GetTicks_usec();
-		gfx_log_emit("[exception] ", "trap at %08x handled, %lu step(s), "
-				"resuming at %08x (chain took %lu ms, %lu ms of it asleep in "
-				"%lu idle waits, %lu waits skipped, %lu handshake ticks, "
-				"cache %u planted-tw block(s) in %lu ms, %lu MakeExecutable "
-				"during chain)\n",
-				f.trap_pc, f.steps, next_pc,
-				(unsigned long)((ExceptionLastResume - f.entered_usec) / 1000),
-				(unsigned long)((IdleWaitUsec - f.entered_idle_usec) / 1000),
-				IdleWaitCount - f.entered_idle_count,
-				IdleWaitSkipCount - f.entered_idle_skip,
-				ExceptionVblCount - f.entered_vbls,
-				planted, inv_ms,
-				ExceptionCodeFlushes - f.entered_flushes);
-		exc_depth--;
 	}
 
-	// This is a NativeOp with FN=0, so execute_sheep adds 4 to pc on the way
-	// out; bias by that rather than clobbering CTR or LR to jump.
-	pc() = next_pc - 4;
+	const uint32 current = ReadMacInt32(0x16a);
+	if (!system_ticks_valid) {
+		system_ticks_high_water = current;
+		system_ticks_valid = true;
+		return;
+	}
+
+	const int32 advance = (int32)(current - system_ticks_high_water);
+	if (advance >= 0) {
+		system_ticks_high_water = current;
+		return;
+	}
+
+	const uint32 rollback = system_ticks_high_water - current;
+	WriteMacInt32(0x16a, system_ticks_high_water);
+	system_tick_correction_count++;
+	system_tick_recovered_total += rollback;
+	if (rollback > system_tick_max_rollback)
+		system_tick_max_rollback = rollback;
+}
+
+void sheepshaver_cpu::exception_diagnostic_state(const char *reason, uint64 now)
+{
+	decrementer_diagnostics_t dec;
+	get_decrementer_diagnostics(dec);
+	InterruptServiceDiagnostics service;
+	GetInterruptServiceDiagnostics(service);
+
+	const uint32 run_mode = ReadMacInt32(XLM_RUN_MODE);
+	const int32 irq_nest = (int32)ReadMacInt32(XLM_IRQ_NEST);
+	const uint32 r25 = ReadMacInt32(XLM_68K_R25);
+	const uint32 context_68k = ReadMacInt32(KernelDataAddr + 0x658);
+	const uint32 current_context = ReadMacInt32(KernelDataAddr + 0x65c);
+	const uint32 kernel_status = ReadMacInt32(KernelDataAddr + 0x660);
+	const uint32 kernel_dec = ReadMacInt32(KernelDataAddr + 0x668);
+	const uint32 irq_mask = ReadMacInt32(KernelDataAddr + 0x674);
+	const uint32 level_address = ReadMacInt32(KernelDataAddr + 0x67c);
+	const uint32 timebase_frequency = ReadMacInt32(KernelDataAddr + 0xf6c);
+	const bool level_valid = guest_addr_ok(level_address, 2);
+	const uint32 level = level_valid ? ReadMacInt16(level_address) : 0xffffffffu;
+
+	const bool context_68k_valid = guest_addr_ok(context_68k, 0x118);
+	const bool current_context_valid = guest_addr_ok(current_context, 0x118);
+	const uint32 context_68k_cr = context_68k_valid
+		? ReadMacInt32(context_68k + 0xdc) : 0xdead0001u;
+	const uint32 context_68k_pc = context_68k_valid
+		? ReadMacInt32(context_68k + 0xfc) : 0xdead0001u;
+	const uint32 context_68k_sp = context_68k_valid
+		? ReadMacInt32(context_68k + 0x10c) : 0xdead0001u;
+	const uint32 current_cr = current_context_valid
+		? ReadMacInt32(current_context + 0xdc) : 0xdead0002u;
+	const uint32 current_pc = current_context_valid
+		? ReadMacInt32(current_context + 0xfc) : 0xdead0002u;
+	const uint32 current_sp = current_context_valid
+		? ReadMacInt32(current_context + 0x10c) : 0xdead0002u;
+	gfx_log_emit("[exception-state] ",
+		"%s +%lu ms: pc=%08x lr=%08x sp=%08x msr=%08x "
+		"srr0=%08x srr1=%08x sprg3=%08x\n",
+		reason,
+		exception_last_program_usec != 0
+			? (unsigned long)((now - exception_last_program_usec) / 1000) : 0UL,
+		pc(), lr(), gpr(1), msr(), srr0(), srr1(), sprg(3));
+	gfx_log_emit("[exception-state] ",
+		"mode=%u exec-depth=%d nest=%d r25=%08x flags=%08x spc=%08x "
+		"tick=%08x canonical=%08x qhead=%08x; "
+		"KD status=%08x savedDEC=%08x timebaseHz=%08x mask=%08x "
+		"level@%08x=%08x\n",
+		run_mode, current_execute_depth(), irq_nest, r25, (uint32)InterruptFlags,
+		spcflags().get(),
+		ReadMacInt32(0x16a), system_ticks_high_water, ReadMacInt32(0x14c), kernel_status,
+		kernel_dec, timebase_frequency, irq_mask, level_address, level);
+	gfx_log_emit("[exception-state] ",
+		"68kctx=%08x valid=%u pc=%08x sp=%08x cr=%08x; "
+		"current=%08x valid=%u pc=%08x sp=%08x cr=%08x\n",
+		context_68k, context_68k_valid ? 1u : 0u, context_68k_pc,
+		context_68k_sp, context_68k_cr, current_context,
+		current_context_valid ? 1u : 0u, current_pc, current_sp, current_cr);
+	gfx_log_emit("[exception-state] ",
+		"DEC=%08x pending=%u writes=%llu delivered=%llu last=%08x "
+		"range=%08x..%08x; OP_IRQ=%llu VIA-serviced=%llu; "
+		"tick corrections=%llu recovered=%llu max-rollback=%u\n",
+		dec.current, dec.pending ? 1u : 0u,
+		(unsigned long long)dec.write_count,
+		(unsigned long long)dec.delivery_count, dec.last_write,
+		dec.minimum_write, dec.maximum_write,
+		(unsigned long long)service.op_irq_entries,
+		(unsigned long long)service.via_services,
+		(unsigned long long)system_tick_correction_count,
+		(unsigned long long)system_tick_recovered_total,
+		system_tick_max_rollback);
+}
+
+void sheepshaver_cpu::exception_idle_diagnostic(void)
+{
+	if (exception_last_program_usec == 0)
+		return;
+	const uint64 now = GetTicks_usec();
+	if (now - exception_last_program_usec > 20000000 ||
+		now - exception_stall_last_usec < 1000000)
+		return;
+	exception_stall_last_usec = now;
+	exception_diagnostic_state("idle-stall", now);
+}
+
+bool sheepshaver_cpu::exception_step_trampoline_ready(void)
+{
+	if (exception_step_trampoline != 0)
+		return true;
+	exception_step_trampoline = NativeFunction(NATIVE_EXCEPTION_STEP);
+	return exception_step_trampoline != 0;
+}
+
+const char *sheepshaver_cpu::enter_exception_vector(
+	uint32 vector, uint32 handler_slot, uint32 saved_pc, uint32 saved_msr)
+{
+	const uint32 table = KernelDataAddr +
+		(ReadMacInt32(XLM_RUN_MODE) == MODE_NATIVE
+			? PPC_NATIVE_EXCEPTION_TABLE_OFFSET
+			: PPC_68K_EXCEPTION_TABLE_OFFSET);
+	sprg(3) = table;
+	const uint32 vector_pc = ROMBase + vector;
+	if (!guest_addr_ok(table + handler_slot, 4))
+		return "the nanokernel exception table is not mapped";
+	const uint32 handler = ReadMacInt32(table + handler_slot);
+	if (handler == 0 || !guest_addr_ok(handler, 4))
+		return "the nanokernel exception handler is not installed";
+	if (!guest_addr_ok(vector_pc, PPC_VECTOR_TAG_OFFSET + 4))
+		return "the nanokernel exception vector is not mapped";
+	const uint32 first = ReadMacInt32(vector_pc);
+	if ((first & 0xfc000003) != 0x48000000 ||
+		ReadMacInt32(vector_pc + PPC_VECTOR_TAG_OFFSET) != (vector & 0xffff))
+		return "the nanokernel exception vector has an unsupported layout";
+	const int32 nest = (int32)ReadMacInt32(XLM_IRQ_NEST);
+	if (nest < 0 || nest == 0x7fffffff)
+		return "the nanokernel interrupt nesting state is invalid";
+	if (exception_entry_depth == 0xffffffffu)
+		return "PowerPC exception nesting overflowed";
+
+	// These are precisely the state changes made by PowerPC exception entry.
+	// The vector itself saves r1/LR in SPRG1/SPRG2 and dispatches through SPRG3.
+	// Pair the hardware exception with the same bookkeeping increment used by
+	// SheepShaver's other nanokernel entry paths. The architectural rfi handler
+	// consumes it on return.
+	const uint32 interrupted_msr = msr();
+	srr0() = saved_pc;
+	srr1() = saved_msr;
+	msr() = ppc_exception_msr(interrupted_msr);
+	WriteMacInt32(XLM_IRQ_NEST, (uint32)nest + 1);
+	exception_entry_depth++;
+	exception_last_vector = vector;
+	exception_last_vector_usec = GetTicks_usec();
+	if (vector == PPC_TRACE_VECTOR)
+		exception_traces_since_program++;
+	else if (vector == PPC_DECREMENTER_VECTOR)
+		exception_decrementers_since_program++;
+	pc() = vector_pc;
+	return NULL;
+}
+
+bool sheepshaver_cpu::decrementer_exception()
+{
+	return enter_exception_vector(PPC_DECREMENTER_VECTOR,
+		PPC_DECREMENTER_HANDLER_SLOT, pc(), ppc_exception_srr1(msr(), 0)) == NULL;
+}
+
+bool sheepshaver_cpu::external_interrupt()
+{
+	// The 68K and EMUL_OP modes deliberately retain their existing callbacks:
+	// they are host-created nested execution frames, not a native PowerPC
+	// context which can take a hardware vector. Native mode must not use that
+	// callback. It used to fabricate a nanokernel frame, execute it recursively,
+	// and then restore SRR/MSR, preventing an interrupt-driven context switch
+	// from becoming the CPU's actual continuation.
+	const uint32 run_mode = ReadMacInt32(XLM_RUN_MODE);
+	if (run_mode != MODE_NATIVE)
+		return powerpc_cpu::external_interrupt();
+
+	// A native exception may context-switch and make its rfi continuation the
+	// CPU's new architectural state. That is valid only for the outer execution
+	// frame; returning through a nested host helper would restore stale state.
+	if (current_execute_depth() != 1) {
+		external_interrupt_mode_deferred_count++;
+		return false;
+	}
+
+	if (int32(ReadMacInt32(XLM_IRQ_NEST)) > 0) {
+		external_interrupt_nest_deferred_count++;
+		return false;
+	}
+
+#ifdef USE_SDL_VIDEO
+	// SDL requires event pumping on the thread which established video mode.
+	SDL_PumpEvents();
+#endif
+#if TARGET_OS_MACCATALYST
+	catalyst_pump_appkit_events();
+#endif
+
+	// Present the VIA level and its nanokernel pending bit before entering the
+	// hardware vector. Both stores are level/idempotent: if early boot has not
+	// installed the vector yet, the asserted CPU request remains pending and a
+	// later boundary retries it.
+	const uint32 interrupt_level =
+		ReadMacInt32(KERNEL_DATA_BASE + 0x67c);
+	const uint32 context = ReadMacInt32(KERNEL_DATA_BASE + 0x658);
+	if (!guest_addr_ok(interrupt_level, 2) ||
+		!guest_addr_ok(context + 0xdc, 4)) {
+		external_interrupt_mode_deferred_count++;
+		return false;
+	}
+	WriteMacInt16(interrupt_level, 1);
+	WriteMacInt32(context + 0xdc,
+		ReadMacInt32(context + 0xdc) |
+		ReadMacInt32(KERNEL_DATA_BASE + 0x674));
+
+	const char *why = enter_exception_vector(PPC_EXTERNAL_VECTOR,
+		PPC_EXTERNAL_HANDLER_SLOT, pc(), ppc_exception_srr1(msr(), 0));
+	if (why != NULL) {
+		external_interrupt_mode_deferred_count++;
+		return false;
+	}
+
+#if EMUL_TIME_STATS
+	interrupt_count++;
+#endif
+	external_interrupt_accepted_count++;
+	external_interrupt_native_vector_count++;
+	return true;
 }
 
 const char *sheepshaver_cpu::deliver_trap_exception(uint32 opcode)
 {
-	if (exc_depth >= (int)(sizeof(exc_stack) / sizeof(exc_stack[0])))
-		return "exception delivery nested too deeply";
-	if (!resolve_exception_fragment())
-		return "the MacOS exception fragment could not be resolved";
+	if (exception_step_active) {
+		exception_step_trap = true;
+		exception_step_opcode = opcode;
+		return NULL;
+	}
+	if (!PrefsFindBool("ppcexceptions"))
+		return "PowerPC exception delivery is disabled";
+	if (!exception_step_trampoline_ready())
+		return "the single-step return trampoline could not be allocated";
+	preserve_system_ticks();
 
-	// Everything goes below the interrupted routine's stack, like the real
-	// low-level handler does; the dispatcher's own frames land below that.
-	const uint32 block_size = EXC_SIZE + MACH_SIZE + REGS_SIZE + FPU_SIZE + CTX_SIZE;
-	exception_frame &f = exc_stack[exc_depth];
-	f.saved_sp = gpr(1);
-	f.block = (f.saved_sp - block_size - 64) & ~15;
-	if (f.block < 0x2000 || f.block >= f.saved_sp)
-		return "no room below the trapped routine's stack";
-	f.exc   = f.block;
-	f.mach  = f.exc + EXC_SIZE;
-	f.regs  = f.mach + MACH_SIZE;
-	f.fpu   = f.regs + REGS_SIZE;
-	f.ctx   = f.fpu + FPU_SIZE;
-	f.trap_pc = pc();
-	f.trap_opcode = opcode;
-	f.steps = 0;
+	const uint32 trap_pc = pc();
+	const uint64 now = GetTicks_usec();
+	const uint64 idle_now = IdleWaitUsec;
+	const unsigned long idle_count_now = IdleWaitCount;
+	const uint32 tick_now = ReadMacInt32(0x16a);
+	const int32 nest_before = (int32)ReadMacInt32(XLM_IRQ_NEST);
+	const uint64 previous_program = exception_last_program_usec;
+	const uint32 previous_returns = exception_returns_since_program;
+	const uint32 previous_traces = exception_traces_since_program;
+	const uint32 previous_decrementers = exception_decrementers_since_program;
+	InterruptServiceDiagnostics service_now;
+	GetInterruptServiceDiagnostics(service_now);
+	const char *why = enter_exception_vector(PPC_PROGRAM_VECTOR,
+		PPC_PROGRAM_HANDLER_SLOT, trap_pc,
+		ppc_exception_srr1(msr(), PPC_SRR1_PROGRAM_TRAP));
+	if (why != NULL)
+		return why;
 
-	exception_snapshot(f);
-	exc_depth++;
-	exception_begin(ExceptionTrapRawKind, f);
-	pc() = ExceptionDispatcherCode;		// execute_trap returns without touching pc
-
-	f.entered_usec = GetTicks_usec();
-	f.entered_idle_usec = IdleWaitUsec;
-	f.entered_idle_count = IdleWaitCount;
-	f.entered_idle_skip = IdleWaitSkipCount;
-	f.entered_flushes = ExceptionCodeFlushes;
-	f.entered_vbls = ExceptionVblCount;
-	ExceptionNoteHandlerEnter();
-	gfx_log_emit("[exception] ", "trap at %08x: entering handler chain (depth %d, "
-			"program ran %lu ms since the last resume)\n", f.trap_pc, exc_depth,
-			ExceptionLastResume
-				? (unsigned long)((f.entered_usec - ExceptionLastResume) / 1000) : 0UL);
-	return NULL;			// handed over; the trampoline finishes the job
+	if (previous_program != 0) {
+		gfx_log_emit("[exception] ",
+			"program exception at %08x: entering nanokernel handler "
+			"(since previous: %lu ms, %lu ms idle in %lu waits, "
+			"%u guest ticks, %u rfi returns, %u trace and %u decrementer "
+			"exceptions; "
+			"nest %d->%d)\n",
+			trap_pc,
+			(unsigned long)((now - previous_program) / 1000),
+			(unsigned long)((idle_now - exception_idle_snapshot_usec) / 1000),
+			idle_count_now - exception_idle_snapshot_count,
+			tick_now - exception_tick_snapshot,
+			previous_returns, previous_traces, previous_decrementers,
+			nest_before,
+			(int32)ReadMacInt32(XLM_IRQ_NEST));
+		gfx_log_emit("[exception] ",
+			"external interrupt arbitration since previous: %llu accepted "
+			"(%llu native vectors, %llu 68k, %llu emul-op); "
+			"%llu nest, %llu 68k-IPL and %llu "
+			"mode boundary retries\n",
+			(unsigned long long)(external_interrupt_accepted_count -
+				external_interrupt_accepted_snapshot),
+			(unsigned long long)(external_interrupt_native_vector_count -
+				external_interrupt_native_vector_snapshot),
+			(unsigned long long)(external_interrupt_68k_accepted_count -
+				external_interrupt_68k_accepted_snapshot),
+			(unsigned long long)(external_interrupt_emul_accepted_count -
+				external_interrupt_emul_accepted_snapshot),
+			(unsigned long long)(external_interrupt_nest_deferred_count -
+				external_interrupt_nest_deferred_snapshot),
+			(unsigned long long)(external_interrupt_68k_deferred_count -
+				external_interrupt_68k_deferred_snapshot),
+			(unsigned long long)(external_interrupt_mode_deferred_count -
+				external_interrupt_mode_deferred_snapshot));
+		const uint64 service_delta = service_now.via_services -
+			exception_service_snapshot.via_services;
+		const uint64 op_irq_delta = service_now.op_irq_entries -
+			exception_service_snapshot.op_irq_entries;
+		gfx_log_emit("[exception] ",
+			"interrupt service since previous: %llu OP_IRQ entr%s, "
+			"%llu VIA service(s)\n",
+			(unsigned long long)op_irq_delta,
+			op_irq_delta == 1 ? "y" : "ies",
+			(unsigned long long)service_delta);
+		gfx_log_emit("[exception] ",
+			"system TickCount preservation since previous: %llu stale "
+			"context restore(s), %llu tick(s) recovered; canonical=%08x, "
+			"lifetime maximum rollback=%u tick(s)\n",
+			(unsigned long long)(system_tick_correction_count -
+				system_tick_correction_snapshot),
+			(unsigned long long)(system_tick_recovered_total -
+				system_tick_recovered_snapshot),
+			system_ticks_high_water, system_tick_max_rollback);
+		report_and_reset_rfi_sites();
+	} else {
+		gfx_log_emit("[exception] ",
+			"program exception at %08x: entering nanokernel handler "
+			"(nest %d->%d)\n", trap_pc, nest_before,
+			(int32)ReadMacInt32(XLM_IRQ_NEST));
+		memset(exception_rfi_sites, 0, sizeof(exception_rfi_sites));
+		exception_rfi_site_overflow = 0;
+	}
+	exception_last_program_usec = now;
+	exception_idle_snapshot_usec = idle_now;
+	exception_idle_snapshot_count = idle_count_now;
+	exception_tick_snapshot = tick_now;
+	exception_returns_since_program = 0;
+	exception_traces_since_program = 0;
+	exception_decrementers_since_program = 0;
+	exception_stall_last_usec = now;
+	exception_service_snapshot = service_now;
+	external_interrupt_accepted_snapshot = external_interrupt_accepted_count;
+	external_interrupt_nest_deferred_snapshot =
+		external_interrupt_nest_deferred_count;
+	external_interrupt_native_vector_snapshot =
+		external_interrupt_native_vector_count;
+	external_interrupt_68k_accepted_snapshot =
+		external_interrupt_68k_accepted_count;
+	external_interrupt_emul_accepted_snapshot =
+		external_interrupt_emul_accepted_count;
+	external_interrupt_68k_deferred_snapshot =
+		external_interrupt_68k_deferred_count;
+	external_interrupt_mode_deferred_snapshot =
+		external_interrupt_mode_deferred_count;
+	system_tick_correction_snapshot = system_tick_correction_count;
+	system_tick_recovered_snapshot = system_tick_recovered_total;
+	exception_diagnostic_state("program-entry", now);
+	return NULL;
 }
 
+// Complete the nanokernel's real rfi. Besides restoring architectural state,
+// this consumes the host-visible interrupt nesting level which SheepShaver
+// increments before entering the nanokernel. Keeping that bookkeeping here
+// removes a native callback from every context return.
+void sheepshaver_cpu::return_from_exception(uint32 saved_pc, uint32 saved_msr)
+{
+	msr() = (msr() & ~PPC_RFI_MSR_MASK) |
+		(saved_msr & PPC_RFI_MSR_MASK);
+	// The guest has completed its context restore before executing rfi. Keep
+	// global system time from being replaced by that context's stale snapshot.
+	preserve_system_ticks();
+	uint32 return_pc = saved_pc & ~3u;
+	const uint32 run_mode = ReadMacInt32(XLM_RUN_MODE);
+	if (exception_last_program_usec != 0)
+		record_rfi_site(return_pc, run_mode);
+	const int32 nest = (int32)ReadMacInt32(XLM_IRQ_NEST);
+	if (nest > 0)
+		WriteMacInt32(XLM_IRQ_NEST, (uint32)nest - 1);
+	else if (exception_entry_depth != 0)
+		gfx_log_emit("[crash] ",
+			"PowerPC rfi has invalid nanokernel nesting state %d\n", nest);
+
+	exception_returns_since_program++;
+	if (exception_entry_depth != 0) {
+		const uint64 now = GetTicks_usec();
+		const uint64 vector_usec = now - exception_last_vector_usec;
+		if (exception_last_vector == PPC_PROGRAM_VECTOR ||
+			(msr() & PPC_MSR_SE) != 0 || vector_usec >= 100000) {
+			gfx_log_emit("[exception] ",
+				"%s vector returned in %lu us to %08x "
+				"(SE=%u, nest=%d, architectural depth=%u)\n",
+				ppc_exception_vector_name(exception_last_vector),
+				(unsigned long)vector_usec, return_pc,
+				(msr() & PPC_MSR_SE) != 0 ? 1u : 0u,
+				(int32)ReadMacInt32(XLM_IRQ_NEST), exception_entry_depth);
+		}
+		exception_entry_depth--;
+	}
+
+	if ((msr() & PPC_MSR_SE) != 0) {
+		// An asynchronous exception may be recognized immediately after the
+		// rfi which armed single-step, before the software trampoline executes.
+		// Its own rfi returns to that trampoline with SE still set; preserve the
+		// original instruction address instead of replacing it with the
+		// trampoline's address.
+		if (exception_step_pending &&
+			return_pc == exception_step_trampoline) {
+			// The already-armed step continues below at the same trampoline.
+		} else if (exception_step_trampoline_ready()) {
+			exception_step_pc = return_pc;
+			exception_step_pending = true;
+			return_pc = exception_step_trampoline;
+			const uint64 now = GetTicks_usec();
+			gfx_log_emit("[exception] ",
+				"single-step return redirected to %08x (%lu ms since last "
+				"program exception, %lu ms idle, "
+				"%u guest ticks, nest=%d)\n",
+				exception_step_pc,
+				exception_last_program_usec != 0
+					? (unsigned long)((now - exception_last_program_usec) / 1000)
+					: 0UL,
+				(unsigned long)((IdleWaitUsec - exception_idle_snapshot_usec) / 1000),
+				ReadMacInt32(0x16a) - exception_tick_snapshot,
+				(int32)ReadMacInt32(XLM_IRQ_NEST));
+			exception_diagnostic_state("step-ready", now);
+		} else {
+			gfx_log_emit("[crash] ",
+				"could not allocate the PowerPC trace trampoline\n");
+			msr() &= ~PPC_MSR_SE;
+		}
+	}
+	pc() = return_pc;
+}
+
+// Reached only when the handler returned with MSR[SE]. At this point the
+// nanokernel has restored the interrupted register file and its nesting count,
+// so execute exactly one instruction and enter the appropriate hardware vector.
+void sheepshaver_cpu::exception_step(void)
+{
+	if (!exception_step_pending) {
+		increment_pc(4);
+		return;
+	}
+
+	pc() = exception_step_pc;
+	const uint32 stepped_pc = pc();
+	const uint32 stepped_opcode = ReadMacInt32(stepped_pc);
+	exception_step_pending = false;
+	exception_step_trap = false;
+	exception_step_opcode = 0;
+	exception_step_active = true;
+	const uint64 step_started = GetTicks_usec();
+	execute_one_instruction();
+	const uint64 step_usec = GetTicks_usec() - step_started;
+	exception_step_active = false;
+
+	const bool trapped = exception_step_trap;
+	const uint32 vector = trapped ? PPC_PROGRAM_VECTOR : PPC_TRACE_VECTOR;
+	const uint32 slot = trapped
+		? PPC_PROGRAM_HANDLER_SLOT : PPC_TRACE_HANDLER_SLOT;
+	const uint32 saved_msr = ppc_exception_srr1(msr(),
+		trapped ? PPC_SRR1_PROGRAM_TRAP : 0);
+	const uint32 saved_pc = pc();
+	gfx_log_emit("[exception] ",
+		"single instruction at %08x (%08x) took %lu us; raising %s "
+		"exception at %08x\n", stepped_pc, stepped_opcode,
+		(unsigned long)step_usec, trapped ? "program" : "trace", saved_pc);
+	const char *why =
+		enter_exception_vector(vector, slot, saved_pc, saved_msr);
+	if (why == NULL)
+		return;
+
+	gfx_log_emit("[crash] ",
+		"%s exception after stepping at %08x could not enter the "
+		"nanokernel: %s\n", trapped ? "program" : "trace", saved_pc, why);
+	report_fault(trapped ? exception_step_opcode : 0);
+	pc() = trapped ? saved_pc + 4 : saved_pc;
+}
 // Execute ppc routine
 inline void sheepshaver_cpu::execute_ppc(uint32 entry)
 {
@@ -1229,11 +1429,15 @@ inline void sheepshaver_cpu::get_resource(uint32 old_get_resource)
 // PowerPC CPU emulator
 static sheepshaver_cpu *ppc_cpu = NULL;
 
+void PPCExceptionIdleDiagnostic(void)
+{
+	if (ppc_cpu != NULL)
+		ppc_cpu->exception_idle_diagnostic();
+}
+
 void FlushCodeCache(uintptr start, uintptr end)
 {
 	D(bug("FlushCodeCache(%08x, %08x)\n", start, end));
-	if (exc_depth > 0)
-		ExceptionCodeFlushes++;
 	ppc_cpu->invalidate_cache_range(start, end);
 }
 
@@ -1288,6 +1492,11 @@ static bool guest_addr_ok(uint32 a, uint32 len)
 	if (SheepMem::Contains(a) && SheepMem::Size() - (a - SheepMem::Base()) >= len)
 		return true;
 	return false;
+}
+
+bool PPCGuestAddressValid(uint32 addr, uint32 len)
+{
+	return guest_addr_ok(addr, len);
 }
 
 /*
@@ -1700,9 +1909,6 @@ void exit_emul_ppc(void)
 	printf("Total emulation time : %.1f sec\n", double(emul_time) / double(CLOCKS_PER_SEC));
 	printf("Total interrupt count: %d (%2.1f Hz)\n", interrupt_count,
 		   (double(interrupt_count) * CLOCKS_PER_SEC) / double(emul_time));
-	printf("Total ppc interrupt count: %d (%2.1f %%)\n", ppc_interrupt_count,
-		   (double(ppc_interrupt_count) * 100.0) / double(interrupt_count));
-
 #define PRINT_STATS(LABEL, VAR_PREFIX) do {								\
 		printf("Total " LABEL " count : %d\n", VAR_PREFIX##_count);		\
 		printf("Total " LABEL " time  : %.1f sec (%.1f%%)\n",			\
@@ -1768,17 +1974,38 @@ void emul_ppc(uint32 entry)
 void TriggerInterrupt(void)
 {
 	idle_resume();
-#if 0
-  WriteMacInt32(0x16a, ReadMacInt32(0x16a) + 1);
-#else
-  // Trigger interrupt to main cpu only
-  if (ppc_cpu)
-	  ppc_cpu->trigger_interrupt();
-#endif
+	// Trigger interrupt to main cpu only
+	if (ppc_cpu)
+		ppc_cpu->trigger_interrupt();
 }
 
-void HandleInterrupt(powerpc_registers *r)
+bool HandleInterrupt(powerpc_registers *r)
 {
+	// The host-side interrupt request models the processor's level-sensitive
+	// INT input. Do all eligibility checks before touching guest state. A false
+	// return keeps the CPU request asserted until a later instruction boundary.
+	if (int32(ReadMacInt32(XLM_IRQ_NEST)) > 0) {
+		external_interrupt_nest_deferred_count++;
+		return false;
+	}
+
+	const uint32 run_mode = ReadMacInt32(XLM_RUN_MODE);
+	switch (run_mode) {
+	case MODE_68K:
+		break;
+#if INTERRUPTS_IN_EMUL_OP_MODE
+	case MODE_EMUL_OP:
+		if ((ReadMacInt32(XLM_68K_R25) & 7) != 0) {
+			external_interrupt_68k_deferred_count++;
+			return false;
+		}
+		break;
+#endif
+	default:
+		external_interrupt_mode_deferred_count++;
+		return false;
+	}
+
 #ifdef USE_SDL_VIDEO
 	// We must fill in the events queue in the same thread that did call SDL_SetVideoMode()
 	SDL_PumpEvents();
@@ -1790,84 +2017,62 @@ void HandleInterrupt(powerpc_registers *r)
 	catalyst_pump_appkit_events();
 #endif
 
-	// Do nothing if interrupts are disabled
-	if (int32(ReadMacInt32(XLM_IRQ_NEST)) > 0)
-		return;
-
 	// Update interrupt count
 #if EMUL_TIME_STATS
 	interrupt_count++;
 #endif
+	external_interrupt_accepted_count++;
 
 	// Interrupt action depends on current run mode
-	switch (ReadMacInt32(XLM_RUN_MODE)) {
+	switch (run_mode) {
 	case MODE_68K:
+		external_interrupt_68k_accepted_count++;
 		// 68k emulator active, trigger 68k interrupt level 1
 		WriteMacInt16(ReadMacInt32(KERNEL_DATA_BASE + 0x67c), 1);
 		r->cr.set(r->cr.get() | ReadMacInt32(KERNEL_DATA_BASE + 0x674));
 		break;
 
-#if INTERRUPTS_IN_NATIVE_MODE
-	case MODE_NATIVE:
-		// 68k emulator inactive, in nanokernel?
-		if (r->gpr[1] != KernelDataAddr) {
-
-			// Prepare for 68k interrupt level 1
-			WriteMacInt16(ReadMacInt32(KERNEL_DATA_BASE + 0x67c), 1);
-			WriteMacInt32(ReadMacInt32(KERNEL_DATA_BASE + 0x658) + 0xdc,
-						  ReadMacInt32(ReadMacInt32(KERNEL_DATA_BASE + 0x658) + 0xdc)
-						  | ReadMacInt32(KERNEL_DATA_BASE + 0x674));
-
-			// Execute nanokernel interrupt routine (this will activate the 68k emulator)
-			DisableInterrupt();
-			if (ROMType == ROMTYPE_NEWWORLD)
-				ppc_cpu->interrupt(ROMBase + 0x312b1c);
-			else
-				ppc_cpu->interrupt(ROMBase + 0x312a3c);
-		}
-		break;
-#endif
-
 #if INTERRUPTS_IN_EMUL_OP_MODE
 	case MODE_EMUL_OP:
-		// 68k emulator active, within EMUL_OP routine, execute 68k interrupt routine directly when interrupt level is 0
-		if ((ReadMacInt32(XLM_68K_R25) & 7) == 0) {
+		external_interrupt_emul_accepted_count++;
+		// 68k emulator active, within EMUL_OP routine. Eligibility above
+		// established that the emulated 68k interrupt level is zero.
 #if EMUL_TIME_STATS
-			const clock_t interrupt_start = clock();
+		const clock_t interrupt_start = clock();
 #endif
 #if 1
-			// Execute full 68k interrupt routine
-			M68kRegisters r;
-			uint32 old_r25 = ReadMacInt32(XLM_68K_R25);	// Save interrupt level
-			WriteMacInt32(XLM_68K_R25, 0x21);			// Execute with interrupt level 1
-			static const uint8 proc_template[] = {
+		// Execute full 68k interrupt routine
+		M68kRegisters r;
+		uint32 old_r25 = ReadMacInt32(XLM_68K_R25);	// Save interrupt level
+		WriteMacInt32(XLM_68K_R25, 0x21);			// Execute with interrupt level 1
+		static const uint8 proc_template[] = {
 				0x3f, 0x3c, 0x00, 0x00,			// move.w	#$0000,-(sp)	(fake format word)
 				0x48, 0x7a, 0x00, 0x0a,			// pea		@1(pc)			(return address)
 				0x40, 0xe7,						// move		sr,-(sp)		(saved SR)
 				0x20, 0x78, 0x00, 0x064,		// move.l	$64,a0
 				0x4e, 0xd0,						// jmp		(a0)
 				M68K_RTS >> 8, M68K_RTS & 0xff	// @1
-			};
-			BUILD_SHEEPSHAVER_PROCEDURE(proc);
-			Execute68k(proc, &r);
-			WriteMacInt32(XLM_68K_R25, old_r25);		// Restore interrupt level
+		};
+		BUILD_SHEEPSHAVER_PROCEDURE(proc);
+		Execute68k(proc, &r);
+		WriteMacInt32(XLM_68K_R25, old_r25);		// Restore interrupt level
 #else
-			// Only update cursor
-			if (HasMacStarted()) {
-				if (InterruptFlags & INTFLAG_VIA) {
-					ClearInterruptFlag(INTFLAG_VIA);
-					ADBInterrupt();
-					ExecuteNative(NATIVE_VIDEO_VBL);
-				}
+		// Only update cursor
+		if (HasMacStarted()) {
+			if (InterruptFlags & INTFLAG_VIA) {
+				ClearInterruptFlag(INTFLAG_VIA);
+				ADBInterrupt();
+				ExecuteNative(NATIVE_VIDEO_VBL);
 			}
+		}
 #endif
 #if EMUL_TIME_STATS
-			interrupt_time += (clock() - interrupt_start);
+		interrupt_time += (clock() - interrupt_start);
 #endif
-		}
 		break;
 #endif
 	}
+	return true;
 }
 
 void sheepshaver_cpu::call_execute_native_op(powerpc_cpu * cpu, uint32 selector) {
@@ -1895,8 +2100,8 @@ void sheepshaver_cpu::execute_native_op(uint32 selector)
 	case NATIVE_VIDEO_DO_DRIVER_IO:
 		gpr(3) = (int32)(int16)VideoDoDriverIO(gpr(3), gpr(4), gpr(5), gpr(6), gpr(7));
 		break;
-	case NATIVE_EXCEPTION_RESUME:
-		exception_resume();
+	case NATIVE_EXCEPTION_STEP:
+		exception_step();
 		break;
 	case NATIVE_ETHER_AO_GET_HWADDR:
 		AO_get_ethernet_address(gpr(3));

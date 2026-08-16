@@ -117,14 +117,10 @@ extern void Execute68k(uint32, M68kRegisters *r);			// Execute 68k subroutine fr
 extern void Execute68kTrap(uint16 trap, M68kRegisters *r);	// Execute 68k A-Trap from EMUL_OP routine
 #if EMULATED_PPC
 extern void FlushCodeCache(uintptr start, uintptr end);		// Invalidate emulator caches
-// True while a PPC trap/trace is being delivered to the MacOS handler
-// chain (CodeWarrior/MetroNub, etc.).  SynchIdleTime uses this to avoid
-// parking the emulator for a full 60Hz tick during a debugger handshake.
-extern bool ExceptionDeliveryActive(void);
-// A new trap or trace has been handed to the dispatcher.  SynchIdleTime
-// must treat the next burst as handshake, not as the user sitting still.
-extern void ExceptionNoteHandlerEnter(void);
 #endif
 extern void ExecuteNative(int selector);					// Execute native code from EMUL_OP routine (real mode switch)
+#if EMULATED_PPC
+extern void PPCExceptionIdleDiagnostic(void);		// Rate-limited exception-stall telemetry
+#endif
 
 #endif

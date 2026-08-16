@@ -73,7 +73,7 @@ enum {
   NATIVE_GET_1_NAMED_RESOURCE,
   NATIVE_RAVE_DISPATCH,
   NATIVE_OPENGL_DISPATCH,
-  NATIVE_EXCEPTION_RESUME, /* return site of the MacOS exception dispatcher */
+  NATIVE_EXCEPTION_STEP,    /* performs one instruction, then raises trace */
   NATIVE_DSP_DISPATCH,     /* fourth engine */
   NATIVE_GLIDE_DISPATCH,   /* 3dfx Glide 2.x / 3.x */
   #if defined(ENABLE_NATIVE_CINEPAK_PATCH) \

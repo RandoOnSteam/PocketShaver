@@ -98,7 +98,6 @@ void powerpc_cpu::set_register(int id, any_register const & value)
 	default:							abort();				break;
 	}
 }
-
 any_register powerpc_cpu::get_register(int id)
 {
 	any_register value;
@@ -143,6 +142,31 @@ void powerpc_cpu::init_registers()
 	xer().set(0);
 	lr() = 0;
 	ctr() = 0;
+	// 6xx/7xx reset starts in real mode with high exception vectors selected;
+	// the ROM establishes EE/IR/DR and the remaining execution state itself.
+	// Using the old fabricated mfmsr value here would enable DEC during the
+	// nanokernel's boot-time decrementer calibration.
+	msr() = 0x00000040;
+	srr0() = 0;
+	srr1() = 0;
+	for (int i = 0; i < 4; i++)
+		sprg(i) = 0;
+	for (int i = 0; i < 16; i++)
+		sr(i) = 0;
+	decrementer_base = 0xffffffffu;
+	decrementer_base_ticks = 0;
+	decrementer_next_underflow = ~(uint64)0;
+	decrementer_pending = false;
+	decrementer_initialized = false;
+	decrementer_last_write = 0;
+	decrementer_minimum_write = 0xffffffffu;
+	decrementer_maximum_write = 0;
+	decrementer_write_count = 0;
+	decrementer_delivery_count = 0;
+#ifdef SHEEPSHAVER
+	decrementer_timer_deadline = ~(uint64)0;
+	decrementer_timer_stop = false;
+#endif
 	pc() = 0;
 }
 
@@ -463,6 +487,9 @@ powerpc_cpu::powerpc_cpu(task_struct *parent_task)
 
 powerpc_cpu::~powerpc_cpu()
 {
+#ifdef SHEEPSHAVER
+	stop_decrementer_timer();
+#endif
 	--ppc_refcount;
 #if PPC_PROFILE_COMPILE_TIME
 	clock_t emul_end_time = clock();
@@ -590,6 +617,23 @@ void powerpc_registers::interrupt_copy(powerpc_registers &oregs, powerpc_registe
 	}
 }
 
+#ifdef SHEEPSHAVER
+bool powerpc_cpu::external_interrupt()
+{
+	// Execute68k and the emulated-opcode bridge still use SheepShaver's legacy
+	// callback contract: give it a temporary register file and do not let the
+	// nested helper's privileged-register changes escape into the interrupted
+	// CPU context.
+	powerpc_registers r;
+	const system_registers_t saved_system_registers = system_registers;
+	powerpc_registers::interrupt_copy(r, regs());
+	const bool accepted = HandleInterrupt(&r);
+	powerpc_registers::interrupt_copy(regs(), r);
+	system_registers = saved_system_registers;
+	return accepted;
+}
+#endif
+
 bool powerpc_cpu::check_spcflags()
 {
 	if (spcflags().test(SPCFLAG_CPU_EXEC_RETURN)) {
@@ -597,23 +641,39 @@ bool powerpc_cpu::check_spcflags()
 		return false;
 	}
 #ifdef SHEEPSHAVER
-	if (spcflags().test(SPCFLAG_CPU_HANDLE_INTERRUPT)) {
-		spcflags().clear(SPCFLAG_CPU_HANDLE_INTERRUPT);
-		static bool processing_interrupt = false;
-		if (!processing_interrupt) {
-			processing_interrupt = true;
-			powerpc_registers r;
-			powerpc_registers::interrupt_copy(r, regs());
-			HandleInterrupt(&r);
-			powerpc_registers::interrupt_copy(regs(), r);
-			processing_interrupt = false;
-		}
-	}
+	// Convert a cross-thread assertion into the CPU-side pending level before
+	// arbitration. There is no reason to defer this by an extra basic block.
 	if (spcflags().test(SPCFLAG_CPU_TRIGGER_INTERRUPT)) {
 		spcflags().clear(SPCFLAG_CPU_TRIGGER_INTERRUPT);
 		spcflags().set(SPCFLAG_CPU_HANDLE_INTERRUPT);
 	}
+	if (spcflags().test(SPCFLAG_CPU_HANDLE_INTERRUPT)) {
+		static bool processing_interrupt = false;
+		// External exceptions are recognized only while MSR[EE] is set.
+		// execute_depth is host recursion, not a guest interrupt mask: the 68K
+		// emulator and EMUL_OP bridges deliberately run guest code in nested
+		// execute() calls and must retain their established interrupt paths.
+		// The SheepShaver override alone rejects a native hardware-vector entry
+		// from a nested host frame, where a context switch cannot safely escape.
+		if (!processing_interrupt && (msr() & 0x00008000) != 0) {
+			// Consume before calling out so an assertion racing with the handler
+			// remains visible. A handler which cannot accept this boundary
+			// reasserts the level below.
+			spcflags().clear(SPCFLAG_CPU_HANDLE_INTERRUPT);
+			processing_interrupt = true;
+			const bool accepted = external_interrupt();
+			processing_interrupt = false;
+			if (!accepted)
+				spcflags().set(SPCFLAG_CPU_HANDLE_INTERRUPT);
+		}
+	}
 #endif
+	if (spcflags().test(SPCFLAG_CPU_DECREMENTER))
+		spcflags().clear(SPCFLAG_CPU_DECREMENTER);
+	// Host wakeups (notably the 60 Hz tick) also provide a bounded polling
+	// point for DEC while translated code is running. Normal nanokernel context
+	// returns and writes to DEC service it immediately in ppc-execute.cpp.
+	service_decrementer();
 	if (spcflags().test(SPCFLAG_CPU_ENTER_MON)) {
 		spcflags().clear(SPCFLAG_CPU_ENTER_MON);
 #if ENABLE_MON
@@ -744,11 +804,12 @@ void powerpc_cpu::execute(uint32 entry)
 			// Predecode a new block
 			block_info::decode_info *di;
 			const instr_info_t *ii;
+			uint32 opcode;
 			uint32 dpc;
 			di = bi->di = decode_cache_p;
 			dpc = pc() - 4;
 			do {
-				uint32 opcode = vm_read_memory_4(dpc += 4);
+				opcode = vm_read_memory_4(dpc += 4);
 				ii = decode(opcode);
 #if PPC_EXECUTE_DUMP_STATE
 				if (dump_state) {
@@ -782,7 +843,7 @@ void powerpc_cpu::execute(uint32 entry)
 					bi->di = decode_cache_p;
 					di = bi->di + blocklen;
 				}
-			} while ((ii->cflow & CFLOW_END_BLOCK) == 0);
+			} while (!instruction_ends_dispatch_block(ii, opcode));
 			bi->end_pc = dpc;
 			// min_pc is this block's OWN start (bi->pc), not the execute()
 			// entry argument: a block predecoded below the entry PC would
@@ -867,6 +928,12 @@ void powerpc_cpu::execute(uint32 entry)
 	if (invalidated_cache)
 		spcflags().set(SPCFLAG_JIT_EXEC_RETURN);
 	--execute_depth;
+	// Nested execute() calls are host-created call frames (68K interrupts,
+	// Mixed Mode and native thunks), not additional guest processors. DEC is
+	// deferred while such a frame owns a saved register set, then reconsidered
+	// by the outer architectural execution context.
+	if (execute_depth == 1 && decrementer_pending)
+		spcflags().set(SPCFLAG_CPU_DECREMENTER);
 }
 
 void powerpc_cpu::execute()
@@ -971,22 +1038,5 @@ void powerpc_cpu::invalidate_cache_range(uintptr start, uintptr end)
 #endif
 	spcflags().set(SPCFLAG_JIT_EXEC_RETURN);
 	my_block_cache.clear_range(start, end);
-#endif
-}
-
-static uint32 ppc_read_guest_word(uintptr addr)
-{
-	return vm_read_memory_4((uint32)addr);
-}
-
-unsigned powerpc_cpu::invalidate_opcode_sites(uint32 opcode_a, uint32 opcode_b)
-{
-#if PPC_DECODE_CACHE || PPC_ENABLE_JIT
-	spcflags().set(SPCFLAG_JIT_EXEC_RETURN);
-	return my_block_cache.invalidate_containing_words(opcode_a, opcode_b, ppc_read_guest_word);
-#else
-	(void)opcode_a;
-	(void)opcode_b;
-	return 0;
 #endif
 }

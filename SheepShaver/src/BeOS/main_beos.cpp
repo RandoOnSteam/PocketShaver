@@ -1236,11 +1236,10 @@ status_t SheepShaver::tick_func(void *arg)
 			WriteMacInt32(0x20c, TimerDateTime());
 		}
 
-		// 60Hz interrupt
-		if (ReadMacInt32(XLM_IRQ_NEST) == 0) {
-			SetInterruptFlag(INTFLAG_VIA);
-			TriggerInterrupt();
-		}
+		// Keep the level asserted until the CPU can accept it. InterruptFlags
+		// coalesces repeated VBLs while external interrupts are masked.
+		SetInterruptFlag(INTFLAG_VIA);
+		TriggerInterrupt();
 	}
 	return 0;
 }
