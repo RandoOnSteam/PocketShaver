@@ -341,16 +341,17 @@ typedef struct ADBGRAVISFIREBIRD {
 		 * -- whichever way this grows, the calibration pass absorbs it. */
 
 	/* 0x1C8 */ short  mUnusedAxis;
-		/* Sits exactly where a third axis belongs, between Y and the throttle.
-		 * Descent II skips it: it publishes no rudder channel for this device. 
-		 * Most likely an axis the Firebird has and Descent 
-		 * chose not to use. */
+		/* ADBS writes settings+$122c + packet[6]. Descent II skips it.
+		 * InputSprocket Gravis reads it as unsigned 0..255 and publishes
+		 * 255-v as both Throttle and Rudder (isel 143/144). */
 
 	/* 0x1CA */ short  mThrottle;
-		/* Throttle / slider. Signed, read the same way as the two stick axes
-		 * and, like them, left completely unscaled. */
+		/* Packet[5] stored raw, not the 4.3x-550 X/Y scale. Descent reads
+		 * it signed. ISp Gravis treats it as unsigned 0..255, 255-v = Trim. */
 
-	/* 0x1CC */ short  mUnknown3;          /* never read */
+	/* 0x1CC */ short  mUnknown3;
+		/* Packet[7], always 0 from us. ISp Gravis reads it the same way
+		 * as the two sliders but never pushes the result. */
 
 	/* 0x1CE */ long   mButtons;
 		/* All 17 controls in one word, one bit each, bit N = control N in the
@@ -443,45 +444,74 @@ typedef struct ADBTHRUSTMASTER {
 #ifdef PRAGMA_ALIGN_SUPPORTED
 #pragma options align=reset
 #endif
-/* Gravis MouseStick II first appears as origADBAddr/devType 0x3/0x1
-* then the GetIndADB addr for origADBAddr and 0x23 for devType. */
-#define JOY_GRAVISMOUSESTICKII_ORIGADBADDR 0x3
-#define JOY_GRAVISMOUSESTICKII_ORIGDEVTYPE 0x1
-#define JOY_GRAVISMOUSESTICKII_DEVTYPE 0x23
+
+#define JOY_HARDWARE_FIREBIRD 1
+#define JOY_HARDWARE_MOUSESTICKII 0
+#define JOY_HARDWARE_BLACKHAWK 0
+#define JOY_HARDWARE_GAMEPAD 0
+#define JOY_HARDWARE_MACALLY 0
+#define JOY_HARDWARE_SIDEWINDER 0
+#define JOY_HARDWARE_CH_FLIGHTSTICKPRO 0 /* Joymanager API handles instead */
+#define JOY_HARDWARE_THRUSTMASTER 1
+#if JOY_HARDWARE_THRUSTMASTER
 #define JOY_THRUSTMASTER_VERSION 11 /* "version" member of struct */
 #define JOY_THRUSTMASTER_ADBADDR 7 /* ADB address issued by Apple */
 #define JOY_THRUSTMASTER_DEVTYPE 0x5F /* ADB handler ID issued by Apple */
 #define JOY_THRUSTMASTER_MAXCOUNT 15 /* Max ADB database ID possible */
+#endif
+#if JOY_HARDWARE_FIREBIRD
 #define JOY_FIREBIRD_ORIGADBADDR      0x3
 #define JOY_FIREBIRD_ORIGDEVTYPE  0x01
 #define JOY_FIREBIRD_DEVTYPE      0x4E
 #define JOY_FIREBIRD_CLASS        0x0A  /* R1 data[0] */
 #define JOY_FIREBIRD_VERSION      0x00  /* R1 data[1] */
+#endif
+#if JOY_HARDWARE_MOUSESTICKII /* Gravis MouseStick II */
+#define JOY_GRAVISMOUSESTICKII_ORIGADBADDR 0x3
+#define JOY_GRAVISMOUSESTICKII_ORIGDEVTYPE 0x1
+#define JOY_GRAVISMOUSESTICKII_DEVTYPE 0x23
+#endif
+#if JOY_HARDWARE_BLACKHAWK
+#define JOY_BLACKHAWK_ORIGADBADDR  0x8
+#define JOY_BLACKHAWK_ORIGDEVTYPE  0x01
+#define JOY_BLACKHAWK_DEVTYPE      0x4F  /* next to Firebird 0x4E */
+#define JOY_BLACKHAWK_CLASS        0x0A
+#define JOY_BLACKHAWK_VERSION      0x00
+#define JOY_BLACKHAWK_KIND         0x01  /* R1[2] & 0x0F; Firebird sends 0 */
+#define JOY_BLACKHAWK_SIGNATURE    0x6D42484B  /* 'mBHK' */
+#endif
+#if JOY_HARDWARE_GAMEPAD
+#define JOY_GAMEPAD_ORIGADBADDR    0x9
+#define JOY_GAMEPAD_ORIGDEVTYPE    0x01
+#define JOY_GAMEPAD_DEVTYPE        0x24  /* next to MouseStick 0x23 */
+#endif
+#if JOY_HARDWARE_MACALLY
+#define JOY_MACALLY_ORIGADBADDR    0x5  /* vendor: orig 3 or 5 */
+#define JOY_MACALLY_DEVTYPE        0x03  /* vendor: handler >= 3 */
+#define JOY_MACALLY_R1_FREE        0xAA
+#define JOY_MACALLY_R1_CLAIMED     0x55
+#endif
+#if JOY_HARDWARE_SIDEWINDER
+#define JOY_SIDEWINDER_ORIGADBADDR 0x6
+#define JOY_SIDEWINDER_DEVTYPE     0x36 
+#define JOY_SIDEWINDER_COUNT       7
+#endif
+#define JOY_ADB_FIRST 4
+#if JOY_HARDWARE_CH_FLIGHTSTICKPRO
 #define JOY_CH_FLIGHTSTICKPRO_ORIGADBADDR 0x3
 #define JOY_CH_FLIGHTSTICKPRO_ORIGDEVTYPE 0x1
 #define JOY_CH_FLIGHTSTICKPRO_DEVTYPE     0x1  /* never changes */
-#if 1 /* Gravis Firebird */
-#define JOY_GRAVIS_ORIGADBADDR  JOY_FIREBIRD_ORIGADBADDR
-#define JOY_GRAVIS_ORIGDEVTYPE  JOY_FIREBIRD_ORIGDEVTYPE
-#define JOY_GRAVIS_DEVTYPE		JOY_FIREBIRD_DEVTYPE
-#define joy_adb_enable_gravis joy_adb_enable_gravis_firebird
-#define joy_adb_pack_gravis joy_adb_pack_gravis_firebird
-#else /* Gravis MouseStick II */
-#define JOY_GRAVIS_ORIGADBADDR  JOY_GRAVISMOUSESTICKII_ORIGADBADDR
-#define JOY_GRAVIS_ORIGDEVTYPE  JOY_GRAVISMOUSESTICKII_ORIGDEVTYPE
-#define JOY_GRAVIS_DEVTYPE      JOY_GRAVISMOUSESTICKII_DEVTYPE
-#define joy_adb_enable_gravis   joy_adb_enable_gravis_mousestick_ii
-#define joy_adb_pack_gravis joy_adb_pack_gravis_mousestick_ii
 #endif
-#define JOY_ADB_FIRST 4
-#define JOY_HARDWARE_CH_FLIGHTSTICKPRO 0 /* Joymanager API handles instead */
-#if JOY_HARDWARE_CH_FLIGHTSTICKPRO 
-#define JOY_DEVSPERDEVICE 3 /* Firebird + Thrustmaster + Flightstick */
+#define JOY_DEVSPERDEVICE (JOY_HARDWARE_FIREBIRD + \
+	JOY_HARDWARE_MOUSESTICKII + JOY_HARDWARE_BLACKHAWK + \
+	JOY_HARDWARE_GAMEPAD + JOY_HARDWARE_MACALLY + \
+	JOY_HARDWARE_SIDEWINDER + JOY_HARDWARE_CH_FLIGHTSTICKPRO + \
+	JOY_HARDWARE_THRUSTMASTER)
+#if JOY_DEVSPERDEVICE < 1
+#define JOY_ADB_MAX 1
 #else
-#define JOY_DEVSPERDEVICE 2 /* Firebird + Thrustmaster */
-#endif
 #define JOY_ADB_MAX (4 * JOY_DEVSPERDEVICE)
-
+#endif
 struct joy_adb_dev {
 	uint8 reg_3[2]; /* [0] flags|CURRENT addr. [1] devType - handler ID. */
 	uint8 orig_addr; /* origADBAddr */
@@ -492,8 +522,11 @@ struct joy_adb_dev {
 	uint8 cmd_armed; /* next R2 read is status and not echo */	  
 	uint8 last_packet_len;
 	uint8 last_packet[8];
+#if JOY_HARDWARE_MACALLY
+	uint8 macally_claimed; /* Talk R1 0xAA free / 0x55 after Listen R1 */
+#endif
 	uint32 entry_base; /* ADB address for ADBInterrupt() */
-	JoyManagerDevice* dev; 
+	JoyManagerDevice* dev;
 };
 static joy_adb_dev joy_adb_devs[JOY_ADB_MAX];
 static int joy_adb_count = 0; 
@@ -510,17 +543,33 @@ void joy_adb_init(void)
 			joy_adb_count -= JOY_DEVSPERDEVICE;
 			continue;
 		}
-		joy_adb_devs[i].orig_addr = JOY_GRAVIS_ORIGADBADDR;
+	#if JOY_HARDWARE_FIREBIRD 
+		joy_adb_devs[i].orig_addr = JOY_FIREBIRD_ORIGADBADDR;
 		joy_adb_devs[i].reg_3[0] = 0x60 | joy_adb_devs[i].orig_addr;
 		joy_adb_devs[i].dev = dev;
-		joy_adb_devs[i].real_devtype = JOY_GRAVIS_DEVTYPE;
-		joy_adb_devs[i].reg_3[1] = JOY_GRAVIS_ORIGDEVTYPE;
+		joy_adb_devs[i].real_devtype = JOY_FIREBIRD_DEVTYPE;
+		joy_adb_devs[i].reg_3[1] = JOY_FIREBIRD_ORIGDEVTYPE;
 		joy_adb_devs[i].enabled = false;
 		joy_adb_devs[i].cmd_status = 0xff00;
 		joy_adb_devs[i].cmd_param = 0;
 		joy_adb_devs[i].cmd_armed = 0;
 		joy_adb_devs[i].last_packet_len = 0;
 		++i;
+	#endif
+	#if JOY_HARDWARE_MOUSESTICKII
+		joy_adb_devs[i].orig_addr = JOY_GRAVISMOUSESTICKII_ORIGADBADDR;
+		joy_adb_devs[i].reg_3[0] = 0x60 | joy_adb_devs[i].orig_addr;
+		joy_adb_devs[i].dev = dev;
+		joy_adb_devs[i].real_devtype = JOY_GRAVISMOUSESTICKII_DEVTYPE;
+		joy_adb_devs[i].reg_3[1] = JOY_GRAVISMOUSESTICKII_ORIGDEVTYPE;
+		joy_adb_devs[i].enabled = false;
+		joy_adb_devs[i].cmd_status = 0xff00;
+		joy_adb_devs[i].cmd_param = 0;
+		joy_adb_devs[i].cmd_armed = 0;
+		joy_adb_devs[i].last_packet_len = 0;
+		++i;
+	#endif
+	#if JOY_HARDWARE_THRUSTMASTER
 		joy_adb_devs[i].orig_addr = JOY_THRUSTMASTER_ADBADDR;
 		joy_adb_devs[i].reg_3[0] = 0x60 | joy_adb_devs[i].orig_addr;
 		joy_adb_devs[i].dev = dev;
@@ -532,6 +581,7 @@ void joy_adb_init(void)
 		joy_adb_devs[i].cmd_armed = 0;
 		joy_adb_devs[i].last_packet_len = 0;
 		++i;
+	#endif
 	#if JOY_HARDWARE_CH_FLIGHTSTICKPRO
 		joy_adb_devs[i].orig_addr = JOY_CH_FLIGHTSTICKPRO_ORIGADBADDR;
 		joy_adb_devs[i].reg_3[0] = 0x60 | joy_adb_devs[i].orig_addr;
@@ -539,6 +589,59 @@ void joy_adb_init(void)
 		joy_adb_devs[i].real_devtype = JOY_CH_FLIGHTSTICKPRO_DEVTYPE;
 		joy_adb_devs[i].reg_3[1] = JOY_CH_FLIGHTSTICKPRO_ORIGDEVTYPE;
 		joy_adb_devs[i].enabled = false;
+		joy_adb_devs[i].cmd_status = 0xff00;
+		joy_adb_devs[i].cmd_param = 0;
+		joy_adb_devs[i].cmd_armed = 0;
+		joy_adb_devs[i].last_packet_len = 0;
+		++i;
+	#endif
+	#if JOY_HARDWARE_BLACKHAWK
+		joy_adb_devs[i].orig_addr = JOY_BLACKHAWK_ORIGADBADDR;
+		joy_adb_devs[i].reg_3[0] = 0x60 | joy_adb_devs[i].orig_addr;
+		joy_adb_devs[i].dev = dev;
+		joy_adb_devs[i].real_devtype = JOY_BLACKHAWK_DEVTYPE;
+		joy_adb_devs[i].reg_3[1] = JOY_BLACKHAWK_ORIGDEVTYPE;
+		joy_adb_devs[i].enabled = false;
+		joy_adb_devs[i].cmd_status = 0xff00;
+		joy_adb_devs[i].cmd_param = 0;
+		joy_adb_devs[i].cmd_armed = 0;
+		joy_adb_devs[i].last_packet_len = 0;
+		++i;
+	#endif
+	#if JOY_HARDWARE_GAMEPAD
+		joy_adb_devs[i].orig_addr = JOY_GAMEPAD_ORIGADBADDR;
+		joy_adb_devs[i].reg_3[0] = 0x60 | joy_adb_devs[i].orig_addr;
+		joy_adb_devs[i].dev = dev;
+		joy_adb_devs[i].real_devtype = JOY_GAMEPAD_DEVTYPE;
+		joy_adb_devs[i].reg_3[1] = JOY_GAMEPAD_ORIGDEVTYPE;
+		joy_adb_devs[i].enabled = true; /* talker; ISp / joystick.h Talk R0 */
+		joy_adb_devs[i].cmd_status = 0xff00;
+		joy_adb_devs[i].cmd_param = 0;
+		joy_adb_devs[i].cmd_armed = 0;
+		joy_adb_devs[i].last_packet_len = 0;
+		++i;
+	#endif
+	#if JOY_HARDWARE_MACALLY
+		joy_adb_devs[i].orig_addr = JOY_MACALLY_ORIGADBADDR;
+		joy_adb_devs[i].reg_3[0] = 0x60 | joy_adb_devs[i].orig_addr;
+		joy_adb_devs[i].dev = dev;
+		joy_adb_devs[i].real_devtype = JOY_MACALLY_DEVTYPE;
+		joy_adb_devs[i].reg_3[1] = JOY_MACALLY_DEVTYPE;
+		joy_adb_devs[i].enabled = true; /* talker; claim is Listen R1 */
+		joy_adb_devs[i].cmd_status = 0xff00;
+		joy_adb_devs[i].cmd_param = 0;
+		joy_adb_devs[i].cmd_armed = 0;
+		joy_adb_devs[i].last_packet_len = 0;
+		joy_adb_devs[i].macally_claimed = 0;
+		++i;
+	#endif
+	#if JOY_HARDWARE_SIDEWINDER
+		joy_adb_devs[i].orig_addr = JOY_SIDEWINDER_ORIGADBADDR;
+		joy_adb_devs[i].reg_3[0] = 0x60 | joy_adb_devs[i].orig_addr;
+		joy_adb_devs[i].dev = dev;
+		joy_adb_devs[i].real_devtype = JOY_SIDEWINDER_DEVTYPE;
+		joy_adb_devs[i].reg_3[1] = JOY_SIDEWINDER_DEVTYPE;
+		joy_adb_devs[i].enabled = true; /* talker; ISp / joystick.h Talk R0 */
 		joy_adb_devs[i].cmd_status = 0xff00;
 		joy_adb_devs[i].cmd_param = 0;
 		joy_adb_devs[i].cmd_armed = 0;
@@ -560,17 +663,55 @@ void joy_adb_reset_addr(void)
 	int i;
 	for (i = 0; i < joy_adb_count; ++i) {
 		joy_adb_devs[i].reg_3[0] = 0x60 | joy_adb_devs[i].orig_addr;
-		if (joy_adb_devs[i].real_devtype == JOY_THRUSTMASTER_DEVTYPE) {
-			joy_adb_devs[i].reg_3[1] = JOY_THRUSTMASTER_DEVTYPE;
-		#if JOY_HARDWARE_CH_FLIGHTSTICKPRO
-		} else if (joy_adb_devs[i].real_devtype
-				== JOY_CH_FLIGHTSTICKPRO_DEVTYPE) {
-			joy_adb_devs[i].reg_3[1] = JOY_CH_FLIGHTSTICKPRO_ORIGDEVTYPE;
-			joy_adb_devs[i].enabled = false;
+		switch(joy_adb_devs[i].real_devtype) {
+		#if JOY_HARDWARE_THRUSTMASTER
+			case JOY_THRUSTMASTER_DEVTYPE:
+				joy_adb_devs[i].reg_3[1] = JOY_THRUSTMASTER_DEVTYPE;
+				break;
 		#endif
-		} else {
-			joy_adb_devs[i].reg_3[1] = JOY_GRAVIS_ORIGDEVTYPE;
-			joy_adb_devs[i].enabled = false;
+		#if JOY_HARDWARE_CH_FLIGHTSTICKPRO
+			case JOY_CH_FLIGHTSTICKPRO_DEVTYPE:
+				joy_adb_devs[i].reg_3[1] = JOY_CH_FLIGHTSTICKPRO_ORIGDEVTYPE;
+				joy_adb_devs[i].enabled = false;
+				break;
+		#endif
+		#if JOY_HARDWARE_BLACKHAWK
+			case JOY_BLACKHAWK_DEVTYPE:
+				joy_adb_devs[i].reg_3[1] = JOY_BLACKHAWK_ORIGDEVTYPE;
+				joy_adb_devs[i].enabled = false;
+				break;
+		#endif
+		#if JOY_HARDWARE_GAMEPAD
+			case JOY_GAMEPAD_DEVTYPE:
+				joy_adb_devs[i].reg_3[1] = JOY_GAMEPAD_ORIGDEVTYPE;
+				joy_adb_devs[i].enabled = true;
+				break;
+		#endif
+		#if JOY_HARDWARE_MACALLY
+			case JOY_MACALLY_DEVTYPE:
+				joy_adb_devs[i].reg_3[1] = JOY_MACALLY_DEVTYPE;
+				joy_adb_devs[i].enabled = true;
+				joy_adb_devs[i].macally_claimed = 0;
+				break;
+		#endif
+		#if JOY_HARDWARE_SIDEWINDER
+			case JOY_SIDEWINDER_DEVTYPE:
+				joy_adb_devs[i].reg_3[1] = JOY_SIDEWINDER_DEVTYPE;
+				joy_adb_devs[i].enabled = true;
+				break;
+		#endif
+		#if JOY_HARDWARE_FIREBIRD
+			case JOY_FIREBIRD_DEVTYPE:
+				joy_adb_devs[i].reg_3[1] = JOY_FIREBIRD_ORIGDEVTYPE;
+				joy_adb_devs[i].enabled = false;
+				break;
+		#endif
+		#if JOY_HARDWARE_MOUSESTICKII
+			case JOY_GRAVISMOUSESTICKII_DEVTYPE:
+				joy_adb_devs[i].reg_3[1] = JOY_GRAVISMOUSESTICKII_ORIGDEVTYPE;
+				joy_adb_devs[i].enabled = false;
+				break;
+		#endif
 		}
 		joy_adb_devs[i].cmd_status = 0xff00;
 		joy_adb_devs[i].cmd_param = 0;
@@ -589,18 +730,7 @@ int joy_adb_find(uint8 adr)
 	return -1;
 }
 
-/* SDL int16 -> the driver's axis units, -600..+600 */
-static int16 joy_adb_axis_600(JoyManagerDevice *dev, int axis)
-{
-	int v;
-
-	v = (JoyManagerAxis(dev, axis) * 600) / 32767;
-	if (v > 600)
-		v = 600;
-	else if (v < -600)
-		v = -600;
-	return (int16)v;
-}
+#if JOY_HARDWARE_FIREBIRD || JOY_HARDWARE_BLACKHAWK
 /* control index -> (packet byte, bit) */
 static const uint8 joy_firebird_control[17][2] = {
 	  {2,2},{2,1},{2,6},{2,5},{2,7},{2,3},{2,0},{2,4},
@@ -628,6 +758,25 @@ static uint8 joy_firebird_axis(JoyManagerDevice *dev, int axis)
 		return 128;
 	return (uint8)r;
 }
+
+/* InputSprocket Gravis then does "255 - value" for Trim / Throttle / Rudder
+   and scales against a 10..150 default range. */
+static uint8 joy_firebird_slider(JoyManagerDevice *dev, int axis)
+{
+	int v, r;
+
+	if (axis >= JoyManagerNumAxes(dev))
+		return 255;
+	v = JoyManagerAxis(dev, axis);
+	if (v < -32768 + JOY_FIREBIRD_REST)
+		return 255;
+	r = 255 - ((v + 32768) * 255 / 65535);
+	if (r < 0)
+		r = 0;
+	return (uint8)r;
+}
+#endif
+#if JOY_HARDWARE_FIREBIRD
 uint8 joy_adb_pack_gravis_firebird(int i, uint8 reg, uint8 *buf)
 { /* fill up to 8 bytes of buf, return filled # of bytes */
 	JoyManagerDevice *dev;
@@ -669,13 +818,29 @@ uint8 joy_adb_pack_gravis_firebird(int i, uint8 reg, uint8 *buf)
 	}
 	buf[3] = joy_firebird_axis(dev, 0);   /* 0..255, 128 centred */
 	buf[4] = joy_firebird_axis(dev, 1);
-	buf[5] = joy_firebird_axis(dev, 2);   /* throttle, unscaled */
-	buf[6] = joy_firebird_axis(dev, 3);   /* third axis */
+	buf[5] = joy_firebird_slider(dev, 2); /* throttle: 255 idle, 0 full */
+	buf[6] = joy_firebird_slider(dev, 3); /* third axis, same sense */
 	buf[7] = 0;
 	return 8;
 }
-/* SDL button index -> packet bit (ADBS+0x670), active low */
-static const uint8 joy_adb_gravis_pack_button_bit[5] = { 2, 0, 1, 3, 4 };
+#endif
+#if JOY_HARDWARE_MOUSESTICKII
+/* SDL int16 -> the driver's axis units, -600..+600 */
+static int16 joy_adb_axis_600(JoyManagerDevice *dev, int axis)
+{
+	int v;
+
+	v = (JoyManagerAxis(dev, axis) * 600) / 32767;
+	if (v > 600)
+		v = 600;
+	else if (v < -600)
+		v = -600;
+	return (int16)v;
+}
+/* SDL button index -> packet bit, active low. ISp Gravis reads Jeff +0x32
+   the same way: bit 2 trigger, 0 top base, 1 bottom base, 3 thumb L, 4 thumb R. */
+static const uint8 joy_adb_gravis_mousestick_ii_pack_button_bit[5] = 
+	{ 2, 0, 1, 3, 4 };
 uint8 joy_adb_pack_gravis_mousestick_ii(int i, uint8 reg, uint8 *buf)
 { /* fill up to 8 bytes of buf, return filled # of bytes */
 	JoyManagerDevice *dev;
@@ -703,7 +868,8 @@ uint8 joy_adb_pack_gravis_mousestick_ii(int i, uint8 reg, uint8 *buf)
 		nb = 5;
 	for (ibutton = 0; ibutton < nb; ++ibutton) {
 		if (JoyManagerButton(dev, ibutton))
-			buttons &= ~(1u << joy_adb_gravis_pack_button_bit[ibutton]);
+			buttons &= ~(1u 
+				<< joy_adb_gravis_mousestick_ii_pack_button_bit[ibutton]);
 	}
 
 	buf[0] = 0;
@@ -715,7 +881,8 @@ uint8 joy_adb_pack_gravis_mousestick_ii(int i, uint8 reg, uint8 *buf)
 	buf[6] = buttons;
 	return 7;
 }
-
+#endif
+#if JOY_HARDWARE_THRUSTMASTER
 static bool joy_adb_owns_cursor(void);
 static bool mouse_adb_pointer_hidden(void);
 
@@ -723,7 +890,10 @@ static bool mouse_adb_pointer_hidden(void);
    TM INIT+0x4788/0x4888/0x4988/0x4a88 do the centring and signing. */
 static uint8 joy_thrustmaster_axis(JoyManagerDevice *dev, int axis)
 {
-	  return (uint8)((JoyManagerAxis(dev, axis) + 32768) >> 8);
+	/* ISp Thrustmaster does `lbz +2 * 0x01010101` with no invert: 0 = idle. */
+	if (axis >= JoyManagerNumAxes(dev))
+		return 0;
+	return (uint8)((JoyManagerAxis(dev, axis) + 32768) >> 8);
 }
 /* signed axes: -128..127, centred on 0 */
 static uint8 joy_thrustmaster_axis_signed(JoyManagerDevice *dev, int axis)
@@ -773,6 +943,7 @@ uint8 joy_adb_pack_thrustmaster(int i, uint8 reg, uint8 *buf)
 	buf[7] = 0; /* reserveByte2 - same */
 	return 8;
 }
+#endif /* #if JOY_HARDWARE_THRUSTMASTER */
 #if JOY_HARDWARE_CH_FLIGHTSTICKPRO
 /* SDL int16 -> the stick's 10-bit field, 512 centred.  invert 
 	matches the wire: Y and throttle are sent inverted, X is not. */
@@ -841,16 +1012,314 @@ uint8 joy_adb_pack_flightstick_pro(int i, uint8 reg, uint8 *buf)
 	return 8;
 }
 #endif /* #if JOY_HARDWARE_CH_FLIGHTSTICKPRO */
+#if JOY_HARDWARE_MACALLY || JOY_HARDWARE_SIDEWINDER
+static uint16 joy_adb_axis_10bit(JoyManagerDevice *dev, int axis)
+{
+	int v;
+
+	if (axis >= JoyManagerNumAxes(dev))
+		return 512;
+	v = (JoyManagerAxis(dev, axis) + 32768) >> 6;
+	if (v > 1023)
+		v = 1023;
+	else if (v < 0)
+		v = 0;
+	return (uint16)v;
+}
+#endif
+#if JOY_HARDWARE_SIDEWINDER
+/* ISp Sidewinder inverts throttle (0x3FF - raw). Idle on the wire is 1023. */
+static uint16 joy_sidewinder_throttle(JoyManagerDevice *dev, int axis)
+{
+	int v;
+
+	if (axis >= JoyManagerNumAxes(dev))
+		return 1023;
+	v = (JoyManagerAxis(dev, axis) + 32768) >> 6;
+	if (v > 1023)
+		v = 1023;
+	else if (v < 0)
+		v = 0;
+	return (uint16)(1023 - v);
+}
+/* 9-bit twist, rest 256. ISp does not invert. */
+static uint16 joy_sidewinder_rudder(JoyManagerDevice *dev, int axis)
+{
+	int v;
+
+	if (axis >= JoyManagerNumAxes(dev))
+		return 256;
+	v = (JoyManagerAxis(dev, axis) + 32768) >> 7;
+	if (v > 511)
+		v = 511;
+	else if (v < 0)
+		v = 0;
+	return (uint16)v;
+}
+/* SDL hat bits U=1 R=2 D=4 L=8 → Microsoft 0=idle, 1=N clockwise. */
+static uint8 joy_sidewinder_hat_nibble(uint8 h)
+{
+	switch (h & 0x0f) {
+	case 0x01: return 1;
+	case 0x03: return 2;
+	case 0x02: return 3;
+	case 0x06: return 4;
+	case 0x04: return 5;
+	case 0x0c: return 6;
+	case 0x08: return 7;
+	case 0x09: return 8;
+	default:   return 0;
+	}
+}
+static const uint8 joy_sidewinder_btn_src[8] = { 5, 5, 5, 5, 0, 0, 0, 0 };
+static const uint8 joy_sidewinder_btn_bit[8] = { 4, 5, 6, 7, 4, 5, 7, 6 };
+
+uint8 joy_adb_pack_sidewinder(int i, uint8 reg, uint8 *buf)
+{
+	JoyManagerDevice *dev;
+	uint16 x, y, thr, rud;
+	uint8 d0, d5;
+	int nb, c;
+
+	if (joy_adb_devs[i].real_devtype != JOY_SIDEWINDER_DEVTYPE)
+		return 0;
+	if (reg != 0)
+		return 0;
+	dev = joy_adb_devs[i].dev;
+
+	x = joy_adb_axis_10bit(dev, 0);
+	y = joy_adb_axis_10bit(dev, 1);
+	thr = joy_sidewinder_throttle(dev, 2);
+	rud = joy_sidewinder_rudder(dev, 3);
+	d0 = (uint8)(((x >> 6) & 0x0F) | 0xF0);
+	d5 = (uint8)(0xF0 | ((thr >> 8) & 0x03));
+	nb = JoyManagerNumButtons(dev);
+	if (nb > 8)
+		nb = 8;
+	for (c = 0; c < nb; ++c) {
+		if (!JoyManagerButton(dev, c))
+			continue;
+		if (joy_sidewinder_btn_src[c] == 5)
+			d5 &= ~(uint8)(1u << joy_sidewinder_btn_bit[c]);
+		else
+			d0 &= ~(uint8)(1u << joy_sidewinder_btn_bit[c]);
+	}
+	buf[0] = d0;
+	buf[1] = (uint8)(((x & 0x3F) << 2) | ((y >> 8) & 0x03));
+	buf[2] = (uint8)y;
+	buf[3] = (uint8)((rud >> 8) & 1);
+	if (JoyManagerNumHats(dev) > 0)
+		buf[3] |= (uint8)(joy_sidewinder_hat_nibble(
+			JoyManagerHat(dev, 0)) << 4);
+	buf[4] = (uint8)rud;
+	buf[5] = d5;
+	buf[6] = (uint8)thr;
+	return JOY_SIDEWINDER_COUNT;
+}
+#endif
+#if JOY_HARDWARE_BLACKHAWK
+uint8 joy_adb_pack_blackhawk(int i, uint8 reg, uint8 *buf)
+{
+	JoyManagerDevice *dev;
+	int nb, c;
+
+	if (joy_adb_devs[i].real_devtype != JOY_BLACKHAWK_DEVTYPE)
+		return 0;
+	dev = joy_adb_devs[i].dev;
+
+	if (reg == 1) {
+		buf[0] = JOY_BLACKHAWK_CLASS;
+		buf[1] = JOY_BLACKHAWK_VERSION;
+		buf[2] = JOY_BLACKHAWK_KIND;
+		return 3;
+	}
+	if (reg == 2) {
+		uint16 v;
+
+		if (joy_adb_devs[i].cmd_armed) {
+			v = joy_adb_devs[i].cmd_status;
+			joy_adb_devs[i].cmd_armed = 0;
+		} else {
+			v = joy_adb_devs[i].cmd_param;
+		}
+		buf[0] = (uint8)(v >> 8);
+		buf[1] = (uint8)v;
+		return 2;
+	}
+	if (reg != 0)
+		return 0;
+
+	buf[0] = 0xff;
+	buf[1] = 0xff;
+	buf[2] = 0xff;
+	nb = JoyManagerNumButtons(dev);
+	if (nb > 4)
+		nb = 4;
+	for (c = 0; c < nb; ++c) {
+		if (JoyManagerButton(dev, c))
+			buf[joy_firebird_control[c][0]] &=
+				~(1u << joy_firebird_control[c][1]);
+	}
+	buf[3] = joy_firebird_axis(dev, 0);
+	buf[4] = joy_firebird_axis(dev, 1);
+	buf[5] = joy_firebird_slider(dev, 2); /* Trim: 255 idle, ISp does 255-raw */
+	buf[6] = joy_firebird_slider(dev, 3);
+	buf[7] = 0;
+	return 8;
+}
+#endif
+#if JOY_HARDWARE_GAMEPAD
+uint8 joy_adb_pack_gravis_gamepad(int i, uint8 reg, uint8 *buf)
+{
+	JoyManagerDevice *dev;
+	int nb, c;
+	uint8 buttons, h;
+
+	if (joy_adb_devs[i].real_devtype != JOY_GAMEPAD_DEVTYPE)
+		return 0;
+	dev = joy_adb_devs[i].dev;
+
+	if (reg == 1) {
+		buf[0] = 3; /* same variant byte as MouseStick II */
+		return 1;
+	}
+	if (reg != 0)
+		return 0;
+
+	/* Digital only. Jeff +0x32 is 8 bits active low: 
+		U D L R Blue Red Green Yellow. */
+	buttons = 0xff;
+	if (JoyManagerNumHats(dev) > 0) {
+		h = JoyManagerHat(dev, 0);
+		if (h & 0x01)
+			buttons &= ~0x01; /* UP */
+		if (h & 0x04)
+			buttons &= ~0x02; /* DOWN */
+		if (h & 0x08)
+			buttons &= ~0x04; /* LEFT */
+		if (h & 0x02)
+			buttons &= ~0x08; /* RIGHT */
+	} else {
+		if (JoyManagerAxis(dev, 1) < -16000)
+			buttons &= ~0x01;
+		if (JoyManagerAxis(dev, 1) > 16000)
+			buttons &= ~0x02;
+		if (JoyManagerAxis(dev, 0) < -16000)
+			buttons &= ~0x04;
+		if (JoyManagerAxis(dev, 0) > 16000)
+			buttons &= ~0x08;
+	}
+	nb = JoyManagerNumButtons(dev);
+	if (nb > 4)
+		nb = 4;
+	for (c = 0; c < nb; ++c) {
+		if (JoyManagerButton(dev, c))
+			buttons &= ~(uint8)(0x10u << c);
+	}
+
+	buf[0] = 0;
+	buf[1] = 0;
+	buf[2] = 0;
+	buf[3] = 0;
+	buf[4] = 0;
+	buf[5] = 0;
+	buf[6] = buttons;
+	return 7;
+}
+#endif
+#if JOY_HARDWARE_MACALLY
+uint8 joy_adb_pack_macally(int i, uint8 reg, uint8 *buf)
+{
+	JoyManagerDevice *dev;
+	uint16 x, y;
+
+	if (joy_adb_devs[i].real_devtype != JOY_MACALLY_DEVTYPE)
+		return 0;
+	dev = joy_adb_devs[i].dev;
+
+	if (reg == 1) {
+		buf[0] = buf[1] = joy_adb_devs[i].macally_claimed
+			? JOY_MACALLY_R1_CLAIMED : JOY_MACALLY_R1_FREE;
+		return 2;
+	}
+	if (reg != 0)
+		return 0;
+
+	/* Talk R0 count 5. lo,lo,hi,hi; 10-bit, 0x200 rest; 
+		2 buttons active high. */
+	x = joy_adb_axis_10bit(dev, 0);
+	y = joy_adb_axis_10bit(dev, 1);
+	buf[0] = (uint8)x;
+	buf[1] = (uint8)y;
+	buf[2] = (uint8)(x >> 8);
+	buf[3] = (uint8)(y >> 8);
+	buf[4] = 0;
+	if (JoyManagerButton(dev, 0))
+		buf[4] |= 0x01;
+	if (JoyManagerButton(dev, 1))
+		buf[4] |= 0x02;
+	return 5;
+}
+#endif
+static bool joy_adb_is_talker(uint8 real_devtype)
+{
+	switch (real_devtype) {
+#if JOY_HARDWARE_SIDEWINDER
+	case JOY_SIDEWINDER_DEVTYPE:
+		return true;
+#endif
+#if JOY_HARDWARE_MACALLY
+	case JOY_MACALLY_DEVTYPE:
+		return true;
+#endif
+#if JOY_HARDWARE_GAMEPAD
+	case JOY_GAMEPAD_DEVTYPE:
+		return true;
+#endif
+	default:
+		return false;
+	}
+}
 uint8 joy_adb_pack(int i, uint8 reg, uint8 *buf)
 {
+	switch(joy_adb_devs[i].real_devtype) {
 	#if JOY_HARDWARE_CH_FLIGHTSTICKPRO
-	if (joy_adb_devs[i].real_devtype == JOY_CH_FLIGHTSTICKPRO_DEVTYPE)
-		return joy_adb_pack_flightstick_pro(i, reg, buf);
+		case JOY_CH_FLIGHTSTICKPRO_DEVTYPE:
+			return joy_adb_pack_flightstick_pro(i, reg, buf);
 	#endif /* #if JOY_HARDWARE_CH_FLIGHTSTICKPRO */
-	if (joy_adb_devs[i].real_devtype == JOY_GRAVIS_DEVTYPE)
-		return joy_adb_pack_gravis(i, reg, buf);
-	return joy_adb_pack_thrustmaster(i, reg, buf);
+	#if JOY_HARDWARE_BLACKHAWK
+		case JOY_BLACKHAWK_DEVTYPE:
+			return joy_adb_pack_blackhawk(i, reg, buf);
+	#endif /* JOY_HARDWARE_BLACKHAWK */
+	#if JOY_HARDWARE_GAMEPAD
+		case JOY_GAMEPAD_DEVTYPE:
+			return joy_adb_pack_gravis_gamepad(i, reg, buf);
+	#endif /* #if JOY_HARDWARE_GAMEPAD */
+	#if JOY_HARDWARE_MACALLY
+		case JOY_MACALLY_DEVTYPE:
+			return joy_adb_pack_macally(i, reg, buf);
+	#endif /* #if JOY_HARDWARE_MACALLY */
+	#if JOY_HARDWARE_SIDEWINDER
+		case JOY_SIDEWINDER_DEVTYPE:
+			return joy_adb_pack_sidewinder(i, reg, buf);
+	#endif /* #if JOY_HARDWARE_SIDEWINDER */
+	#if JOY_HARDWARE_FIREBIRD
+		case JOY_FIREBIRD_DEVTYPE:
+			return joy_adb_pack_gravis_firebird(i, reg, buf);
+	#endif /* #if JOY_HARDWARE_FIREBIRD */
+	#if JOY_HARDWARE_MOUSESTICKII
+		case JOY_GRAVISMOUSESTICKII_DEVTYPE:
+			return joy_adb_pack_gravis_mousestick_ii(i, reg, buf);
+	#endif /* JOY_HARDWARE_MOUSESTICKII */
+	#if JOY_HARDWARE_THRUSTMASTER
+		case JOY_THRUSTMASTER_DEVTYPE:
+			return joy_adb_pack_thrustmaster(i, reg, buf);
+	#endif /* JOY_HARDWARE_THRUSTMASTER */
+		default:
+			return 0;
+	}
 }
+#if JOY_HARDWARE_MOUSESTICKII
 static void joy_adb_enable_gravis_mousestick_ii(int i)
 {
 	uint32 area, record;
@@ -871,6 +1340,8 @@ static void joy_adb_enable_gravis_mousestick_ii(int i)
 		return;
 	}
 }
+#endif
+#if JOY_HARDWARE_FIREBIRD
 static void joy_adb_enable_gravis_firebird(int i)
 {
 	uint32 area, record;
@@ -893,6 +1364,35 @@ static void joy_adb_enable_gravis_firebird(int i)
 		return;
 	}
 }
+#endif
+#if JOY_HARDWARE_BLACKHAWK
+static void joy_adb_enable_blackhawk(int i)
+{
+	uint32 area, record;
+	int n, k;
+	uint8 mode;
+
+	area = ReadMacInt32(joy_adb_devs[i].entry_base + 4);
+	if (area == 0 || ReadMacInt32(area + 0xe6) != JOY_BLACKHAWK_SIGNATURE)
+		return;
+
+	n = (int16)ReadMacInt16(area + 0x110);
+	if (n < 0 || n > 2)
+		return;
+	for (k = 0; k < n; k++) {
+		if (ReadMacInt8(area + 0x120 + 10 * k)
+				!= (joy_adb_devs[i].reg_3[0] & 0x0f))
+			continue;
+		record = area + 0x134 + 0xAC * k;
+		/* decodeMode 4/5 is the Firebird 8-byte Talk R0 path. */
+		mode = ReadMacInt8(record + 0x20);
+		if (mode != 4 && mode != 5)
+			WriteMacInt8(record + 0x20, 4);
+		joy_adb_devs[i].enabled = true;
+		return;
+	}
+}
+#endif
 void joy_adb_op(int i, uint8 cmd, uint8 reg, uint8* data) {
 	if (cmd == 2) { /* Write */
 		uint16 v;
@@ -909,12 +1409,45 @@ void joy_adb_op(int i, uint8 cmd, uint8 reg, uint8* data) {
 							== JOY_CH_FLIGHTSTICKPRO_DEVTYPE) /* on/off switch */
 						joy_adb_devs[i].enabled = (data[1] & 0x20) != 0;
 					#endif /* #if JOY_HARDWARE_CH_FLIGHTSTICKPRO */
-				} else if (data[2] == JOY_GRAVIS_ORIGDEVTYPE
-						|| data[2] == JOY_GRAVIS_DEVTYPE
-						|| data[2] == JOY_THRUSTMASTER_DEVTYPE)
+				} else if (0
+					#if JOY_HARDWARE_FIREBIRD
+						|| data[2] == JOY_FIREBIRD_ORIGDEVTYPE
+						|| data[2] == JOY_FIREBIRD_DEVTYPE
+					#endif
+					#if JOY_HARDWARE_MOUSESTICKII
+						|| data[2] == JOY_GRAVISMOUSESTICKII_ORIGDEVTYPE
+						|| data[2] == JOY_GRAVISMOUSESTICKII_DEVTYPE
+					#endif
+					#if JOY_HARDWARE_THRUSTMASTER
+						|| data[2] == JOY_THRUSTMASTER_DEVTYPE
+					#endif
+					#if JOY_HARDWARE_BLACKHAWK
+						|| data[2] == JOY_BLACKHAWK_ORIGDEVTYPE
+						|| data[2] == JOY_BLACKHAWK_DEVTYPE
+					#endif
+					#if JOY_HARDWARE_GAMEPAD
+						|| data[2] == JOY_GAMEPAD_ORIGDEVTYPE
+						|| data[2] == JOY_GAMEPAD_DEVTYPE
+					#endif
+					#if JOY_HARDWARE_SIDEWINDER
+						|| data[2] == JOY_SIDEWINDER_DEVTYPE
+					#endif
+					#if JOY_HARDWARE_MACALLY
+						|| (joy_adb_devs[i].real_devtype == JOY_MACALLY_DEVTYPE
+							&& data[2] >= JOY_MACALLY_DEVTYPE)
+					#endif
+						)
 					joy_adb_devs[i].reg_3[1] = data[2];
 				break;
 			case 1:
+			#if JOY_HARDWARE_MACALLY
+				if (joy_adb_devs[i].real_devtype == JOY_MACALLY_DEVTYPE) {
+					if (data[0] >= 2 && data[1] == JOY_MACALLY_R1_CLAIMED
+							&& data[2] == JOY_MACALLY_R1_CLAIMED)
+						joy_adb_devs[i].macally_claimed = 1;
+					break;
+				}
+			#endif
 				v = ((uint16)data[1] << 8) | data[2];
 				if (v == 0xfdfd)
 					joy_adb_devs[i].cmd_armed = 1;
@@ -1025,7 +1558,11 @@ static bool joy_adb_owns_cursor(void)
 
 	for (i = 0; i < joy_adb_count; i++) {
 		if (joy_adb_devs[i].enabled
-				&& joy_adb_devs[i].real_devtype != JOY_THRUSTMASTER_DEVTYPE)
+#if JOY_HARDWARE_THRUSTMASTER
+				&& joy_adb_devs[i].real_devtype != JOY_THRUSTMASTER_DEVTYPE
+#endif
+				&& !joy_adb_is_talker(joy_adb_devs[i].real_devtype)
+				)
 			return true;
 	}
 	return false;
@@ -2230,8 +2767,9 @@ static void adb_log_firebird_zone(void)
 	for (i = 34; i < 42; i++)
 		current[i] = -1;				/* delivered packet bytes */
 #ifdef USE_SDL
+#if JOY_HARDWARE_FIREBIRD
 	for (i = 0; i < joy_adb_count; i++)
-		if (joy_adb_devs[i].real_devtype == JOY_GRAVIS_DEVTYPE) {
+		if (joy_adb_devs[i].real_devtype == JOY_FIREBIRD_DEVTYPE) {
 			current[0] = JoyManagerAxis(joy_adb_devs[i].dev, 0);
 			current[1] = JoyManagerAxis(joy_adb_devs[i].dev, 1);
 			if (joy_adb_devs[i].last_packet_len >= 5) {
@@ -2245,6 +2783,7 @@ static void adb_log_firebird_zone(void)
 				current[34 + j] = joy_adb_devs[i].last_packet[j];
 			break;
 		}
+#endif
 #endif
 	current[5] = (int16)ReadMacInt16(adb_firebird_area + 0x2e);	/* how far the driver thinks the stick is pushed */
 	current[6] = (int16)ReadMacInt16(adb_firebird_area + 0x30);
@@ -2467,12 +3006,38 @@ void ADBVBL(void)
 					== JOY_CH_FLIGHTSTICKPRO_DEVTYPE)
 				continue; /* handled by R3, not driver data flag */
 			#endif /* JOY_HARDWARE_CH_FLIGHTSTICKPRO */
-			joy_adb_enable_gravis(i);
-			if (!joy_adb_devs[i].enabled)
-				continue;
+			if (joy_adb_is_talker(joy_adb_devs[i].real_devtype))
+				continue; /* ISp Talk via ADBOp */
+			#if JOY_HARDWARE_BLACKHAWK
+			if (joy_adb_devs[i].real_devtype == JOY_BLACKHAWK_DEVTYPE) {
+				joy_adb_enable_blackhawk(i);
+				if (!joy_adb_devs[i].enabled)
+					continue;
+			} 
+			#endif
+			#if JOY_HARDWARE_FIREBIRD
+			if (joy_adb_devs[i].real_devtype == JOY_FIREBIRD_DEVTYPE) {
+				joy_adb_enable_gravis_firebird(i);
+				if (!joy_adb_devs[i].enabled)
+					continue;
+			}
+			#endif
+			#if JOY_HARDWARE_MOUSESTICKII
+			if (joy_adb_devs[i].real_devtype 
+					== JOY_GRAVISMOUSESTICKII_DEVTYPE) {
+				joy_adb_enable_gravis_mousestick_ii(i);
+				if (!joy_adb_devs[i].enabled)
+					continue;
+			}
+			#endif
 		}
 
+		/* Talkers have no live data-area ADBS to feed. */
+		if (joy_adb_is_talker(joy_adb_devs[i].real_devtype))
+			continue;
+
 		/* 3. which register does this device's driver poll? */
+		#if JOY_HARDWARE_THRUSTMASTER
 		if (joy_adb_devs[i].real_devtype == JOY_THRUSTMASTER_DEVTYPE) {
 			reg = 2;
 			cmdlow = 0x0e;
@@ -2483,7 +3048,9 @@ void ADBVBL(void)
 				ReadMacInt32(ReadMacInt32(joy_adb_devs[i].entry_base + 4) + 4),
 				ReadMacInt32(ReadMacInt32(joy_adb_devs[i].entry_base + 4) 
 					+ 8)));
-		} else {
+		} else
+		#endif
+		{
 			reg = 0;
 			cmdlow = 0x0c;
 		}
