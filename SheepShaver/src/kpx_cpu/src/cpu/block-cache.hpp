@@ -60,6 +60,11 @@ public:
 	void initialize();
 	void clear();
 	void clear_range(uintptr start, uintptr end);
+	// Drop every active block whose guest range contains word_a or word_b.
+	// read4 fetches one big-endian guest word; used to find planted
+	// debugger traps without wiping the whole translation cache.
+	unsigned invalidate_containing_words(uint32 word_a, uint32 word_b,
+			uint32 (*read4)(uintptr addr));
 	block_info *fast_find(uintptr pc);
 	block_info *find(uintptr pc);
 
@@ -138,6 +143,37 @@ void block_cache< block_info, block_allocator >::clear_range(uintptr start, uint
 			delete_blockinfo(q);
 		}
 	}
+}
+
+template< class block_info, template<class T> class block_allocator >
+unsigned block_cache< block_info, block_allocator >::invalidate_containing_words(
+	uint32 word_a, uint32 word_b, uint32 (*read4)(uintptr addr))
+{
+	if (!active || read4 == NULL)
+		return 0;
+
+	unsigned n = 0;
+	entry *p = active, *q;
+	while (p) {
+		q = p;
+		p = p->next;
+		bool hit = false;
+		for (uintptr addr = q->min_pc; addr <= q->max_pc; addr += 4) {
+			const uint32 w = read4(addr);
+			if (w == word_a || w == word_b) {
+				hit = true;
+				break;
+			}
+		}
+		if (hit) {
+			q->invalidate();
+			remove_from_cl_list(q);
+			remove_from_list(q);
+			delete_blockinfo(q);
+			n++;
+		}
+	}
+	return n;
 }
 
 template< class block_info, template<class T> class block_allocator >

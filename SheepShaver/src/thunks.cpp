@@ -114,6 +114,12 @@ uint32 NativeOpcode(int selector)
 	case NATIVE_OPENGL_DISPATCH:
 		opcode = POWERPC_NATIVE_OP(0, selector);
 		break;
+	case NATIVE_EXCEPTION_RESUME:
+		// FN=0: the handler picks the resume address itself, so it wants the
+		// plain pc += 4 rather than a return through LR (which it must leave
+		// holding the interrupted routine's link register).
+		opcode = POWERPC_NATIVE_OP(0, selector);
+		break;
 	case NATIVE_DSP_DISPATCH:
 		opcode = POWERPC_NATIVE_OP(0, selector);
 		break;

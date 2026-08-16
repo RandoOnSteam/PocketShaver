@@ -76,6 +76,8 @@ extern "C" void catalyst_pump_appkit_events(void);
 #define DEBUG 0
 #include "debug.h"
 
+#include "gfx_log.h"
+
 extern "C" {
 #include "dis-asm.h"
 }
@@ -183,6 +185,13 @@ public:
 
 	// Execute MacOS/PPC code
 	uint32 execute_macos_code(uint32 tvect, int nargs, uint32 const *args);
+
+	// Hand a taken trap to the MacOS exception handler chain
+	const char *deliver_trap_exception(uint32 opcode);
+	void exception_snapshot(const struct exception_frame &f);
+	void exception_restore(const struct exception_frame &f);
+	void exception_begin(uint32 raw_kind, const struct exception_frame &f);
+	void exception_resume(void);
 
 #if PPC_ENABLE_JIT
 	// Compile one instruction
@@ -728,6 +737,449 @@ uint32 sheepshaver_cpu::execute_macos_code(uint32 tvect, int nargs, uint32 const
 	return retval;
 }
 
+/*
+ *  Hand a taken trap to the MacOS PowerPC exception handler chain
+ *
+ *  On real hardware the nanokernel would snapshot the machine state and call
+ *  the ROM's SystemExceptionDispatcher, which runs the system handler
+ *  (InstallSystemExceptionHandler -- CodeWarrior's MetroNub) and then the
+ *  per-process one (InstallExceptionHandler).  SheepShaver never arms the PPC
+ *  exception table, so we build the same snapshot here and make that call
+ *  ourselves.  rom_patches.cpp supplies the dispatcher's ROM address and, via
+ *  a NativeOp on the Install...Handler entry points, the fragment's TOC.
+ *
+ *  Returns true if the chain claimed the exception (r3 == 0), in which case
+ *  the machine state it left behind -- which is how a debugger resumes you
+ *  somewhere else, or restores the instruction its breakpoint replaced -- has
+ *  been written back and execution continues from it.
+ */
+
+// Structure layout, all per MachineExceptions.h and confirmed against the
+// ROM's own LowLevelExceptionHandler, which fills exactly these offsets.
+enum {
+	// ExceptionInformation
+	EXC_KIND		= 0x00,
+	EXC_MACHINE		= 0x04,
+	EXC_REGISTERS	= 0x08,
+	EXC_FPU			= 0x0c,
+	EXC_INFO		= 0x10,
+	EXC_VECTOR		= 0x14,
+	EXC_SIZE		= 0x18,
+	// MachineInformation (CTR/LR/PC/DAR/Reserved are 64-bit; we use the low half)
+	MACH_CTR_LO		= 0x04,
+	MACH_LR_LO		= 0x0c,
+	MACH_PC_LO		= 0x14,
+	MACH_CR			= 0x18,
+	MACH_XER		= 0x1c,
+	MACH_MSR		= 0x20,
+	MACH_SIZE		= 0x40,
+	// RegisterInformation: 32 * UnsignedWide, FPUInformation: 32 * double + FPSCR
+	REGS_SIZE		= 32 * 8,
+	FPU_FPSCR		= 32 * 8,
+	FPU_SIZE		= 32 * 8 + 8,
+	// The dispatcher writes PC/LR/R3/R4 back into the nanokernel frame when
+	// nothing claimed the exception; it never reads it for a trap.
+	CTX_SIZE		= 0xd0
+};
+
+/*
+ *  Locating the exception fragment at run time
+ *
+ *  Mac OS keeps its PowerPC exception plumbing in a small CFM fragment
+ *  exporting GetCurrentProcessFragContext, SystemExceptionDispatcher,
+ *  InstallExceptionHandler, InstallSystemExceptionHandler and
+ *  LowLevelExceptionHandler, in that order.  The ROM carries a copy, but Mac OS
+ *  9 runs a newer build out of the System file, and the two differ in every
+ *  detail that matters -- the system handler slot is at TOC+0xac in the ROM
+ *  build and TOC+0xdc in the System one, and the exception-kind table is behind
+ *  a pointer at TOC-0x10 in the first and inline at TOC+0x7c in the second.
+ *  Nothing here may be taken from the ROM: it is all read from whichever
+ *  fragment CFM actually prepared.
+ *
+ *  Only two things are needed to drive it:
+ *
+ *    - SystemExceptionDispatcher's TVector.  CFM does not export the
+ *      dispatcher under any library name, but it does export its two
+ *      neighbours, and the fragment's TVectors sit consecutively in export
+ *      order, so the dispatcher is one slot below InstallExceptionHandler.
+ *      That is checked, not assumed: InstallSystemExceptionHandler must land
+ *      one slot above, all three must share our TOC, and the dispatcher must
+ *      start with the mflr r0 that opens it in both known builds.
+ *
+ *    - the raw exception number that the dispatcher maps to kTrapException.
+ *      The mapping table is found by decoding the dispatcher's own indexed
+ *      load, which covers the inline and behind-a-pointer forms alike, and the
+ *      result is validated as a kind table before it is believed.
+ */
+
+static const uint32 kTrapException = 2;
+static const uint32 kTraceException = 9;
+static const uint32 PPC_MFLR_R0 = 0x7c0802a6;
+
+// MSR[SE], bit 21 counting from the msb.  A handler sets it in the machine
+// state it returns to ask for the next instruction to be single stepped -- see
+// LowLevelExceptionHandler, whose resume path masks exactly this bit out of
+// MachineInformation.MSR (rlwinm rX,rX,0,21,21) and hands it to the nanokernel.
+static const uint32 MSR_SE = 1u << (31 - 21);
+
+static uint32 ExceptionDispatcherCode = 0;	// resolved once, then reused
+static uint32 ExceptionLibTOC = 0;
+static uint32 ExceptionTrampoline = 0;		// guest return site of the dispatcher
+static uint32 ExceptionTrapRawKind = 0;
+static uint32 ExceptionTraceRawKind = 0;
+
+// A kind table maps small raw numbers to ExceptionKinds, so every entry is a
+// small integer and entry 0 is kUnknownException.  Both known builds start
+// 0, 2, 2, 13, 1, 8 ... -- but only the shape is required here.
+static bool kind_table_scan(uint32 table, uint32 *trap, uint32 *trace)
+{
+	if (table < 0x1000 || table >= 0x80000000)
+		return false;
+	if (ReadMacInt32(table) != 0)
+		return false;
+	*trap = *trace = 0;
+	for (uint32 i = 1; i < 24; i++) {
+		const uint32 v = ReadMacInt32(table + i * 4);
+		if (v >= 32)
+			return false;		// not a table of ExceptionKinds
+		if (v == kTrapException && *trap == 0)
+			*trap = i;
+		else if (v == kTraceException && *trace == 0)
+			*trace = i;
+	}
+	return *trap != 0 && *trace != 0;
+}
+
+// The dispatcher indexes the table with `lwzx rD,rA,rB` after scaling the raw
+// kind by 4.  Whichever of rA/rB is the base was set from r2 a few
+// instructions earlier, either as `addi rB,r2,d` (table inline in the data
+// section) or `lwz rB,d(r2)` (table behind a pointer).
+static bool find_raw_kinds(uint32 code, uint32 toc)
+{
+	for (int i = 0; i < 48; i++) {
+		const uint32 insn = ReadMacInt32(code + i * 4);
+		if ((insn & 0xfc0007fe) != 0x7c00002e)		// lwzx
+			continue;
+		const uint32 regs[2] = { (insn >> 16) & 0x1f, (insn >> 11) & 0x1f };
+		for (int which = 0; which < 2; which++) {
+			for (int j = i - 1; j >= 0; j--) {
+				const uint32 def = ReadMacInt32(code + j * 4);
+				if (((def >> 21) & 0x1f) != regs[which] || ((def >> 16) & 0x1f) != 2)
+					continue;
+				uint32 table = 0;
+				if ((def >> 26) == 14)				// addi rD,r2,d
+					table = toc + (int32)(int16)(def & 0xffff);
+				else if ((def >> 26) == 32)			// lwz rD,d(r2)
+					table = ReadMacInt32(toc + (int32)(int16)(def & 0xffff));
+				else
+					break;							// rD set some other way
+				if (kind_table_scan(table, &ExceptionTrapRawKind, &ExceptionTraceRawKind)) {
+					gfx_log_emit("[exception] ", "kind table at %08x: raw %u = trap, "
+							"raw %u = trace\n", table,
+							ExceptionTrapRawKind, ExceptionTraceRawKind);
+					return true;
+				}
+				break;
+			}
+		}
+	}
+	return false;
+}
+
+static bool resolve_exception_fragment(void)
+{
+	static bool asked = false;
+	if (ExceptionDispatcherCode != 0)
+		return true;
+	if (asked)
+		return false;
+	asked = true;
+
+	if (!PrefsFindBool("ppcexceptions")) {
+		gfx_log_emit("[exception] ", "trap delivery disabled by preference\n");
+		return false;
+	}
+
+	const uint32 install = FindLibSymbol("\014InterfaceLib", "\027InstallExceptionHandler");
+	const uint32 install_sys = FindLibSymbol("\023PrivateInterfaceLib",
+			"\035InstallSystemExceptionHandler");
+	if (install == 0 || install_sys == 0) {
+		gfx_log_emit("[exception] ", "CFM has no Install%sExceptionHandler\n",
+				install == 0 ? "" : "System");
+		return false;
+	}
+
+	const uint32 toc = ReadMacInt32(install + 4);
+	const uint32 dispatcher = install - 8;
+	if (install_sys != install + 8 || ReadMacInt32(install_sys + 4) != toc ||
+		ReadMacInt32(dispatcher + 4) != toc) {
+		gfx_log_emit("[exception] ", "TVectors not consecutive: install=%08x "
+				"install_sys=%08x toc=%08x\n", install, install_sys, toc);
+		return false;
+	}
+	const uint32 code = ReadMacInt32(dispatcher);
+	if (ReadMacInt32(code) != PPC_MFLR_R0) {
+		gfx_log_emit("[exception] ", "no dispatcher prologue at %08x (found %08x)\n",
+				code, ReadMacInt32(code));
+		return false;
+	}
+
+	// The system handler slot displacement lives in InstallSystemExceptionHandler's
+	// own first instruction (addi r12,r2,d), so reporting who is registered costs
+	// nothing and does not assume a layout.
+	uint32 registered = 0;
+	const uint32 slot_insn = ReadMacInt32(ReadMacInt32(install_sys));
+	if ((slot_insn & 0xffff0000) == 0x39820000)
+		registered = ReadMacInt32(toc + (int32)(int16)(slot_insn & 0xffff));
+
+	if (!find_raw_kinds(code, toc)) {
+		gfx_log_emit("[exception] ", "no exception-kind table found in the dispatcher "
+				"at %08x\n", code);
+		return false;
+	}
+
+	// One-instruction guest trampoline: the dispatcher returns into it, which
+	// hands control back to exception_resume().
+	ExceptionTrampoline = SheepMem::ReserveProc(4);
+	WriteMacInt32(ExceptionTrampoline, NativeOpcode(NATIVE_EXCEPTION_RESUME));
+	ExceptionDispatcherCode = code;
+	ExceptionLibTOC = toc;
+	gfx_log_emit("[exception] ", "dispatcher %08x (code %08x) toc %08x, "
+			"system handler %08x, trampoline %08x\n", dispatcher, code, toc,
+			registered, ExceptionTrampoline);
+	return true;
+}
+
+/*
+ *  Running the handler chain
+ *
+ *  The obvious way to call the dispatcher is execute_macos_code(), and the
+ *  first version did.  It is unusably slow: PPC_REENTRANT_JIT is 0, so
+ *  powerpc_cpu::execute() only uses the block engines at execute_depth == 1,
+ *  and a nested call runs the pure interpreter.  The handler chain does not
+ *  return until the user resumes, so *everything* Mac OS does while stopped at
+ *  a breakpoint -- the IDE's event loop, its window updates, the whole Toolbox
+ *  -- would be interpreted.  Measured at about five seconds per source-line
+ *  step.
+ *
+ *  So the dispatcher is not called; control is handed to it. The trapped state
+ *  is snapshotted, the guest is pointed at the dispatcher with LR aimed at a
+ *  one-instruction trampoline, and the trap handler simply returns.  The outer
+ *  execute() -- still at depth 1, still JIT compiled -- runs the dispatcher and
+ *  everything it reaches at full speed, and lands in the trampoline when the
+ *  chain is done.  exception_resume() then applies the machine state the
+ *  handler left behind, single steps if it asked for it, and either dispatches
+ *  again or resumes the program.
+ */
+
+struct exception_frame {
+	uint32 block, exc, mach, regs, fpu, ctx;
+	uint32 saved_sp, trap_pc, trap_opcode;
+	unsigned long steps;
+	uint64 entered_usec, entered_idle_usec;
+	unsigned long entered_idle_count, entered_idle_skip, entered_flushes, entered_vbls;
+};
+
+// Time the emulator spent asleep in idle_wait(), from emul_op.cpp
+extern uint64 IdleWaitUsec;
+extern unsigned long IdleWaitCount;
+extern unsigned long IdleWaitSkipCount;
+extern unsigned long ExceptionVblCount;
+
+// MakeExecutable/FlushCodeCache calls seen while a handler chain is running.
+// If MetroNub flushes the pages it rewrites, a full JIT wipe on resume is
+// unnecessary; the count tells us whether that is safe to try.
+static unsigned long ExceptionCodeFlushes = 0;
+
+// When the program was last let go; the gap to the next trap is how long it ran
+// between stops, which separates a slow handler chain from a program that blew
+// past a breakpoint whose translation had not been invalidated.
+static uint64 ExceptionLastResume = 0;
+
+// Nesting is bounded: a trap taken while the chain runs is legitimate (stepping
+// onto a breakpoint), an unbounded chain of them is not.
+static exception_frame exc_stack[4];
+static int exc_depth = 0;
+
+bool ExceptionDeliveryActive(void)
+{
+	return exc_depth > 0;
+}
+
+void sheepshaver_cpu::exception_snapshot(const exception_frame &f)
+{
+	for (uint32 a = f.block; a < f.ctx + CTX_SIZE; a += 4)
+		WriteMacInt32(a, 0);
+
+	WriteMacInt32(f.mach + MACH_CTR_LO, ctr());
+	WriteMacInt32(f.mach + MACH_LR_LO, lr());
+	WriteMacInt32(f.mach + MACH_PC_LO, pc());
+	WriteMacInt32(f.mach + MACH_CR, get_cr());
+	WriteMacInt32(f.mach + MACH_XER, get_xer());
+	// Real LowLevelExceptionHandler stores the interrupted user's MSR.
+	// This core reports 0xf072 from mfmsr (EE/PR on, SE off).  Leaving
+	// zero made MetroNub treat the machine as running with interrupts
+	// disabled and take its 60-tick OSDispatch poll instead of yielding.
+	WriteMacInt32(f.mach + MACH_MSR, 0xf072);
+	for (int i = 0; i < 32; i++)
+		WriteMacInt32(f.regs + i * 8 + 4, gpr(i));
+	for (int i = 0; i < 32; i++)
+		WriteMacInt64(f.fpu + i * 8, fpr_dw(i));
+	WriteMacInt32(f.fpu + FPU_FPSCR, fpscr());
+
+	WriteMacInt32(f.exc + EXC_MACHINE, f.mach);
+	WriteMacInt32(f.exc + EXC_REGISTERS, f.regs);
+	WriteMacInt32(f.exc + EXC_FPU, f.fpu);
+}
+
+void sheepshaver_cpu::exception_restore(const exception_frame &f)
+{
+	ctr() = ReadMacInt32(f.mach + MACH_CTR_LO);
+	lr() = ReadMacInt32(f.mach + MACH_LR_LO);
+	pc() = ReadMacInt32(f.mach + MACH_PC_LO);
+	set_cr(ReadMacInt32(f.mach + MACH_CR));
+	set_xer(ReadMacInt32(f.mach + MACH_XER));
+	for (int i = 0; i < 32; i++)
+		gpr(i) = ReadMacInt32(f.regs + i * 8 + 4);
+	for (int i = 0; i < 32; i++)
+		fpr_dw(i) = ReadMacInt64(f.fpu + i * 8);
+	fpscr() = ReadMacInt32(f.fpu + FPU_FPSCR);
+}
+
+// Set up the call into the dispatcher.  pc is left to the caller: entering from
+// the trap handler sets it directly, while the trampoline has to bias it (see
+// exception_resume).
+void sheepshaver_cpu::exception_begin(uint32 raw_kind, const exception_frame &f)
+{
+	WriteMacInt32(f.exc + EXC_KIND, raw_kind);
+	gpr(1) = f.block - 64;			// linkage area for the dispatcher's frame
+	gpr(2) = ExceptionLibTOC;
+	gpr(3) = f.ctx;
+	gpr(4) = f.exc;
+	lr() = ExceptionTrampoline;
+}
+
+// The trampoline, reached when the handler chain returns.
+void sheepshaver_cpu::exception_resume(void)
+{
+	if (exc_depth <= 0)				// can't happen; don't make it fatal
+		return;
+	exception_frame &f = exc_stack[exc_depth - 1];
+	const uint32 result = gpr(3);
+
+	exception_restore(f);
+	uint32 next_pc;
+
+	if (result != 0) {
+		// Nobody claimed it.  Resuming past the trap is not an option -- the
+		// instruction a breakpoint overwrote never ran -- so report and stop,
+		// with the CPU back in its trapped state so the dump is the real one.
+		gfx_log_emit("[crash] ", "Trap taken at %08x, opcode = %08x%s -- "
+				"the handler chain declined it (%d)\n", f.trap_pc, f.trap_opcode,
+				f.trap_opcode == 0x7e800008 ? " (debugger breakpoint)" : "",
+				(int32)result);
+		report_fault(f.trap_opcode);		// aborts unless ignoreillegal is set
+		next_pc = f.trap_pc + 4;
+		exc_depth--;
+	}
+	else if ((ReadMacInt32(f.mach + MACH_MSR) & MSR_SE) != 0) {
+		// MSR[SE] means "single step from here".  There is no hardware to do
+		// it and no MSR in this core, so run one instruction and raise the
+		// trace exception ourselves, exactly as the nanokernel would --
+		// repeating for as long as the handler keeps asking, which is how a
+		// debugger walks a source line or steps over a call.
+		execute_one_instruction();
+		f.steps++;
+		exception_snapshot(f);
+		exception_begin(ExceptionTraceRawKind, f);
+		ExceptionNoteHandlerEnter();
+		next_pc = ExceptionDispatcherCode;
+	}
+	else {
+		// Done.  The debugger rewrites the code it is stopped in (restoring
+		// what a breakpoint replaced), so no translation of the resume site
+		// may survive.
+		next_pc = pc();
+		// Do not wipe the whole JIT.  A full invalidate_cache() is cheap
+		// (0 ms) but the next handler chain then re-translates MetroNub,
+		// the IDE and the Toolbox -- that is the compounding 3-6 s of
+		// non-idle time.  MetroNub never calls MakeExecutable (count is
+		// always 0), so we:
+		//   1. drop translations of the resume/trap pages (the original
+		//      instruction was restored; a scan for `tw` would miss it);
+		//   2. drop any other block that now contains a planted CW
+		//      breakpoint (0x7e800008) or Debugger() (0x7f810808).
+		const uint64 inv_t0 = GetTicks_usec();
+		invalidate_cache_range(f.trap_pc, f.trap_pc + 4);
+		if (next_pc != f.trap_pc)
+			invalidate_cache_range(next_pc, next_pc + 4);
+		const unsigned planted = invalidate_opcode_sites(0x7e800008, 0x7f810808);
+		const unsigned long inv_ms = (unsigned long)((GetTicks_usec() - inv_t0) / 1000);
+		ExceptionLastResume = GetTicks_usec();
+		gfx_log_emit("[exception] ", "trap at %08x handled, %lu step(s), "
+				"resuming at %08x (chain took %lu ms, %lu ms of it asleep in "
+				"%lu idle waits, %lu waits skipped, %lu handshake ticks, "
+				"cache %u planted-tw block(s) in %lu ms, %lu MakeExecutable "
+				"during chain)\n",
+				f.trap_pc, f.steps, next_pc,
+				(unsigned long)((ExceptionLastResume - f.entered_usec) / 1000),
+				(unsigned long)((IdleWaitUsec - f.entered_idle_usec) / 1000),
+				IdleWaitCount - f.entered_idle_count,
+				IdleWaitSkipCount - f.entered_idle_skip,
+				ExceptionVblCount - f.entered_vbls,
+				planted, inv_ms,
+				ExceptionCodeFlushes - f.entered_flushes);
+		exc_depth--;
+	}
+
+	// This is a NativeOp with FN=0, so execute_sheep adds 4 to pc on the way
+	// out; bias by that rather than clobbering CTR or LR to jump.
+	pc() = next_pc - 4;
+}
+
+const char *sheepshaver_cpu::deliver_trap_exception(uint32 opcode)
+{
+	if (exc_depth >= (int)(sizeof(exc_stack) / sizeof(exc_stack[0])))
+		return "exception delivery nested too deeply";
+	if (!resolve_exception_fragment())
+		return "the MacOS exception fragment could not be resolved";
+
+	// Everything goes below the interrupted routine's stack, like the real
+	// low-level handler does; the dispatcher's own frames land below that.
+	const uint32 block_size = EXC_SIZE + MACH_SIZE + REGS_SIZE + FPU_SIZE + CTX_SIZE;
+	exception_frame &f = exc_stack[exc_depth];
+	f.saved_sp = gpr(1);
+	f.block = (f.saved_sp - block_size - 64) & ~15;
+	if (f.block < 0x2000 || f.block >= f.saved_sp)
+		return "no room below the trapped routine's stack";
+	f.exc   = f.block;
+	f.mach  = f.exc + EXC_SIZE;
+	f.regs  = f.mach + MACH_SIZE;
+	f.fpu   = f.regs + REGS_SIZE;
+	f.ctx   = f.fpu + FPU_SIZE;
+	f.trap_pc = pc();
+	f.trap_opcode = opcode;
+	f.steps = 0;
+
+	exception_snapshot(f);
+	exc_depth++;
+	exception_begin(ExceptionTrapRawKind, f);
+	pc() = ExceptionDispatcherCode;		// execute_trap returns without touching pc
+
+	f.entered_usec = GetTicks_usec();
+	f.entered_idle_usec = IdleWaitUsec;
+	f.entered_idle_count = IdleWaitCount;
+	f.entered_idle_skip = IdleWaitSkipCount;
+	f.entered_flushes = ExceptionCodeFlushes;
+	f.entered_vbls = ExceptionVblCount;
+	ExceptionNoteHandlerEnter();
+	gfx_log_emit("[exception] ", "trap at %08x: entering handler chain (depth %d, "
+			"program ran %lu ms since the last resume)\n", f.trap_pc, exc_depth,
+			ExceptionLastResume
+				? (unsigned long)((f.entered_usec - ExceptionLastResume) / 1000) : 0UL);
+	return NULL;			// handed over; the trampoline finishes the job
+}
+
 // Execute ppc routine
 inline void sheepshaver_cpu::execute_ppc(uint32 entry)
 {
@@ -780,6 +1232,8 @@ static sheepshaver_cpu *ppc_cpu = NULL;
 void FlushCodeCache(uintptr start, uintptr end)
 {
 	D(bug("FlushCodeCache(%08x, %08x)\n", start, end));
+	if (exc_depth > 0)
+		ExceptionCodeFlushes++;
 	ppc_cpu->invalidate_cache_range(start, end);
 }
 
@@ -1441,6 +1895,9 @@ void sheepshaver_cpu::execute_native_op(uint32 selector)
 	case NATIVE_VIDEO_DO_DRIVER_IO:
 		gpr(3) = (int32)(int16)VideoDoDriverIO(gpr(3), gpr(4), gpr(5), gpr(6), gpr(7));
 		break;
+	case NATIVE_EXCEPTION_RESUME:
+		exception_resume();
+		break;
 	case NATIVE_ETHER_AO_GET_HWADDR:
 		AO_get_ethernet_address(gpr(3));
 		break;
@@ -1848,6 +2305,19 @@ void sheepshaver_cpu::execute_native_op(uint32 selector)
 	native_exec_time += (clock() - native_exec_start);
 #endif
 }
+
+/*
+ *  Offer a taken trap to the MacOS exception handler chain (see
+ *  sheepshaver_cpu::deliver_trap_exception).  Called from the PowerPC core.
+ */
+
+const char *DeliverTrapException(uint32 opcode)
+{
+	if (ppc_cpu == NULL)
+		return "no CPU";
+	return ppc_cpu->deliver_trap_exception(opcode);
+}
+
 
 /*
  *  Execute 68k subroutine (must be ended with EXEC_RETURN)

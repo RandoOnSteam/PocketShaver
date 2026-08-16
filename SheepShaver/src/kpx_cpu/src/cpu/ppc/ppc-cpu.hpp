@@ -301,6 +301,9 @@ public:
 	// Caches invalidation
 	void invalidate_cache();
 	void invalidate_cache_range(uintptr start, uintptr end);
+	// Invalidate translations that now contain a planted debugger trap
+	// (tw 20,r0,r0 / Debugger's tw 28,r1,r2) without wiping the rest.
+	unsigned invalidate_opcode_sites(uint32 opcode_a, uint32 opcode_b);
 private:
 	struct { uintptr start, end; } cache_range;
 
@@ -389,6 +392,22 @@ private:
 	const instr_info_t *decode(uint32 opcode) {
 		return &ii_table[ii_index_table[get_ii_index(opcode)]];
 	}
+
+protected:
+	// Execute exactly one instruction at pc through the interpreter, leaving
+	// pc wherever that instruction put it.  Single stepping a debugged program
+	// is the only caller: it must not go through the block engines, whose unit
+	// of work is a whole block.
+	void execute_one_instruction() {
+		const uint32 opcode = vm_read_memory_4(pc());
+		decode(opcode)->execute(this, opcode);
+	}
+
+	// Context dump and the ignore-or-abort policy for a fault the emulator
+	// cannot hand to the guest.  Callers supply their own headline first.
+	void report_fault(uint32 opcode) { execute_fault_report(opcode); }
+
+private:
 
 	// Block lookup table
 	typedef powerpc_block_info block_info;
@@ -490,6 +509,10 @@ private:
 	template< class OP, class RD, class RA, class SH, class SO, class CA, class Rc >
 	void execute_shift(uint32 opcode);
 	void execute_syscall(uint32 opcode);
+	void execute_fault_report(uint32 opcode);
+	void execute_trap(uint32 opcode);
+	void execute_trap_imm(uint32 opcode);
+	void execute_trap_taken(uint32 opcode);
 	template< bool OC >
 	void execute_fp_compare(uint32 opcode);
  	template< class RA, class RB, bool LD, bool DB, bool UP >

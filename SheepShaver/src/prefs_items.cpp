@@ -60,6 +60,7 @@ prefs_desc common_prefs_items[] = {
 	{"noclipconversion", TYPE_BOOLEAN, false, "don't convert clipboard contents"},
 	{"ignoresegv", TYPE_BOOLEAN, false, "ignore illegal memory accesses"},
 	{"ignoreillegal", TYPE_BOOLEAN, false, "ignore illegal instructions"},
+	{"ppcexceptions", TYPE_BOOLEAN, false, "deliver taken PPC traps to the MacOS exception handler chain"},
 	{"jit", TYPE_BOOLEAN, false,        "enable JIT compiler"},
 	{"jit68k", TYPE_BOOLEAN, false,     "enable 68k DR emulator"},
 	{"keyboardtype", TYPE_INT32, false, "hardware keyboard type"},
@@ -135,6 +136,7 @@ void AddPrefsDefaults(void)
 	PrefsAddBool("noclipconversion", false);
 	PrefsAddBool("ignoresegv", true);
 	PrefsAddBool("ignoreillegal", false);
+	PrefsAddBool("ppcexceptions", true);
 
 #if USE_JIT && !defined(__aarch64__)
 	// JIT compiler specific options

@@ -100,7 +100,14 @@ void powerpc_cpu::execute_illegal(uint32 opcode)
 #endif
 
 	gfx_log_emit("[crash] ", "Illegal instruction at %08x, opcode = %08x\n", pc(), opcode);
+	execute_fault_report(opcode);
+}
 
+// Context dump + "ignore or abort" policy, shared by execute_illegal() and by
+// execute_trap_taken() (a taken trap is a fault we cannot deliver, but it is
+// not an illegal opcode, so it prints its own headline).
+void powerpc_cpu::execute_fault_report(uint32 opcode)
+{
 #ifdef SHEEPSHAVER
 	// Dump the locked-'nift' monitor table on the first fault -- host-side
 	// reads only, context-safe.
@@ -1163,6 +1170,76 @@ void powerpc_cpu::execute_syscall(uint32 opcode)
 	cr().set_so(0, execute_do_syscall && !execute_do_syscall(this));
 #endif
 	increment_pc(4);
+}
+
+/**
+ *		Trap instructions
+ **/
+
+// The TO field (bits 6..10, same position as rS) selects which comparison
+// results raise the trap.  TO[0] is the most significant bit, so:
+//   0x10 signed less than, 0x08 signed greater than, 0x04 equal,
+//   0x02 unsigned less than, 0x01 unsigned greater than.
+static inline bool trap_condition(uint32 to, uint32 a, uint32 b)
+{
+	return (((to & 0x10) && (int32)a <  (int32)b) ||
+			((to & 0x08) && (int32)a >  (int32)b) ||
+			((to & 0x04) && a == b) ||
+			((to & 0x02) && a <  b) ||
+			((to & 0x01) && a >  b));
+}
+
+void powerpc_cpu::execute_trap(uint32 opcode)
+{
+	if (trap_condition(rS_field::extract(opcode),
+					   operand_RA::get(this, opcode),
+					   operand_RB::get(this, opcode)))
+		execute_trap_taken(opcode);
+	else
+		increment_pc(4);
+}
+
+void powerpc_cpu::execute_trap_imm(uint32 opcode)
+{
+	if (trap_condition(rS_field::extract(opcode),
+					   operand_RA::get(this, opcode),
+					   operand_SIMM::get(this, opcode)))
+		execute_trap_taken(opcode);
+	else
+		increment_pc(4);
+}
+
+void powerpc_cpu::execute_trap_taken(uint32 opcode)
+{
+	// A taken trap raises a program exception, which the nanokernel hands to
+	// the handler chain a process joined with InstallExceptionHandler() or
+	// InstallSystemExceptionHandler().  That is how the CodeWarrior debugger
+	// nub (MetroNub) implements PowerPC breakpoints: it writes tw 20,r0,r0
+	// (0x7e800008) over the first instruction of a routine and waits for the
+	// exception, and it is also how Debugger()/DebugStr() reach MacsBug.
+	//
+	// SheepShaver never arms the PPC exception table (patch_nanokernel() in
+	// rom_patches.cpp) and this core models no MSR/SRR0/SRR1, so the exception
+	// cannot arrive by itself.  Call the ROM's dispatcher directly instead --
+	// it walks the same chain, so a handler that is listening still sees it.
+	const char *why = "not built for SheepShaver";
+#ifdef SHEEPSHAVER
+	{
+		extern const char *DeliverTrapException(uint32 opcode);
+		why = DeliverTrapException(opcode);
+		if (why == NULL)
+			return;		// handed to the guest; it resumes us when it is done
+	}
+#endif
+
+	// Nobody claimed it.  Resuming past the trap is not an alternative: the
+	// instruction a breakpoint overwrote (usually the prologue's mflr r0)
+	// never runs, so the routine stores a stale r0 as its return address and
+	// comes back to the same breakpoint forever.  Report and stop.
+	gfx_log_emit("[crash] ", "Trap taken at %08x, opcode = %08x%s -- not delivered: %s\n",
+			pc(), opcode,
+			opcode == 0x7e800008 ? " (debugger breakpoint)" : "", why);
+	execute_fault_report(opcode);
 }
 
 /**

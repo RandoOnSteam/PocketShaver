@@ -973,3 +973,20 @@ void powerpc_cpu::invalidate_cache_range(uintptr start, uintptr end)
 	my_block_cache.clear_range(start, end);
 #endif
 }
+
+static uint32 ppc_read_guest_word(uintptr addr)
+{
+	return vm_read_memory_4((uint32)addr);
+}
+
+unsigned powerpc_cpu::invalidate_opcode_sites(uint32 opcode_a, uint32 opcode_b)
+{
+#if PPC_DECODE_CACHE || PPC_ENABLE_JIT
+	spcflags().set(SPCFLAG_JIT_EXEC_RETURN);
+	return my_block_cache.invalidate_containing_words(opcode_a, opcode_b, ppc_read_guest_word);
+#else
+	(void)opcode_a;
+	(void)opcode_b;
+	return 0;
+#endif
+}

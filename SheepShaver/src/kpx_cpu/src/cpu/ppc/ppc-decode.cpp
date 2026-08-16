@@ -1065,6 +1065,16 @@ const powerpc_cpu::instr_info_t powerpc_cpu::powerpc_ii_table[] = {
 	  PPC_I(SYNC),
 	  X_form, 31, 598, CFLOW_NORMAL
 	},
+	{ "tw",
+	  EXECUTE_0(trap),
+	  PPC_I(TW),
+	  X_form, 31, 4, CFLOW_TRAP
+	},
+	{ "twi",
+	  EXECUTE_0(trap_imm),
+	  PPC_I(TWI),
+	  D_form, 3, 0, CFLOW_TRAP
+	},
 	{ "xor",
 	  EXECUTE_GENERIC_ARITH(xor, RA, RS, RB, NONE, OE_BIT_0, RC_BIT_G),
 	  PPC_I(XOR),

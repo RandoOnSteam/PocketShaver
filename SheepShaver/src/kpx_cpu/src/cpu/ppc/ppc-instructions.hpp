@@ -218,6 +218,8 @@ enum powerpc_instruction {
 	PPC_I(SUBFME),
 	PPC_I(SUBFZE),
 	PPC_I(SYNC),
+	PPC_I(TW),
+	PPC_I(TWI),
 	PPC_I(XOR),
 	PPC_I(XORI),
 	PPC_I(XORIS),
