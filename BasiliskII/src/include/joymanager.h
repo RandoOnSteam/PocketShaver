@@ -63,4 +63,5 @@ void JoyManagerUpdate(void);
 	if (right) return 3;
 	if (left) return 4; */
 int JoyManagerHatPosition(uint8 hat);
+#define JOY_TRACE 1
 #endif

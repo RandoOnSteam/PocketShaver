@@ -252,6 +252,7 @@ bool InitAll(const char *vmdir)
 	WriteMacInt32(XLM_ETHER_WPUT, NativeFunction(NATIVE_ETHER_WPUT));
 	WriteMacInt32(XLM_ETHER_RSRV, NativeFunction(NATIVE_ETHER_RSRV));
 	WriteMacInt32(XLM_VIDEO_DOIO, NativeFunction(NATIVE_VIDEO_DO_DRIVER_IO));
+	WriteMacInt32(XLM_USB_UIM_DISPATCH, NativeFunction(NATIVE_USB_UIM_DISPATCH));
 	D(bug("Low Memory initialized\n"));
 
 #if ENABLE_MON

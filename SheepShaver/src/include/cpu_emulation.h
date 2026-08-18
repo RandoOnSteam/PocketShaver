@@ -121,6 +121,7 @@ extern void FlushCodeCache(uintptr start, uintptr end);		// Invalidate emulator 
 extern void ExecuteNative(int selector);					// Execute native code from EMUL_OP routine (real mode switch)
 #if EMULATED_PPC
 extern void PPCExceptionIdleDiagnostic(void);		// Rate-limited exception-stall telemetry
+extern void PPCExceptionStallSample(void);			// Host-thread sampler: sees a frozen guest
 #endif
 
 #endif

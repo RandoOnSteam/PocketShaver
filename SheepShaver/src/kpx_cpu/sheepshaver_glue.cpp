@@ -45,6 +45,9 @@ extern "C" void catalyst_pump_appkit_events(void);
 // Used for NativeOp trampolines
 #include "video.h"
 #include "name_registry.h"
+#include "usbhid.h"
+#include "usbuim.h"
+#include "mmio.h"
 #include "serial.h"
 #include "ether.h"
 #include "timer.h"
@@ -74,6 +77,23 @@ extern "C" void catalyst_pump_appkit_events(void);
 #endif
 
 #define DEBUG 0
+
+#ifndef PPC_DEBUG_TRACE
+#define PPC_DEBUG_TRACE 0
+#endif
+
+static void ppc_trace(const char *prefix, const char *format, ...)
+{
+#if PPC_DEBUG_TRACE
+	va_list args;
+	va_start(args, format);
+	gfx_log_emitv(prefix, format, args);
+	va_end(args);
+#else
+	(void)prefix;
+	(void)format;
+#endif
+}
 #include "debug.h"
 
 #include "gfx_log.h"
@@ -211,12 +231,22 @@ public:
 	void return_from_exception(uint32 saved_pc, uint32 saved_msr);
 	bool decrementer_exception();
 	bool external_interrupt();
+#if PPC_DEBUG_TRACE
+	void watch_event_queue(void);
+#endif
 	bool exception_step_trampoline_ready(void);
+#if PPC_DEBUG_TRACE
 	void exception_diagnostic_state(const char *reason, uint64 now);
 	void exception_idle_diagnostic(void);
+	void exception_stall_sample(void);
 	void record_rfi_site(uint32 return_pc, uint32 run_mode);
 	void report_and_reset_rfi_sites(void);
-	void preserve_system_ticks(void);
+#endif
+	void preserve_system_ticks(const char *site);
+#if PPC_DEBUG_TRACE
+	void lowmem_watch(void);
+	void lowmem_dump(const char *why);
+#endif
 
 	bool exception_step_active;
 	bool exception_step_trap;
@@ -227,6 +257,70 @@ public:
 	// Hardware-style entries which have not yet crossed an rfi boundary.
 	// This is architectural nesting, not debugger-handler lifetime.
 	uint32 exception_entry_depth;
+#if PPC_DEBUG_TRACE
+	uint32 exception_stall_pc;
+	uint32 exception_stall_last_reported_pc;
+	uint32 exception_stall_tick;
+	enum { EXC_TRACK = 64 };
+	uint32 exception_track_ppc_pc[EXC_TRACK];
+	uint32 exception_track_68k_pc[EXC_TRACK];
+	uint32 exception_track_level[EXC_TRACK];
+	uint32 exception_track_mode[EXC_TRACK];
+	uint64 exception_track_usec[EXC_TRACK];
+	unsigned exception_track_next;
+	unsigned exception_track_count;
+	uint32 exception_last_seen_level;
+	uint32 exception_last_seen_mode;
+	bool exception_level_seen;
+	bool exception_queue_reported;
+	enum { EVQ_TRACK = 24 };
+	uint32 evq_head[EVQ_TRACK];
+	uint32 evq_tail[EVQ_TRACK];
+	uint32 evq_link[EVQ_TRACK];
+	uint32 evq_what[EVQ_TRACK];
+	uint32 evq_pc[EVQ_TRACK];
+	uint32 evq_68k_pc[EVQ_TRACK];
+	uint32 evq_guard[EVQ_TRACK];
+	uint32 evq_free[EVQ_TRACK];
+	uint32 evq_msg[EVQ_TRACK];
+	uint32 evq_when[EVQ_TRACK];
+	uint32 evq_level[EVQ_TRACK];
+	uint32 evq_mode[EVQ_TRACK];
+	unsigned evq_next;
+	unsigned evq_count;
+	uint32 evq_last_head;
+	uint32 evq_last_tail;
+	uint32 evq_last_link;
+	bool evq_reported;
+	uint64 exception_stall_tick_moved_usec;
+	uint64 exception_stall_via_services;
+	uint64 exception_stall_moved_usec;
+	uint64 exception_stall_sample_usec;
+	uint64 exception_stall_samples;
+	uint64 exception_steps_taken;
+	uint64 exception_vector_entries;
+	enum { LOWMEM_BASE = 0x100, LOWMEM_WORDS = 192 };	// $100..$400
+	enum { LOWMEM_TRACK = 128 };
+	uint32 lowmem_snap[LOWMEM_WORDS];
+	bool lowmem_snap_valid;
+	uint32 lowmem_track_addr[LOWMEM_TRACK];
+	uint32 lowmem_track_old[LOWMEM_TRACK];
+	uint32 lowmem_track_new[LOWMEM_TRACK];
+	uint32 lowmem_track_ppc[LOWMEM_TRACK];
+	uint32 lowmem_track_lr[LOWMEM_TRACK];
+	uint32 lowmem_track_68k[LOWMEM_TRACK];
+	uint32 lowmem_track_level[LOWMEM_TRACK];
+	uint32 lowmem_track_mode[LOWMEM_TRACK];
+	uint32 lowmem_track_nest[LOWMEM_TRACK];
+	uint32 lowmem_track_depth[LOWMEM_TRACK];
+	uint32 lowmem_track_ticks[LOWMEM_TRACK];
+	uint64 lowmem_track_usec[LOWMEM_TRACK];
+	unsigned lowmem_track_next;
+	unsigned lowmem_track_count;
+	uint64 lowmem_changes;
+	bool lowmem_armed;
+	uint32 lowmem_prev_ticks;
+	unsigned lowmem_reports;
 	uint64 exception_last_program_usec;
 	uint64 exception_last_vector_usec;
 	uint64 exception_idle_snapshot_usec;
@@ -245,13 +339,15 @@ public:
 		uint64 count;
 	} exception_rfi_sites[EXCEPTION_RFI_SITE_COUNT];
 	uint64 exception_rfi_site_overflow;
-	bool system_ticks_valid;
-	uint32 system_ticks_high_water;
 	uint64 system_tick_correction_count;
 	uint64 system_tick_recovered_total;
 	uint32 system_tick_max_rollback;
 	uint64 system_tick_correction_snapshot;
 	uint64 system_tick_recovered_snapshot;
+#endif /* PPC_DEBUG_TRACE */
+	bool system_ticks_valid;
+	uint32 system_ticks_high_water;
+	uint64 system_queue_repairs;
 
 #if PPC_ENABLE_JIT
 	// Compile one instruction
@@ -282,6 +378,49 @@ sheepshaver_cpu::sheepshaver_cpu()
 	exception_step_pc = 0;
 	exception_step_pending = false;
 	exception_entry_depth = 0;
+	system_ticks_valid = false;
+	system_ticks_high_water = 0;
+	system_queue_repairs = 0;
+#if PPC_DEBUG_TRACE
+	exception_stall_pc = 0;
+	exception_stall_last_reported_pc = 0;
+	exception_stall_tick = 0;
+	memset(exception_track_ppc_pc, 0, sizeof(exception_track_ppc_pc));
+	memset(exception_track_68k_pc, 0, sizeof(exception_track_68k_pc));
+	memset(exception_track_level, 0, sizeof(exception_track_level));
+	memset(exception_track_mode, 0, sizeof(exception_track_mode));
+	memset(exception_track_usec, 0, sizeof(exception_track_usec));
+	exception_track_next = 0;
+	exception_track_count = 0;
+	exception_last_seen_level = 0xffffffffu;
+	exception_last_seen_mode = 0xffffffffu;
+	exception_level_seen = false;
+	exception_queue_reported = false;
+	memset(evq_head, 0, sizeof(evq_head));
+	memset(evq_tail, 0, sizeof(evq_tail));
+	memset(evq_link, 0, sizeof(evq_link));
+	memset(evq_what, 0, sizeof(evq_what));
+	memset(evq_pc, 0, sizeof(evq_pc));
+	memset(evq_68k_pc, 0, sizeof(evq_68k_pc));
+	memset(evq_guard, 0, sizeof(evq_guard));
+	memset(evq_free, 0, sizeof(evq_free));
+	memset(evq_msg, 0, sizeof(evq_msg));
+	memset(evq_when, 0, sizeof(evq_when));
+	memset(evq_level, 0, sizeof(evq_level));
+	memset(evq_mode, 0, sizeof(evq_mode));
+	evq_next = 0;
+	evq_count = 0;
+	evq_last_head = 0xffffffffu;
+	evq_last_tail = 0xffffffffu;
+	evq_last_link = 0xffffffffu;
+	evq_reported = false;
+	exception_stall_tick_moved_usec = 0;
+	exception_stall_via_services = 0;
+	exception_stall_moved_usec = 0;
+	exception_stall_sample_usec = 0;
+	exception_stall_samples = 0;
+	exception_steps_taken = 0;
+	exception_vector_entries = 0;
 	exception_last_program_usec = 0;
 	exception_last_vector_usec = 0;
 	exception_idle_snapshot_usec = 0;
@@ -296,14 +435,21 @@ sheepshaver_cpu::sheepshaver_cpu()
 		sizeof(exception_service_snapshot));
 	memset(exception_rfi_sites, 0, sizeof(exception_rfi_sites));
 	exception_rfi_site_overflow = 0;
-	system_ticks_valid = false;
-	system_ticks_high_water = 0;
 	system_tick_correction_count = 0;
 	system_tick_recovered_total = 0;
+	memset(lowmem_snap, 0, sizeof(lowmem_snap));
+	lowmem_snap_valid = false;
+	memset(lowmem_track_addr, 0, sizeof(lowmem_track_addr));
+	lowmem_track_next = 0;
+	lowmem_track_count = 0;
+	lowmem_changes = 0;
+	lowmem_armed = false;
+	lowmem_prev_ticks = 0;
+	lowmem_reports = 0;
 	system_tick_max_rollback = 0;
 	system_tick_correction_snapshot = 0;
 	system_tick_recovered_snapshot = 0;
-
+#endif
 #if PPC_ENABLE_JIT
 	if (PrefsFindBool("jit"))
 		enable_jit();
@@ -351,7 +497,7 @@ void sheepshaver_cpu::execute_emul_op(uint32 emul_op)
 	// The 68K side services VBL and therefore owns the newest system Ticks
 	// value.  Observe it before crossing into a host EmulOp; a later PowerPC
 	// context return must not expose an older process-context copy.
-	preserve_system_ticks();
+	preserve_system_ticks("emul-op entry");
 	WriteMacInt32(XLM_68K_R25, gpr(25));
 	WriteMacInt32(XLM_RUN_MODE, MODE_EMUL_OP);
 	for (int i = 0; i < 8; i++)
@@ -842,6 +988,7 @@ static bool guest_addr_ok(uint32 a, uint32 len);
 extern uint64 IdleWaitUsec;
 extern unsigned long IdleWaitCount;
 
+#if PPC_DEBUG_TRACE
 void sheepshaver_cpu::record_rfi_site(uint32 return_pc, uint32 run_mode)
 {
 	for (unsigned i = 0; i < EXCEPTION_RFI_SITE_COUNT; i++) {
@@ -862,7 +1009,9 @@ void sheepshaver_cpu::record_rfi_site(uint32 return_pc, uint32 run_mode)
 	}
 	exception_rfi_site_overflow++;
 }
+#endif
 
+#if PPC_DEBUG_TRACE
 void sheepshaver_cpu::report_and_reset_rfi_sites(void)
 {
 	bool reported[EXCEPTION_RFI_SITE_COUNT];
@@ -878,20 +1027,21 @@ void sheepshaver_cpu::report_and_reset_rfi_sites(void)
 		if (best == EXCEPTION_RFI_SITE_COUNT)
 			break;
 		reported[best] = true;
-		gfx_log_emit("[exception-rfi] ",
+		ppc_trace("[exception-rfi] ",
 			"rank %u: return %08x, mode %u, %llu occurrence(s)\n",
 			rank + 1, exception_rfi_sites[best].pc,
 			exception_rfi_sites[best].mode,
 			(unsigned long long)exception_rfi_sites[best].count);
 	}
 	if (exception_rfi_site_overflow != 0)
-		gfx_log_emit("[exception-rfi] ",
+		ppc_trace("[exception-rfi] ",
 			"%llu return(s) used sites beyond the %u-entry exact table\n",
 			(unsigned long long)exception_rfi_site_overflow,
 			(unsigned)EXCEPTION_RFI_SITE_COUNT);
 	memset(exception_rfi_sites, 0, sizeof(exception_rfi_sites));
 	exception_rfi_site_overflow = 0;
 }
+#endif
 
 /*
  * Low-memory Ticks is system time, not part of a process's private context.
@@ -904,11 +1054,45 @@ void sheepshaver_cpu::report_and_reset_rfi_sites(void)
  * backwards. The signed subtraction is the standard wrap-safe comparison for
  * the 32-bit counter (valid for deltas shorter than half its wrap period).
  */
-void sheepshaver_cpu::preserve_system_ticks(void)
+void sheepshaver_cpu::preserve_system_ticks(const char *site)
 {
 	if (!HasMacStarted()) {
 		system_ticks_valid = false;
 		return;
+	}
+
+	// The stale low-memory restore that moves Ticks backwards carries $14c and
+	// $150 with it, and a stale qHead is what freezes the machine: it points
+	// at an element the dequeue already released, so PostEvent's free scan
+	// legitimately hands that element out again and Enqueue takes its
+	// non-empty branch with qTail == elem, self-linking it. The Event Manager
+	// then walks that link for ever at interrupt level 7 (ROM 0x10dc6) with
+	// every interrupt masked.
+	//
+	// A queued element always carries a real event code, so a qHead pointing
+	// at one marked free - what == 0xffff, the marker PostEvent's own scan
+	// looks for at ROM 0x10d3e - is proof the header is the stale copy and
+	// not a queue. Empty it: self-consistent, cannot self-link, and the
+	// events it named were about to be mangled anyway.
+	//
+	// A repair rather than prevention, because preventing it means catching
+	// the guest _BlockMoveData that does it, and that costs the store path on
+	// every instruction the emulator runs. Here it is two guest reads at the
+	// three points this function already runs at.
+	{
+		const uint32 qhead = ReadMacInt32(0x14c);
+		if (qhead != 0 && guest_addr_ok(qhead, 8) &&
+			ReadMacInt16(qhead + 6) == 0xffff) {
+			const uint32 qtail = ReadMacInt32(0x150);
+			WriteMacInt32(0x14c, 0);
+			WriteMacInt32(0x150, 0);
+			system_queue_repairs++;
+			ppc_trace("[ticks] ",
+				"EvtQHead %08x was a released element at %s; emptied the "
+				"queue (repair %llu, qTail was %08x, Ticks %08x)\n",
+				qhead, site, (unsigned long long)system_queue_repairs,
+				qtail, ReadMacInt32(0x16a));
+		}
 	}
 
 	const uint32 current = ReadMacInt32(0x16a);
@@ -925,13 +1109,74 @@ void sheepshaver_cpu::preserve_system_ticks(void)
 	}
 
 	const uint32 rollback = system_ticks_high_water - current;
-	WriteMacInt32(0x16a, system_ticks_high_water);
+#if PPC_DEBUG_TRACE
 	system_tick_correction_count++;
 	system_tick_recovered_total += rollback;
 	if (rollback > system_tick_max_rollback)
 		system_tick_max_rollback = rollback;
+#endif
+
+	WriteMacInt32(0x16a, system_ticks_high_water);
+#if PPC_DEBUG_TRACE
+	{
+		const uint32 guard = ReadMacInt8(0x160);
+		const uint32 qhead = ReadMacInt32(0x14c);
+		const uint32 qtail = ReadMacInt32(0x150);
+		ppc_trace("[ticks] ",
+			"Ticks rolled back %u at %s (%08x -> %08x, high water %08x); "
+			"guard $160=%02x bit6=%u; EvtQ head=%08x tail=%08x qLink=%08x "
+			"what=%04x\n",
+			rollback, site, system_ticks_high_water, current,
+			system_ticks_high_water, guard, (guard >> 6) & 1,
+			qhead, qtail,
+			(qhead != 0 && guest_addr_ok(qhead, 8)) ? ReadMacInt32(qhead) : 0,
+			(qhead != 0 && guest_addr_ok(qhead, 8))
+				? ReadMacInt16(qhead + 6) : 0xffffu);
+		ppc_trace("[ticks] ",
+			"  ppc pc=%08x lr=%08x sp=%08x msr=%08x srr0=%08x srr1=%08x; "
+			"68k pc=%08x level=%08x; mode=%u nest=%d depth=%u exec-depth=%d "
+			"step %s\n",
+			pc(), lr(), gpr(1), msr(), srr0(), srr1(), gpr(24), gpr(25),
+			ReadMacInt32(XLM_RUN_MODE), (int32)ReadMacInt32(XLM_IRQ_NEST),
+			exception_entry_depth, current_execute_depth(),
+			exception_step_pending ? "armed" : "idle");
+		ppc_trace("[ticks] ",
+			"  corrections=%llu recovered=%llu max=%u; steps taken=%llu; "
+			"vector entries=%llu; last vector %s\n",
+			(unsigned long long)system_tick_correction_count,
+			(unsigned long long)system_tick_recovered_total,
+			system_tick_max_rollback,
+			(unsigned long long)exception_steps_taken,
+			(unsigned long long)exception_vector_entries,
+			ppc_exception_vector_name(exception_last_vector));
+		{
+			const uint32 kd = KernelDataAddr;
+			const uint32 ctx68 = ReadMacInt32(kd + 0x658);
+			const uint32 cur = ReadMacInt32(kd + 0x65c);
+			ppc_trace("[ticks] ",
+				"  KD status=%08x savedDEC=%08x mask=%08x level@%08x=%04x; "
+				"68kctx=%08x pc=%08x sp=%08x; current=%08x pc=%08x sp=%08x\n",
+				ReadMacInt32(kd + 0x660), ReadMacInt32(kd + 0x668),
+				ReadMacInt32(kd + 0x674), ReadMacInt32(kd + 0x67c),
+				guest_addr_ok(ReadMacInt32(kd + 0x67c), 2)
+					? ReadMacInt16(ReadMacInt32(kd + 0x67c)) : 0xffffu,
+				ctx68,
+				guest_addr_ok(ctx68, 0x118) ? ReadMacInt32(ctx68 + 0xfc) : 0,
+				guest_addr_ok(ctx68, 0x118) ? ReadMacInt32(ctx68 + 0x10c) : 0,
+				cur,
+				guest_addr_ok(cur, 0x118) ? ReadMacInt32(cur + 0xfc) : 0,
+				guest_addr_ok(cur, 0x118) ? ReadMacInt32(cur + 0x10c) : 0);
+		}
+	}
+#endif
+	// When the correction was applied the guest is back at the high water
+	// mark; when it was skipped, follow the guest so the next genuine
+	// advance is not reported as another rollback.
+	if ((ReadMacInt8(0x160) & 0x40) != 0)
+		system_ticks_high_water = current;
 }
 
+#if PPC_DEBUG_TRACE
 void sheepshaver_cpu::exception_diagnostic_state(const char *reason, uint64 now)
 {
 	decrementer_diagnostics_t dec;
@@ -966,14 +1211,14 @@ void sheepshaver_cpu::exception_diagnostic_state(const char *reason, uint64 now)
 		? ReadMacInt32(current_context + 0xfc) : 0xdead0002u;
 	const uint32 current_sp = current_context_valid
 		? ReadMacInt32(current_context + 0x10c) : 0xdead0002u;
-	gfx_log_emit("[exception-state] ",
+	ppc_trace("[exception-state] ",
 		"%s +%lu ms: pc=%08x lr=%08x sp=%08x msr=%08x "
 		"srr0=%08x srr1=%08x sprg3=%08x\n",
 		reason,
 		exception_last_program_usec != 0
 			? (unsigned long)((now - exception_last_program_usec) / 1000) : 0UL,
 		pc(), lr(), gpr(1), msr(), srr0(), srr1(), sprg(3));
-	gfx_log_emit("[exception-state] ",
+	ppc_trace("[exception-state] ",
 		"mode=%u exec-depth=%d nest=%d r25=%08x flags=%08x spc=%08x "
 		"tick=%08x canonical=%08x qhead=%08x; "
 		"KD status=%08x savedDEC=%08x timebaseHz=%08x mask=%08x "
@@ -982,13 +1227,13 @@ void sheepshaver_cpu::exception_diagnostic_state(const char *reason, uint64 now)
 		spcflags().get(),
 		ReadMacInt32(0x16a), system_ticks_high_water, ReadMacInt32(0x14c), kernel_status,
 		kernel_dec, timebase_frequency, irq_mask, level_address, level);
-	gfx_log_emit("[exception-state] ",
+	ppc_trace("[exception-state] ",
 		"68kctx=%08x valid=%u pc=%08x sp=%08x cr=%08x; "
 		"current=%08x valid=%u pc=%08x sp=%08x cr=%08x\n",
 		context_68k, context_68k_valid ? 1u : 0u, context_68k_pc,
 		context_68k_sp, context_68k_cr, current_context,
 		current_context_valid ? 1u : 0u, current_pc, current_sp, current_cr);
-	gfx_log_emit("[exception-state] ",
+	ppc_trace("[exception-state] ",
 		"DEC=%08x pending=%u writes=%llu delivered=%llu last=%08x "
 		"range=%08x..%08x; OP_IRQ=%llu VIA-serviced=%llu; "
 		"tick corrections=%llu recovered=%llu max-rollback=%u\n",
@@ -1002,7 +1247,551 @@ void sheepshaver_cpu::exception_diagnostic_state(const char *reason, uint64 now)
 		(unsigned long long)system_tick_recovered_total,
 		system_tick_max_rollback);
 }
+#endif
 
+#if PPC_DEBUG_TRACE
+// Called at every instruction-block boundary. One read of EvtQHead and a
+// compare when nothing has changed, which is the common case. The ROM's
+// Enqueue (0x10ef0) clears elem->qLink and handles an empty queue, so it can
+// only produce a self-link if the element it is given is already qTail - which
+// means PostEvent's free scan (what == 0x00ff at elem+6, ROM 0x10d3e) handed
+// out an element that was still in the queue. This records who moves the queue
+// so that hand-out is attributable rather than inferred.
+void sheepshaver_cpu::watch_event_queue(void)
+{
+	lowmem_watch();
+	// The corruption leaves qHead alone and changes the head element's qLink,
+	// so watching qHead by itself never sees it. Compare the whole shape.
+	const uint32 head = ReadMacInt32(0x14c);
+	const uint32 link = (head != 0 && guest_addr_ok(head, 8))
+		? ReadMacInt32(head) : 0;
+	if (head == evq_last_head && link == evq_last_link)
+		return;
+	const uint32 tail = ReadMacInt32(0x150);
+	const uint32 what = (head != 0 && guest_addr_ok(head, 8))
+		? ReadMacInt16(head + 6) : 0xffffu;
+	evq_head[evq_next] = head;
+	evq_tail[evq_next] = tail;
+	evq_link[evq_next] = link;
+	evq_what[evq_next] = what;
+	evq_pc[evq_next] = pc();
+	// The PPC pc is only the 68k emulator's dispatch loop. r24 is the 68k
+	// instruction pointer and r25 its interrupt level, so these name the 68k
+	// routine that moved the queue and whether it held the level it needed.
+	evq_68k_pc[evq_next] = gpr(24);
+	// The VBL handler's re-entrancy guard (bit 6 of $160, set at ROM
+	// 0x11814), the head element's payload, and how many slots in the
+	// event buffer are still free. PostEvent only recycles a queued
+	// element when that free count reaches zero (its scan looks for
+	// what == 0xffff at elem+6, ROM 0x10d3e), so the count is what says
+	// whether the recycle path was even reachable.
+	evq_guard[evq_next] = ReadMacInt8(0x160);
+	evq_msg[evq_next] = (head != 0 && guest_addr_ok(head, 16))
+		? ReadMacInt32(head + 8) : 0;
+	evq_when[evq_next] = (head != 0 && guest_addr_ok(head, 16))
+		? ReadMacInt32(head + 12) : 0;
+	{
+		const uint32 base = ReadMacInt32(0x146);
+		const int count = (int)(int16)ReadMacInt16(0x154);
+		int freeslots = 0;
+		int q;
+		for (q = 0; q <= count && q < 64; q++) {
+			const uint32 el = base + (uint32)q * 0x16;
+			if (guest_addr_ok(el, 16) && ReadMacInt16(el + 6) == 0xffff)
+				freeslots++;
+		}
+		evq_free[evq_next] = (uint32)freeslots;
+	}
+	evq_level[evq_next] = gpr(25);
+	evq_mode[evq_next] = ReadMacInt32(XLM_RUN_MODE);
+	evq_next = (evq_next + 1) % EVQ_TRACK;
+	if (evq_count < EVQ_TRACK)
+		evq_count++;
+	evq_last_head = head;
+	evq_last_tail = tail;
+	evq_last_link = link;
+
+	if (head != 0 && link == head && !evq_reported) {
+		unsigned n = evq_count;
+		unsigned i = (evq_next + EVQ_TRACK - n) % EVQ_TRACK;
+		unsigned k;
+		evq_reported = true;
+		ppc_trace("[evq] ",
+			"EvtQHead %08x is self-linked (qTail=%08x what=%04x) at 68k pc "
+			"%08x level %08x (ppc %08x), mode %u, nest %d, depth %u, step %s; history oldest first:\n",
+			head, tail, what, gpr(24), gpr(25), pc(),
+			ReadMacInt32(XLM_RUN_MODE),
+			(int32)ReadMacInt32(XLM_IRQ_NEST), exception_entry_depth,
+			exception_step_pending ? "armed" : "idle");
+		for (k = 0; k < n; k++) {
+			ppc_trace("[evq] ",
+				"  head=%08x tail=%08x qLink=%08x what=%04x by 68k pc %08x "
+				"level %08x (ppc %08x) mode %u guard=%02x free=%u msg=%08x when=%08x\n",
+				evq_head[i], evq_tail[i], evq_link[i], evq_what[i],
+				evq_68k_pc[i], evq_level[i], evq_pc[i], evq_mode[i],
+				evq_guard[i], evq_free[i], evq_msg[i], evq_when[i]);
+			i = (i + 1) % EVQ_TRACK;
+		}
+	}
+}
+#endif
+
+#if PPC_DEBUG_TRACE
+// Every change to low memory $100..$400 with enough context to name who made
+// it, and a full state dump the first time either invariant breaks: EvtQHead
+// pointing at an element still marked free (what == ffff), or Ticks moving
+// backwards. Both are the same rollback, caught at the word that moved instead
+// of inferred from its consequence several enqueues later.
+void sheepshaver_cpu::lowmem_watch(void)
+{
+	unsigned i;
+	bool head_free = false;
+	bool ticks_back = false;
+	uint32 ticks;
+
+	// Two reads, every block: the exact invariant that breaks. Everything
+	// below only runs while the debugger is in use.
+	{
+		const uint32 head = ReadMacInt32(0x14c);
+		if (head != 0 && guest_addr_ok(head, 0x16) &&
+			ReadMacInt16(head + 6) == 0xffff)
+			head_free = true;
+	}
+	if (!lowmem_armed) {
+		if (head_free && lowmem_reports < 4)
+			lowmem_dump("EvtQHead points at an element already marked free");
+		return;
+	}
+
+	ticks = ReadMacInt32(0x16a);
+	for (i = 0; i < LOWMEM_WORDS; i++) {
+		const uint32 addr = LOWMEM_BASE + i * 4;
+		const uint32 now = ReadMacInt32(addr);
+		if (lowmem_snap_valid && now == lowmem_snap[i])
+			continue;
+		if (lowmem_snap_valid) {
+			const unsigned s = lowmem_track_next;
+			lowmem_track_addr[s] = addr;
+			lowmem_track_old[s] = lowmem_snap[i];
+			lowmem_track_new[s] = now;
+			lowmem_track_ppc[s] = pc();
+			lowmem_track_lr[s] = lr();
+			lowmem_track_68k[s] = gpr(24);
+			lowmem_track_level[s] = gpr(25);
+			lowmem_track_mode[s] = ReadMacInt32(XLM_RUN_MODE);
+			lowmem_track_nest[s] = ReadMacInt32(XLM_IRQ_NEST);
+			lowmem_track_depth[s] = exception_entry_depth;
+			lowmem_track_ticks[s] = ticks;
+			lowmem_track_usec[s] = GetTicks_usec();
+			lowmem_track_next = (s + 1) % LOWMEM_TRACK;
+			if (lowmem_track_count < LOWMEM_TRACK)
+				lowmem_track_count++;
+			lowmem_changes++;
+		}
+		lowmem_snap[i] = now;
+	}
+	if (lowmem_snap_valid && ticks < lowmem_prev_ticks)
+		ticks_back = true;
+	lowmem_prev_ticks = ticks;
+	lowmem_snap_valid = true;
+
+	if (lowmem_reports < 4 && (head_free || ticks_back))
+		lowmem_dump(head_free
+			? "EvtQHead points at an element already marked free"
+			: "Ticks moved backwards");
+}
+#endif
+
+#if PPC_DEBUG_TRACE
+void sheepshaver_cpu::lowmem_dump(const char *why)
+{
+	unsigned i, k;
+
+	lowmem_reports++;
+	ppc_trace("[lowmem] ", "ROLLBACK CAUGHT: %s\n", why);
+	ppc_trace("[lowmem] ",
+		"pc=%08x lr=%08x ctr=%08x sp=%08x msr=%08x srr0=%08x srr1=%08x "
+		"sprg0=%08x sprg1=%08x sprg2=%08x sprg3=%08x\n",
+		pc(), lr(), ctr(), gpr(1), msr(), srr0(), srr1(),
+		sprg(0), sprg(1), sprg(2), sprg(3));
+	ppc_trace("[lowmem] ",
+		"mode=%u nest=%d architectural depth=%u exec-depth=%d step %s; "
+		"last vector %s %lu us ago; vector entries=%llu steps taken=%llu "
+		"low-memory changes seen=%llu\n",
+		ReadMacInt32(XLM_RUN_MODE), (int32)ReadMacInt32(XLM_IRQ_NEST),
+		exception_entry_depth, current_execute_depth(),
+		exception_step_pending ? "armed" : "idle",
+		ppc_exception_vector_name(exception_last_vector),
+		(unsigned long)(GetTicks_usec() - exception_last_vector_usec),
+		(unsigned long long)exception_vector_entries,
+		(unsigned long long)exception_steps_taken,
+		(unsigned long long)lowmem_changes);
+	for (i = 0; i < 32; i += 8)
+		ppc_trace("[lowmem] ",
+			"r%-2u %08x %08x %08x %08x %08x %08x %08x %08x\n", i,
+			gpr(i), gpr(i + 1), gpr(i + 2), gpr(i + 3),
+			gpr(i + 4), gpr(i + 5), gpr(i + 6), gpr(i + 7));
+	ppc_trace("[lowmem] ",
+		"deferrals: ext accepted=%llu nest=%llu mode=%llu; tick "
+		"corrections=%llu recovered=%llu max=%u\n",
+		(unsigned long long)external_interrupt_accepted_count,
+		(unsigned long long)external_interrupt_nest_deferred_count,
+		(unsigned long long)external_interrupt_mode_deferred_count,
+		(unsigned long long)system_tick_correction_count,
+		(unsigned long long)system_tick_recovered_total,
+		system_tick_max_rollback);
+	{
+		const uint32 ctx68k = ReadMacInt32(KERNEL_DATA_BASE + 0x65c);
+		const uint32 cur = ReadMacInt32(KERNEL_DATA_BASE + 0x658);
+		ppc_trace("[lowmem] ",
+			"KernelData: status=%08x savedDEC=%08x mask=%08x level=%08x; "
+			"68kctx=%08x current=%08x\n",
+			ReadMacInt32(KERNEL_DATA_BASE + 0x18),
+			ReadMacInt32(KERNEL_DATA_BASE + 0x648),
+			ReadMacInt32(KERNEL_DATA_BASE + 0x674),
+			ReadMacInt32(KERNEL_DATA_BASE + 0x67c), ctx68k, cur);
+	}
+	ppc_trace("[lowmem] ",
+		"EventQueue: qFlags=%04x qHead=%08x qTail=%08x buf=%08x count=%d "
+		"Ticks=%08x guard $160=%02x mask $144=%04x\n",
+		ReadMacInt16(0x14a), ReadMacInt32(0x14c), ReadMacInt32(0x150),
+		ReadMacInt32(0x146), (int)(int16)ReadMacInt16(0x154),
+		ReadMacInt32(0x16a), ReadMacInt8(0x160), ReadMacInt16(0x144));
+	{
+		const uint32 base = ReadMacInt32(0x146);
+		const int count = (int)(int16)ReadMacInt16(0x154);
+		int q;
+		for (q = 0; q <= count && q < 64; q++) {
+			const uint32 el = base + (uint32)q * 0x16;
+			if (!guest_addr_ok(el, 0x16))
+				continue;
+			ppc_trace("[lowmem] ",
+				"  elem[%2d] %08x qLink=%08x qType=%04x what=%04x msg=%08x "
+				"when=%08x where=%08x mods=%04x%s%s\n",
+				q, el, ReadMacInt32(el), ReadMacInt16(el + 4),
+				ReadMacInt16(el + 6), ReadMacInt32(el + 8),
+				ReadMacInt32(el + 12), ReadMacInt32(el + 16),
+				ReadMacInt16(el + 20),
+				el == ReadMacInt32(0x14c) ? " <-qHead" : "",
+				el == ReadMacInt32(0x150) ? " <-qTail" : "");
+		}
+	}
+	ppc_trace("[lowmem] ", "low-memory changes, oldest first:\n");
+	k = lowmem_track_count;
+	i = (lowmem_track_next + LOWMEM_TRACK - k) % LOWMEM_TRACK;
+	while (k-- > 0) {
+		ppc_trace("[lowmem] ",
+			"  $%03x %08x -> %08x  ppc %08x lr %08x 68k pc %08x level %08x "
+			"mode %u nest %d depth %u ticks %08x at %llu us\n",
+			lowmem_track_addr[i], lowmem_track_old[i], lowmem_track_new[i],
+			lowmem_track_ppc[i], lowmem_track_lr[i], lowmem_track_68k[i],
+			lowmem_track_level[i], lowmem_track_mode[i],
+			(int32)lowmem_track_nest[i], lowmem_track_depth[i],
+			lowmem_track_ticks[i],
+			(unsigned long long)lowmem_track_usec[i]);
+		i = (i + 1) % LOWMEM_TRACK;
+	}
+	{
+		// The code that did it, straight out of guest memory: the relocated
+		// 68k emulator lives above the 4 MB ROM file, so it is not in the
+		// image tools/rom_decode.py produces and has to be dumped to be
+		// disassembled at all.
+		static const char *const w[4] = {
+			"ppc pc", "ppc lr", "68k pc", "ppc pc" };
+		uint32 at[4];
+		int b;
+		at[0] = pc(); at[1] = lr(); at[2] = gpr(24);
+		at[3] = pc();
+		for (b = 0; b < 4; b++) {
+			uint32 a;
+			for (a = at[b] - 0x100; a < at[b] + 0x40; a += 16) {
+				if (!guest_addr_ok(a, 16))
+					continue;
+				ppc_trace("[lowmem] ",
+					"  code %s %08x: %08x %08x %08x %08x%s\n",
+					w[b], a, ReadMacInt32(a), ReadMacInt32(a + 4),
+					ReadMacInt32(a + 8), ReadMacInt32(a + 12),
+					(at[b] >= a && at[b] < a + 16) ? "   <-- here" : "");
+			}
+		}
+	}
+	{
+		// The whole watched region, so the full extent of a revert is visible
+		// rather than only the words that happened to survive in a ring.
+		uint32 a;
+		for (a = LOWMEM_BASE; a < LOWMEM_BASE + LOWMEM_WORDS * 4; a += 16)
+			ppc_trace("[lowmem] ",
+				"  $%03x: %08x %08x %08x %08x\n", a, ReadMacInt32(a),
+				ReadMacInt32(a + 4), ReadMacInt32(a + 8),
+				ReadMacInt32(a + 12));
+	}
+	{
+		// Both nanokernel context blocks: if the stale values are restored
+		// from a saved context, they are in here.
+		const uint32 c[2] = { ReadMacInt32(KERNEL_DATA_BASE + 0x65c),
+			ReadMacInt32(KERNEL_DATA_BASE + 0x658) };
+		int b;
+		uint32 a;
+		for (b = 0; b < 2; b++)
+			for (a = c[b]; a < c[b] + 0x200; a += 16) {
+				if (!guest_addr_ok(a, 16))
+					continue;
+				ppc_trace("[lowmem] ",
+					"  ctx%d %08x: %08x %08x %08x %08x\n", b, a,
+					ReadMacInt32(a), ReadMacInt32(a + 4),
+					ReadMacInt32(a + 8), ReadMacInt32(a + 12));
+			}
+	}
+	report_and_reset_rfi_sites();
+	exception_diagnostic_state("lowmem-rollback", GetTicks_usec());
+}
+#endif
+
+#if PPC_DEBUG_TRACE
+void sheepshaver_cpu::exception_stall_sample(void)
+{
+	// From the first time the debugger is entered onwards. Gating this on
+	// being inside a vector was wrong: the guest resumes, the handler returns,
+	// and only then does everything stop - so the sampler went quiet exactly
+	// when it was needed.
+	if (exception_last_program_usec == 0)
+		return;
+
+	const uint64 now = GetTicks_usec();
+	const uint32 sampled_pc = pc();
+
+	// Catch the corruption at the tick it happens rather than minutes later
+	// once the Event Manager has wedged on it. EvtQHead ($14C) going
+	// self-linked, or pointing at an element with a nonsense event code, is
+	// the state the ROM's queue walk can never leave.
+	{
+		const uint32 qhead = ReadMacInt32(0x14c);
+		bool bad = false;
+		if (qhead != 0 && guest_addr_ok(qhead, 8)) {
+			const uint32 link = ReadMacInt32(qhead);
+			const uint32 what = ReadMacInt16(qhead + 6);
+			bad = (link == qhead) || (what > 23);
+		}
+		if (bad && !exception_queue_reported) {
+			unsigned n = exception_track_count;
+			unsigned i = (exception_track_next + EXC_TRACK - n) % EXC_TRACK;
+			unsigned k;
+			exception_queue_reported = true;
+			ppc_trace("[exception-corrupt] ",
+				"EvtQHead %08x went bad: qLink=%08x what=%04x qTail=%08x; "
+				"ppc pc=%08x, 68k pc=%08x, r25=%08x, mode=%u, nest=%d, "
+				"depth=%u, step %s\n",
+				qhead, ReadMacInt32(qhead), ReadMacInt16(qhead + 6),
+				ReadMacInt32(0x150), sampled_pc, cur_gpr(24), cur_gpr(25),
+				ReadMacInt32(XLM_RUN_MODE),
+				(int32)ReadMacInt32(XLM_IRQ_NEST), exception_entry_depth,
+				exception_step_pending ? "armed" : "idle");
+			for (k = 0; k < n; k++) {
+				ppc_trace("[exception-corrupt] ",
+					"  -%lu ms: ppc %08x, 68k pc %08x, r25 %08x, mode %u\n",
+					(unsigned long)((now - exception_track_usec[i]) / 1000),
+					exception_track_ppc_pc[i], exception_track_68k_pc[i],
+					exception_track_level[i], exception_track_mode[i]);
+				i = (i + 1) % EXC_TRACK;
+			}
+		} else if (!bad) {
+			exception_queue_reported = false;
+		}
+	}
+
+	// Record every sample, and shout the moment the 68k interrupt level or the
+	// run mode changes. Level 7 masks everything, so the transition into it is
+	// the event that matters and it is invisible in a periodic dump.
+	const uint32 level_now = cur_gpr(25) & 7;
+	const uint32 mode_now = ReadMacInt32(XLM_RUN_MODE);
+	exception_track_ppc_pc[exception_track_next] = sampled_pc;
+	exception_track_68k_pc[exception_track_next] = cur_gpr(24);
+	exception_track_level[exception_track_next] = cur_gpr(25);
+	exception_track_mode[exception_track_next] = mode_now;
+	exception_track_usec[exception_track_next] = now;
+	exception_track_next = (exception_track_next + 1) % EXC_TRACK;
+	if (exception_track_count < EXC_TRACK)
+		exception_track_count++;
+	/*if (!exception_level_seen || level_now != exception_last_seen_level ||
+			mode_now != exception_last_seen_mode) {
+		ppc_trace("[exception-level] ",
+			"68k level %u -> %u, mode %u -> %u at ppc %08x, 68k pc %08x, "
+			"r25=%08x, nest %d, depth %u, step %s\n",
+			exception_level_seen ? exception_last_seen_level : 0xffffffffu,
+			level_now,
+			exception_level_seen ? exception_last_seen_mode : 0xffffffffu,
+			mode_now, sampled_pc, cur_gpr(24), cur_gpr(25),
+			(int32)ReadMacInt32(XLM_IRQ_NEST), exception_entry_depth,
+			exception_step_pending ? "armed" : "idle");
+		exception_last_seen_level = level_now;
+		exception_last_seen_mode = mode_now;
+		exception_level_seen = true;
+	}*/
+
+	if (sampled_pc != exception_stall_pc) {
+		exception_stall_pc = sampled_pc;
+		exception_stall_moved_usec = now;
+	} else if (exception_stall_moved_usec == 0) {
+		exception_stall_moved_usec = now;
+	}
+
+	// The guest clock, which is the symptom that actually matters. A guest can
+	// be executing - writing DEC, taking decrementer vectors - while no VIA
+	// interrupt is serviced and TickCount never advances. That is the freeze,
+	// and a pc-only test misses it completely because the pc keeps moving.
+	InterruptServiceDiagnostics service;
+	GetInterruptServiceDiagnostics(service);
+	const uint32 tick_now = ReadMacInt32(0x16a);
+	if (tick_now != exception_stall_tick ||
+			service.via_services != exception_stall_via_services) {
+		exception_stall_tick = tick_now;
+		exception_stall_via_services = service.via_services;
+		exception_stall_tick_moved_usec = now;
+	} else if (exception_stall_tick_moved_usec == 0) {
+		exception_stall_tick_moved_usec = now;
+	}
+
+	const bool pc_stuck = (now - exception_stall_moved_usec) >= 2000000;
+	const bool clock_stuck = (now - exception_stall_tick_moved_usec) >= 2000000;
+	if (!pc_stuck && !clock_stuck)
+		return;
+	if (exception_stall_sample_usec != 0 &&
+			now - exception_stall_sample_usec < 1000000)
+		return;
+	exception_stall_sample_usec = now;
+	exception_stall_samples++;
+
+	ppc_trace("[exception-stall] ",
+		"guest clock stopped %lu ms (tick=%08x, %llu VIA service(s)); "
+		"pc %s for %lu ms\n",
+		(unsigned long)((now - exception_stall_tick_moved_usec) / 1000),
+		tick_now, (unsigned long long)service.via_services,
+		pc_stuck ? "unchanged" : "still moving",
+		(unsigned long)((now - exception_stall_moved_usec) / 1000));
+	ppc_trace("[exception-stall] ",
+		"guest at pc=%08x (%08x) lr=%08x sp=%08x msr=%08x "
+		"srr0=%08x srr1=%08x SE=%u\n",
+		sampled_pc,
+		guest_addr_ok(sampled_pc, 4) ? ReadMacInt32(sampled_pc) : 0xffffffffu,
+		lr(), gpr(1), msr(), srr0(), srr1(),
+		(msr() & PPC_MSR_SE) != 0 ? 1u : 0u);
+	ppc_trace("[exception-stall] ",
+		"last vector %s entered %lu ms ago, architectural depth %u, "
+		"nest %d, mode %u, exec-depth %d, step %s at %08x, "
+		"%llu vector entr%s and %llu step(s) so far\n",
+		ppc_exception_vector_name(exception_last_vector),
+		(unsigned long)((now - exception_last_vector_usec) / 1000),
+		exception_entry_depth, (int32)ReadMacInt32(XLM_IRQ_NEST),
+		ReadMacInt32(XLM_RUN_MODE), current_execute_depth(),
+		exception_step_pending ? "armed" : "idle", exception_step_pc,
+		(unsigned long long)exception_vector_entries,
+		exception_vector_entries == 1 ? "y" : "ies",
+		(unsigned long long)exception_steps_taken);
+	ppc_trace("[exception-stall] ",
+		"interrupts: flags=%08x spc=%08x accepted=%llu, deferred %llu nest / "
+		"%llu mode / %llu 68k-IPL; OP_IRQ=%llu; 68k pc=%08x level=%08x\n",
+		(uint32)InterruptFlags, spcflags().get(),
+		(unsigned long long)external_interrupt_accepted_count,
+		(unsigned long long)external_interrupt_nest_deferred_count,
+		(unsigned long long)external_interrupt_mode_deferred_count,
+		(unsigned long long)external_interrupt_68k_deferred_count,
+		(unsigned long long)0ULL,
+		cur_gpr(24), cur_gpr(25));
+	// The 68k side in full: its emulator keeps D0-D7 in r8-r15, A0-A7 in
+	// r16-r23, the 68k pc in r24 and the interrupt level in r25. If the level
+	// is stuck at 7 nothing below it can ever be serviced, so the registers and
+	// the instruction stream at that pc say which routine masked them.
+	{
+		const uint32 k68_pc = cur_gpr(24);
+		ppc_trace("[exception-stall] ",
+			"68k pc=%08x level=%08x  d0-d7 %08x %08x %08x %08x %08x %08x "
+			"%08x %08x\n", k68_pc, cur_gpr(25),
+			cur_gpr(8), cur_gpr(9), cur_gpr(10), cur_gpr(11),
+			cur_gpr(12), cur_gpr(13), cur_gpr(14), cur_gpr(15));
+		ppc_trace("[exception-stall] ",
+			"   a0-a7 %08x %08x %08x %08x %08x %08x %08x %08x\n",
+			cur_gpr(16), cur_gpr(17), cur_gpr(18), cur_gpr(19),
+			cur_gpr(20), cur_gpr(21), cur_gpr(22), cur_gpr(23));
+		if (guest_addr_ok(k68_pc, 16))
+			ppc_trace("[exception-stall] ",
+				"   68k code %04x %04x %04x %04x %04x %04x %04x %04x\n",
+				ReadMacInt16(k68_pc), ReadMacInt16(k68_pc + 2),
+				ReadMacInt16(k68_pc + 4), ReadMacInt16(k68_pc + 6),
+				ReadMacInt16(k68_pc + 8), ReadMacInt16(k68_pc + 10),
+				ReadMacInt16(k68_pc + 12), ReadMacInt16(k68_pc + 14));
+		// Is an interrupt actually being presented to the 68k emulator?
+		const uint32 level_addr = ReadMacInt32(KERNEL_DATA_BASE + 0x67c);
+		ppc_trace("[exception-stall] ",
+			"presented level@%08x=%04x mask=%08x cr=%08x lowmem ticks=%08x\n",
+			level_addr, guest_addr_ok(level_addr, 2) ? ReadMacInt16(level_addr) : 0xffff,
+			ReadMacInt32(KERNEL_DATA_BASE + 0x674), cr().get(),
+			ReadMacInt32(0x16a));
+	}
+
+	// The event queue itself. The freeze is the ROM's Event Manager walking it
+	// with the 68k interrupt level raised to 7 (ROM 0x10dbc ori.w #$700,sr,
+	// walk at 0x10dc6..0x10dd2) and never reaching the sr restore, because the
+	// chain is circular. Printing it names the element that closes the cycle,
+	// and whether qTail already pointed at it - which is what Enqueue produces
+	// when the same element is enqueued twice.
+	{
+		const uint32 qflags = ReadMacInt16(0x14a);
+		const uint32 qhead = ReadMacInt32(0x14c);
+		const uint32 qtail = ReadMacInt32(0x150);
+		uint32 seen[48];
+		uint32 e = qhead;
+		int n = 0;
+		ppc_trace("[exception-queue] ",
+			"EventQueue qFlags=%04x qHead=%08x qTail=%08x\n",
+			qflags, qhead, qtail);
+		while (e != 0 && n < 48 && guest_addr_ok(e, 16)) {
+			const uint32 next = ReadMacInt32(e);
+			int k;
+			int loop = -1;
+			for (k = 0; k < n; k++)
+				if (seen[k] == e) { loop = k; break; }
+			ppc_trace("[exception-queue] ",
+				"  [%d] %08x qLink=%08x what=%04x message=%08x when=%08x%s%s\n",
+				n, e, next, ReadMacInt16(e + 6), ReadMacInt32(e + 8),
+				ReadMacInt32(e + 12),
+				e == qtail ? " <-qTail" : "",
+				loop >= 0 ? " <-CYCLE" : "");
+			if (loop >= 0)
+				break;
+			seen[n++] = e;
+			e = next;
+		}
+		if (n >= 48)
+			ppc_trace("[exception-queue] ", "  ... truncated at 48\n");
+	}
+
+	// The rolling history, oldest first: where the guest has been since the
+	// debugger was entered, and when the level changed.
+	{
+		unsigned n = exception_track_count;
+		unsigned i = (exception_track_next + EXC_TRACK - n) % EXC_TRACK;
+		unsigned k;
+		for (k = 0; k < n; k++) {
+			ppc_trace("[exception-track] ",
+				"-%lu ms: ppc %08x, 68k pc %08x, r25 %08x, mode %u\n",
+				(unsigned long)((now - exception_track_usec[i]) / 1000),
+				exception_track_ppc_pc[i], exception_track_68k_pc[i],
+				exception_track_level[i], exception_track_mode[i]);
+			i = (i + 1) % EXC_TRACK;
+		}
+		exception_track_count = 0;
+	}
+
+	// The full machine picture, but only the first few times so a long freeze
+	// does not fill the log with identical dumps.
+	if (exception_stall_samples <= 3 ||
+			sampled_pc != exception_stall_last_reported_pc)
+		exception_diagnostic_state("stall", now);
+	exception_stall_last_reported_pc = sampled_pc;
+}
+#endif
+
+#if PPC_DEBUG_TRACE
 void sheepshaver_cpu::exception_idle_diagnostic(void)
 {
 	if (exception_last_program_usec == 0)
@@ -1014,6 +1803,7 @@ void sheepshaver_cpu::exception_idle_diagnostic(void)
 	exception_stall_last_usec = now;
 	exception_diagnostic_state("idle-stall", now);
 }
+#endif
 
 bool sheepshaver_cpu::exception_step_trampoline_ready(void)
 {
@@ -1060,12 +1850,37 @@ const char *sheepshaver_cpu::enter_exception_vector(
 	msr() = ppc_exception_msr(interrupted_msr);
 	WriteMacInt32(XLM_IRQ_NEST, (uint32)nest + 1);
 	exception_entry_depth++;
+#if PPC_DEBUG_TRACE
 	exception_last_vector = vector;
 	exception_last_vector_usec = GetTicks_usec();
+	exception_vector_entries++;
+	// Every entry, not just program ones. The trace vector is the one that
+	// stops coming back, and without this there is no record that it was even
+	// entered, nor of which handler it dispatched to. External and decrementer
+	// vectors fire constantly, so they are only logged while a debugger chain
+	// or an armed step is in flight.
+	if (vector != PPC_EXTERNAL_VECTOR || exception_step_pending ||
+			exception_entry_depth > 1) {
+		ppc_trace("[exception-entry] ",
+			"%s vector at %08x: handler %08x, saved pc %08x, srr1 %08x, "
+			"nest %d->%d, architectural depth %u, step %s, mode %u, "
+			"68k pc %08x level %08x\n",
+			ppc_exception_vector_name(vector), vector_pc, handler, saved_pc,
+			saved_msr, nest, nest + 1, exception_entry_depth,
+			exception_step_pending ? "armed" : "idle",
+			ReadMacInt32(XLM_RUN_MODE), gpr(24), gpr(25));
+	}
+	// The full low-memory diff below costs 192 guest reads per block, which
+	// would be slower than booting under a per-instruction watch. The rollback
+	// only ever appears once the debugger is running, so arm it there and
+	// leave the boot at the two-read trigger.
+	if (vector == PPC_TRACE_VECTOR || vector == PPC_PROGRAM_VECTOR)
+		lowmem_armed = true;
 	if (vector == PPC_TRACE_VECTOR)
 		exception_traces_since_program++;
 	else if (vector == PPC_DECREMENTER_VECTOR)
 		exception_decrementers_since_program++;
+#endif
 	pc() = vector_pc;
 	return NULL;
 }
@@ -1075,6 +1890,7 @@ bool sheepshaver_cpu::decrementer_exception()
 	return enter_exception_vector(PPC_DECREMENTER_VECTOR,
 		PPC_DECREMENTER_HANDLER_SLOT, pc(), ppc_exception_srr1(msr(), 0)) == NULL;
 }
+
 
 bool sheepshaver_cpu::external_interrupt()
 {
@@ -1152,9 +1968,10 @@ const char *sheepshaver_cpu::deliver_trap_exception(uint32 opcode)
 		return "PowerPC exception delivery is disabled";
 	if (!exception_step_trampoline_ready())
 		return "the single-step return trampoline could not be allocated";
-	preserve_system_ticks();
+	preserve_system_ticks("trap delivery");
 
 	const uint32 trap_pc = pc();
+#if PPC_DEBUG_TRACE
 	const uint64 now = GetTicks_usec();
 	const uint64 idle_now = IdleWaitUsec;
 	const unsigned long idle_count_now = IdleWaitCount;
@@ -1166,14 +1983,16 @@ const char *sheepshaver_cpu::deliver_trap_exception(uint32 opcode)
 	const uint32 previous_decrementers = exception_decrementers_since_program;
 	InterruptServiceDiagnostics service_now;
 	GetInterruptServiceDiagnostics(service_now);
+#endif
 	const char *why = enter_exception_vector(PPC_PROGRAM_VECTOR,
 		PPC_PROGRAM_HANDLER_SLOT, trap_pc,
 		ppc_exception_srr1(msr(), PPC_SRR1_PROGRAM_TRAP));
 	if (why != NULL)
 		return why;
 
+#if PPC_DEBUG_TRACE
 	if (previous_program != 0) {
-		gfx_log_emit("[exception] ",
+		ppc_trace("[exception] ",
 			"program exception at %08x: entering nanokernel handler "
 			"(since previous: %lu ms, %lu ms idle in %lu waits, "
 			"%u guest ticks, %u rfi returns, %u trace and %u decrementer "
@@ -1187,7 +2006,7 @@ const char *sheepshaver_cpu::deliver_trap_exception(uint32 opcode)
 			previous_returns, previous_traces, previous_decrementers,
 			nest_before,
 			(int32)ReadMacInt32(XLM_IRQ_NEST));
-		gfx_log_emit("[exception] ",
+		ppc_trace("[exception] ",
 			"external interrupt arbitration since previous: %llu accepted "
 			"(%llu native vectors, %llu 68k, %llu emul-op); "
 			"%llu nest, %llu 68k-IPL and %llu "
@@ -1210,13 +2029,13 @@ const char *sheepshaver_cpu::deliver_trap_exception(uint32 opcode)
 			exception_service_snapshot.via_services;
 		const uint64 op_irq_delta = service_now.op_irq_entries -
 			exception_service_snapshot.op_irq_entries;
-		gfx_log_emit("[exception] ",
+		ppc_trace("[exception] ",
 			"interrupt service since previous: %llu OP_IRQ entr%s, "
 			"%llu VIA service(s)\n",
 			(unsigned long long)op_irq_delta,
 			op_irq_delta == 1 ? "y" : "ies",
 			(unsigned long long)service_delta);
-		gfx_log_emit("[exception] ",
+		ppc_trace("[exception] ",
 			"system TickCount preservation since previous: %llu stale "
 			"context restore(s), %llu tick(s) recovered; canonical=%08x, "
 			"lifetime maximum rollback=%u tick(s)\n",
@@ -1227,7 +2046,7 @@ const char *sheepshaver_cpu::deliver_trap_exception(uint32 opcode)
 			system_ticks_high_water, system_tick_max_rollback);
 		report_and_reset_rfi_sites();
 	} else {
-		gfx_log_emit("[exception] ",
+		ppc_trace("[exception] ",
 			"program exception at %08x: entering nanokernel handler "
 			"(nest %d->%d)\n", trap_pc, nest_before,
 			(int32)ReadMacInt32(XLM_IRQ_NEST));
@@ -1259,6 +2078,7 @@ const char *sheepshaver_cpu::deliver_trap_exception(uint32 opcode)
 	system_tick_correction_snapshot = system_tick_correction_count;
 	system_tick_recovered_snapshot = system_tick_recovered_total;
 	exception_diagnostic_state("program-entry", now);
+#endif
 	return NULL;
 }
 
@@ -1272,11 +2092,12 @@ void sheepshaver_cpu::return_from_exception(uint32 saved_pc, uint32 saved_msr)
 		(saved_msr & PPC_RFI_MSR_MASK);
 	// The guest has completed its context restore before executing rfi. Keep
 	// global system time from being replaced by that context's stale snapshot.
-	preserve_system_ticks();
+	preserve_system_ticks("rfi return");
 	uint32 return_pc = saved_pc & ~3u;
-	const uint32 run_mode = ReadMacInt32(XLM_RUN_MODE);
+#if PPC_DEBUG_TRACE
 	if (exception_last_program_usec != 0)
-		record_rfi_site(return_pc, run_mode);
+		record_rfi_site(return_pc, ReadMacInt32(XLM_RUN_MODE));
+#endif
 	const int32 nest = (int32)ReadMacInt32(XLM_IRQ_NEST);
 	if (nest > 0)
 		WriteMacInt32(XLM_IRQ_NEST, (uint32)nest - 1);
@@ -1284,20 +2105,28 @@ void sheepshaver_cpu::return_from_exception(uint32 saved_pc, uint32 saved_msr)
 		gfx_log_emit("[crash] ",
 			"PowerPC rfi has invalid nanokernel nesting state %d\n", nest);
 
+#if PPC_DEBUG_TRACE
 	exception_returns_since_program++;
+#endif
 	if (exception_entry_depth != 0) {
+#if PPC_DEBUG_TRACE
 		const uint64 now = GetTicks_usec();
 		const uint64 vector_usec = now - exception_last_vector_usec;
 		if (exception_last_vector == PPC_PROGRAM_VECTOR ||
+			exception_last_vector == PPC_TRACE_VECTOR ||
+			exception_step_pending || exception_entry_depth > 1 ||
 			(msr() & PPC_MSR_SE) != 0 || vector_usec >= 100000) {
-			gfx_log_emit("[exception] ",
+			ppc_trace("[exception] ",
 				"%s vector returned in %lu us to %08x "
-				"(SE=%u, nest=%d, architectural depth=%u)\n",
+				"(SE=%u, nest=%d, architectural depth=%u, mode=%u, "
+				"68k pc=%08x level=%08x)\n",
 				ppc_exception_vector_name(exception_last_vector),
 				(unsigned long)vector_usec, return_pc,
 				(msr() & PPC_MSR_SE) != 0 ? 1u : 0u,
-				(int32)ReadMacInt32(XLM_IRQ_NEST), exception_entry_depth);
+				(int32)ReadMacInt32(XLM_IRQ_NEST), exception_entry_depth,
+				ReadMacInt32(XLM_RUN_MODE), gpr(24), gpr(25));
 		}
+#endif
 		exception_entry_depth--;
 	}
 
@@ -1314,8 +2143,9 @@ void sheepshaver_cpu::return_from_exception(uint32 saved_pc, uint32 saved_msr)
 			exception_step_pc = return_pc;
 			exception_step_pending = true;
 			return_pc = exception_step_trampoline;
+#if PPC_DEBUG_TRACE
 			const uint64 now = GetTicks_usec();
-			gfx_log_emit("[exception] ",
+			ppc_trace("[exception] ",
 				"single-step return redirected to %08x (%lu ms since last "
 				"program exception, %lu ms idle, "
 				"%u guest ticks, nest=%d)\n",
@@ -1327,6 +2157,7 @@ void sheepshaver_cpu::return_from_exception(uint32 saved_pc, uint32 saved_msr)
 				ReadMacInt32(0x16a) - exception_tick_snapshot,
 				(int32)ReadMacInt32(XLM_IRQ_NEST));
 			exception_diagnostic_state("step-ready", now);
+#endif
 		} else {
 			gfx_log_emit("[crash] ",
 				"could not allocate the PowerPC trace trampoline\n");
@@ -1347,15 +2178,22 @@ void sheepshaver_cpu::exception_step(void)
 	}
 
 	pc() = exception_step_pc;
+#if PPC_DEBUG_TRACE
 	const uint32 stepped_pc = pc();
 	const uint32 stepped_opcode = ReadMacInt32(stepped_pc);
+#endif
 	exception_step_pending = false;
 	exception_step_trap = false;
 	exception_step_opcode = 0;
 	exception_step_active = true;
+#if PPC_DEBUG_TRACE
 	const uint64 step_started = GetTicks_usec();
+	exception_steps_taken++;
+#endif
 	execute_one_instruction();
+#if PPC_DEBUG_TRACE
 	const uint64 step_usec = GetTicks_usec() - step_started;
+#endif
 	exception_step_active = false;
 
 	const bool trapped = exception_step_trap;
@@ -1365,10 +2203,15 @@ void sheepshaver_cpu::exception_step(void)
 	const uint32 saved_msr = ppc_exception_srr1(msr(),
 		trapped ? PPC_SRR1_PROGRAM_TRAP : 0);
 	const uint32 saved_pc = pc();
-	gfx_log_emit("[exception] ",
+#if PPC_DEBUG_TRACE
+	ppc_trace("[exception] ",
 		"single instruction at %08x (%08x) took %lu us; raising %s "
-		"exception at %08x\n", stepped_pc, stepped_opcode,
-		(unsigned long)step_usec, trapped ? "program" : "trace", saved_pc);
+		"exception at %08x (mode %u, 68k pc %08x, level %08x, nest %d)\n",
+		stepped_pc, stepped_opcode,
+		(unsigned long)step_usec, trapped ? "program" : "trace", saved_pc,
+		ReadMacInt32(XLM_RUN_MODE), gpr(24), gpr(25),
+		(int32)ReadMacInt32(XLM_IRQ_NEST));
+#endif
 	const char *why =
 		enter_exception_vector(vector, slot, saved_pc, saved_msr);
 	if (why == NULL)
@@ -1429,10 +2272,43 @@ inline void sheepshaver_cpu::get_resource(uint32 old_get_resource)
 // PowerPC CPU emulator
 static sheepshaver_cpu *ppc_cpu = NULL;
 
+
+// Guest PC, for sampling from the host tick thread. A racy read of one word:
+// the point is to find where the guest is spinning when it stops taking
+// interrupts, and a sampling profiler is the only thing that still works
+// then - anything driven from the VBL has stopped running by definition.
+uint32 PPCSampleGuestPC(void)
+{
+	return ppc_cpu ? ppc_cpu->cur_pc() : 0;
+}
+
+// The ROM's 68k emulator keeps the 68k instruction pointer in r24 (its fetch
+// is lhau r27,2(r24)) and the interrupt level in r25, so sampling those says
+// which 68k code is looping and whether it has interrupts masked.
+uint32 PPCSampleGuestGPR(int i)
+{
+	return ppc_cpu ? ppc_cpu->cur_gpr(i) : 0;
+}
+
 void PPCExceptionIdleDiagnostic(void)
 {
+#if PPC_DEBUG_TRACE
 	if (ppc_cpu != NULL)
 		ppc_cpu->exception_idle_diagnostic();
+#endif
+}
+
+// Called from the host tick thread, which keeps running when the guest does
+// not. exception_idle_diagnostic() is driven from SynchIdleTime, so it reports
+// nothing in precisely the case that matters: a guest stuck inside an exception
+// handler never reaches the idle loop again. Sampling from outside is the only
+// view left once that happens.
+void PPCExceptionStallSample(void)
+{
+#if PPC_DEBUG_TRACE
+	if (ppc_cpu != NULL)
+		ppc_cpu->exception_stall_sample();
+#endif
 }
 
 void FlushCodeCache(uintptr start, uintptr end)
@@ -1791,6 +2667,13 @@ sigsegv_return_t sigsegv_handler(sigsegv_info_t *sip)
 #endif
 
 	const uintptr addr = (uintptr)sigsegv_get_fault_address(sip);
+
+	// Emulated device windows (see mmio.h). Their pages are deliberately kept
+	// inaccessible so that every guest load and store lands here and is served
+	// with real register semantics instead of being polled out of RAM.
+	if (MMIOIsWindow((void *)addr))
+		return SIGSEGV_RETURN_DEVICE_ACCESS;
+
 #if HAVE_SIGSEGV_SKIP_INSTRUCTION
 	// Ignore writes to ROM
 	if ((addr - (uintptr)ROMBaseHost) < ROM_SIZE)
@@ -2063,6 +2946,9 @@ bool HandleInterrupt(powerpc_registers *r)
 				ClearInterruptFlag(INTFLAG_VIA);
 				ADBInterrupt();
 				ExecuteNative(NATIVE_VIDEO_VBL);
+#ifdef ENABLE_USB
+				USBHIDVBL();
+#endif /* ENABLE_USB */
 			}
 		}
 #endif
@@ -2100,6 +2986,53 @@ void sheepshaver_cpu::execute_native_op(uint32 selector)
 	case NATIVE_VIDEO_DO_DRIVER_IO:
 		gpr(3) = (int32)(int16)VideoDoDriverIO(gpr(3), gpr(4), gpr(5), gpr(6), gpr(7));
 		break;
+#ifdef ENABLE_USB
+	case NATIVE_USB_PUBLISH_NODE:
+		DoPublishUSBNode();
+		break;
+	case NATIVE_USB_UIM_POLL:
+		USBUIMPoll();
+		break;
+	case NATIVE_USB_EXPERT_NOTIFY: {
+		// Chains into the Expert, so the same non-volatile registers have to
+		// survive as for NATIVE_USB_UIM_DISPATCH above.
+		uint32 saved[20];
+		int i;
+		saved[0] = gpr(1);
+		for (i = 13; i < 32; i++)
+			saved[i - 12] = gpr(i);
+		gpr(3) = USBUIMExpertNotify(gpr(3));
+		gpr(1) = saved[0];
+		for (i = 13; i < 32; i++)
+			gpr(i) = saved[i - 12];
+		break;
+	}
+	case NATIVE_USB_UIM_DISPATCH: {
+		// One entry for all 25 plugin slots; the stub put the slot in r11.
+		// r11 = slot, r12 = the fragment's own TOC, which for this PEF is the
+		// address of ThePluginDispatchTable itself.
+		//
+		// A UIM entry completes root hub transfers by calling straight back
+		// into the guest, and execute_ppc() runs a nested call on this same
+		// register file - it saves LR and nothing else. A plugin entry is an
+		// ordinary PowerPC function call, so the non-volatile registers have to
+		// come back untouched: USBServicesLib holds the function address in r28
+		// across all three stages of a control transfer (USL code 0x4a7c and
+		// 0x4b10 both pass it from there), and losing it sent the data stage of
+		// every control transfer to address 0.
+		uint32 saved[20];
+		int i;
+		saved[0] = gpr(1);
+		for (i = 13; i < 32; i++)
+			saved[i - 12] = gpr(i);
+		gpr(3) = USBUIMDispatch(gpr(11), gpr(12), lr(), gpr(3), gpr(4), gpr(5),
+			gpr(6), gpr(7), gpr(8), gpr(9), gpr(10));
+		gpr(1) = saved[0];
+		for (i = 13; i < 32; i++)
+			gpr(i) = saved[i - 12];
+		break;
+	}
+#endif /* #ifdef ENABLE_USB */
 	case NATIVE_EXCEPTION_STEP:
 		exception_step();
 		break;

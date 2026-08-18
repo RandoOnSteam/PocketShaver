@@ -27,10 +27,46 @@
 #include "user_strings.h"
 #include "emul_op.h"
 #include "thunks.h"
+#include "usbhid.h"
+#include "pcibridge.h"
+#include "usbuim.h"
 
 #define DEBUG 0
 #include "debug.h"
 
+/* Publishing a "pci" bus node is measured to be fatal while the ROM's
+   Expansion Manager has no bus record for it: with device_type="pci" the boot
+   dies in 68k code storing through a wild pointer, and with just name and
+   bus-range it hangs - in both cases without ever issuing a configuration
+   cycle, even with the bridge in pcibridge.cpp answering. Kept behind this
+   switch because the node is still exactly what ExpMgr's bus walk wants; it
+   only becomes safe once a bus record exists. See docs/usb-ohci-uim.md 5b. */
+#define PCI_PUBLISH_BUS_NODE 0
+
+/* Hand our own UIM to the guest. Off leaves a bare "usb" node that no driver
+   binds to, which is the last state known to boot; flip it to tell a UIM
+   problem apart from an unrelated boot problem. */
+#define USB_PUBLISH_UIM 1
+
+/* Publish the USB controller node at all. 0 is the pre-USB behaviour. */
+#define USB_PUBLISH_NODE 1
+
+/* Advertise device_type = "usb" on the node. This is what makes the ROM's
+   USB Expert adopt the node as a bus; 0 leaves the hardware description
+   published but invisible to the USB Family. */
+#define USB_NODE_DEVICE_TYPE 1
+
+/* Seconds after the first idle-loop call before the node appears. Kept short:
+   anything that snapshots the machine's configuration when it launches - Apple
+   System Profiler does - will not see USB if the bus turns up after it. */
+#define USB_NODE_PUBLISH_DELAY 2
+
+#ifdef ENABLE_USB
+static uint64 usb_first_idle;
+static bool usb_node_published;
+static SheepRegEntryID *pci_node;
+static SheepRegEntryID *usb_node;
+#endif /* ENABLE_USB */
 
 // Function pointers
 typedef int16 (*rcec_ptr)(const RegEntryID *, const char *, RegEntryID *);
@@ -77,9 +113,132 @@ struct SheepPair : public SheepArray<8> {
 };
 
 
+
 /*
  *  Patch Name Registry during startup
  */
+#ifdef ENABLE_USB
+/*
+ *  Publish the USB controller node.
+ *
+ *  Deliberately NOT called from DoPatchNameRegistry. A node whose
+ *  device_type is "usb" makes the ROM startup drop into its Service Test
+ *  Manager and the boot never finishes - measured down to a node carrying
+ *  nothing but a name and that one property (docs/usb-ohci-uim.md 5b).
+ *  Once the Mac is up that startup path is long past, so it goes in then.
+ */
+void DoPublishUSBNode(void)
+{
+	SheepVar32 u32;
+	int16 err;
+
+	/* Created by full path rather than parent id. A RegEntryID kept from the
+	   startup patch is not valid this much later - using one gives
+	   nrInvalidNodeErr (-2538) - and the registry takes a path, which is how
+	   "Devices:device-tree" itself gets made. */
+	if (usb_node == NULL)
+		usb_node = new SheepRegEntryID;
+
+			/* Create "ohci-host", the node the USB Family adopts as a bus.
+			 *
+			 * It used to describe a PCI function as well - reg, vendor-id,
+			 * device-id, class-code, revision-id, assigned-addresses and
+			 * AAPL,address, all read by the ROM's own OHCI UIM. That UIM
+			 * cannot run here (docs/usb-ohci-uim.md 4, 5b) and our own UIM
+			 * reads none of it, so those properties described hardware that
+			 * nothing drives - on a machine with no PCI bus at all. Anything
+			 * walking the device tree by exactly those names, which is how
+			 * Apple System Profiler enumerates slots, was being pointed at a
+			 * PCI function with no bus behind it. Deleted.
+			 */
+			err = RegistryCStrEntryCreate(0, "Devices:device-tree:ohci-host",
+				usb_node->addr());
+			USBHIDLog("create ohci-host err=%d", err);
+			if (!err) {
+				if (USB_NODE_DEVICE_TYPE)
+					RegistryPropertyCreateStr(usb_node->addr(), "device_type", "usb");
+				// Apple System Profiler finds the bus by searching for exactly
+				// that property - device_type = "usb", four bytes with the NUL
+				// (its code 0x2bad0) - and then reads AAPL,BusNumber off the
+				// node it found before walking its children as devices.
+				u32.set_value(0);
+				USBHIDLog("bus node device_type='usb' AAPL,BusNumber -> %d",
+					RegistryPropertyCreate(usb_node->addr(), "AAPL,BusNumber",
+						u32.addr(), 4));
+				// Deliberately NOT "pciclass,0c0310": that is the ROM OHCIUIM's
+				// match string, and it cannot run here. Our own UIM matches this
+				// name and nothing else does, so no version race with the ROM.
+				RegistryPropertyCreateStr(usb_node->addr(), "compatible", "SheepUSB");
+				if (USB_PUBLISH_UIM) {
+					uint32 drv_size;
+					const uint8 *drv = USBUIMDriver(&drv_size);
+					SheepArray<4096> the_uim;
+					Host2Mac_memcpy(the_uim.addr(), drv, drv_size);
+					RegistryPropertyCreate(usb_node->addr(),
+						"driver,AAPL,MacOS,PowerPC", the_uim.addr(), drv_size);
+				}
+				USBHIDLog("ohci-host published, uim=%d", USB_PUBLISH_UIM);
+
+				/* Bring the bus up. The node's RegEntryID goes with it: the
+				   Expert's LoadUIMForEntry keeps it as the parent for the
+				   per-device registry nodes it publishes. */
+				if (USB_PUBLISH_UIM)
+					USBUIMRegisterBus(usb_node->addr());
+			}
+}
+
+/*
+ *  Called from the Mac OS idle loop (OP_IDLE_TIME), not from the VBL. Creating
+ *  a Name Registry entry allocates memory, which is not allowed at interrupt
+ *  time - doing it from the VBL wedged the guest at 68k 0x4081180a. The idle
+ *  loop runs at task level with a real stack, and its first call already means
+ *  the Mac is up.
+ */
+
+void USBNodeResetPublish(void)
+{
+	usb_first_idle = 0;
+	usb_node_published = false;
+}
+
+void USBNodePublishDeferred(void)
+{
+	if (usb_node_published) {
+		// Transfer completions run from here too: they have to happen outside
+		// the UIM entry that created the transfer, in PPC mode, at task level.
+		//
+		// Rate-limited here rather than inside USBUIMPoll, because the cost is
+		// ExecuteNative itself: SynchIdleTime is called far more often than
+		// 60 Hz and every visit was a 68k-to-PPC mode switch. What the poll
+		// drives - USBIdleTask and the Expert's event drain - is once per
+		// SystemTask work anyway, and slot 21 is where completions normally
+		// run, so 60 Hz here loses nothing.
+		static uint64 next_poll;
+		uint64 now = GetTicks_usec();
+		if (now < next_poll)
+			return;
+		next_poll = now + 16000;
+		ExecuteNative(NATIVE_USB_UIM_POLL);
+		return;
+	}
+	if (!USB_PUBLISH_NODE || !USBHIDReady())
+		return;
+	if (usb_first_idle == 0) {
+		usb_first_idle = GetTicks_usec();
+		USBHIDLog("first idle-loop call seen; publishing in %d s",
+			USB_NODE_PUBLISH_DELAY);
+		return;
+	}
+	if (GetTicks_usec() - usb_first_idle
+			< (uint64)USB_NODE_PUBLISH_DELAY * 1000000)
+		return;
+	usb_node_published = true;
+	USBHIDLog("publishing USB node from the idle loop");
+	// Same reason PatchNameRegistry() does this: the Name Registry calls have
+	// to run in PPC mode, and the idle hook is 68k context.
+	ExecuteNative(NATIVE_USB_PUBLISH_NODE);
+}
+#endif /* ENABLE_USB */
 
 void DoPatchNameRegistry(void)
 {
@@ -347,6 +506,50 @@ void DoPatchNameRegistry(void)
 			// local-mac-address
 			// max-frame-size 2048
 		}
+#ifdef ENABLE_USB
+		USBHIDInstall();
+		if (false) {	// the USB node is published later, see PublishUSBNode()
+			uintptr usb_parent = device_tree.addr();
+			if (pci_node == NULL)
+				pci_node = new SheepRegEntryID;
+			if (usb_node == NULL)
+				usb_node = new SheepRegEntryID;
+
+			// Create "pci" - the host bridge the USB controller hangs off.
+			//
+			// ExpMgr resolves a device's bus by walking Name Registry parents
+			// for one named "pci" or "bandit", and its config path builds a
+			// bus table from every entry carrying "bus-range"
+			// (docs/usb-ohci-uim.md sections 4 and 4c). Publishing this without
+			// a bridge behind it is fatal - measured twice - so the node is
+			// only created once PCIBridgeInstall() has the config ports live,
+			// and "reg" points at those ports rather than at nothing.
+			// Only worth existing when the bus node is published: until then
+			// nothing issues a configuration cycle, and the two trapping
+			// windows would only change behaviour for whatever else touches
+			// those addresses.
+			if (PCI_PUBLISH_BUS_NODE)
+				PCIBridgeInstall();
+			if (PCI_PUBLISH_BUS_NODE
+				&& !RegistryCStrEntryCreate(device_tree.addr(), "pci", pci_node->addr())) {
+				RegistryPropertyCreateStr(pci_node->addr(), "device_type", "pci");
+				RegistryPropertyCreateStr(pci_node->addr(), "compatible", "grackle");
+				SheepPair bus_range(0, 0);	// bus 0, and the only one
+				RegistryPropertyCreate(pci_node->addr(), "bus-range", bus_range.addr(), 8);
+				SheepPair bridge_reg(PCI_CONFIG_ADDR, PCI_CONFIG_DATA - PCI_CONFIG_ADDR);
+				RegistryPropertyCreate(pci_node->addr(), "reg", bridge_reg.addr(), 8);
+				SheepPair cfg_ports(PCI_CONFIG_ADDR, PCI_CONFIG_DATA);
+				RegistryPropertyCreate(pci_node->addr(), "AAPL,address", cfg_ports.addr(), 8);
+				u32.set_value(3);
+				RegistryPropertyCreate(pci_node->addr(), "#address-cells", u32.addr(), 4);
+				u32.set_value(2);
+				RegistryPropertyCreate(pci_node->addr(), "#size-cells", u32.addr(), 4);
+				usb_parent = pci_node->addr();
+				USBHIDLog("pci bridge node published");
+			}
+
+		}
+#endif /* ENABLE_USB */
 	}
 	D(bug("done.\n"));
 }
@@ -366,3 +569,4 @@ void PatchNameRegistry(void)
 	// Main routine must be executed in PPC mode
 	ExecuteNative(NATIVE_PATCH_NAME_REGISTRY);
 }
+

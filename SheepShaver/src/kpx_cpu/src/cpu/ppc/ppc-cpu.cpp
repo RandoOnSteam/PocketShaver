@@ -669,6 +669,10 @@ bool powerpc_cpu::check_spcflags()
 		}
 	}
 #endif
+#ifdef SHEEPSHAVER
+	// One read and a compare unless the Event Manager queue actually moved.
+	watch_event_queue();
+#endif
 	if (spcflags().test(SPCFLAG_CPU_DECREMENTER))
 		spcflags().clear(SPCFLAG_CPU_DECREMENTER);
 	// Host wakeups (notably the 60 Hz tick) also provide a bounded polling
@@ -878,6 +882,9 @@ void powerpc_cpu::execute(uint32 entry)
 					} while (--n > 0);
 				}
 
+#ifdef SHEEPSHAVER
+				watch_event_queue();
+#endif
 				if (!spcflags().empty()) {
 					if (!check_spcflags())
 						goto return_site;

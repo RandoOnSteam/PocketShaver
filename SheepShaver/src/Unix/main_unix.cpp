@@ -112,6 +112,7 @@
 #include "user_strings.h"
 #include "vm_alloc.h"
 #include "sigsegv.h"
+#include "macio_escc.h"
 #include "sigregs.h"
 #include "rpc.h"
 #include "cpu/jit/jit-wx.hpp"
@@ -1195,6 +1196,7 @@ int main(int argc, char *argv[])
 		ErrorAlert(str);
 		goto quit;
 	}
+	MacIOESCCInstall();
 	
 	// Load Mac ROM
 	if (!load_mac_rom())

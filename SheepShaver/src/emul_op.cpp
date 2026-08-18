@@ -37,6 +37,8 @@
 #include "ether.h"
 #include "serial.h"
 #include "joymanager.h"
+#include "usbhid.h"
+#include "usbuim.h"
 #include "clip.h"
 #include "extfs.h"
 #include "macos_util.h"
@@ -350,7 +352,8 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 				WriteMacInt32(KernelDataAddr + 0x17c4, DR_CACHE_SIZE);
 				WriteMacInt32(KernelDataAddr + 0x1b04, DR_CACHE_BASE);
 				WriteMacInt32(KernelDataAddr + 0x1b00, DR_EMULATOR_BASE);
-				memcpy((void *)DR_EMULATOR_BASE, (void *)(ROMBase + 0x370000), DR_EMULATOR_SIZE);
+				memcpy((void *)DR_EMULATOR_BASE, 
+					(void *)(uintptr_t)(ROMBase + 0x370000), DR_EMULATOR_SIZE);
 				MakeExecutable(0, DR_EMULATOR_BASE, DR_EMULATOR_SIZE);
 			}
 			tick_inhibit = false;
@@ -374,7 +377,9 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 					ExecuteNative(NATIVE_VIDEO_VBL);
 					JoyManagerVBL();
 					ADBVBL();
-
+#ifdef ENABLE_USB
+					USBHIDVBL();
+#endif /* ENABLE_USB */
 					DrainPendingResourceLocks();	// DII fix: lock queued sound-component PEF handles (safe VBL context)
 
 					static int tick_counter = 0;
@@ -579,6 +584,9 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 			break;
 
 		case OP_IDLE_TIME:
+#ifdef ENABLE_USB
+			USBNodePublishDeferred();
+#endif /* ENABLE_USB */
 			// Sleep if no events pending
 			if (ReadMacInt32(0x14c) == 0)
 				IdleWaitMeasured();
@@ -586,6 +594,9 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 			break;
 
 		case OP_IDLE_TIME_2:
+#ifdef ENABLE_USB
+			USBNodePublishDeferred();
+#endif /* ENABLE_USB */
 			// Sleep if no events pending
 			if (ReadMacInt32(0x14c) == 0)
 				IdleWaitMeasured();

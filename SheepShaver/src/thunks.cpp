@@ -125,6 +125,21 @@ uint32 NativeOpcode(int selector)
 	case NATIVE_GLIDE_DISPATCH:
 		opcode = POWERPC_NATIVE_OP(0, selector);
 		break;
+	case NATIVE_USB_UIM_DISPATCH:
+		// FN=0: reached through the generic [opcode; blr] thunk like the other
+		// dispatch selectors. The UIM stub bctr's here with LR still pointing
+		// at its caller, so the blr returns straight to the USB Family.
+		opcode = POWERPC_NATIVE_OP(0, selector);
+		break;
+	case NATIVE_USB_PUBLISH_NODE:
+		opcode = POWERPC_NATIVE_OP(0, selector);
+		break;
+	case NATIVE_USB_UIM_POLL:
+		opcode = POWERPC_NATIVE_OP(0, selector);
+		break;
+	case NATIVE_USB_EXPERT_NOTIFY:
+		opcode = POWERPC_NATIVE_OP(0, selector);
+		break;
 #if defined(ENABLE_NATIVE_CINEPAK_PATCH) \
 		&& ENABLE_NATIVE_CINEPAK_PATCH
 	case NATIVE_CINEPAK_DISPATCH:

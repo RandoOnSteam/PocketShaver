@@ -445,14 +445,14 @@ typedef struct ADBTHRUSTMASTER {
 #pragma options align=reset
 #endif
 
-#define JOY_HARDWARE_FIREBIRD 1
+#define JOY_HARDWARE_FIREBIRD 0
 #define JOY_HARDWARE_MOUSESTICKII 0
 #define JOY_HARDWARE_BLACKHAWK 0
 #define JOY_HARDWARE_GAMEPAD 0
 #define JOY_HARDWARE_MACALLY 0
 #define JOY_HARDWARE_SIDEWINDER 0
 #define JOY_HARDWARE_CH_FLIGHTSTICKPRO 0 /* Joymanager API handles instead */
-#define JOY_HARDWARE_THRUSTMASTER 1
+#define JOY_HARDWARE_THRUSTMASTER 0
 #if JOY_HARDWARE_THRUSTMASTER
 #define JOY_THRUSTMASTER_VERSION 11 /* "version" member of struct */
 #define JOY_THRUSTMASTER_ADBADDR 7 /* ADB address issued by Apple */
@@ -1280,7 +1280,37 @@ static bool joy_adb_is_talker(uint8 real_devtype)
 		return false;
 	}
 }
+static uint8 joy_adb_pack_inner(int i, uint8 reg, uint8 *buf);
+
+/* Every ADB joystick packet the guest asks for. The .JoyManager device is only
+   one of the joysticks presented; this says whether the ISp ADB modules are
+   polling the emulated Firebird / ThrustMaster as well, and what they are told.
+   Rate-limited per device, because a Talk R0 arrives on every ADB poll. */
 uint8 joy_adb_pack(int i, uint8 reg, uint8 *buf)
+{
+	uint8 n = joy_adb_pack_inner(i, reg, buf);
+#if JOY_TRACE && defined(SHEEPSHAVER)
+	static uint64 next[JOY_ADB_MAX];
+
+	if (i >= 0 && i < JOY_ADB_MAX && GetTicks_usec() >= next[i]) {
+		extern void USBHIDLog(const char *fmt, ...);
+		char hex[64];
+		int len = 0;
+		uint8 k;
+
+		next[i] = GetTicks_usec() + 1000000;
+		hex[0] = 0;
+		for (k = 0; k < n && len < 48; k++)
+			len += sprintf(hex + len, " %02x", buf[k]);
+		USBHIDLog("adb joy %d devtype=%02x addr=%02x enabled=%d reg%d ->%s",
+			i, joy_adb_devs[i].real_devtype, joy_adb_devs[i].orig_addr,
+			(int)joy_adb_devs[i].enabled, reg, hex);
+	}
+#endif
+	return n;
+}
+
+static uint8 joy_adb_pack_inner(int i, uint8 reg, uint8 *buf)
 {
 	switch(joy_adb_devs[i].real_devtype) {
 	#if JOY_HARDWARE_CH_FLIGHTSTICKPRO

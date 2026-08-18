@@ -62,5 +62,6 @@
 #define XLM_ETHER_WPUT 0x28d0			// Pointer to ethernet ether_wput() function
 #define XLM_ETHER_RSRV 0x28d4			// Pointer to ethernet ether_rsrv() function
 #define XLM_VIDEO_DOIO 0x28d8			// Pointer to video DoDriverIO() function
+#define XLM_USB_UIM_DISPATCH 0x28dc	// Pointer to the USB UIM dispatch routine (all 25 plugin slots)
 
 #endif

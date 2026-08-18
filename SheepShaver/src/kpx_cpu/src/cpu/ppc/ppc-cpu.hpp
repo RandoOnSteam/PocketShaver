@@ -129,6 +129,9 @@ protected:
 	// vectors override this; the base implementation retains the legacy
 	// register-copy callback for non-native execution modes.
 	virtual bool external_interrupt();
+#ifdef SHEEPSHAVER
+	virtual void watch_event_queue() { }
+#endif
 #endif
 
 	friend class pc_operand;

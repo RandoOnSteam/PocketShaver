@@ -76,6 +76,12 @@ enum {
   NATIVE_EXCEPTION_STEP,    /* performs one instruction, then raises trace */
   NATIVE_DSP_DISPATCH,     /* fourth engine */
   NATIVE_GLIDE_DISPATCH,   /* 3dfx Glide 2.x / 3.x */
+  NATIVE_USB_UIM_DISPATCH, /* USB UIM plugin table; slot number arrives in r11 */
+  NATIVE_USB_PUBLISH_NODE, /* Name Registry calls, so it must run in PPC mode */
+  NATIVE_USB_UIM_POLL,     /* runs deferred USB transfer completions */
+  NATIVE_USB_EXPERT_NOTIFY, /* sits in front of the USB Expert's notification
+                               routine; the only call the family makes into
+                               the Expert, so the only place to watch it */
   #if defined(ENABLE_NATIVE_CINEPAK_PATCH) \
 			&& ENABLE_NATIVE_CINEPAK_PATCH
 	NATIVE_CINEPAK_DISPATCH, /* QuickTime Cinepak ('cvid') 

@@ -84,6 +84,25 @@ enum {
 	kJoyCsGetElementName = 1016
 };
 
+#if JOY_TRACE && defined(SHEEPSHAVER)
+extern void USBHIDLog(const char *fmt, ...);
+#define JoyTrace USBHIDLog
+/* True once a second, for the periodic dumps. */
+static bool JoyTraceTick(void)
+{
+	static uint64 next;
+	uint64 now = GetTicks_usec();
+
+	if (now < next)
+		return false;
+	next = now + 1000000;
+	return true;
+}
+#else
+static inline void JoyTrace(const char *, ...) { }
+static inline bool JoyTraceTick(void) { return false; }
+#endif
+
 enum {
 	joySimpleFeatures = 0x00,
 	joySimpleAxis = 0x04,
@@ -432,7 +451,7 @@ void JoyManagerWriteDeviceInfo(JoyHostDevice *device)
 	element = device->elements_addr;
 	for (i = 0; i < device->button_count; i++) {
 		JoyManagerWriteElement(element, kJoyElemButton,
-			kJoyUnknownLabel, 0, 0, 0);
+			kJoyUnknownLabel, 0, 1, 0);
 		element += joyElementSize;
 	}
 	for (i = 0; i < device->hat_count; i++) {
@@ -444,6 +463,7 @@ void JoyManagerWriteDeviceInfo(JoyHostDevice *device)
 		int label;
 		int32 min_value;
 		int32 max_value;
+		int32 neutral_value;
 
 		label = JoyManagerAxisLabel(i, device->rudder_throttle);
 		min_value = -32768;
@@ -452,9 +472,9 @@ void JoyManagerWriteDeviceInfo(JoyHostDevice *device)
 			min_value = 0;
 			max_value = 32767;
 		}
+		neutral_value = JoyManagerAxisNeutralValue(i, device->rudder_throttle);
 		JoyManagerWriteElement(element, kJoyElemAxis, label,
-			min_value, max_value,
-			JoyManagerAxisNeutralValue(i, device->rudder_throttle));
+			min_value, max_value, neutral_value);
 		element += joyElementSize;
 	}
 }
@@ -543,7 +563,7 @@ bool JoyManagerPrepare(void)
 		count = JoyManagerSDLNumHats(joystick);
 		if (count < 0)
 			count = 0;
-		device->hat_count = count > JOY_MAX_HATS ? JOY_MAX_HATS : count;
+		device->hat_count = 0;//count > JOY_MAX_HATS ? JOY_MAX_HATS : count;
 		/* Buttons occupy JoyInfo 0..n so a JoyEvent +0x06 of 0 is
 		   element 0 = trigger.  ISp Joy decodes 0..3 as its four
 		   buttons; Descent type 4 indexes this same field through
@@ -683,6 +703,8 @@ void JoyManagerPutEvent(int device_index, int element_index, int what, int value
 	WriteMacInt16(event_addr + joyEventWhat, what);
 	WriteMacInt16(event_addr + joyEventValue, value);
 	WriteMacInt16(joy_queue_addr + joyQueueWriteCount, write_count + 1);
+	JoyTrace("joymgr event dev=%d elem=%d what=%d value=%d (pending %d)",
+		device_index + 1, element_index, what, value, (int)pending + 1);
 }
 
 void JoyManagerApplyButtonState(int device_index, int button,
@@ -875,6 +897,87 @@ void JoyManagerUpdateState(void)
 	if (shared_device != NULL)
 		Mac2Mac_memcpy(joy_simple_addr, shared_device->simple_addr,
 			joySimpleSize);
+
+	if (JoyTraceTick()) { /* Everything InputSprocket can see */
+		int i;
+
+		JoyTrace("joymgr global simple @%08x feat=%08x x=%d y=%d thr=%d rud=%d"
+			" gas=%d brk=%d hat=%d (shared=%s)", joy_simple_addr,
+			ReadMacInt32(joy_simple_addr + 0x00),
+			(int)(int16)ReadMacInt16(joy_simple_addr + 0x04),
+			(int)(int16)ReadMacInt16(joy_simple_addr + 0x06),
+			(int)(int16)ReadMacInt16(joy_simple_addr + 0x0a),
+			(int)(int16)ReadMacInt16(joy_simple_addr + 0x0c),
+			(int)(int16)ReadMacInt16(joy_simple_addr + 0x0e),
+			(int)(int16)ReadMacInt16(joy_simple_addr + 0x10),
+			(int)(int16)ReadMacInt16(joy_simple_addr + 0x14),
+			shared_device != NULL ? shared_device->name : "none");
+		if (joy_queue_addr != 0)
+			JoyTrace("joymgr queue write=%d read=%d overflow=%d start_count=%d",
+				(int)ReadMacInt16(joy_queue_addr + joyQueueWriteCount),
+				(int)ReadMacInt16(joy_queue_addr + joyQueueReadCount),
+				(int)ReadMacInt8(joy_queue_addr + joyQueueOverflow),
+				joy_start_count);
+		for (i = 0; i < joy_device_count; i++) {
+			JoyHostDevice *device = &joy_devices[i];
+			char raw[320];
+			int len = 0;
+			int n;
+
+			JoyTrace("joymgr dev %d '%s' enabled=%d attached=%d axes=%d"
+				" (simple %d) btns=%d hats=%d rt=%d info=%08x elems=%08x"
+				" base(btn %d hat %d axis %d)", i + 1, device->name,
+				(int)device->enabled,
+				(int)JoyManagerSDLDeviceAttached(device->joystick),
+				device->axis_count, device->simple_axis_count,
+				device->button_count, device->hat_count,
+				(int)device->rudder_throttle, device->info_addr,
+				device->elements_addr, device->button_element,
+				device->hat_element, device->axis_element);
+
+			raw[0] = 0;
+			for (n = 0; n < device->axis_count && len < 250; n++)
+				len += sprintf(raw + len, " a%d=%d", n,
+					(int)JoyManagerSDLAxis(device->joystick, n));
+			for (n = 0; n < device->hat_count && len < 280; n++)
+				len += sprintf(raw + len, " h%d=%02x", n,
+					JoyManagerSDLHat(device->joystick, n));
+			JoyTrace("  raw sdl%s", raw);
+			len = 0;
+			raw[0] = 0;
+			for (n = 0; n < device->button_count && len < 250; n++)
+				len += sprintf(raw + len, "%d",
+					JoyManagerSDLButton(device->joystick, n) ? 1 : 0);
+			JoyTrace("  raw btn %s", raw);
+			JoyTrace("  info feat=%08x elemcount=%d",
+				ReadMacInt32(device->info_addr + joyInfoFeatures),
+				(int)(int16)ReadMacInt16(device->info_addr +
+					joyInfoElementCount));
+			JoyTrace("  dev simple feat=%08x x=%d y=%d thr=%d rud=%d gas=%d"
+				" brk=%d hat=%d", ReadMacInt32(device->simple_addr + 0x00),
+				(int)(int16)ReadMacInt16(device->simple_addr + 0x04),
+				(int)(int16)ReadMacInt16(device->simple_addr + 0x06),
+				(int)(int16)ReadMacInt16(device->simple_addr + 0x0a),
+				(int)(int16)ReadMacInt16(device->simple_addr + 0x0c),
+				(int)(int16)ReadMacInt16(device->simple_addr + 0x0e),
+				(int)(int16)ReadMacInt16(device->simple_addr + 0x10),
+				(int)(int16)ReadMacInt16(device->simple_addr + 0x14));
+			for (n = 0; n < device->axis_count + device->button_count +
+					device->hat_count; n++) {
+				uint32 e = device->elements_addr + n * joyElementSize;
+				int kind = (int16)ReadMacInt16(e + joyElementKind);
+				/* Idle buttons say nothing; axes and hats always do. */
+				if (kind == kJoyElemButton &&
+						ReadMacInt32(e + joyElementValue) == 0)
+					continue;
+				JoyTrace("  elem %2d kind=%d label=%d min=%d max=%d value=%d",
+					n, kind, (int)(int16)ReadMacInt16(e + joyElementLabel),
+					(int)(int32)ReadMacInt32(e + joyElementMin),
+					(int)(int32)ReadMacInt32(e + joyElementMax),
+					(int)(int32)ReadMacInt32(e + joyElementValue));
+			}
+		}
+	}
 }
 #endif
 
@@ -953,6 +1056,12 @@ int16 JoyManagerControl(uint32 pb, uint32 dce)
 	(void)dce;
 	code = (int16)ReadMacInt16(pb + csCode);
 	D(bug("JoyManagerControl %d\n", code));
+	/* Who is talking to the driver, and about which device. This is what says
+	   whether ISp Joy is on the simple-data path (1004) or ISp CH is on the
+	   element path (1006), and which index it enabled (1007). */
+	JoyTrace("joymgr csCode %d params=%04x %04x %04x start_count=%d", code,
+		ReadMacInt16(pb + csParam + 4), ReadMacInt16(pb + csParam + 6),
+		ReadMacInt16(pb + csParam + 8), joy_start_count);
 	switch (code) {
 		case kJoyCsStart:
 #ifdef USE_SDL

@@ -43,6 +43,9 @@
 #include "user_strings.h"
 #include "vm_alloc.h"
 #include "sigsegv.h"
+#include "macio_escc.h"
+#include "usbhid.h"
+#include "usbuim.h"
 #include "util_windows.h"
 //#include "kernel_windows.h"
 
@@ -380,7 +383,10 @@ int main(int argc, char **argv)
 		ErrorAlert(str);
 		goto quit;
 	}
-
+#ifdef ENABLE_USB
+	MacIOESCCInstall();
+	USBHIDInstall();
+#endif /* ENABLE_USB */
 	// Load Mac ROM
 	rom_path = PrefsFindString("rom");
 	rom_fh = CreateFile(rom_path && *rom_path ? rom_path : ROM_FILE_NAME,
@@ -708,6 +714,13 @@ static DWORD WINAPI tick_func(void *arg)
 		// while masked still coalesce rather than being replayed as a burst.
 		SetInterruptFlag(INTFLAG_VIA);
 		TriggerInterrupt();
+		USBUIMSampleGuest();
+#if EMULATED_PPC
+		// The tick thread is a host thread, so it still runs when the guest has
+		// stopped executing. That is the only vantage point on a guest wedged
+		// inside an exception handler.
+		PPCExceptionStallSample();
+#endif
 	}
 
 	uint64 end = GetTicks_usec();

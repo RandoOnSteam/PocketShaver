@@ -156,7 +156,8 @@ struct sigsegv_info_t {
 enum sigsegv_return_t {
   SIGSEGV_RETURN_SUCCESS,
   SIGSEGV_RETURN_FAILURE,
-  SIGSEGV_RETURN_SKIP_INSTRUCTION
+  SIGSEGV_RETURN_SKIP_INSTRUCTION,
+  SIGSEGV_RETURN_DEVICE_ACCESS
 };
 
 // Type of a SIGSEGV handler. Returns boolean expressing successful operation

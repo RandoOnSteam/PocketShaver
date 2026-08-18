@@ -40,6 +40,9 @@
 #include <signal.h>
 #include <string.h>
 #include "sigsegv.h"
+#ifdef SHEEPSHAVER
+#include "mmio.h"
+#endif
 
 #ifndef NO_STD_NAMESPACE
 using std::list;
@@ -1047,7 +1050,8 @@ static inline int ix86_step_over_modrm(unsigned char * p)
 	return offset;
 }
 
-static bool ix86_skip_instruction(SIGSEGV_REGISTER_TYPE * regs)
+static bool ix86_skip_instruction(SIGSEGV_REGISTER_TYPE * regs,
+								  uintptr dev_addr = 0)
 {
 	unsigned char * eip = (unsigned char *)regs[X86_REG_EIP];
 
@@ -1226,7 +1230,7 @@ static bool ix86_skip_instruction(SIGSEGV_REGISTER_TYPE * regs)
 		reg += 8;
 #endif
 
-	if (instruction_type == i_MOV && transfer_type == SIGSEGV_TRANSFER_LOAD && reg != -1) {
+	if (instruction_type == i_MOV && reg != -1) {
 		static const int x86_reg_map[] = {
 			X86_REG_EAX, X86_REG_ECX, X86_REG_EDX, X86_REG_EBX,
 			X86_REG_ESP, X86_REG_EBP, X86_REG_ESI, X86_REG_EDI,
@@ -1235,31 +1239,58 @@ static bool ix86_skip_instruction(SIGSEGV_REGISTER_TYPE * regs)
 			X86_REG_R12, X86_REG_R13, X86_REG_R14, X86_REG_R15,
 #endif
 		};
+		static const int transfer_bytes[] = { 0, 1, 2, 4, 8 };
 
 		if (reg < 0 || reg >= (int)(sizeof(x86_reg_map)/sizeof(x86_reg_map[0])))
 			return false;
 
-		// Set 0 to the relevant register part
-		// NOTE: this is only valid for MOV alike instructions
+		// The high-byte registers %ah..%bh are only reachable without a REX
+		// prefix, where they alias the first four slots shifted up a byte.
 		int rloc = x86_reg_map[reg];
-		switch (target_size) {
-		case SIZE_BYTE:
-			if (has_rex || reg < 4)
-				regs[rloc] = (regs[rloc] & ~0x00ffL);
-			else {
-				rloc = x86_reg_map[reg - 4];
-				regs[rloc] = (regs[rloc] & ~0xff00L);
-			}
-			break;
-		case SIZE_WORD:
-			regs[rloc] = (regs[rloc] & ~0xffffL);
-			break;
-		case SIZE_LONG:
-		case SIZE_QUAD: // zero-extension
-			regs[rloc] = 0;
-			break;
+		int shift = 0;
+		if (target_size == SIZE_BYTE && !has_rex && reg >= 4) {
+			rloc = x86_reg_map[reg - 4];
+			shift = 8;
 		}
+
+		if (transfer_type == SIGSEGV_TRANSFER_LOAD) {
+			// Without a device this delivers zero, which is what skipping a
+			// load has always meant here.
+			// NOTE: this is only valid for MOV alike instructions
+			SIGSEGV_REGISTER_TYPE value = 0;
+#ifdef SHEEPSHAVER
+			if (dev_addr)
+				value = MMIORead((void *)dev_addr, transfer_bytes[transfer_size]);
+#endif
+			switch (target_size) {
+			case SIZE_BYTE:
+				regs[rloc] = (regs[rloc] & ~(0xffL << shift))
+					| ((value & 0xffL) << shift);
+				break;
+			case SIZE_WORD:
+				regs[rloc] = (regs[rloc] & ~0xffffL) | (value & 0xffffL);
+				break;
+			case SIZE_LONG:
+			case SIZE_QUAD: // zero-extension
+				regs[rloc] = value;
+				break;
+			}
+		}
+#ifdef SHEEPSHAVER
+		else if (dev_addr)
+			MMIOWrite((void *)dev_addr, transfer_bytes[transfer_size],
+					  (uint32)(regs[rloc] >> shift));
+#endif
 	}
+#ifdef SHEEPSHAVER
+	else if (dev_addr) {
+		// A read-modify-write (ADD) against a device register, or a form the
+		// decoder could not pin to a register. The emulator's own guest
+		// accessors never emit either, so fail loudly rather than silently
+		// mis-model the access.
+		return false;
+	}
+#endif
 
 #if DEBUG
 	printf("%p: %s %s access", (void *)regs[X86_REG_EIP],
@@ -1315,6 +1346,13 @@ static bool ix86_skip_instruction(SIGSEGV_REGISTER_TYPE * regs)
 	regs[X86_REG_EIP] += len;
 	return true;
 }
+
+#ifdef SHEEPSHAVER
+// Same decoder, but the transfer is performed against an emulated device
+// rather than discarded. Only defined where the decoder is: a port without
+// one simply has no device windows.
+#define SIGSEGV_EMULATE_TRANSFER(REGS, ADDR)	ix86_skip_instruction(REGS, ADDR)
+#endif
 #endif
 
 // Decode and skip IA-64 instruction
@@ -2733,6 +2771,34 @@ static bool handle_badaccess(SIGSEGV_FAULT_HANDLER_ARGLIST_1)
 			mach_set_thread_state(SIP);
 #endif
 			return true;
+		}
+		break;
+#endif
+
+#ifdef SIGSEGV_EMULATE_TRANSFER
+	case SIGSEGV_RETURN_DEVICE_ACCESS:
+		// The handler recognised the address as an emulated device window.
+		// Decode the faulting load or store and let the device perform it.
+#ifdef HAVE_MACH_EXCEPTIONS
+		if (!SIP->has_thr_state)
+			mach_get_thread_state(SIP);
+#endif
+		if (SIGSEGV_EMULATE_TRANSFER(SIGSEGV_REGISTER_FILE, (uintptr)SI.addr)) {
+#ifdef HAVE_MACH_EXCEPTIONS
+			mach_set_thread_state(SIP);
+#endif
+			return true;
+		}
+		// The decoder does not know this instruction form. Name it: without
+		// this the process just dies at the first unsupported device access
+		// with nothing to go on.
+		{
+			const unsigned char *p = (const unsigned char *)SI.pc;
+			fprintf(stderr, "[mmio] cannot emulate device access to %p from %p:"
+				" %02x %02x %02x %02x %02x %02x %02x %02x\n",
+				(void *)SI.addr, (void *)SI.pc,
+				p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7]);
+			fflush(stderr);
 		}
 		break;
 #endif
