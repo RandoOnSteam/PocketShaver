@@ -4,8 +4,7 @@
  *  The original driver returns pointers to driver-owned Mac memory.  In
  *  particular, clients read JoySimpleData and the live values in analogue
  *  JoyElement records directly, and consume JoyEventQueue without making a
- *  Device Manager call.  The replacement therefore keeps the original guest
- *  layouts, rather than returning host-side snapshots.
+ *  Device Manager call.
  * 
  *	(C) 2026 Ryan Norton (battlemageloveryt@gmail.com)
  *
@@ -53,18 +52,25 @@ enum {
 	kJoyRudderAvailable = 0x0010,
 	kJoyGasAvailable = 0x0020,
 	kJoyBrakeAvailable = 0x0040,
-	kJoyHatAvailable = 0x0100
+	kJoyXAndYAxisAvailable = 0x0100 /* Only checked by ISp and newer games */
 };
 
 enum {
 	kJoyElemButton = 0,
 	kJoyElemSelector = 1,
+	kJoyElemUnpublished = 3,
 	kJoyElemAxis = 10000,
 	kJoyUnknownLabel = 0x7fff,
-	kJoyLabelXAxis = 0,
-	kJoyLabelYAxis = 1,
-	kJoyLabelThrottle = 6,
-	kJoyLabelRudder = 7
+	kJoyLabelXAxis = 0,      /* 'xaxi' */
+	kJoyLabelYAxis = 1,      /* 'yaxi' */
+	kJoyLabelZAxis = 2,      /* 'zaxi' */
+	kJoyLabelRxAxis = 3,     /* 'rxax' */
+	kJoyLabelRyAxis = 4,     /* 'ryax' */
+	kJoyLabelRzAxis = 5,     /* 'rzax' */
+	kJoyLabelThrottle = 6,   /* 'thrt' */
+	kJoyLabelRudder = 7,     /* 'rudd' */
+	kJoyLabelGas = 8,        /* 'gasp' */
+	kJoyLabelBrake = 9       /* 'brak' */
 };
 
 enum {
@@ -152,6 +158,8 @@ struct JoyHostDevice {
 	int button_element;
 	int hat_element;
 	int axis_element;
+	int mirror_count; /* Rx/Ry mirror count */
+	int mirror_element;  /* Rx/Ry mirror */
 	bool rudder_throttle;
 	bool enabled;
 	uint8 buttons[JOY_MAX_BUTTONS];
@@ -352,66 +360,92 @@ bool JoyManagerSDLInit(void)
 }
 #endif
 
-/* The feature bits are not a packed run: 0x0004 is unused and rudder is
- * 0x0010, above throttle's 0x0008.  "features |= 1 << i" therefore reports
- * axis 2 as a bit nothing reads, and never sets rudder at all.
- *
- * 0x0100 is not "has a hat".  InputSprocket Joy treats it as "X/Y are
- * digital and come from the hat" (code 0x1298) and then discards the
- * analogue stick whenever simpleData.hat != 0. */
-uint32 JoyManagerAxisFeature(int axis)
+uint32 JoyManagerAxisFeature(int label)
 {
-	switch (axis) {
-		case 0: return kJoyXAxisAvailable;
-		case 1: return kJoyYAxisAvailable;
-		case 2: return kJoyRudderAvailable;
-		case 3: return kJoyThrottleAvailable;
-		case 4: return kJoyGasAvailable;
-		case 5: return kJoyBrakeAvailable;
+	switch (label) {
+		case kJoyLabelXAxis: return kJoyXAxisAvailable;
+		case kJoyLabelYAxis: return kJoyYAxisAvailable;
+		case kJoyLabelRudder: return kJoyRudderAvailable;
+		case kJoyLabelThrottle: return kJoyThrottleAvailable;
+		case kJoyLabelGas: return kJoyGasAvailable;
+		case kJoyLabelBrake: return kJoyBrakeAvailable;
 	}
 	return 0;
 }
 
-uint32 JoyManagerFeaturesForAxes(int axes, int hats)
+uint32 JoyManagerFeaturesForAxes(int axes, bool rudder_throttle)
 {
 	uint32 features;
-	int i;
+	int axis;
 
-	(void)hats;
 	features = 0;
-	for (i = 0; i < axes && i < JOY_MAX_AXES; i++)
-		features |= JoyManagerAxisFeature(i);
+	for (axis = 0; axis < axes && axis < JOY_MAX_AXES; axis++)
+		features |= JoyManagerAxisFeature(
+			JoyManagerAxisLabel(axis));
 	return features;
 }
 
-/* InputSprocket Joy reads these fixed JoySimpleData slots, not axis index * 2. */
+/* Where JoySimpleData keeps each axis.  By label, not by position: the ISp
+ * module that reads this block indexes it by role and does not read +0x08 at
+ * all, so an axis stored at its ordinal would land in the wrong field or in
+ * the hole. */
 int JoyManagerSimpleOffset(int label)
 {
 	switch (label) {
-		case kJoyLabelXAxis: return 0x04;
-		case kJoyLabelYAxis: return 0x06;
-		case kJoyLabelThrottle: return 0x0a;
-		case kJoyLabelRudder: return 0x0c;
+		case kJoyLabelXAxis: return joySimpleAxis + 0x00;
+		case kJoyLabelYAxis: return joySimpleAxis + 0x02;
+		case kJoyLabelThrottle: return joySimpleAxis + 0x06;
+		case kJoyLabelRudder: return joySimpleAxis + 0x08;
+		case kJoyLabelGas: return joySimpleAxis + 0x0a;
+		case kJoyLabelBrake: return joySimpleAxis + 0x0c;
 	}
 	return -1;
 }
 
-int JoyManagerAxisLabel(int axis, bool rudder_throttle)
+/* The layout is fixed, and it has to be: Descent II's JoyManager sampler does
+ * not search by label, it reads elements 0..3 positionally and expects X, Y,
+ * rudder, throttle there.  InputSprocket does search by label, but it accepts
+ * this same set - a JoyManager 'rudd'/'thrt' pair is exactly what ISp expects
+ * to see from a stick, and it maps them onto whatever needs a client asked
+ * for.  So one layout serves both, and a twin-stick pad's right stick simply
+ * arrives at ISp under the rudder and throttle labels.
+ *
+ * The two triggers are 'brak' and 'gasp', which Descent's four-label switch
+ * skips and ISp knows as pedals.  They are declared 0..32767 and rest at 0,
+ * their own min: a pedal that reads 0 when it is not pressed is correct, and
+ * this is the one place resting at min is not the drift.
+ *
+ * Anything past the sixth axis has no label either mode looks for.  Published
+ * as an axis it reached ISp as a 'none' element resting at exactly the
+ * declared min, which CH scales to 0 - hard over, permanently, on whatever
+ * need ISp bound it to, and that was the drift.  JoyManagerWriteDeviceInfo
+ * publishes those with kJoyElemUnpublished instead, which CH's kind switch
+ * drops, and appends separate 'rxax'/'ryax' mirror elements after the buttons
+ * and hats so an ISp client that asks for the right stick by name still finds
+ * it.  Descent never looks past element 3, so the mirrors are invisible to it.
+ *
+ * (rudder_throttle is the SDL probe result; it no longer selects a layout.
+ * Labelling the right stick rxax/ryax here instead was tried and breaks
+ * Descent, which then finds no rudder or throttle at all.) */
+int JoyManagerAxisLabel(int axis)
 {
-	(void)rudder_throttle;
 	switch (axis) {
 		case 0: return kJoyLabelXAxis;
 		case 1: return kJoyLabelYAxis;
-		case 2: return kJoyLabelRudder; /* right stick on twin sticks */
-		case 3: return kJoyLabelThrottle; /* right stick on twin sticks */
+		case 2: return kJoyLabelRudder; /* Rx on twin sticks */
+		case 3: return kJoyLabelThrottle; /* Ry on twin sticks */
+		case 4: return kJoyLabelBrake; /* left trigger */
+		case 5: return kJoyLabelGas; /* right trigger */
 	}
 	return kJoyUnknownLabel;
 }
 
-int32 JoyManagerAxisNeutralValue(int axis, bool rudder_throttle)
-{
-	(void)rudder_throttle;
-	(void)axis;
+int32 JoyManagerAxisNeutralValue(int axis)
+{ /* what the element reads when the device is gone: a stick centres at 0 and
+   * a pedal rests at 0, the bottom of its own declared range; only the
+   * throttle, declared 0..16384, sits mid-travel */
+	if (JoyManagerAxisLabel(axis) == kJoyLabelThrottle)
+		return 8192;
 	return 0;
 }
 
@@ -434,7 +468,7 @@ void JoyManagerWriteDeviceInfo(JoyHostDevice *device)
 	int i;
 
 	features = JoyManagerFeaturesForAxes(device->simple_axis_count,
-		device->hat_count);
+		device->rudder_throttle);
 	name_len = (int)strlen(device->name);
 	if (name_len > 35)
 		name_len = 35;
@@ -445,7 +479,8 @@ void JoyManagerWriteDeviceInfo(JoyHostDevice *device)
 			device->name, name_len);
 	WriteMacInt32(device->info_addr + joyInfoFeatures, features);
 	WriteMacInt16(device->info_addr + joyInfoElementCount,
-		device->axis_count + device->button_count + device->hat_count);
+		device->axis_count + device->button_count + device->hat_count +
+		device->mirror_count);
 	WriteMacInt32(device->info_addr + joyInfoElements, device->elements_addr);
 
 	element = device->elements_addr;
@@ -458,23 +493,85 @@ void JoyManagerWriteDeviceInfo(JoyHostDevice *device)
 		JoyManagerWriteElement(element, kJoyElemSelector,
 			kJoyUnknownLabel, 0, 8, 0);
 		element += joyElementSize;
-	}
+	}	
+	/* Descent II's JoyManager enumeration (Descent code 0x11c74..0x11dbc)
+	 * walks this table and switches on JoyElement.label, taking exactly four:
+	 *
+	 *     label 0 -> slot 0 X        label 7 -> slot 2 Rudder
+	 *     label 1 -> slot 1 Y        label 6 -> slot 3 Throttle
+	 *
+	 * and for each one it reads min (+0x08) and max (+0x0c) and keeps
+	 * centre = (min + max) >> 1.  It does *not* ignore them, so min/max have
+	 * to bound the values actually published and a self-centring axis has to
+	 * rest at exactly that midpoint.  InputSprocket CH wants the same thing
+	 * from the same fields - it scales (raw - min) * 0xffffffff / (max - min)
+	 * - which is why one set of numbers satisfies both.
+	 *
+	 * Axes 4 and 5 are the triggers, published as 'brak' and 'gasp' over
+	 * 0..32767.  Descent's switch takes only 0/1/7/6 so they stay invisible to
+	 * it, while ISp gets two pedals resting at 0.
+	 *
+	 * Anything past that has no label either side looks for and is published
+	 * with kJoyElemUnpublished, which CH's kind switch drops.  Left as an axis
+	 * it reached ISp as a 'none' element resting at exactly min, which CH
+	 * turns into 0 - hard over, permanently, on whatever need ISp bound it
+	 * to. */
 	for (i = 0; i < device->axis_count; i++) {
+		int kind;
 		int label;
 		int32 min_value;
 		int32 max_value;
 		int32 neutral_value;
 
-		label = JoyManagerAxisLabel(i, device->rudder_throttle);
+		label = JoyManagerAxisLabel(i);
 		min_value = -32768;
 		max_value = 32767;
 		if (label == kJoyLabelThrottle) {
 			min_value = 0;
+			max_value = 16384;
+		} else if (label == kJoyLabelGas || label == kJoyLabelBrake) {
+			min_value = 0;
 			max_value = 32767;
 		}
-		neutral_value = JoyManagerAxisNeutralValue(i, device->rudder_throttle);
-		JoyManagerWriteElement(element, kJoyElemAxis, label,
+		neutral_value = JoyManagerAxisNeutralValue(i);
+		if (label == kJoyUnknownLabel)
+			kind = kJoyElemUnpublished;
+		else
+			kind = kJoyElemAxis;
+		JoyManagerWriteElement(element, kind, label,
 			min_value, max_value, neutral_value);
+		element += joyElementSize;
+	}
+
+	/* The right stick, a second time, as 'rxax' and 'ryax'.
+	 *
+	 * Isp and Descent II cannot be satisfied by one pair of labels.  Descent's
+	 * JoyManager enumeration only recognises 0/1/7/6 (its code 0x11c74), so
+	 * axes 2 and 3 have to be Rudder and Throttle or it never finds them.
+	 * Descent's InputSprocket needs are 'zaxi' 'yaxi' 'xaxi' 'rzax' 'ryax'
+	 * 'rxax' (its ISpInit table at 0xf74c), which those two match not at all,
+	 * leaving ISp to fill them from whatever is spare.
+	 *
+	 * CH builds one row per element and takes the role from the label alone -
+	 * there is no fixed axis order or count on that side - and it creates an
+	 * ISpElement for every axis row whatever the label is (its 0xb14/0xb18).
+	 * So publishing the same two SDL axes again under the labels ISp asks for
+	 * gives each client an exact match and costs two elements.  They go after
+	 * everything else, so no existing element index moves.
+	 *
+	 * It also sidesteps the one asymmetry in the pair we already publish: CH
+	 * inverts an element labelled 'rudd' and nothing else (its 0x3860), so
+	 * that axis necessarily reads opposite ways to the two clients.  'rxax'
+	 * is passed through untouched. */
+	for (i = 0; i < device->mirror_count; i++) {
+		int label;
+
+		if (i == 0)
+			label = kJoyLabelRxAxis;
+		else
+			label = kJoyLabelRyAxis;
+		JoyManagerWriteElement(element, kJoyElemAxis, label,
+			-32768, 32767, 0);
 		element += joyElementSize;
 	}
 }
@@ -546,32 +643,42 @@ bool JoyManagerPrepare(void)
 		count = JoyManagerSDLNumAxes(joystick);
 		if (count < 0)
 			count = 0;
-		device->axis_count = count > JOY_MAX_AXES ? JOY_MAX_AXES : count;
+		if (count > JOY_MAX_AXES) {
+			device->axis_count = JOY_MAX_AXES;
+		} else { 
+			device->axis_count = count;
+		}
 		device->simple_axis_count = device->axis_count;
-		/* InputSprocket Joy publishes exactly six axis elements, so that is
-		 * the most the simple record can carry.  Axes past the second are
-		 * still worth exporting: without them a twin-stick pad only ever
-		 * reaches InputSprocket as its left stick. */
 		if (device->simple_axis_count > 6)
 			device->simple_axis_count = 6;
 
 		count = JoyManagerSDLNumButtons(joystick);
 		if (count < 0)
 			count = 0;
-		device->button_count = count > JOY_MAX_BUTTONS ? JOY_MAX_BUTTONS : count;
+		if (count > JOY_MAX_BUTTONS) {
+			device->button_count = JOY_MAX_BUTTONS;
+		} else {
+			device->button_count = count;
+		}
 
 		count = JoyManagerSDLNumHats(joystick);
 		if (count < 0)
 			count = 0;
-		device->hat_count = 0;//count > JOY_MAX_HATS ? JOY_MAX_HATS : count;
-		/* Buttons occupy JoyInfo 0..n so a JoyEvent +0x06 of 0 is
-		   element 0 = trigger.  ISp Joy decodes 0..3 as its four
-		   buttons; Descent type 4 indexes this same field through
-		   map[(dev-1)*64 + elementIndex] (0x10804).  Both are
-		   element indices.  The shipping driver puts buttons first. */
+		if (count > JOY_MAX_HATS) {
+			device->hat_count = JOY_MAX_HATS;
+		} else { 
+			device->hat_count = count;
+		}
 		device->button_element = 0;
 		device->hat_element = device->button_count;
 		device->axis_element = device->button_count + device->hat_count;
+		if (device->axis_count > 3)
+			device->mirror_count = 2;
+		else if (device->axis_count > 2)
+			device->mirror_count = 1;
+		else
+			device->mirror_count = 0;
+		device->mirror_element = device->axis_element + device->axis_count;
 		joy_device_count++;
 	}
 
@@ -631,7 +738,7 @@ bool JoyManagerSetGuestStorage(uint32 addr, uint32 size)
 
 		device = &joy_devices[i];
 		element_bytes = (device->axis_count + device->button_count +
-			device->hat_count) * joyElementSize;
+			device->hat_count + device->mirror_count) * joyElementSize;
 		simple_addr = cursor;
 		info_addr = JoyManagerAlignFour(simple_addr + joySimpleSize);
 		elements_addr = JoyManagerAlignFour(info_addr + joyInfoSize);
@@ -668,14 +775,14 @@ int JoyManagerSDLHatPosition(uint8 hat)
 	down = (hat & SDL_HAT_DOWN) != 0;
 	right = (hat & SDL_HAT_RIGHT) != 0;
 	left = (hat & SDL_HAT_LEFT) != 0;
-	if (up && right) return 5;
-	if (up && left) return 6;
-	if (down && right) return 7;
-	if (down && left) return 8;
+	if (up && left) return 5;
+	if (up && right) return 6;
+	if (down && left) return 7;
+	if (down && right) return 8;
 	if (up) return 1;
 	if (down) return 2;
-	if (right) return 3;
-	if (left) return 4;
+	if (left) return 3;
+	if (right) return 4;
 	return 0;
 }
 
@@ -692,7 +799,13 @@ void JoyManagerPutEvent(int device_index, int element_index, int what, int value
 	read_count = ReadMacInt16(joy_queue_addr + joyQueueReadCount);
 	pending = (uint16)(write_count - read_count);
 	if (pending >= JOY_EVENT_COUNT) {
-		WriteMacInt8(joy_queue_addr + joyQueueOverflow, 1);
+		/* WriteMacInt8(joy_queue_addr + joyQueueOverflow, 1);
+		 * Do not raise joyQueueOverflow.  ISp CH's dequeue
+		 * clears the flag and returns -12345 without
+		 * ever writing the caller's 12-byte event record, and the poll
+		 * at code 0x375c reads `what` out of that still-uninitialised
+		 * stack buffer and dispatches on it - so signalling overflow
+		 * makes CH act on a garbage event.  Drop it instead. */
 		return;
 	}
 
@@ -774,18 +887,23 @@ int32 JoyManagerAxisValue(JoyHostDevice *device, int axis)
 	int32 value;
 	int label;
 
-	label = JoyManagerAxisLabel(axis, device->rudder_throttle);
-	/* ISp Joy does min(v, 0x7FFF) << 17 for throttle: 0 = idle = ISp min.
-	   A released SDL trigger sits at -32768; do not centre-deadzone it. */
-	if (label == kJoyLabelThrottle) {
+	label = JoyManagerAxisLabel(axis);
+	if (label == kJoyLabelGas || label == kJoyLabelBrake) {
+		/* A trigger is not self-centring, so the deadzone in
+		 * JoyManagerAxisRest() - which pulls values back toward 0 - does not
+		 * apply to it.  SDL reports -32768 released to 32767 fully pressed;
+		 * both the element (0..32767) and JoySimpleData, which the ISp module
+		 * reads as min(v, 0x7fff) << 17, want that as 0..32767. */
 		value = JoyManagerSDLAxis(device->joystick, axis);
-		if (value < -32768 + JOY_AXIS_REST)
-			return 0;
 		return (value + 32768) >> 1;
 	}
+
 	value = JoyManagerAxisRest(JoyManagerSDLAxis(device->joystick, axis));
 	switch (label) {
-		case kJoyLabelRudder: /* ISp then does 0xFFFF - (v + 0x8000) */
+		case kJoyLabelThrottle:
+			value = (-value + 32770) >> 2;
+			break;
+		case kJoyLabelRudder: /* (0xffff - (v + 0x8000)). */
 			value = -value;
 			break;
 		case kJoyLabelYAxis:
@@ -796,7 +914,7 @@ int32 JoyManagerAxisValue(JoyHostDevice *device, int axis)
 }
 
 bool JoyManagerWriteDeviceState(JoyHostDevice *device)
-{
+{ /* for JoyGetSimpleDataPtr() */
 	bool active;
 	uint32 features;
 	int i;
@@ -804,24 +922,45 @@ bool JoyManagerWriteDeviceState(JoyHostDevice *device)
 	active = device->enabled &&
 		JoyManagerSDLDeviceAttached(device->joystick);
 	Mac_memset(device->simple_addr, 0, joySimpleSize);
-	features = active ?
-		JoyManagerFeaturesForAxes(device->simple_axis_count,
-			device->hat_count) : 0;
+	if(active) {
+		features = JoyManagerFeaturesForAxes(device->simple_axis_count,
+			device->rudder_throttle);
+	} else {
+		features = 0;
+	}
 	WriteMacInt32(device->simple_addr + joySimpleFeatures, features);
 
 	for (i = 0; i < device->axis_count; i++) {
 		int32 value;
-		int label;
 		int off;
 
-		label = JoyManagerAxisLabel(i, device->rudder_throttle);
-		value = active ? JoyManagerAxisValue(device, i) :
-			JoyManagerAxisNeutralValue(i, device->rudder_throttle);
-		off = JoyManagerSimpleOffset(label);
+		if(active) {
+			value = JoyManagerAxisValue(device, i);
+		} else {
+			value = JoyManagerAxisNeutralValue(i);
+		}
+		off = JoyManagerSimpleOffset(
+			JoyManagerAxisLabel(i));
 		if (active && off >= 0)
 			WriteMacInt16(device->simple_addr + off, value);
 		WriteMacInt32(device->elements_addr +
 			(device->axis_element + i) * joyElementSize +
+			joyElementValue, value);
+	}
+	for (i = 0; i < device->mirror_count; i++) {
+		int32 value;
+
+		/* Not JoyManagerAxisValue(): that applies the rudder negation and the
+		   throttle rescale, and this element is declared -32768..32767 with
+		   its centre at 0.  The mirror publishes the stick as it is. */
+		if (active) {
+			value = JoyManagerAxisRest(
+				JoyManagerSDLAxis(device->joystick, 2 + i));
+		} else {
+			value = 0;
+		}
+		WriteMacInt32(device->elements_addr +
+			(device->mirror_element + i) * joyElementSize +
 			joyElementValue, value);
 	}
 	if (active && device->hat_count > 0)
@@ -843,7 +982,7 @@ bool JoyManagerWriteElementName(uint32 addr, int device_index,
 		return false;
 	device = &joy_devices[device_index - 1];
 	if (element_index < 0 || element_index >= device->axis_count +
-		device->button_count + device->hat_count)
+		device->button_count + device->hat_count + device->mirror_count)
 		return false;
 
 	button = element_index - device->button_element;
@@ -854,13 +993,23 @@ bool JoyManagerWriteElementName(uint32 addr, int device_index,
 	} else if (hat >= 0 && hat < device->hat_count) {
 		sprintf(name, "Hat %d", hat + 1);
 	} else if (axis >= 0 && axis < device->axis_count) {
-		switch (JoyManagerAxisLabel(axis, device->rudder_throttle)) {
+		switch (JoyManagerAxisLabel(axis)) {
 			case kJoyLabelXAxis: strcpy(name, "X Axis"); break;
 			case kJoyLabelYAxis: strcpy(name, "Y Axis"); break;
+			case kJoyLabelRxAxis: strcpy(name, "Rx Axis"); break;
+			case kJoyLabelRyAxis: strcpy(name, "Ry Axis"); break;
 			case kJoyLabelRudder: strcpy(name, "Rudder"); break;
 			case kJoyLabelThrottle: strcpy(name, "Throttle"); break;
+			case kJoyLabelGas: strcpy(name, "Gas"); break;
+			case kJoyLabelBrake: strcpy(name, "Brake"); break;
 			default: sprintf(name, "Axis %d", axis + 1); break;
 		}
+	} else if (element_index - device->mirror_element >= 0 &&
+		element_index - device->mirror_element < device->mirror_count) {
+		if (element_index == device->mirror_element)
+			strcpy(name, "Rx Axis");
+		else
+			strcpy(name, "Ry Axis");
 	} else {
 		sprintf(name, "Element %d", element_index);
 	}
@@ -1004,8 +1153,11 @@ void JoyManagerVBL(void)
 		attached = JoyManagerSDLDeviceAttached(device->joystick);
 		for (j = 0; j < device->button_count; j++) {
 			uint8 value;
-
-			value = attached ? JoyManagerSDLButton(device->joystick, j) : 0;
+			if(attached) {
+				value = JoyManagerSDLButton(device->joystick, j);
+			} else {
+				value = 0;
+			}
 			JoyManagerApplyButtonState(i, j, value);
 		}
 		for (j = 0; j < device->hat_count; j++) {

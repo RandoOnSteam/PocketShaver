@@ -45,7 +45,7 @@ int JoyManagerNumButtons(JoyManagerDevice *joystick);
 int JoyManagerNumAxes(JoyManagerDevice *joystick);
 int JoyManagerNumHats(JoyManagerDevice *joystick);
 bool JoyManagerInit(void);
-int JoyManagerAxisLabel(int axis, bool rudder_throttle);
+int JoyManagerAxisLabel(int axis);
 bool JoyManagerHasRudderThrottle(JoyManagerDevice *joystick);
 bool JoyManagerDeviceAttached(JoyManagerDevice *joystick);
 const char *JoyManagerDeviceName(JoyManagerDevice *joystick,
@@ -54,14 +54,14 @@ int16 JoyManagerAxis(JoyManagerDevice *joystick, int axis);
 uint8 JoyManagerButton(JoyManagerDevice *joystick, int button);
 uint8 JoyManagerHat(JoyManagerDevice *joystick, int hat);
 void JoyManagerUpdate(void);
-/* 	if (up && right) return 5;
-	if (up && left) return 6;
-	if (down && right) return 7;
-	if (down && left) return 8;
+/* 	if (up && left) return 5;
+	if (up && right) return 6;
+	if (down && left) return 7;
+	if (down && right) return 8;
 	if (up) return 1;
 	if (down) return 2;
-	if (right) return 3;
-	if (left) return 4; */
+	if (left) return 3;
+	if (right) return 4; */
 int JoyManagerHatPosition(uint8 hat);
 #define JOY_TRACE 1
 #endif
