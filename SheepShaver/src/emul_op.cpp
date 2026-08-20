@@ -256,6 +256,9 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 		case OP_JOY_CLOSE:
 			r->d[0] = JoyManagerClose(r->a[0], r->a[1]);
 			break;
+		case OP_JOY_INTPOLL:
+			JoyManagerIntPoll();
+			break;
 #endif /* ENABLE_JOYMANAGER */
 		case OP_ADBOP:				// ADBOp() replacement
 			ADBOp(r->d[0], Mac2HostAddr(ReadMacInt32(r->a[0])));

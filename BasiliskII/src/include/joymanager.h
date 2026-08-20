@@ -42,6 +42,8 @@ extern int16 JoyManagerOpen(uint32 pb, uint32 dce);
 extern int16 JoyManagerControl(uint32 pb, uint32 dce);
 extern int16 JoyManagerStatus(uint32 pb, uint32 dce);
 extern int16 JoyManagerClose(uint32 pb, uint32 dce);
+extern void JoyManagerSetDCE(uint32 dce);
+extern void JoyManagerIntPoll(void);
 
 /* low level API, typically for ADB joysticks */
 typedef struct _SDL_Joystick JoyManagerDevice;

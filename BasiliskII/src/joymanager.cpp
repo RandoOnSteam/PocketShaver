@@ -26,6 +26,7 @@
 #include "sysdeps.h"
 #include "joymanager.h"
 #include "macos_util.h"
+#include "cpu_emulation.h"
 #include "xlowmem.h"
 
 #ifdef USE_SDL
@@ -180,6 +181,8 @@ static uint32 joy_event_buf_addr;
 static int joy_device_count;
 static int joy_start_count;
 static bool joy_prepared;
+static uint32 joy_dce = 0;			/* .JoyManager DCE, for IntPoll */
+static bool joy_intpoll_active = false;
 
 #ifdef USE_SDL
 static JoyHostDevice joy_devices[JOYMANAGER_MAX_DEVICES];
@@ -1240,6 +1243,56 @@ int16 JoyManagerControl(uint32 pb, uint32 dce)
 		}
 	}
 	return controlErr;
+}
+
+
+void JoyManagerSetDCE(uint32 dce)
+{
+	joy_dce = dce;
+}
+
+/*
+ *  Interrupt-time I/O poll.
+ *
+ *  InputSprocket's CH module reaches PBControlSync(.JoyManager) from two
+ *  places with no mutual exclusion: its Time Manager tickle (module
+ *  code+0x3a18) and an application-level entry (code+0x3a60), both via
+ *  code+0x361c. When the tickle preempts the other one the Device Manager
+ *  finds the driver busy and queues the request instead of dispatching it.
+ *  At interrupt level the ROM's IOWait cannot wait for an interrupt to
+ *  complete it, so it walks the IntPoll chain instead - this routine.
+ *
+ *  Running the head request again when it had already been dispatched is
+ *  harmless: every csCode this driver answers is a query except Start and
+ *  Stop, which are issued once at open and close and never contend.
+ */
+void JoyManagerIntPoll(void)
+{
+	uint32 pb;
+	int16 result;
+	M68kRegisters r;
+
+	if (joy_dce == 0 || joy_intpoll_active)
+		return;
+	if ((ReadMacInt16(joy_dce + dCtlFlags) & (1 << drvrActive)) == 0)
+		return;
+	pb = ReadMacInt32(joy_dce + dCtlQHdr + 2);	/* qHead */
+	if (pb == 0 || (int16)ReadMacInt16(pb + ioResult) <= 0)
+		return;
+
+	switch (ReadMacInt16(pb + ioTrap) & 0xff) {
+		case 4: result = JoyManagerControl(pb, joy_dce); break;
+		case 5: result = JoyManagerStatus(pb, joy_dce); break;
+		default: return;
+	}
+
+	/* Complete it exactly as the driver's own IOReturn tail does. */
+	joy_intpoll_active = true;
+	r.d[0] = (uint32)(int32)result;
+	r.a[0] = pb;
+	r.a[1] = joy_dce;
+	Execute68k(ReadMacInt32(0x08fc), &r);	/* JIODone */
+	joy_intpoll_active = false;
 }
 
 int16 JoyManagerStatus(uint32 pb, uint32 dce)

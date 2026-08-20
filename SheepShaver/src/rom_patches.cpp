@@ -557,8 +557,17 @@ static const uint8 joy_manager_driver[] = {	// Replacement .JoyManager driver
 	0x42, 0x40,							// clr.w d0
 	0x4e, 0x75,							// rts
 	0x2f, 0x38, 0x08, 0xfc,				// 3: move.l $8fc,-(sp)
-	0x4e, 0x75							// rts
+	0x4e, 0x75,							// rts
+
+	// IntPoll: Pascal calling convention, two pointer arguments, no result.
+	M68K_EMUL_OP_JOY_INTPOLL >> 8, M68K_EMUL_OP_JOY_INTPOLL & 0xff,
+	0x20, 0x5f,							// movea.l (sp)+,a0	true return address
+	0x50, 0x8f,							// addq.l  #8,sp		drop both arguments
+	0x4e, 0xd0							// jmp     (a0)
 };
+
+// Offset of the IntPoll stub inside joy_manager_driver[]
+const uint32 JOY_INTPOLL_OFFSET = 0x56;
 
 static uint32 long_ptr;
 
@@ -2633,6 +2642,32 @@ void InstallDrivers(void)
 					WriteMacInt32(pb + ioNamePtr, joymanager_str.addr());
 					r.a[0] = pb;
 					Execute68kTrap(0xa000, &r);	// Open()
+
+					// InputSprocket calls this driver synchronously from a Time
+					// Manager task. When the driver is busy the Device Manager
+					// queues that request, and at interrupt level the ROM can only
+					// complete it through the IntPoll chain (IntPollGlobals at
+					// ExpandMem+$24c, reached from the IOWait vector at $6dc).
+					// Such a request never completes without the chain and the
+					// wait spins with the 68k interrupt level pinned at 1.
+					JoyManagerSetDCE(dce);
+					uint32 expand_mem = ReadMacInt32(0x2b6);
+					uint32 int_poll = expand_mem
+						? ReadMacInt32(expand_mem + 0x24c) : 0;
+					if (int_poll) {
+						r.d[0] = 12;				// qLink, qType, proc
+						Execute68kTrap(0xa71e, &r);	// NewPtrSysClear()
+						uint32 elem = r.a[0];
+						if (elem) {
+							WriteMacInt32(elem + 8, ROMBase + sony_offset +
+								0x700 + JOY_INTPOLL_OFFSET);
+							r.a[0] = elem;
+							r.a[1] = int_poll + 2;	// its QHdr
+							Execute68kTrap(0xa96f, &r);	// Enqueue()
+						}
+					} else
+						printf("WARNING: no IntPollGlobals; .JoyManager cannot "
+							"complete interrupt-time requests\n");
 				} else {
 					JoyManagerReset();
 				}

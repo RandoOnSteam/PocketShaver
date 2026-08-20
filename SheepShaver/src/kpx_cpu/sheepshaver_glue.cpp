@@ -1,4 +1,4 @@
-/*
+﻿/*
  *  sheepshaver_glue.cpp - Glue Kheperix CPU to SheepShaver CPU engine interface
  *
  *  SheepShaver (C) 1997-2008 Christian Bauer and Marc Hellwig
@@ -80,6 +80,12 @@ extern "C" void catalyst_pump_appkit_events(void);
 
 #ifndef PPC_DEBUG_TRACE
 #define PPC_DEBUG_TRACE 0
+#endif
+#ifndef GUEST_STALL_TRACE
+#define GUEST_STALL_TRACE 0
+#endif
+#if GUEST_STALL_TRACE && !PPC_DEBUG_TRACE
+#error "GUEST_STALL_TRACE needs PPC_DEBUG_TRACE"
 #endif
 
 static void ppc_trace(const char *prefix, const char *format, ...)
@@ -239,6 +245,12 @@ public:
 	void exception_diagnostic_state(const char *reason, uint64 now);
 	void exception_idle_diagnostic(void);
 	void exception_stall_sample(void);
+#if GUEST_STALL_TRACE
+	void exec_frame_push(uint8 kind, uint32 entry, uint32 arg);
+	void exec_frame_pop(void);
+	void exec_frame_dump(const char *why);
+	void guest_stall_watch(void);
+#endif
 	void record_rfi_site(uint32 return_pc, uint32 run_mode);
 	void report_and_reset_rfi_sites(void);
 #endif
@@ -297,6 +309,28 @@ public:
 	uint64 exception_stall_moved_usec;
 	uint64 exception_stall_sample_usec;
 	uint64 exception_stall_samples;
+#if GUEST_STALL_TRACE
+	// Nested host-driven guest execution. execute_68k()/execute_macos_code()
+	// run the guest one level deeper than the emulation loop, so a call that
+	// never comes back pins the interrupt level of whatever invoked it. This
+	// records what opened each level.
+	enum { EXEC_FRAMES = 16 };
+	enum { EXEC_FRAME_EMUL_OP = 0, EXEC_FRAME_68K = 1, EXEC_FRAME_MACOS = 2 };
+	uint8  exec_frame_kind[EXEC_FRAMES];
+	uint32 exec_frame_entry[EXEC_FRAMES];
+	uint32 exec_frame_arg[EXEC_FRAMES];
+	uint32 exec_frame_68k_pc[EXEC_FRAMES];
+	uint32 exec_frame_r25[EXEC_FRAMES];
+	uint32 exec_frame_sp[EXEC_FRAMES];
+	uint64 exec_frame_usec[EXEC_FRAMES];
+	unsigned exec_frame_depth;
+	unsigned exec_frame_overflow;
+	// Emul-thread stall watch: the register file is only coherent here.
+	uint32 guest_stall_tick;
+	uint64 guest_stall_tick_usec;
+	uint64 guest_stall_report_usec;
+	unsigned guest_stall_reports;
+#endif
 	uint64 exception_steps_taken;
 	uint64 exception_vector_entries;
 	enum { LOWMEM_BASE = 0x100, LOWMEM_WORDS = 192 };	// $100..$400
@@ -383,6 +417,21 @@ sheepshaver_cpu::sheepshaver_cpu()
 	system_queue_repairs = 0;
 #if PPC_DEBUG_TRACE
 	exception_stall_pc = 0;
+#if GUEST_STALL_TRACE
+	memset(exec_frame_kind, 0, sizeof(exec_frame_kind));
+	memset(exec_frame_entry, 0, sizeof(exec_frame_entry));
+	memset(exec_frame_arg, 0, sizeof(exec_frame_arg));
+	memset(exec_frame_68k_pc, 0, sizeof(exec_frame_68k_pc));
+	memset(exec_frame_r25, 0, sizeof(exec_frame_r25));
+	memset(exec_frame_sp, 0, sizeof(exec_frame_sp));
+	memset(exec_frame_usec, 0, sizeof(exec_frame_usec));
+	exec_frame_depth = 0;
+	exec_frame_overflow = 0;
+	guest_stall_tick = 0;
+	guest_stall_tick_usec = 0;
+	guest_stall_report_usec = 0;
+	guest_stall_reports = 0;
+#endif
 	exception_stall_last_reported_pc = 0;
 	exception_stall_tick = 0;
 	memset(exception_track_ppc_pc, 0, sizeof(exception_track_ppc_pc));
@@ -507,7 +556,13 @@ void sheepshaver_cpu::execute_emul_op(uint32 emul_op)
 	r68.a[7] = gpr(1);
 	uint32 saved_cr = get_cr() & 0xff9fffff; // mask_operand::compute(11, 8)
 	uint32 saved_xer = get_xer();
+#if GUEST_STALL_TRACE
+	exec_frame_push(EXEC_FRAME_EMUL_OP, emul_op, gpr(24));
+#endif
 	EmulOp(&r68, gpr(24), emul_op);
+#if GUEST_STALL_TRACE
+	exec_frame_pop();
+#endif
 	set_cr(saved_cr);
 	set_xer(saved_xer);
 	for (int i = 0; i < 8; i++)
@@ -831,12 +886,18 @@ void sheepshaver_cpu::execute_68k(uint32 entry, M68kRegisters *r)
 	// Set r0 to 0 for 68k emulator
 	gpr(0) = 0;
 
+#if GUEST_STALL_TRACE
+	exec_frame_push(EXEC_FRAME_68K, entry, r->a[1]);
+#endif
 	// Execute 68k opcode
 	uint32 opcode = ReadMacInt16(gpr(24));
 	gpr(27) = (int32)(int16)ReadMacInt16(gpr(24) += 2);
 	gpr(29) += opcode * 8;
 	execute(gpr(29));
 
+#if GUEST_STALL_TRACE
+	exec_frame_pop();
+#endif
 	// Save r25 (contains current 68k interrupt level)
 	WriteMacInt32(XLM_68K_R25, gpr(25));
 
@@ -900,7 +961,13 @@ uint32 sheepshaver_cpu::execute_macos_code(uint32 tvect, int nargs, uint32 const
 	gpr(2) = toc;
 	for (int i = 0; i < nargs; i++)
 		gpr(i + 3) = args[i];
+#if GUEST_STALL_TRACE
+	exec_frame_push(EXEC_FRAME_MACOS, tvect, proc);
+#endif
 	execute(proc);
+#if GUEST_STALL_TRACE
+	exec_frame_pop();
+#endif
 	uint32 retval = gpr(3);
 
 	// Restore PowerPC registers
@@ -1259,6 +1326,12 @@ void sheepshaver_cpu::exception_diagnostic_state(const char *reason, uint64 now)
 // so that hand-out is attributable rather than inferred.
 void sheepshaver_cpu::watch_event_queue(void)
 {
+#if GUEST_STALL_TRACE
+	// Same call site, same thread as the emulation loop. Piggy-backing keeps
+	// the stall watch off the host sampler, whose register view is not
+	// coherent, without adding a second hook to the CPU core.
+	guest_stall_watch();
+#endif
 	lowmem_watch();
 	// The corruption leaves qHead alone and changes the head element's qLink,
 	// so watching qHead by itself never sees it. Compare the whole shape.
@@ -1548,12 +1621,218 @@ void sheepshaver_cpu::lowmem_dump(const char *why)
 #endif
 
 #if PPC_DEBUG_TRACE
+#if GUEST_STALL_TRACE
+// Where an address lives, so a pc printed in a log can be found again offline.
+static const char *guest_region_name(uint32 addr)
+{
+	if (addr >= ROMBase && addr < ROMBase + ROM_SIZE)
+		return "ROM-image";
+	if (addr >= ROMBase && addr < ROMBase + ROM_AREA_SIZE)
+		return "ROM-area-scratch";
+	if (addr >= RAMBase && addr < RAMBase + RAMSize)
+		return "RAM";
+	if (SheepMem::Contains(addr))
+		return "SheepMem";
+	return "?";
+}
+
+void sheepshaver_cpu::exec_frame_push(uint8 kind, uint32 entry, uint32 arg)
+{
+	const unsigned d = exec_frame_depth;
+	if (d >= EXEC_FRAMES) {
+		exec_frame_overflow++;
+		exec_frame_depth++;
+		return;
+	}
+	exec_frame_kind[d] = kind;
+	exec_frame_entry[d] = entry;
+	exec_frame_arg[d] = arg;
+	exec_frame_68k_pc[d] = gpr(24);
+	exec_frame_r25[d] = gpr(25);
+	exec_frame_sp[d] = gpr(1);
+	exec_frame_usec[d] = GetTicks_usec();
+	exec_frame_depth = d + 1;
+}
+
+void sheepshaver_cpu::exec_frame_pop(void)
+{
+	if (exec_frame_depth != 0)
+		exec_frame_depth--;
+}
+
+void sheepshaver_cpu::exec_frame_dump(const char *why)
+{
+	static const char *const kind_name[3] = { "EMUL_OP", "Execute68k", "MacOS-PPC" };
+	unsigned i;
+	const uint64 now = GetTicks_usec();
+
+	ppc_trace("[exec-frames] ",
+		"%s: %u nested host-driven guest call(s), overflow %u, "
+		"exec-depth %d\n",
+		why, exec_frame_depth, exec_frame_overflow,
+		current_execute_depth());
+	for (i = 0; i < exec_frame_depth && i < EXEC_FRAMES; i++) {
+		const uint8 k = exec_frame_kind[i];
+		ppc_trace("[exec-frames] ",
+			"  [%u] %s entry=%08x (%s) arg=%08x, opened %lu ms ago at "
+			"68k pc %08x, r25 %08x, sp %08x\n",
+			i, k < 3 ? kind_name[k] : "?", exec_frame_entry[i],
+			guest_region_name(exec_frame_entry[i]), exec_frame_arg[i],
+			(unsigned long)((now - exec_frame_usec[i]) / 1000),
+			exec_frame_68k_pc[i], exec_frame_r25[i], exec_frame_sp[i]);
+		// An Execute68k frame is a Time Manager task dispatch when its entry
+		// is a Mixed Mode routine descriptor. Name the routine it will run so
+		// a callback that never returns can be identified from the log alone.
+		if (k == EXEC_FRAME_68K && guest_addr_ok(exec_frame_entry[i], 32) &&
+				ReadMacInt16(exec_frame_entry[i]) == 0xAAFE) {
+			const uint32 rd = exec_frame_entry[i];
+			const uint32 tvect = ReadMacInt32(rd + 20);
+			ppc_trace("[exec-frames] ",
+				"      routine descriptor: version %u procInfo %08x ISA %u "
+				"flags %04x procDescriptor %08x (%s)\n",
+				ReadMacInt8(rd + 2), ReadMacInt32(rd + 12),
+				ReadMacInt8(rd + 17), ReadMacInt16(rd + 18), tvect,
+				guest_region_name(tvect));
+			if (guest_addr_ok(tvect, 8))
+				ppc_trace("[exec-frames] ",
+					"      TVector: code %08x (%s) toc %08x\n",
+					ReadMacInt32(tvect), guest_region_name(ReadMacInt32(tvect)),
+					ReadMacInt32(tvect + 4));
+		}
+	}
+}
+
+// Runs on the emulation thread, so the register file is coherent and the 68k
+// registers actually mean something. The host-thread sampler cannot say that:
+// it catches the CPU mid-instruction and in whatever mode it happens to be.
+void sheepshaver_cpu::guest_stall_watch(void)
+{
+	const uint32 tick = ReadMacInt32(0x16a);
+	uint64 now;
+	unsigned i;
+
+	if (tick != guest_stall_tick) {
+		guest_stall_tick = tick;
+		guest_stall_tick_usec = GetTicks_usec();
+		return;
+	}
+	if (guest_stall_tick_usec == 0) {
+		guest_stall_tick_usec = GetTicks_usec();
+		return;
+	}
+	now = GetTicks_usec();
+	if (now - guest_stall_tick_usec < 2000000)
+		return;
+	// Only report while the 68k emulator itself is the code running. Its
+	// register file is the only state in which gpr(8..25) are D0-D7/A0-A6,
+	// the 68k pc and the interrupt level. XLM_RUN_MODE is too coarse: it
+	// still reads MODE_68K while the nanokernel runs on its own registers.
+	// patch_rom_ppc() copies the emulator to ROMBase+0x460000 and stores
+	// that in LA_EmulatorCode, which is what execute_68k() loads into r30.
+	{
+		const uint32 emulator = ReadMacInt32(KERNEL_DATA_BASE + 0x1078);
+		if (emulator == 0 || pc() < emulator ||
+				pc() >= emulator + 0xa0000)
+			return;
+		if (gpr(31) != KernelDataAddr + 0x1000)
+			return;
+	}
+	if (guest_stall_report_usec != 0 && now - guest_stall_report_usec < 2000000)
+		return;
+	if (guest_stall_reports >= 6)
+		return;
+	guest_stall_report_usec = now;
+	guest_stall_reports++;
+
+	{
+		const uint32 k68_pc = gpr(24);
+		const uint32 a7 = gpr(1);
+		ppc_trace("[guest-stall] ",
+			"guest clock stopped %lu ms (tick=%08x). ppc pc=%08x (%s) "
+			"lr=%08x msr=%08x; 68k pc=%08x (%s) r25=%08x IPL=%u\n",
+			(unsigned long)((now - guest_stall_tick_usec) / 1000), tick,
+			pc(), guest_region_name(pc()), lr(), msr(),
+			k68_pc, guest_region_name(k68_pc), gpr(25), gpr(25) & 7);
+		ppc_trace("[guest-stall] ",
+			"  d0-d7 %08x %08x %08x %08x %08x %08x %08x %08x\n",
+			gpr(8), gpr(9), gpr(10), gpr(11),
+			gpr(12), gpr(13), gpr(14), gpr(15));
+		ppc_trace("[guest-stall] ",
+			"  a0-a6 %08x %08x %08x %08x %08x %08x %08x  a7=%08x\n",
+			gpr(16), gpr(17), gpr(18), gpr(19),
+			gpr(20), gpr(21), gpr(22), a7);
+		if (guest_addr_ok(k68_pc - 16, 48)) {
+			ppc_trace("[guest-stall] ", "  68k code at pc-16:");
+			for (i = 0; i < 24; i++)
+				ppc_trace("[guest-stall] ", "    +%-3d %04x%s", (int)i * 2 - 16,
+					ReadMacInt16(k68_pc - 16 + i * 2),
+					i == 8 ? "   <- pc" : "");
+		}
+		// The 68k stack: the return addresses on it name the caller chain that
+		// reached the wait, which the pc alone cannot.
+		if (guest_addr_ok(a7, 64)) {
+			ppc_trace("[guest-stall] ", "  68k stack at a7:\n");
+			for (i = 0; i < 16; i++) {
+				const uint32 v = ReadMacInt32(a7 + i * 4);
+				ppc_trace("[guest-stall] ", "    %08x: %08x (%s)\n",
+					a7 + i * 4, v, guest_region_name(v));
+			}
+		}
+		// The ROM's synchronous wait spins on a 16-bit result word going <= 0
+		// (move.w (An),d0 / bgt.s .-2 at the emulator's 68k pc). Whichever
+		// address register points at a Device Manager parameter block names
+		// the call that never completed, so decode all of them.
+		{
+			for (i = 0; i < 7; i++) {
+				const uint32 a = gpr(16 + i);
+				if (!guest_addr_ok(a, 32))
+					continue;
+				ppc_trace("[guest-stall] ",
+					"  a%u=%08x (%s): %08x %08x %08x %08x %08x %08x %08x %08x\n",
+					i, a, guest_region_name(a),
+					ReadMacInt32(a), ReadMacInt32(a + 4),
+					ReadMacInt32(a + 8), ReadMacInt32(a + 12),
+					ReadMacInt32(a + 16), ReadMacInt32(a + 20),
+					ReadMacInt32(a + 24), ReadMacInt32(a + 28));
+				// ParamBlockHeader: ioLink/ioType/ioTrap/ioCmdAddr/
+				// ioCompletion/ioResult/ioNamePtr/ioVRefNum, then ioRefNum
+				// and csCode for a control call.
+				ppc_trace("[guest-stall] ",
+					"     as pb: ioTrap=%04x ioCmdAddr=%08x ioCompletion=%08x "
+					"ioResult=%d ioRefNum=%d csCode=%d\n",
+					ReadMacInt16(a + 6), ReadMacInt32(a + 8),
+					ReadMacInt32(a + 12), (int)(int16)ReadMacInt16(a + 16),
+					(int)(int16)ReadMacInt16(a + 24),
+					(int)(int16)ReadMacInt16(a + 26));
+			}
+		}
+		// Execute68k() pushes the EXEC_RETURN opcode address as the 68k return
+		// address. If it is no longer on that stack, the nested run can never
+		// end even once the guest unblocks.
+		if (exec_frame_depth >= 2 && guest_addr_ok(exec_frame_sp[1], 64)) {
+			const uint32 fsp = exec_frame_sp[1];
+			ppc_trace("[guest-stall] ",
+				"  Execute68k frame sp=%08x, EXEC_RETURN opcode at %08x:\n",
+				fsp, (uint32)XLM_EXEC_RETURN_OPCODE);
+			for (i = 0; i < 16; i++)
+				ppc_trace("[guest-stall] ",
+					"    %08x: %08x%s\n", fsp + i * 4,
+					ReadMacInt32(fsp + i * 4),
+					ReadMacInt32(fsp + i * 4) == (uint32)XLM_EXEC_RETURN_OPCODE
+						? "  <- EXEC_RETURN" : "");
+		}
+	}
+	exec_frame_dump("guest clock stopped");
+	exception_diagnostic_state("guest-stall", now);
+}
+#endif	/* GUEST_STALL_TRACE */
+
 void sheepshaver_cpu::exception_stall_sample(void)
 {
-	// From the first time the debugger is entered onwards. Gating this on
-	// being inside a vector was wrong: the guest resumes, the handler returns,
-	// and only then does everything stop - so the sampler went quiet exactly
-	// when it was needed.
+	// From the first time the debugger is entered onwards. For a freeze with
+	// no program exception at all - a guest wedged in its own loop, or one
+	// whose clock stopped - this never fires; GUEST_STALL_TRACE covers that
+	// case instead.
 	if (exception_last_program_usec == 0)
 		return;
 
@@ -1688,15 +1967,23 @@ void sheepshaver_cpu::exception_stall_sample(void)
 		exception_vector_entries == 1 ? "y" : "ies",
 		(unsigned long long)exception_steps_taken);
 	ppc_trace("[exception-stall] ",
-		"interrupts: flags=%08x spc=%08x accepted=%llu, deferred %llu nest / "
-		"%llu mode / %llu 68k-IPL; OP_IRQ=%llu; 68k pc=%08x level=%08x\n",
+		"interrupts: flags=%08x spc=%08x accepted=%llu (%llu 68k, %llu emul-op, "
+		"%llu native vector), deferred %llu nest / %llu mode / %llu 68k-IPL; "
+		"OP_IRQ=%llu VIA=%llu; 68k pc=%08x level=%08x\n",
 		(uint32)InterruptFlags, spcflags().get(),
 		(unsigned long long)external_interrupt_accepted_count,
+		(unsigned long long)external_interrupt_68k_accepted_count,
+		(unsigned long long)external_interrupt_emul_accepted_count,
+		(unsigned long long)external_interrupt_native_vector_count,
 		(unsigned long long)external_interrupt_nest_deferred_count,
 		(unsigned long long)external_interrupt_mode_deferred_count,
 		(unsigned long long)external_interrupt_68k_deferred_count,
-		(unsigned long long)0ULL,
+		(unsigned long long)service.op_irq_entries,
+		(unsigned long long)service.via_services,
 		cur_gpr(24), cur_gpr(25));
+#if GUEST_STALL_TRACE
+	exec_frame_dump("host sampler");
+#endif
 	// The 68k side in full: its emulator keeps D0-D7 in r8-r15, A0-A7 in
 	// r16-r23, the 68k pc in r24 and the interrupt level in r25. If the level
 	// is stuck at 7 nothing below it can ever be serviced, so the registers and
