@@ -243,7 +243,7 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 		case OP_SOUNDIN_CLOSE:
 			r->d[0] = SoundInClose(r->a[0], r->a[1]);
 			break;
-
+#ifdef ENABLE_JOYMANAGER
 		case OP_JOY_OPEN:
 			r->d[0] = JoyManagerOpen(r->a[0], r->a[1]);
 			break;
@@ -256,7 +256,7 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 		case OP_JOY_CLOSE:
 			r->d[0] = JoyManagerClose(r->a[0], r->a[1]);
 			break;
-
+#endif /* ENABLE_JOYMANAGER */
 		case OP_ADBOP:				// ADBOp() replacement
 			ADBOp(r->d[0], Mac2HostAddr(ReadMacInt32(r->a[0])));
 			break;
@@ -331,7 +331,9 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 		case OP_RESET:				// Early in MacOS reset
 			D(bug("*** RESET ***\n"));
 			tick_inhibit = true;
+		#ifdef ENABLE_JOYMANAGER
 			JoyManagerReset();
+		#endif /* ENABLE_JOYMANAGER */
 			CDROMRemount(); // for System 7.x
 			TimerReset();
 			MacOSUtilReset();
@@ -375,7 +377,9 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 					TimerInterrupt();
 #endif
 					ExecuteNative(NATIVE_VIDEO_VBL);
+#ifdef ENABLE_JOYMANAGER
 					JoyManagerVBL();
+#endif
 					ADBVBL();
 #ifdef ENABLE_USB
 					USBHIDVBL();

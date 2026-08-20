@@ -1,5 +1,8 @@
 /*
- *  joymanager.h - SDL-backed replacement for the classic .JoyManager driver
+ * joymanager.h - SDL-backed replacement for the classic 
+ * .JoyManager driver. Note that this also contains utilities used
+ * by other backends - ENABLE_JOYMANAGER only gates the .JoyManager
+ * driver implementation.
  * 
  *	(C) 2026 Ryan Norton (battlemageloveryt@gmail.com)
  *
@@ -20,6 +23,10 @@
 
 #ifndef JOYMANAGER_H
 #define JOYMANAGER_H
+
+#ifndef ENABLE_JOYMANAGER
+#define ENABLE_JOYMANAGER
+#endif
 
 #include "sysdeps.h"
 
@@ -63,5 +70,5 @@ void JoyManagerUpdate(void);
 	if (left) return 3;
 	if (right) return 4; */
 int JoyManagerHatPosition(uint8 hat);
-#define JOY_TRACE 1
+#define JOY_TRACE 0
 #endif

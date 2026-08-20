@@ -2591,6 +2591,7 @@ void InstallDrivers(void)
 		Execute68kTrap(0xa000, &r);		// Open()
 	}
 
+#ifdef ENABLE_JOYMANAGER
 	// Install the SDL-backed .JoyManager driver
 	if (!PrefsFindBool("nojoystick") && JoyManagerPrepare()) {
 		int16 joy_ref_num;
@@ -2642,6 +2643,7 @@ void InstallDrivers(void)
 			JoyManagerReset();
 		}
 	}
+#endif /* ENABLE_JOYMANAGER */
 
 	// Install serial drivers
 	r.a[0] = ROMBase + sony_offset + 0x300;
