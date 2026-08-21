@@ -4,8 +4,8 @@
 
 #ifndef GFX_LOG_H
 #define GFX_LOG_H
-
-#include <stdio.h>
+#include "sysdeps.h"
+#include "debug.h"
 
 #ifdef __APPLE__
 #include <os/log.h>
@@ -17,12 +17,6 @@
 #ifdef __cplusplus
 
 #include <stdarg.h>
-
-#if defined(_WIN32) /* don't drag in windows.h */
-extern "C" __declspec(dllimport) void __stdcall OutputDebugStringA(
-    const char *lpOutputString);
-#endif
-
 
 #ifndef ACCEL_LOGGING_ENABLED
 #define ACCEL_LOGGING_ENABLED 0  /* ship default OFF */
@@ -70,10 +64,6 @@ inline bool accel_log_verbose() {
 #define ACCEL_LOG_VERBOSE false
 #endif
 
-/* Emit one diagnostic line. `prefix` is a short tag written verbatim before the
- * formatted body (e.g. "[nqd] ", "CINEPAK: "); pass "" for none. A trailing
- * newline is appended. Goes to stderr (flushed) and, on Windows, also to the
- * debugger output stream. Never conditionally compiled. */
 static inline void gfx_log_emitv(const char *prefix,
     const char *format, va_list args)
 {
@@ -86,11 +76,7 @@ static inline void gfx_log_emitv(const char *prefix,
                   prefix ? prefix : "", body);
     record[sizeof(record) - 1] = '\0';
 
-    fputs(record, stderr);
-    fflush(stderr);
-#if defined(_WIN32)
-    OutputDebugStringA(record);
-#endif
+    bug("%s", record);
 }
 
 static inline void gfx_log_emit(const char *prefix, const char *format, ...)
@@ -105,9 +91,6 @@ static inline void gfx_log_emit(const char *prefix, const char *format, ...)
 
 #endif /* __cplusplus */
 
-/* Generic logger (runtime `tag`) routed through the shared stderr +
- * OutputDebugStringA sink. The tag is dynamic, so it is folded into the body
- * with an empty prefix. */
 #define GFX_FPRINTF_LOG(tag, fmt, ...) \
 	gfx_log_emit("", "[%s] " fmt, (tag), ##__VA_ARGS__)
 
@@ -141,6 +124,7 @@ static inline void gfx_log_emit(const char *prefix, const char *format, ...)
 static inline void qd3d_log(const char *category, const char *file, int line,
                        const char *format, ...)
 {
+	char prefix[512];
 	char message[2048];
 	va_list args;
 	va_start(args, format);
@@ -148,9 +132,6 @@ static inline void qd3d_log(const char *category, const char *file, int line,
 	va_end(args);
 	message[sizeof(message) - 1] = '\0';
 
-	/* Prefix carries the category + source location; body is the message.
-	 * The shared sink appends the trailing newline and handles both outputs. */
-	char prefix[512];
 	snprintf(prefix, sizeof(prefix), "[QD3D:%s] %s:%d: ",
 	              category, file, line);
 	prefix[sizeof(prefix) - 1] = '\0';

@@ -38,9 +38,6 @@
 bool nqd_metal_available = false;
 
 #if ACCEL_LOGGING_ENABLED
-/* Gate from GFXACCEL_LOG (unset/"all"/list-containing-"nqd" => on), matching
- * the DSp/RAVE/GL subsystems' control plane. Sink is the shared stderr +
- * OutputDebugStringA emitter (gfx_log.h), always compiled in. */
 bool nqd_logging_enabled = accel_log_subsystem_on("nqd");
 #define NQD_LOG(...) do { if (nqd_logging_enabled) GFX_DEBUG_EMIT("[nqd] ", __VA_ARGS__); } while (0)
 #else
@@ -61,14 +58,6 @@ static inline bool nqd_range_in_buffer(uint64 mac_addr, uint64 length)
 	const uint64 end = begin + (uint64)nqd_ram_size;
 	if (mac_addr >= begin && mac_addr < end && length <= end - mac_addr)
 		return true;
-	/* The visible screen lives OUTSIDE guest RAM, in the framebuffer
-	 * aperture just past the RAM top. The NQD hooks commit screen-destined
-	 * ops (fills, drag-copy blits), so rejecting the screen here left them
-	 * committed-then-dropped - stale destination pixels, seen as streaks
-	 * when dragging Finder icons. Accept the compositor's current guest
-	 * surface: the CPU loops write straight into the_buffer, which the
-	 * compositor re-uploads. This matches the Metal backend, where
-	 * screen-visible NQD ops are CPU-handled against the same memory. */
 	uint32_t scr_base = 0, scr_size = 0;
 	if (MetalCompositorGetGuestSurface(&scr_base, &scr_size) == 0 && scr_base != 0) {
 		const uint64 sbegin = (uint64)scr_base;

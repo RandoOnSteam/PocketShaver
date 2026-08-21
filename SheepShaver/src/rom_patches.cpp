@@ -1464,11 +1464,7 @@ static bool patch_nanokernel(void)
 	lp = (uint32 *)(ROMBaseHost + base + 4);
 	*lp = htonl((ntohl(*lp) & 0xffff) | 0x48000000);	// bgt -> b
 
-	// The PowerPC core now implements SRR0, SRR1 and rfi.  Leave the
-	// nanokernel's architectural return sequence intact; return_from_exception
-	// performs SheepShaver's XLM_IRQ_NEST bookkeeping as part of rfi itself.
-	// The historical bctr detour used to be necessary only because those
-	// registers and rfi were not emulated.
+	// Leave the nanokernel's architectural return sequence intact
 	static const uint8 trap_return_dat[] = {0x80, 0xc1, 0x00, 0x18, 0x80, 0x21, 0x00, 0x04, 0x4c, 0x00, 0x00, 0x64};
 	if ((base = find_rom_data(0x312000, 0x320000, trap_return_dat, sizeof(trap_return_dat))) == 0) return false;
 	D(bug("trap_return %08lx\n", base + 8));

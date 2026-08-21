@@ -144,14 +144,10 @@ static void adb_logf(const char *fmt, ...)
 	va_start(ap, fmt);
 	vsnprintf(body, sizeof(body), fmt, ap);
 	va_end(ap);
-	snprintf(rec, sizeof(rec), "[adb %5u v%-5u] %s\n", adb_log_lines,
+	snprintf(rec, sizeof(rec), "[adb %5u v%-5u] %s", adb_log_lines,
 		adb_vbl_count, body);
 	rec[sizeof(rec) - 1] = 0;
-	fputs(rec, stderr);
-	fflush(stderr);
-#if defined(_WIN32)
-	OutputDebugStringA(rec);
-#endif
+	bug("%s", rec);
 }
 
 /* Build a string of every low memory value the cursor uses. */

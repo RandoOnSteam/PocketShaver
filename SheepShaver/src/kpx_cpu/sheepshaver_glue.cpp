@@ -20,6 +20,7 @@
 
 #include "sysdeps.h"
 #include "cpu_emulation.h"
+#include "ppc-report.h"
 #include "main.h"
 #include "prefs.h"
 #include "xlowmem.h"
@@ -1052,6 +1053,14 @@ static const char *ppc_exception_vector_name(uint32 vector)
 }
 
 static bool guest_addr_ok(uint32 a, uint32 len);
+
+static inline bool ppc_68k_sp_parked(uint32 a7)
+{
+	return a7 - (uint32)KernelDataAddr < 0x8000u;
+}
+
+static bool ppc_pc_in_68k_emulator(uint32 pc);
+uint32 ppc_recover_68k_sp(uint32 a7);
 extern uint64 IdleWaitUsec;
 extern unsigned long IdleWaitCount;
 
@@ -2451,6 +2460,9 @@ void sheepshaver_cpu::return_from_exception(uint32 saved_pc, uint32 saved_msr)
 			msr() &= ~PPC_MSR_SE;
 		}
 	}
+	/* A return into the 68k emulator that skipped the lwz r1,4(r1). */
+	if (ppc_68k_sp_parked(gpr(1)) && ppc_pc_in_68k_emulator(return_pc))
+		gpr(1) = ppc_recover_68k_sp(gpr(1));
 	pc() = return_pc;
 }
 
@@ -2662,6 +2674,37 @@ bool PPCGuestAddressValid(uint32 addr, uint32 len)
 	return guest_addr_ok(addr, len);
 }
 
+/* Is this a 68k stack pointer? */
+static bool ppc_68k_sp_ok(uint32 sp)
+{
+	return sp != 0 && (sp & 1) == 0 && !ppc_68k_sp_parked(sp)
+		&& guest_addr_ok(sp, 4);
+}
+
+static bool ppc_pc_in_68k_emulator(uint32 pc)
+{
+	const uint32 emulator = ReadMacInt32(KERNEL_DATA_BASE + 0x1078);
+
+	return emulator != 0 && pc - emulator < 0xa0000u;
+}
+
+/* Returns a7 unchanged when nothing usable is parked. */
+uint32 ppc_recover_68k_sp(uint32 a7)
+{
+	uint32 sp = ReadMacInt32(KERNEL_DATA_BASE + 0x004);
+	uint32 ctx;
+
+	if (ppc_68k_sp_ok(sp))
+		return sp;
+	ctx = ReadMacInt32(KERNEL_DATA_BASE + 0x658);
+	if (!guest_addr_ok(ctx, 0x110))
+		return a7;
+	sp = ReadMacInt32(ctx + 0x10c);
+	return ppc_68k_sp_ok(sp) ? sp : a7;
+}
+
+#if PPC_REPORT_BAD_EA
+
 /*
  *  Report an access execute_loadstore() flagged, before it performs it.  That
  *  is the only place the state can be recorded when the access itself takes
@@ -2685,13 +2728,75 @@ static bool ppc_report_is_new(uint32 pc, uint32 *seen, int seen_max,
 	return true;
 }
 
+uint32 ppc_68k_branch_from[PPC_68K_BRANCHES];
+uint32 ppc_68k_branch_to[PPC_68K_BRANCHES];
+uint32 ppc_68k_branch_hits[PPC_68K_BRANCHES];
+uint32 ppc_68k_branch_op[PPC_68K_BRANCHES];
+uint32 ppc_68k_branch_key[PPC_68K_BRANCHES];
+uint16 ppc_68k_branch_map[PPC_68K_BRANCH_HASH];
+int ppc_68k_branch_pos = -1;
+static const uint32 ppc_68k_r31 = (uint32)(KERNEL_DATA_BASE + 0x1000);
+bool ppc_68k_a7_flagged = false;
+
+uint32 ppc_68k_last_pc = 0;
+
+static void ppc_dump_68k_branches(void)
+{
+	static int dumps = 0;
+	int i, first;
+
+	if (dumps >= 3 || ppc_68k_branch_pos < 0)
+		return;
+	dumps++;
+	first = PPC_68K_BRANCHES - PPC_68K_BRANCH_DUMP;
+	if (first < 1)
+		first = 1;
+	for (i = first; i <= PPC_68K_BRANCHES; i++) {
+		int k = (ppc_68k_branch_pos + i) & (PPC_68K_BRANCHES - 1);
+
+		if (ppc_68k_branch_hits[k] == 0)
+			continue;
+		bug("[bad-ea] 68k branch %08x -> %08x op=%04x x%u\n",
+			ppc_68k_branch_from[k], ppc_68k_branch_to[k],
+			ppc_68k_branch_op[k] & 0xffff, ppc_68k_branch_hits[k]);
+	}
+}
+
+void ppc_log_68k_op(uint32 from, uint32 npc, uint32 op, uint32 a7)
+{
+	static uint32 seen[8];
+	static int seen_count = 0;
+	char msg[320];
+	uint32 ksp, ctx, ctx_sp = 0;
+	int i, n;
+
+	if (!ppc_report_is_new(from ^ (npc << 1) ^ op, seen, 8, &seen_count))
+		return;
+	ksp = ReadMacInt32(KERNEL_DATA_BASE + 0x004);
+	ctx = ReadMacInt32(KERNEL_DATA_BASE + 0x658);
+	if (guest_addr_ok(ctx, 0x110))
+		ctx_sp = ReadMacInt32(ctx + 0x10c);
+	n = snprintf(msg, sizeof(msg),
+		"[bad-ea] 68k op=%04x %08x -> %08x a7=%08x ksp=%08x ctx_sp=%08x vec5c=%08x",
+		op, from, npc, a7, ksp, ctx_sp, ReadMacInt32(0x5c));
+	if (n < 0)
+		n = 0;
+	if (guest_addr_ok(npc, 8) && n < (int)sizeof(msg) - 28) {
+		n += snprintf(msg + n, sizeof(msg) - n, " dest");
+		for (i = 0; i < 4 && n > 0 && n < (int)sizeof(msg) - 8; i++)
+			n += snprintf(msg + n, sizeof(msg) - n, " %04x",
+				ReadMacInt16(npc + i * 2));
+	}
+	bug("%s\n", msg);
+}
+
 static void ppc_report_context(const char *what, uint32 pc, uint32 ea)
 {
 	sheepshaver_cpu *cpu = ppc_cpu;
-	char msg[512];
 	int i;
+	char msg[500];
 
-	snprintf(msg, sizeof(msg),
+	bug(
 		"[bad-ea] %s ea=%08x pc=%08x 68k-pc=%08x lr=%08x ctr=%08x\n"
 		"  r0-r7   %08x %08x %08x %08x %08x %08x %08x %08x\n"
 		"  r8-r15  %08x %08x %08x %08x %08x %08x %08x %08x\n"
@@ -2708,15 +2813,60 @@ static void ppc_report_context(const char *what, uint32 pc, uint32 ea)
 		cpu->gpr(20), cpu->gpr(21), cpu->gpr(22), cpu->gpr(23),
 		cpu->gpr(24), cpu->gpr(25), cpu->gpr(26), cpu->gpr(27),
 		cpu->gpr(28), cpu->gpr(29), cpu->gpr(30), cpu->gpr(31));
-	fputs(msg, stderr);
-	fflush(stderr);
-#if defined(_WIN32)
-	OutputDebugStringA(msg);
-#endif
-	/* The 68k stack.  r1 is the emulator's a7, so when the emulator itself
-	   faults this holds the exception frame it just pushed -- status word,
-	   then the 68k pc that took the exception, then the vector offset --
-	   followed by the return addresses of whatever called into that code. */
+	/* +0x004 is the sp the nanokernel saved, +0x658/+0x65c the contexts. */
+	{
+		uint32 ctx68k = ReadMacInt32(KERNEL_DATA_BASE + 0x658);
+		uint32 ctx_pc = 0, ctx_sp = 0;
+
+		if (guest_addr_ok(ctx68k, 0x110)) {
+			ctx_pc = ReadMacInt32(ctx68k + 0xfc);
+			ctx_sp = ReadMacInt32(ctx68k + 0x10c);
+		}
+		bug("  kdata sp=%08x ctx68k=%08x cur=%08x status=%08x level=%08x\n"
+			"  ctx_pc=%08x ctx_sp=%08x vec5c=%08x tramp=%08x %08x\n",
+			ReadMacInt32(KERNEL_DATA_BASE + 0x004),
+			ctx68k,
+			ReadMacInt32(KERNEL_DATA_BASE + 0x65c),
+			ReadMacInt32(KERNEL_DATA_BASE + 0x660),
+			ReadMacInt32(KERNEL_DATA_BASE + 0x67c),
+			ctx_pc, ctx_sp, ReadMacInt32(0x5c),
+			ReadMacInt32(KERNEL_DATA_BASE + 0x5f0),
+			ReadMacInt32(KERNEL_DATA_BASE + 0x5f4));
+	}
+	/* The same registers under their 68k names. */
+	{
+		if (ppc_pc_in_68k_emulator(pc)) {
+			bug("  68k d0-d7 %08x %08x %08x %08x %08x %08x %08x %08x\n"
+				"  68k a0-a7 %08x %08x %08x %08x %08x %08x %08x %08x\n",
+				cpu->gpr(8), cpu->gpr(9), cpu->gpr(10), cpu->gpr(11),
+				cpu->gpr(12), cpu->gpr(13), cpu->gpr(14), cpu->gpr(15),
+				cpu->gpr(16), cpu->gpr(17), cpu->gpr(18), cpu->gpr(19),
+				cpu->gpr(20), cpu->gpr(21), cpu->gpr(22), cpu->gpr(1));
+		}
+	}
+
+	bug("  ticks=%u runmode=%u irqnest=%d r25=%08x\n",
+		ReadMacInt32(0x16a), ReadMacInt32(XLM_RUN_MODE),
+		(int)ReadMacInt32(XLM_IRQ_NEST), cpu->gpr(25));
+	/* A dispatch table is usually still addressed by one of these. */
+	{
+		int reg;
+
+		for (reg = 0; reg < 7; reg++) {
+			uint32 base = cpu->gpr(16 + reg);
+			int o, k;
+			char msg[500];
+			if (!guest_addr_ok(base, 0x20))
+				continue;
+			o = snprintf(msg, sizeof(msg), 
+				"[bad-ea] a%d %08x:", reg, base);
+			for (k = 0; k < 0x20; k += 4)
+				o += snprintf(msg + o, sizeof(msg) - o, 
+					" %08x", ReadMacInt32(base + k));
+			bug("%s\n", msg);
+		}
+	}
+	/* The 68k stack. */
 	{
 		uint32 sp = cpu->gpr(1);
 		int o = 0, k;
@@ -2727,18 +2877,11 @@ static void ppc_report_context(const char *what, uint32 pc, uint32 ea)
 				for (i = 0; i < 16; i += 2)
 					o += snprintf(msg + o, sizeof(msg) - o, " %04x",
 						ReadMacInt16(sp + k + i));
-				snprintf(msg + o, sizeof(msg) - o, "\n");
-				fputs(msg, stderr);
-#if defined(_WIN32)
-				OutputDebugStringA(msg);
-#endif
+				bug("%s\n", msg);
 			}
-			fflush(stderr);
 		}
 	}
-	/* The structure a3 points at.  If its first 108 bytes look like a
-	   GrafPort but the window fields past them do not, the block is not the
-	   WindowRecord the program thinks it is. */
+	/* The structure a3 points at. */
 	{
 		uint32 rec = cpu->gpr(19);
 		int o = 0, k;
@@ -2749,14 +2892,10 @@ static void ppc_report_context(const char *what, uint32 pc, uint32 ea)
 				for (i = 0; i < 16; i += 2)
 					o += snprintf(msg + o, sizeof(msg) - o, " %04x",
 						ReadMacInt16(rec + k + i));
-				snprintf(msg + o, sizeof(msg) - o, "\n");
-				fputs(msg, stderr);
-#if defined(_WIN32)
-				OutputDebugStringA(msg);
-#endif
+				bug("%s\n", msg);
 			}
-			fflush(stderr);
 		}
+
 	}
 	/* The PowerPC instructions around the fault.  A fault in native code has
 	   no meaningful 68k program counter, so this is what names the routine.
@@ -2773,13 +2912,8 @@ static void ppc_report_context(const char *what, uint32 pc, uint32 ea)
 				for (j = 0; j < 32; j += 4)
 					o += snprintf(msg + o, sizeof(msg) - o, " %08x",
 						ReadMacInt32(base + k + j));
-				snprintf(msg + o, sizeof(msg) - o, "\n");
-				fputs(msg, stderr);
-#if defined(_WIN32)
-				OutputDebugStringA(msg);
-#endif
+				bug("%s\n", msg);
 			}
-			fflush(stderr);
 		}
 	}
 	/* The call chain.  PowerOpen keeps the caller's stack pointer at 0(sp)
@@ -2796,37 +2930,27 @@ static void ppc_report_context(const char *what, uint32 pc, uint32 ea)
 				break;
 			back = ReadMacInt32(sp);
 			saved_lr = ReadMacInt32(sp + 8);
-			snprintf(msg, sizeof(msg),
-				"[bad-ea] frame %2d sp=%08x back=%08x lr=%08x\n",
+			bug("[bad-ea] frame %2d sp=%08x back=%08x lr=%08x\n",
 				depth, sp, back, saved_lr);
-			fputs(msg, stderr);
-#if defined(_WIN32)
-			OutputDebugStringA(msg);
-#endif
 			if (back <= sp || back - sp > 0x100000)
 				break;
 			sp = back;
 		}
-		fflush(stderr);
 	}
 	/* The low memory globals this class of bug tramples or reads: the 68k
 	   exception vectors live below 0x100, the unit table pointer is at 0x11c
 	   and the SCC register base addresses are at 0x1d8 and 0x1dc. */
 	{
 		int o = 0, k, j;
+		char msg[500];
 
 		for (k = 0; k < 0x200; k += 32) {
 			o = snprintf(msg, sizeof(msg), "[bad-ea] lomem %03x:", k);
 			for (j = 0; j < 32; j += 4)
 				o += snprintf(msg + o, sizeof(msg) - o, " %08x",
 					ReadMacInt32(k + j));
-			snprintf(msg + o, sizeof(msg) - o, "\n");
-			fputs(msg, stderr);
-#if defined(_WIN32)
-			OutputDebugStringA(msg);
-#endif
+			bug("%s\n", msg);
 		}
-		fflush(stderr);
 	}
 	/* The table of contents the faulting fragment runs with.  Its first
 	   entries name the fragment's own data, which is what tells one native
@@ -2842,13 +2966,8 @@ static void ppc_report_context(const char *what, uint32 pc, uint32 ea)
 				for (j = 0; j < 32; j += 4)
 					o += snprintf(msg + o, sizeof(msg) - o, " %08x",
 						ReadMacInt32(toc - 64 + k + j));
-				snprintf(msg + o, sizeof(msg) - o, "\n");
-				fputs(msg, stderr);
-#if defined(_WIN32)
-				OutputDebugStringA(msg);
-#endif
+				bug("%s\n", msg);
 			}
-			fflush(stderr);
 		}
 	}
 	/* The 68k instruction stream around the faulting instruction, so it can
@@ -2857,18 +2976,14 @@ static void ppc_report_context(const char *what, uint32 pc, uint32 ea)
 		uint32 p68 = cpu->gpr(24);
 		uint32 base = p68 - 32;
 		int o = 0, k;
+		char msg[500];
 
 		if (p68 >= 32 && guest_addr_ok(base, 80)) {
 			o = snprintf(msg, sizeof(msg), "[bad-ea] 68k code %08x:", base);
 			for (k = 0; k < 80 && o < (int)sizeof(msg) - 4; k += 2)
 				o += snprintf(msg + o, sizeof(msg) - o, " %04x",
 					ReadMacInt16(base + k));
-			snprintf(msg + o, sizeof(msg) - o, "\n");
-			fputs(msg, stderr);
-			fflush(stderr);
-#if defined(_WIN32)
-			OutputDebugStringA(msg);
-#endif
+			bug("%s\n", msg);
 		}
 	}
 }
@@ -2878,31 +2993,105 @@ void ppc_report_bad_ea(uint32 pc, uint32 ea, int is_load)
 	static uint32 seen[64];
 	static int seen_count = 0;
 	const char *what = "store";
+	uint32 key;
 
 	if (ppc_cpu == NULL || guest_addr_ok(ea, 1))
 		return;
-	if (!ppc_report_is_new(pc, seen, 64, &seen_count))
+	/* One PowerPC pc is one 68k opcode shape, so key on the 68k pc. */
+	key = pc;
+	if (ppc_cpu->gpr(31) == ppc_68k_r31)
+		key = ppc_cpu->gpr(24);
+	if (!ppc_report_is_new(key, seen, 64, &seen_count))
 		return;
 	if (is_load)
 		what = "load";
 	ppc_report_context(what, pc, ea);
+	ppc_dump_68k_branches();
 }
 
-/* A store into the 68k exception vectors.  The address is mapped, so the
-   access itself is harmless; what matters is that the vector it lands on is
-   used by every A-trap the guest executes from then on. */
+void ppc_report_bad_jump(uint32 pc, uint32 from, uint32 to);
+void ppc_report_bad_a7(uint32 pc, uint32 a7);
 
+/* a7 is post-recovery here, so parked means the recovery itself failed. */
+void ppc_report_68k_transfer(uint32 pc, uint32 from, uint32 to, uint32 op,
+	uint32 a7)
+{
+	const bool parked = ppc_68k_sp_parked(a7);
+
+	if (op == 0xfe07
+			|| (op == 0xfe02
+				&& (to >= 0x10000000u || (to & 1) || to < 0x10000u || parked)))
+		ppc_log_68k_op(from, to, op, a7);
+	if ((to < 0x10000u && (to - 0x2800u) >= 0x100u && parked) || (to & 1)
+			|| ((0xff88u >> (to >> 28)) & 1)
+			|| (to - 0x41000000u) < 0x0f000000u)
+		ppc_report_bad_jump(pc, from, to);
+	else if (!ppc_68k_a7_flagged && parked)
+		ppc_report_bad_a7(pc, a7);
+}
+
+void ppc_report_bad_jump(uint32 pc, uint32 from, uint32 to)
+{
+	static uint32 seen[64];
+	static int seen_count = 0;
+	char msg[512];
+	int o, k;
+
+	if (ppc_cpu == NULL)
+		return;
+	/* Keyed on the pair: one site, two wrong targets, is two findings. */
+	if (!ppc_report_is_new(from ^ (to << 1), seen, 64, &seen_count)) {
+		/* Past the budget, still say it happened. */
+		bug("[bad-ea] 68k jump %08x -> %08x (context budget spent)\n",
+			from, to);
+		return;
+	}
+	ppc_report_context("68k jump", pc, to);
+	/* The instruction that handed control over: jmp, rts or a table. */
+	if (guest_addr_ok(from - 0x20, 0x60)) {
+		o = snprintf(msg, sizeof(msg), "[bad-ea] 68k from %08x:", from - 0x20);
+		for (k = 0; k < 0x60 && o < (int)sizeof(msg) - 8; k += 2)
+			o += snprintf(msg + o, sizeof(msg) - o, " %04x",
+				ReadMacInt16(from - 0x20 + k));
+		bug("%s\n", msg);
+	}
+	ppc_dump_68k_branches();
+}
+
+void ppc_report_bad_a7(uint32 pc, uint32 a7)
+{
+	if (ppc_cpu == NULL || ppc_68k_a7_flagged)
+		return;
+	ppc_68k_a7_flagged = true;
+	ppc_report_context("68k a7 in kernel data", pc, a7);
+	ppc_dump_68k_branches();
+}
+
+/* A store into the 68k exception vectors. */
 void ppc_report_vector_store(uint32 pc, uint32 ea)
 {
 	static uint32 seen[64];
 	static int seen_count = 0;
+	uint32 emulator;
+	uint32 key;
 
 	if (ppc_cpu == NULL)
 		return;
-	if (!ppc_report_is_new(pc, seen, 64, &seen_count))
+	key = pc;
+	emulator = ReadMacInt32(KERNEL_DATA_BASE + 0x1078);
+	if (emulator != 0 && pc >= emulator && pc < emulator + 0xa0000)
+		key = ppc_cpu->gpr(24);
+	if (!ppc_report_is_new(key, seen, 64, &seen_count))
 		return;
+	if (ea != 0x28 && ea != 0x2c) {
+		bug("[bad-ea] vector store ea=%08x pc=%08x 68k-pc=%08x\n",
+			ea, pc, ppc_cpu->gpr(24));
+		return;
+	}
 	ppc_report_context("vector store", pc, ea);
 }
+
+#endif
 
 static void dump_crash_context(sheepshaver_cpu *cpu)
 {

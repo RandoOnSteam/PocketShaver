@@ -65,9 +65,6 @@
 #if CINEPAK_LOGGING_ENABLED
 #include "gfx_log.h"
 
-/* Route through the shared stderr + OutputDebugStringA sink. Keeps the
- * "[CINEPAK:...]" text so existing greps/notes still match. The source lines
- * pass their own trailing "\n"; wrap so the body sits inside the brackets. */
 static inline void CINEPAK_LOG(const char *format, ...)
 {
 	char message[2048];

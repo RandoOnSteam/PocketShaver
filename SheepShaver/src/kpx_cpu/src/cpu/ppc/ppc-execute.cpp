@@ -26,9 +26,6 @@
 #if defined(__MINGW64__) || defined(_MSC_VER) || defined(__GLIBC__) || defined(__APPLE__)
 #include <fenv.h>
 #endif
-/* Set to 0 to drop the out-of-range address report in execute_loadstore. */
-#define PPC_REPORT_BAD_EA 0
-
 #include "cpu/vm.hpp"
 #include "cpu/ppc/ppc-cpu.hpp"
 #include "cpu/ppc/ppc-bitfields.hpp"
@@ -36,6 +33,11 @@
 #include "cpu/ppc/ppc-operations.hpp"
 #include "cpu/ppc/ppc-execute.hpp"
 #include "cpu/ppc/ppc-stfiwx.hpp"
+#ifdef SHEEPSHAVER
+#include "ppc-report.h"
+#else
+#define PPC_REPORT_BAD_EA 0
+#endif
 
 static inline uint64 get_tb_ticks(void);
 
@@ -740,6 +742,40 @@ DEFINE_MEMORY_HELPER(1);
 DEFINE_MEMORY_HELPER(2);
 DEFINE_MEMORY_HELPER(4);
 
+#ifdef SHEEPSHAVER
+static const uint32 PPC_68K_KDATA = (uint32)KERNEL_DATA_BASE;
+static const uint32 PPC_68K_EMUL_R31 = (uint32)(KERNEL_DATA_BASE + 0x1000);
+extern uint32 ppc_recover_68k_sp(uint32 a7);
+#endif
+
+#if PPC_REPORT_BAD_EA
+#define PPC_EA_SUSPECT(ea__)							\
+	((ea__) >= 0x30000000u						\
+		&& (((0xff88u >> ((ea__) >> 28)) & 1)			\
+			|| ((ea__) - 0x41000000u) < 0x0f000000u))
+
+#define PPC_CHECK_EA(ea_, is_load_)						\
+	do {									\
+		const uint32 ea__ = (ea_);						\
+		if (PPC_EA_SUSPECT(ea__))						\
+			ppc_report_bad_ea(pc(), ea__, (is_load_));			\
+	} while (0)
+
+#define PPC_CHECK_EA_STORE(ea_)							\
+	do {									\
+		const uint32 ea__ = (ea_);						\
+		if (ea__ - 0x100u >= 0x2fffff00u) {				\
+			if (ea__ < 0x100u)						\
+				ppc_report_vector_store(pc(), ea__);			\
+			else if (PPC_EA_SUSPECT(ea__))				\
+				ppc_report_bad_ea(pc(), ea__, 0);				\
+		}									\
+	} while (0)
+#else
+#define PPC_CHECK_EA(ea_, is_load_) do { } while (0)
+#define PPC_CHECK_EA_STORE(ea_) do { } while (0)
+#endif
+
 template< class OP, class RA, class RB, bool LD, int SZ, bool UP, bool RX >
 void powerpc_cpu::execute_loadstore(uint32 opcode)
 {
@@ -747,26 +783,54 @@ void powerpc_cpu::execute_loadstore(uint32 opcode)
 	const uint32 b = RB::get(this, opcode);
 	const uint32 ea = a + b;
 
-#if PPC_REPORT_BAD_EA
-	/* The guest can only reach RAM and the frame buffer (top nibble 0, 1, 2),
-	   the ROM just above 0x40800000, SheepMem at 5 and the kernel area at 6.
-	   Flag the nibbles none of those use, plus the gap between the end of the
-	   ROM and SheepMem, which is where an address built out of text lands.
-	   Reporting here happens before the access faults, which is the only
-	   chance to record anything when the fault takes the process down. */
-	if (((0xff88u >> (ea >> 28)) & 1)
-			|| (ea >= 0x41000000u && ea < 0x50000000u)) {
-		extern void ppc_report_bad_ea(uint32 pc, uint32 ea, int is_load);
-		ppc_report_bad_ea(pc(), ea, LD);
-	}
-	/* The first 256 bytes of guest memory are the 68k exception vectors.
-	   The ROM fills them in during boot and nothing writes them afterwards,
-	   so name whoever stores there: a bad vector kills the next A-trap. */
-	if (!LD && ea < 0x100) {
-		extern void ppc_report_vector_store(uint32 pc, uint32 ea);
-		ppc_report_vector_store(pc(), ea);
-	}
+	if (LD)
+		PPC_CHECK_EA(ea, 1);
+	else
+		PPC_CHECK_EA_STORE(ea);
+	/* 68k opcode fetch: r1 is the 68k a7, repaired before the opcode runs. */
+	if (LD && SZ == 2 && UP) {
+#ifdef SHEEPSHAVER
+		if (gpr(1) - PPC_68K_KDATA < 0x8000u && gpr(31) == PPC_68K_EMUL_R31)
+			gpr(1) = ppc_recover_68k_sp(gpr(1));
 #endif
+#if PPC_REPORT_BAD_EA
+		const uint32 npc = gpr(24);
+
+		if (npc - ppc_68k_last_pc > 16 && gpr(31) == PPC_68K_EMUL_R31) {
+			const uint32 op = gpr(27) & 0xffff;
+			const uint32 a7 = gpr(1);
+			const uint32 key = ppc_68k_last_pc ^ (npc << 1);
+			const uint32 h = (key ^ (key >> 13))
+				& (PPC_68K_BRANCH_HASH - 1);
+			const uint32 slot = ppc_68k_branch_map[h];
+
+			/* The key beside the slot is what confirms the bucket. */
+			if (slot != 0 && ppc_68k_branch_key[slot - 1] == key) {
+				ppc_68k_branch_hits[slot - 1]++;
+			} else {
+				const int k = (ppc_68k_branch_pos + 1)
+					& (PPC_68K_BRANCHES - 1);
+
+				ppc_68k_branch_key[k] = key;
+				ppc_68k_branch_from[k] = ppc_68k_last_pc;
+				ppc_68k_branch_to[k] = npc;
+				ppc_68k_branch_op[k] = op;
+				ppc_68k_branch_hits[k] = 1;
+				ppc_68k_branch_map[h] = (uint16)(k + 1);
+				ppc_68k_branch_pos = k;
+			}
+			/* Superset of ppc_report_68k_transfer()'s rules; it classifies. */
+			if ((npc & 1) != 0
+					|| (npc >= 0x30000000u
+						&& (npc - 0x40000000u) >= 0x01000000u)
+					|| (op - 0xfe02u) <= 5u
+					|| a7 - PPC_68K_KDATA < 0x8000u)
+				ppc_report_68k_transfer(pc(), ppc_68k_last_pc, npc,
+					op, a7);
+		}
+		ppc_68k_last_pc = npc;
+#endif
+	}
 
 
 	if (LD)
@@ -786,6 +850,8 @@ void powerpc_cpu::execute_loadstore_multiple(uint32 opcode)
 	const uint32 a = RA::get(this, opcode);
 	const uint32 d = DP::get(this, opcode);
 	uint32 ea = a + d;
+
+	PPC_CHECK_EA(ea, LD);
 /*
 	// FIXME: generate exception if ea is not word-aligned
 	if ((ea & 3) != 0) {
@@ -829,6 +895,7 @@ void powerpc_cpu::execute_fp_loadstore(uint32 opcode)
 	const uint32 ea = a + b;
 	uint64 v;
 
+	PPC_CHECK_EA(ea, LD);
 	if (LD) {
 		if (DB)
 			v = vm_read_memory_8(ea);
@@ -880,6 +947,8 @@ void powerpc_cpu::execute_load_string(uint32 opcode)
 	if (!IM)
 		ea += operand_RB::get(this, opcode);
 
+	PPC_CHECK_EA(ea, 1);
+
 	int nb = NB::get(this, opcode);
 	if (IM && nb == 0)
 		nb = 32;
@@ -929,6 +998,8 @@ void powerpc_cpu::execute_store_string(uint32 opcode)
 	uint32 ea = RA::get(this, opcode);
 	if (!IM)
 		ea += operand_RB::get(this, opcode);
+
+	PPC_CHECK_EA(ea, 0);
 
 	int nb = NB::get(this, opcode);
 	if (IM && nb == 0)
