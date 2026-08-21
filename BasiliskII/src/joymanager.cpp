@@ -33,6 +33,7 @@
 #include "my_sdl.h"
 #endif
 
+#define JOYMANAGER_TRACE 0
 #define DEBUG 0
 #include "debug.h"
 
@@ -68,18 +69,30 @@ enum {
 	kJoyElemButton = 0,
 	kJoyElemSelector = 1,
 	kJoyElemUnpublished = 3,
-	kJoyElemAxis = 10000,
-	kJoyUnknownLabel = 0x7fff,
+	kJoyElemAxisFriction = 10000, /* neutral = min */
+	kJoyElemAxisCentered = 10001, /* neutral = (min + max) / 2 */
+	kJoyUnknownLabel = 0x7fff, /* NOT ACCEPTED BY ISP! */
 	kJoyLabelXAxis = 0,      /* 'xaxi' */
 	kJoyLabelYAxis = 1,      /* 'yaxi' */
 	kJoyLabelZAxis = 2,      /* 'zaxi' */
-	kJoyLabelRxAxis = 3,     /* 'rxax' */
-	kJoyLabelRyAxis = 4,     /* 'ryax' */
-	kJoyLabelRzAxis = 5,     /* 'rzax' */
+	kJoyLabelRxAxis = 3,     /* 'rxax'; NOT ACCEPTED BY ISP! */
+	kJoyLabelRyAxis = 4,     /* 'ryax'; NOT ACCEPTED BY ISP! */
+	kJoyLabelRzAxis = 5,     /* 'rzax'; NOT ACCEPTED BY ISP!  */
 	kJoyLabelThrottle = 6,   /* 'thrt' */
 	kJoyLabelRudder = 7,     /* 'rudd' */
 	kJoyLabelGas = 8,        /* 'gasp' */
-	kJoyLabelBrake = 9       /* 'brak' */
+	kJoyLabelBrake = 9,      /* 'brak' */
+	kJoyLabelClutch = 10,    /* 'cltc' */
+	kJoyLabelUnknown11 = 11,    
+	kJoyLabelUnknown12 = 12,    
+	kJoyLabelUnknown13 = 13,    
+	kJoyLabelUnknown14 = 14,    
+	kJoyLabelUnknown15 = 15,    
+	kJoyLabelTrim = 16,    /* 'trim' - FSP Throttle; Friction 0<->0x3ff */
+	kJoyLabelUnknown17 = 17,    
+	kJoyLabelBrake2 = 18,    /* 'brak' */
+	kJoyLabelGas2 = 19,    /* 'gasp' */
+	kJoyLabelMax = 20
 };
 
 enum {
@@ -100,8 +113,7 @@ enum {
 };
 
 #if JOYMANAGER_TRACE && defined(SHEEPSHAVER)
-extern void USBHIDLog(const char *fmt, ...);
-#define JoyTrace USBHIDLog
+#define JoyTrace bug
 /* True once a second, for the periodic dumps. */
 static bool JoyTraceTick(void)
 {
@@ -517,7 +529,7 @@ void JoyManagerWriteDeviceInfo(JoyHostDevice *device)
 		label = JoyManagerAxisLabel(i);
 		JoyManagerAxisRange(label, &min_value, &max_value);
 		neutral_value = JoyManagerAxisNeutralValue(i);
-		kind = kJoyElemAxis;
+		kind = kJoyElemAxisCentered;
 		JoyManagerWriteElement(element, kind, label,
 			min_value, max_value, neutral_value);
 		element += joyElementSize;
