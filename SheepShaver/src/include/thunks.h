@@ -78,7 +78,9 @@ enum {
   NATIVE_GLIDE_DISPATCH,   /* 3dfx Glide 2.x / 3.x */
   NATIVE_USB_UIM_DISPATCH, /* USB UIM plugin table; slot number arrives in r11 */
   NATIVE_USB_PUBLISH_NODE, /* Name Registry calls, so it must run in PPC mode */
-  NATIVE_USB_UIM_POLL,     /* runs deferred USB transfer completions */
+  NATIVE_USB_UIM_POLL,     /* the Expert's idle work and node publishing */
+  NATIVE_USB_UIM_COMPLETE, /* hands finished transfers back to the family */
+  NATIVE_USB_EXPORT_HOOK,  /* sits on a watched library export */
   NATIVE_USB_EXPERT_NOTIFY, /* sits in front of the USB Expert's notification
                                routine; the only call the family makes into
                                the Expert, so the only place to watch it */

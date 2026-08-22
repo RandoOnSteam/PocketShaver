@@ -30,15 +30,33 @@
 #include "usbhid.h"
 #include "pcibridge.h"
 #include "usbuim.h"
+#include "xlowmem.h"
 
 #define DEBUG 0
 #include "debug.h"
 
 #define PCI_PUBLISH_BUS_NODE 0
+
+/* Hand our own UIM to the guest. Off leaves a bare "usb" node that no driver
+   binds to, which is the last state known to boot; flip it to tell a UIM
+   problem apart from an unrelated boot problem. */
 #define USB_PUBLISH_UIM 1
+
+/* Publish the USB controller node at all. 0 is the pre-USB behaviour. */
 #define USB_PUBLISH_NODE 1
+
+/* Advertise device_type = "usb" on the node. This is what makes the ROM's
+   USB Expert adopt the node as a bus; 0 leaves the hardware description
+   published but invisible to the USB Family. */
 #define USB_NODE_DEVICE_TYPE 1
+
+/* Seconds after the first idle-loop call before the node appears. Kept short:
+   anything that snapshots the machine's configuration when it launches - Apple
+   System Profiler does - will not see USB if the bus turns up after it. */
 #define USB_NODE_PUBLISH_DELAY 2
+
+// Helper for RegEntryID
+typedef SheepArray<sizeof(RegEntryID)> SheepRegEntryID;
 
 #ifdef ENABLE_USB
 static uint64 usb_first_idle;
@@ -82,8 +100,7 @@ static const uint8 ethernet_driver[] = {
 #endif
 };
 
-// Helper for RegEntryID
-typedef SheepArray<sizeof(RegEntryID)> SheepRegEntryID;
+
 
 // Helper for a <uint32, uint32> pair
 struct SheepPair : public SheepArray<8> {
@@ -101,11 +118,6 @@ void DoPublishUSBNode(void)
 {
 	SheepVar32 u32;
 	int16 err;
-
-	/* Created by full path rather than parent id. A RegEntryID kept from the
-	   startup patch is not valid this much later - using one gives
-	   nrInvalidNodeErr (-2538) - and the registry takes a path, which is how
-	   "Devices:device-tree" itself gets made. */
 	if (usb_node == NULL)
 		usb_node = new SheepRegEntryID;
 	err = RegistryCStrEntryCreate(0, "Devices:device-tree:ohci-host",
@@ -123,7 +135,8 @@ void DoPublishUSBNode(void)
 			RegistryPropertyCreate(usb_node->addr(), "AAPL,BusNumber",
 				u32.addr(), 4));
 		// Deliberately NOT "pciclass,0c0310": that is the ROM OHCIUIM's
-		// match string, and it cannot run here.
+		// match string, and it cannot run here. Our own UIM matches this
+		// name and nothing else does, so no version race with the ROM.
 		RegistryPropertyCreateStr(usb_node->addr(), "compatible", "SheepUSB");
 		if (USB_PUBLISH_UIM) {
 			uint32 drv_size;
@@ -134,11 +147,14 @@ void DoPublishUSBNode(void)
 				"driver,AAPL,MacOS,PowerPC", the_uim.addr(), drv_size);
 		}
 		USBHIDLog("ohci-host published, uim=%d", USB_PUBLISH_UIM);
+
+		/* Bring the bus up. The node's RegEntryID goes with it: the
+			Expert's LoadUIMForEntry keeps it as the parent for the
+			per-device registry nodes it publishes. */
 		if (USB_PUBLISH_UIM)
 			USBUIMRegisterBus(usb_node->addr());
 	}
 }
-
 void USBNodeResetPublish(void)
 {
 	usb_first_idle = 0;

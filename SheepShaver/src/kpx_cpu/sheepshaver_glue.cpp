@@ -1323,24 +1323,12 @@ void sheepshaver_cpu::exception_diagnostic_state(const char *reason, uint64 now)
 #endif
 
 #if PPC_DEBUG_TRACE
-// Called at every instruction-block boundary. One read of EvtQHead and a
-// compare when nothing has changed, which is the common case. The ROM's
-// Enqueue (0x10ef0) clears elem->qLink and handles an empty queue, so it can
-// only produce a self-link if the element it is given is already qTail - which
-// means PostEvent's free scan (what == 0x00ff at elem+6, ROM 0x10d3e) handed
-// out an element that was still in the queue. This records who moves the queue
-// so that hand-out is attributable rather than inferred.
 void sheepshaver_cpu::watch_event_queue(void)
 {
 #if GUEST_STALL_TRACE
-	// Same call site, same thread as the emulation loop. Piggy-backing keeps
-	// the stall watch off the host sampler, whose register view is not
-	// coherent, without adding a second hook to the CPU core.
 	guest_stall_watch();
 #endif
 	lowmem_watch();
-	// The corruption leaves qHead alone and changes the head element's qLink,
-	// so watching qHead by itself never sees it. Compare the whole shape.
 	const uint32 head = ReadMacInt32(0x14c);
 	const uint32 link = (head != 0 && guest_addr_ok(head, 8))
 		? ReadMacInt32(head) : 0;
@@ -1354,16 +1342,7 @@ void sheepshaver_cpu::watch_event_queue(void)
 	evq_link[evq_next] = link;
 	evq_what[evq_next] = what;
 	evq_pc[evq_next] = pc();
-	// The PPC pc is only the 68k emulator's dispatch loop. r24 is the 68k
-	// instruction pointer and r25 its interrupt level, so these name the 68k
-	// routine that moved the queue and whether it held the level it needed.
 	evq_68k_pc[evq_next] = gpr(24);
-	// The VBL handler's re-entrancy guard (bit 6 of $160, set at ROM
-	// 0x11814), the head element's payload, and how many slots in the
-	// event buffer are still free. PostEvent only recycles a queued
-	// element when that free count reaches zero (its scan looks for
-	// what == 0xffff at elem+6, ROM 0x10d3e), so the count is what says
-	// whether the recycle path was even reachable.
 	evq_guard[evq_next] = ReadMacInt8(0x160);
 	evq_msg[evq_next] = (head != 0 && guest_addr_ok(head, 16))
 		? ReadMacInt32(head + 8) : 0;
@@ -1416,11 +1395,6 @@ void sheepshaver_cpu::watch_event_queue(void)
 #endif
 
 #if PPC_DEBUG_TRACE
-// Every change to low memory $100..$400 with enough context to name who made
-// it, and a full state dump the first time either invariant breaks: EvtQHead
-// pointing at an element still marked free (what == ffff), or Ticks moving
-// backwards. Both are the same rollback, caught at the word that moved instead
-// of inferred from its consequence several enqueues later.
 void sheepshaver_cpu::lowmem_watch(void)
 {
 	unsigned i;
@@ -1428,8 +1402,6 @@ void sheepshaver_cpu::lowmem_watch(void)
 	bool ticks_back = false;
 	uint32 ticks;
 
-	// Two reads, every block: the exact invariant that breaks. Everything
-	// below only runs while the debugger is in use.
 	{
 		const uint32 head = ReadMacInt32(0x14c);
 		if (head != 0 && guest_addr_ok(head, 0x16) &&
@@ -2460,6 +2432,23 @@ void sheepshaver_cpu::return_from_exception(uint32 saved_pc, uint32 saved_msr)
 	/* A return into the 68k emulator that skipped the lwz r1,4(r1). */
 	if (ppc_68k_sp_parked(gpr(1)) && ppc_pc_in_68k_emulator(return_pc))
 		gpr(1) = ppc_recover_68k_sp(gpr(1));
+#if PPC_REPORT_BAD_EA
+	/* Instruction fetch has no range check, so an rfi to a wild SRR0 takes the
+	   process down with nothing logged. Say so while the registers that
+	   produced it are still readable. */
+	if (!guest_addr_ok(return_pc, 4)) {
+		/* Powers of two: a wild rfi inside a loop must not become the reason
+		   the emulator is slow. */
+		static uint32 wild;
+
+		wild++;
+		if ((wild & (wild - 1)) == 0)
+			bug("[bad-ea] rfi to %08x x%u"
+				" (srr0 %08x srr1 %08x lr %08x r1 %08x)\n",
+				return_pc, wild, saved_pc, saved_msr,
+				get_register(powerpc_registers::LR).i, gpr(1));
+	}
+#endif
 	pc() = return_pc;
 }
 
@@ -2641,9 +2630,9 @@ static void dump_disassembly(const uint32 pc, const int prefix_count, const int 
 	const uint32 base_addr = pc - prefix_count * 4;
 	for (int i = 0; i < count; i++) {
 		const bfd_vma addr = base_addr + i * 4;
-		fprintf(stderr, "%s0x%8llx:  ", addr == pc ? " >" : "  ", addr);
+		bug("%s0x%8llx:  ", addr == pc ? " >" : "  ", addr);
 		print_insn_ppc(addr, &info);
-		fprintf(stderr, "\n");
+		bug("\n");
 	}
 }
 
@@ -2725,11 +2714,7 @@ static bool ppc_report_is_new(uint32 pc, uint32 *seen, int seen_max,
 	return true;
 }
 
-uint32 ppc_68k_branch_from[PPC_68K_BRANCHES];
-uint32 ppc_68k_branch_to[PPC_68K_BRANCHES];
-uint32 ppc_68k_branch_hits[PPC_68K_BRANCHES];
-uint32 ppc_68k_branch_op[PPC_68K_BRANCHES];
-uint32 ppc_68k_branch_key[PPC_68K_BRANCHES];
+struct ppc_68k_branch ppc_68k_branches[PPC_68K_BRANCHES];
 uint16 ppc_68k_branch_map[PPC_68K_BRANCH_HASH];
 int ppc_68k_branch_pos = -1;
 static const uint32 ppc_68k_r31 = (uint32)(KERNEL_DATA_BASE + 0x1000);
@@ -2740,7 +2725,9 @@ uint32 ppc_68k_last_pc = 0;
 static void ppc_dump_68k_branches(void)
 {
 	static int dumps = 0;
-	int i, first;
+	/* winbug() formats into a 1K record, so keep a batch under that. */
+	char out[900], line[128];
+	int i, first, o = 0;
 
 	if (dumps >= 3 || ppc_68k_branch_pos < 0)
 		return;
@@ -2748,14 +2735,31 @@ static void ppc_dump_68k_branches(void)
 	first = PPC_68K_BRANCHES - PPC_68K_BRANCH_DUMP;
 	if (first < 1)
 		first = 1;
+	/* Batched to what one record holds. Each bug() is a synchronous debugger
+	   write, so a line at a time is 256 round trips and a visible stall. */
 	for (i = first; i <= PPC_68K_BRANCHES; i++) {
 		int k = (ppc_68k_branch_pos + i) & (PPC_68K_BRANCHES - 1);
+		int n;
 
-		if (ppc_68k_branch_hits[k] == 0)
+		if (ppc_68k_branches[k].hits == 0)
 			continue;
-		bug("[bad-ea] 68k branch %08x -> %08x op=%04x x%u\n",
-			ppc_68k_branch_from[k], ppc_68k_branch_to[k],
-			ppc_68k_branch_op[k] & 0xffff, ppc_68k_branch_hits[k]);
+		n = snprintf(line, sizeof(line),
+			"[bad-ea] 68k branch %08x -> %08x op=%04x x%u\n",
+			ppc_68k_branches[k].from, ppc_68k_branches[k].to,
+			ppc_68k_branches[k].op & 0xffff, ppc_68k_branches[k].hits);
+		if (n <= 0)
+			continue;
+		if (o + n >= (int)sizeof(out)) {
+			out[o] = 0;
+			bug("%s", out);
+			o = 0;
+		}
+		memcpy(out + o, line, n);
+		o += n;
+	}
+	if (o != 0) {
+		out[o] = 0;
+		bug("%s", out);
 	}
 }
 
@@ -3038,9 +3042,11 @@ void ppc_report_bad_jump(uint32 pc, uint32 from, uint32 to)
 		return;
 	/* Keyed on the pair: one site, two wrong targets, is two findings. */
 	if (!ppc_report_is_new(from ^ (to << 1), seen, 64, &seen_count)) {
-		/* Past the budget, still say it happened. */
-		bug("[bad-ea] 68k jump %08x -> %08x (context budget spent)\n",
-			from, to);
+		static uint32 spent;
+
+		spent++;
+		if ((spent & (spent - 1)) == 0)
+			bug("[bad-ea] 68k jump %08x -> %08x (context budget spent, x%u)\n", from, to, spent);
 		return;
 	}
 	ppc_report_context("68k jump", pc, to);
@@ -3064,6 +3070,10 @@ void ppc_report_bad_a7(uint32 pc, uint32 a7)
 	ppc_dump_68k_branches();
 }
 
+void ppc_report_fault_trail(void)
+{ /* The trail into a fault */
+	ppc_dump_68k_branches();
+}
 /* A store into the 68k exception vectors. */
 void ppc_report_vector_store(uint32 pc, uint32 ea)
 {
@@ -3094,15 +3104,15 @@ static void dump_crash_context(sheepshaver_cpu *cpu)
 {
 	// Guest stack crawl. PowerOpen ABI: back chain at [sp], saved LR at [sp+8].
 	uint32 sp = cpu->cur_gpr(1);
-	fprintf(stderr, "guest stack crawl (r1=%08x):\n", sp);
+	bug("guest stack crawl (r1=%08x):\n", sp);
 	for (int depth = 0; depth < 32; depth++) {
 		if (!guest_addr_ok(sp, 12)) {
-			fprintf(stderr, "  [%2d] sp %08x (unmapped; stop)\n", depth, sp);
+			bug("  [%2d] sp %08x (unmapped; stop)\n", depth, sp);
 			break;
 		}
 		uint32 back = ReadMacInt32(sp);
 		uint32 saved_lr = ReadMacInt32(sp + 8);
-		fprintf(stderr, "  [%2d] sp %08x back %08x lr %08x\n", depth, sp, back, saved_lr);
+		bug("  [%2d] sp %08x back %08x lr %08x\n", depth, sp, back, saved_lr);
 		if (back <= sp || back - sp > 0x100000)
 			break;
 		sp = back;
@@ -3113,17 +3123,17 @@ static void dump_crash_context(sheepshaver_cpu *cpu)
 	// flag any word still matching that signature.
 	const uint32 lo = (uint32)KERNEL_DATA_BASE - 0x200;
 	const uint32 hi = (uint32)KERNEL_DATA_BASE + 0x40;
-	fprintf(stderr, "kernel-area dump [%08x..%08x) ('<' = LE self-address):\n", lo, hi);
+	bug("kernel-area dump [%08x..%08x) ('<' = LE self-address):\n", lo, hi);
 	for (uint32 a = lo; a < hi; a += 16) {
 		if (!guest_addr_ok(a, 16))
 			continue;
-		fprintf(stderr, "  %08x:", a);
+		bug("  %08x:", a);
 		for (int i = 0; i < 4; i++) {
 			uint32 w = ReadMacInt32(a + i * 4);
 			uint32 le = ((w & 0xff) << 24) | ((w & 0xff00) << 8) | ((w >> 8) & 0xff00) | (w >> 24);
-			fprintf(stderr, " %08x%c", w, (le - (a + i * 4)) <= 0x100 ? '<' : ' ');
+			bug(" %08x%c", w, (le - (a + i * 4)) <= 0x100 ? '<' : ' ');
 		}
-		fprintf(stderr, "\n");
+		bug("\n");
 	}
 
 	extern void RsrcLocksDumpOnCrash(void);
@@ -3208,16 +3218,21 @@ sigsegv_return_t sigsegv_handler(sigsegv_info_t *sip)
 #error "FIXME: You don't have the capability to skip instruction within signal handlers"
 #endif
 
-	fprintf(stderr, "SIGSEGV\n");
-	fprintf(stderr, "  pc %p\n", sigsegv_get_fault_instruction_address(sip));
-	fprintf(stderr, "  ea %p\n", sigsegv_get_fault_address(sip));
+#if PPC_REPORT_BAD_EA
+	ppc_report_fault_trail();
+#endif
+	/* Through bug(), like every other report here: a GUI build has no stderr
+	   and this dump was being written into nothing. */
+	bug("SIGSEGV\n");
+	bug("  pc %p\n", sigsegv_get_fault_instruction_address(sip));
+	bug("  ea %p\n", sigsegv_get_fault_address(sip));
 	dump_registers();
 	dump_log();
 	dump_crash_context(cpu);
 	if (guest_addr_ok(pc - 8 * 4, (8 + 8 + 1) * 4))
 		dump_disassembly(pc, 8, 8);
 	else
-		fprintf(stderr, "  (pc %08x outside mapped guest areas; disassembly skipped)\n", pc);
+		bug("  (pc %08x outside mapped guest areas; disassembly skipped)\n", pc);
 
 	enter_mon();
 	QuitEmulator();
@@ -3465,6 +3480,13 @@ void sheepshaver_cpu::execute_native_op(uint32 selector)
 		break;
 	case NATIVE_USB_UIM_POLL:
 		USBUIMPoll();
+		break;
+	case NATIVE_USB_UIM_COMPLETE:
+		USBUIMDeliverCompletions();
+		break;
+	case NATIVE_USB_EXPORT_HOOK:
+		gpr(3) = USBUIMExportHook(pc(), gpr(3), gpr(4), gpr(5), gpr(6),
+			gpr(7), gpr(8));
 		break;
 	case NATIVE_USB_EXPERT_NOTIFY: {
 		// Chains into the Expert, so the same non-volatile registers have to

@@ -1,6 +1,8 @@
 /*
  *  usbuim.h - SheepShaver's own USB Universal Interface Module
  *
+ *  The guest side is USBUIMStub.i
+ *
  *	(C) 2026 Ryan Norton (battlemageloveryt@gmail.com)
  *
  *  This program is free software; you can redistribute it and/or modify
@@ -45,6 +47,13 @@ extern void USBUIMPortChanged(void);
 // Called once per VBL. Dumps the USB Expert's own status log a few seconds
 // after it first touches us, which is the only way to see why it stalls.
 extern void USBUIMPoll(void);
+// The interrupt half: samples the gamepad pipe and delivers what finished.
+extern void USBUIMVBL(void);
+// Stands in for a hooked library export; site is the patched address.
+extern uint32 USBUIMExportHook(uint32 site, uint32 r3, uint32 r4,
+	uint32 r5, uint32 r6, uint32 r7, uint32 r8);
+// Runs the queued completions; the NATIVE_USB_UIM_COMPLETE entry point.
+extern void USBUIMDeliverCompletions(void);
 
 // Called from the host tick thread: samples where the guest is executing,
 // which is the only visibility left once it stops taking interrupts.

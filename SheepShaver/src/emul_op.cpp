@@ -386,6 +386,7 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 					ADBVBL();
 #ifdef ENABLE_USB
 					USBHIDVBL();
+					USBUIMVBL();
 #endif /* ENABLE_USB */
 					DrainPendingResourceLocks();	// DII fix: lock queued sound-component PEF handles (safe VBL context)
 

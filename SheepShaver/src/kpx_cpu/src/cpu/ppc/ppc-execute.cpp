@@ -749,6 +749,7 @@ extern uint32 ppc_recover_68k_sp(uint32 a7);
 #endif
 
 #if PPC_REPORT_BAD_EA
+#if PPC_REPORT_EVERY_ACCESS
 #define PPC_EA_SUSPECT(ea__)							\
 	((ea__) >= 0x30000000u						\
 		&& (((0xff88u >> ((ea__) >> 28)) & 1)			\
@@ -771,7 +772,10 @@ extern uint32 ppc_recover_68k_sp(uint32 a7);
 				ppc_report_bad_ea(pc(), ea__, 0);				\
 		}									\
 	} while (0)
-#else
+#endif
+#endif
+
+#if !PPC_REPORT_EVERY_ACCESS
 #define PPC_CHECK_EA(ea_, is_load_) do { } while (0)
 #define PPC_CHECK_EA_STORE(ea_) do { } while (0)
 #endif
@@ -805,17 +809,18 @@ void powerpc_cpu::execute_loadstore(uint32 opcode)
 			const uint32 slot = ppc_68k_branch_map[h];
 
 			/* The key beside the slot is what confirms the bucket. */
-			if (slot != 0 && ppc_68k_branch_key[slot - 1] == key) {
-				ppc_68k_branch_hits[slot - 1]++;
+			if (slot != 0 && ppc_68k_branches[slot - 1].key == key) {
+				ppc_68k_branches[slot - 1].hits++;
 			} else {
 				const int k = (ppc_68k_branch_pos + 1)
 					& (PPC_68K_BRANCHES - 1);
+				struct ppc_68k_branch *e = &ppc_68k_branches[k];
 
-				ppc_68k_branch_key[k] = key;
-				ppc_68k_branch_from[k] = ppc_68k_last_pc;
-				ppc_68k_branch_to[k] = npc;
-				ppc_68k_branch_op[k] = op;
-				ppc_68k_branch_hits[k] = 1;
+				e->key = key;
+				e->from = ppc_68k_last_pc;
+				e->to = npc;
+				e->op = op;
+				e->hits = 1;
 				ppc_68k_branch_map[h] = (uint16)(k + 1);
 				ppc_68k_branch_pos = k;
 			}

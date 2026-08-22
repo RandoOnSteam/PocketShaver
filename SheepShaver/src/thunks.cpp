@@ -135,7 +135,12 @@ uint32 NativeOpcode(int selector)
 		opcode = POWERPC_NATIVE_OP(0, selector);
 		break;
 	case NATIVE_USB_UIM_POLL:
+	case NATIVE_USB_UIM_COMPLETE:
 		opcode = POWERPC_NATIVE_OP(0, selector);
+		break;
+	case NATIVE_USB_EXPORT_HOOK:
+		// FN=1: patches the first instruction of a library export.
+		opcode = POWERPC_NATIVE_OP(1, selector);
 		break;
 	case NATIVE_USB_EXPERT_NOTIFY:
 		opcode = POWERPC_NATIVE_OP(0, selector);

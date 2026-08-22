@@ -848,6 +848,7 @@ uint32_t GlideDispatch(uint32_t r3, uint32_t r4, uint32_t r5,
 		/* void grBufferSwap(int swap_interval) */
 		const int interval = (int)r3;
 		GlideLog("grBufferSwap begin interval=%d", interval);
+		/* Make the back buffer visible (SubmitFrame + Present) */
 		GlideMetalBufferSwap(interval);
 		(void)dmc_set_active_owner(kDMCOwnerGlide);
 		GlideLog("grBufferSwap done (pending=0, presented)");

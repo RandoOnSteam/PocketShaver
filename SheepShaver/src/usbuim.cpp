@@ -49,11 +49,41 @@
 #include "thunks.h"
 #include "usbuim.h"
 #include "usbhid.h"
+#include "name_registry.h"
 #include "xlowmem.h"
+#include "emul_op.h"
+extern bool PPCGuestAddressValid(uint32 addr, uint32 len);
 
+/* Patches on the USB and InputSprocket library exports and on the private
+   routines inside InputSprocket HID, so the path from a report to a game
+   reading an element can be watched end to end. Each call unpatches, calls and
+   repatches, so it costs real time on the hot ones. */
+#define USB_ISP_TRACE 0
+#if USB_ISP_TRACE && !USBHID_LOG
+#error USB_ISP_TRACE reports through USBHIDLog; turn USBHID_LOG on too
+#endif
+#if USB_ISP_TRACE
+/* Defined with the export hooks, further down. */
+static void USBUIMHookReport(void);
+static int USBUIMHooksPending(void);
+static void USBUIMHookForget(void);
+#else
+static inline int USBUIMHooksPending(void) { return 0; }
+#endif
+/* Every reason this can decline to send, counted, with a line once a second.
+   The pipe going quiet is the whole symptom, so the counts are the diagnosis:
+   no armed transfer, rate limited, nothing packed, or a report identical to
+   the last one. */
+#if USBHID_LOG
+static uint32 pad_calls, pad_no_xfer, pad_rate, pad_empty, pad_same, pad_sent;
+#define USBCount(x) ((x)++)
+#define USBAdd(x, v) ((x) += (v))
+#else
+#define USBCount(x) ((void)0)
+#define USBAdd(x, v) ((void)0)
+#endif
 #include <stdio.h>
 #include <string.h>
-
 #define DEBUG 0
 #include "debug.h"
 
@@ -61,6 +91,7 @@
    They cost real guest time, so they are compiled out; set to 1 to bring back
    "profiler view", the AAPL,USBNodeType search and USBGetNextDeviceByClass. */
 #define USB_UIM_DIAGNOSTICS 0
+
 
 /* The whole UIM is behind the same switch as the rest of USB - see ENABLE_USB
    in usbhid.h. With it off, the no-op entry points at the end of the file
@@ -85,6 +116,14 @@ const uint8 *USBUIMDriver(uint32 *size)
  *  named USBFamilyExpertLib.
  */
 static int uim_seen_init;
+#if USBHID_LOG
+static int uim_polled;
+#endif
+/* The gamepad pipe has been armed at least once: enumeration is complete
+   and the VBL may service it. */
+static int pad_pipe_armed;
+
+
 static uint32 uim_status_buf;
 
 /* Resolve in guest context; FindLibSymbol executes guest code and therefore
@@ -141,19 +180,30 @@ static void USBUIMDumpExpertStatus(void)
  *  no other stage outstanding and finish the request early. The ROM OHCI UIM
  *  also completes later, from its queued interrupt work.
  */
+/* Microseconds a second spent in each part of the USB path, and the calls. */
+#if USBHID_LOG
+static uint64 us_vbl, us_dispatch, us_defer;
+static uint32 n_vbl, n_dispatch, n_defer;
+#endif
+
 enum { USB_DONE_QUEUE = 64 };
 
 static struct {
 	uint32 proc;
 	uint32 refcon;
-	uint32 actual;
+	uint32 remaining;
 	int32 status;
 } usb_done[USB_DONE_QUEUE];
 static int usb_done_in;
 static int usb_done_out;
 
+/* The third argument of a UIM completion is bufferSizeRemaining, which is
+   what the request still wants, not what arrived. The ROM UIM computes it
+   from the TD (code 0x2aa8): zero when CurrentBufferPointer is null, else
+   BufferEnd - CurrentBufferPointer + 1. USBServicesLib turns it into
+   usbActCount by subtracting it from usbReqCount. */
 static void USBUIMComplete(uint32 proc, uint32 refcon, int32 status,
-	uint32 actual)
+	uint32 remaining)
 {
 	int next = (usb_done_in + 1) % USB_DONE_QUEUE;
 
@@ -166,7 +216,7 @@ static void USBUIMComplete(uint32 proc, uint32 refcon, int32 status,
 	usb_done[usb_done_in].proc = proc;
 	usb_done[usb_done_in].refcon = refcon;
 	usb_done[usb_done_in].status = status;
-	usb_done[usb_done_in].actual = actual;
+	usb_done[usb_done_in].remaining = remaining;
 	usb_done_in = next;
 }
 
@@ -186,14 +236,27 @@ static void USBUIMRunCompletions(void)
 		uint32 proc = usb_done[usb_done_out].proc;
 		uint32 refcon = usb_done[usb_done_out].refcon;
 		uint32 status = (uint32)usb_done[usb_done_out].status;
-		uint32 actual = usb_done[usb_done_out].actual;
+		uint32 remaining = usb_done[usb_done_out].remaining;
 		usb_done_out = (usb_done_out + 1) % USB_DONE_QUEUE;
-		USBHIDLog("complete refcon=%08x status=%d actual=%u",
-			refcon, (int)(int32)status, actual);
-		CallMacOS3(completion_ptr, proc, refcon, status, actual);
+#if USBHID_TRACE
+		USBHIDLog("complete proc=%08x refcon=%08x status=%d left=%u",
+			proc, refcon, (int)(int32)status, remaining);
+#endif
+		/* proc comes from the guest. Calling a wild one is an access violation
+		   with no report at all, so say so and drop it instead. */
+		if (proc == 0 || !PPCGuestAddressValid(proc, 4)) {
+			USBHIDLog("  BAD completion proc %08x - dropped", proc);
+			continue;
+		}
+		CallMacOS3(completion_ptr, proc, refcon, status, remaining);
 	}
 	busy = 0;
 }
+
+/* The gamepad's finished report, held apart from the ring: it is the one
+   completion that has to be handed back while a game is running, and the only
+   one that does not start a chain of USB family work. */
+static uint32 pad_done_proc, pad_done_refcon, pad_done_left;
 
 /*
  *  Everything above the UIM talks to the Expert through one notification
@@ -765,12 +828,16 @@ static void USBUIMProbeDevices(void)
 }
 #endif
 
+static int uim_service_busy;
+/* Depth of guest calls into the UIM; a completion must not run inside one. */
+static int uim_in_dispatch;
+
 void USBUIMPoll(void)
 {
-	/* completion(refcon, OSStatus, actualByteCount) - the shape the ROM UIM
-	   calls with at its own TD-done points (UIM code 0x35e0, 0x4f3c). */
+	/* completion(refcon, OSStatus, bufferSizeRemaining) - the shape the ROM
+	   UIM calls with at its own TD-done points (UIM code 0x35e0, 0x4f3c). */
 	typedef void (*idle_ptr)(void);
-	static int busy;
+	int &busy = uim_service_busy;
 
 	/* Everything below calls back into the guest, and any of those calls can
 	   reach SynchIdleTime again - which is where this is called from. Without
@@ -780,12 +847,8 @@ void USBUIMPoll(void)
 		return;
 	busy = 1;
 
-	/* First, always. Everything below runs guest code and can take tens of
-	   milliseconds; a completion left waiting behind it lets USL time the
-	   request out and recycle the request block, and the next completion then
-	   calls through a routine pointer that is no longer there. Measured: a
-	   crash inside USBServicesLib at a bctrl with r11 = garbage, immediately
-	   after a long stretch of registry work. */
+	/* Before the heartbeats: a completion left waiting behind them lets USL
+	   time the request out and recycle the request block. */
 	USBUIMRunCompletions();
 
 	/* The two heartbeats.
@@ -797,8 +860,6 @@ void USBUIMPoll(void)
 	 * gets them there is in USBNodePublishDeferred, in front of ExecuteNative,
 	 * because the mode switch costs more than these calls do.
 	 *
-	 * USBIdleTask has to keep running: it is what reaches slot 21, which is
-	 * where transfer completions and the joystick's report pipe are serviced.
 	 * The Expert's drain only runs while an arrival is still being worked on -
 	 * see usb_expert_drain_until.
 	 */
@@ -864,6 +925,7 @@ void USBUIMSampleGuest(void)
 	pc = PPCSampleGuestPC();
 	off = pc - ROMBase;
 	if (off < ROM_AREA_SIZE) {
+		/* Fragment code sections, from docs/usb-ohci-uim.md section 1. */
 		if (off >= 0x21de10 && off < 0x227d28) {
 			USBHIDLog("guest in USBFamilyExpertLib code+%06x (pc=%08x)%s",
 				off - 0x21de10, pc, pc == last ? " SPINNING" : "");
@@ -1002,27 +1064,7 @@ void USBUIMRegisterBus(uint32 node)
 				}
 			}
 		}
-		/* Whether anything else already drives the Expert's event drain.
-		 *
-		 * INIT_USBExpert hangs it off a patch on toolbox trap 0xABF7 (Expert
-		 * code 0x868: NewPtrSys, NewRoutineDescriptor, SetToolboxTrapAddress),
-		 * and toolbox trap n lives at 0xE00 + (n & 0x3ff)*4. With a minimal
-		 * Extensions folder that trap is the shared unimplemented-trap stub -
-		 * every neighbour holds the same handler - so nothing calls it and the
-		 * drain is ours to run. With a full Extensions folder it is a real 68k
-		 * patch in RAM chaining into the ROM, so the drain is already being
-		 * driven.
-		 *
-		 * Except that it is not: with a full Extensions folder 0xABF7 is a real
-		 * 68k patch in RAM, and refusing to drive the drain because of it stops
-		 * enumeration dead - the first "expert notify" is queued and nothing
-		 * ever looks at it, so no hub driver, no port device and no HID.
-		 * INIT_USBExpert bails here at "Couldn't find any USB Controllers/UIMS"
-		 * long before its SetToolboxTrapAddress, so the Expert never installs
-		 * that patch and whatever owns 0xABF7 is some other extension. Measured
-		 * and reverted; the trap table is still logged because it is the only
-		 * view of who else is in play.
-		 */
+		/* Whether anything else already drives the Expert's event drain. */
 		{
 			uint32 patch = ReadMacInt32(0xe00 + 0x3f7 * 4);
 			int t;
@@ -1198,7 +1240,8 @@ registered:
  *    slot 7 UIMCreateInterruptTransfer(same shape)
  *
  *  where the UIM stores completion at TD+0x10 and refcon at TD+0x14 and later
- *  calls completion(refcon, OSStatus, actualCount) through glue 0x5a40. dir is
+ *  calls completion(refcon, OSStatus, bufferSizeRemaining) through glue
+ *  0x5a40. dir is
  *  Mac OS's kUSBOut 0 / kUSBIn 1 / kUSBNone 2, and a control transfer arrives
  *  as three separate calls: kUSBNone with the eight-byte device request, then
  *  the data stage, then a zero-length status stage.
@@ -1486,17 +1529,19 @@ static uint32 USBRootHubControl(uint32 refcon, uint32 completion, uint32 buffer,
 	if (dir == USB_DIR_NONE) {
 		/* Setup stage: latch the request and act on the ones with no data. */
 		Mac2Host_memcpy(setup, buffer, 8);
+#if USBHID_LOG
 		USBHIDLog("  setup fa=%u %02x %02x %02x%02x %02x%02x %02x%02x",
 			fa, setup[0], setup[1], setup[3], setup[2], setup[5], setup[4],
 			setup[7], setup[6]);
+#endif
 		if ((setup[6] | setup[7]) == 0) {
 			n = USBRequestFor(fa, setup, data, 0);
 			if (n < 0) {
-				USBUIMComplete(completion, refcon, kUSBEndpointStalled, 0);
+				USBUIMComplete(completion, refcon, kUSBEndpointStalled, 8);
 				return 0;
 			}
 		}
-		USBUIMComplete(completion, refcon, 0, 8);
+		USBUIMComplete(completion, refcon, 0, 0);
 		return 0;
 	}
 
@@ -1510,16 +1555,16 @@ static uint32 USBRootHubControl(uint32 refcon, uint32 completion, uint32 buffer,
 		n = USBRequestFor(fa, setup, data,
 			length > sizeof(data) ? (int)sizeof(data) : (int)length);
 		if (n < 0) {
-			USBUIMComplete(completion, refcon, kUSBEndpointStalled, 0);
+			USBUIMComplete(completion, refcon, kUSBEndpointStalled, length);
 			return 0;
 		}
 		Host2Mac_memcpy(buffer, data, n);
-		USBUIMComplete(completion, refcon, 0, (uint32)n);
+		USBUIMComplete(completion, refcon, 0, length - (uint32)n);
 		return 0;
 	}
 
 	/* OUT data stage - nothing the hub takes a payload for. */
-	USBUIMComplete(completion, refcon, 0, length);
+	USBUIMComplete(completion, refcon, 0, 0);
 	return 0;
 }
 
@@ -1555,6 +1600,7 @@ static uint32 USBInterruptTransfer(uint32 refcon, uint32 completion,
 	pad_int_completion = completion;
 	pad_int_buffer = buffer;
 	pad_int_length = length;
+	pad_pipe_armed = 1;
 	return 0;
 }
 
@@ -1563,30 +1609,609 @@ static uint32 USBInterruptTransfer(uint32 refcon, uint32 completion,
  *
  *  A HID device with no idle rate set reports only when something changes, so
  *  the held transfer is completed only when the packed report differs from the
- *  one last delivered. Called from slot 21, like every other completion.
+ *  one last delivered. Called from the 60 Hz interrupt.
  */
-static void USBPadReport(void)
+
+
+/* The last report delivered, so an unchanged one is not sent again. File
+   scope so a reset can clear it. */
+static uint8 pad_last[32];
+static int pad_last_len;
+
+static void USBPadReportReset(void)
+{
+	memset(pad_last, 0, sizeof(pad_last));
+	pad_last_len = 0;
+}
+
+static void USBPadReport(uint64 now)
 {
 	uint8 report[32];
-	static uint8 last[32];
-	static int last_len;
+	static uint64 next_pack;
+#if USBHID_LOG
+	static uint64 next_log;
+#endif
 	uint32 completion = pad_int_completion;
 	int n;
 
-	if (completion == 0 || pad_int_length == 0)
+	USBCount(pad_calls);
+#if USBHID_LOG
+	if (now >= next_log) {
+		next_log = now + 1000000;
+		USBHIDLog("pad pipe: calls=%u no_xfer=%u rate=%u empty=%u same=%u"
+			" sent=%u polled=%u | completion=%08x refcon=%08x buffer=%08x len=%u",
+			pad_calls, pad_no_xfer, pad_rate, pad_empty, pad_same, pad_sent,
+			uim_polled, pad_int_completion, pad_int_refcon, pad_int_buffer,
+			pad_int_length);
+		uim_polled = 0;
+		USBHIDLog("usb cost/s: vbl %lluus/%u dispatch %lluus/%u"
+			" defer %lluus/%u",
+			(unsigned long long)us_vbl, n_vbl,
+			(unsigned long long)us_dispatch, n_dispatch,
+			(unsigned long long)us_defer, n_defer);
+#if USB_ISP_TRACE
+		USBUIMHookReport();
+#endif
+		us_vbl = us_dispatch = us_defer = 0;
+		n_vbl = n_dispatch = n_defer = 0;
+		pad_calls = pad_no_xfer = pad_rate = 0;
+		pad_empty = pad_same = pad_sent = 0;
+	}
+#endif
+	if (completion == 0 || pad_int_length == 0) {
+		USBCount(pad_no_xfer);
 		return;
+	}
+	/* The endpoint declares bInterval 10, and UIM_POLL_BUS runs far faster than
+	   that.  Packing a report the pipe cannot carry yet is pure cost. */
+	if (now < next_pack) {
+		USBCount(pad_rate);
+		return;
+	}
+	next_pack = now + 8000;
 	n = USBHIDDeviceInterruptIn(report, (int)sizeof(report));
-	if (n <= 0)
+	if (n <= 0) {
+		USBCount(pad_empty);
 		return;
-	if (n == last_len && memcmp(report, last, n) == 0)
+	}
+	if (n == pad_last_len && memcmp(report, pad_last, n) == 0) {
+		USBCount(pad_same);
 		return;
-	memcpy(last, report, n);
-	last_len = n;
+	}
+	memcpy(pad_last, report, n);
+	pad_last_len = n;
 	if (n > (int)pad_int_length)
 		n = (int)pad_int_length;
+	USBCount(pad_sent);
+#if USBHID_TRACE
+	USBHIDLog("pad send %d bytes to %08x: %02x %02x %02x %02x %02x %02x"
+		" %02x %02x %02x %02x %02x", n, pad_int_buffer,
+		report[0], report[1], report[2], report[3], report[4], report[5],
+		report[6], report[7], report[8], report[9], report[10]);
+#endif
 	pad_int_completion = 0;
 	Host2Mac_memcpy(pad_int_buffer, report, n);
-	USBUIMComplete(completion, pad_int_refcon, 0, (uint32)n);
+	pad_done_refcon = pad_int_refcon;
+	pad_done_left = pad_int_length - (uint32)n;
+	pad_done_proc = completion;
+}
+
+
+
+
+
+#if USB_ISP_TRACE
+/* A patch on the first instruction of a routine, so every call can be counted
+   and still do its job. The handler is shared: the patched address says which
+   routine was entered. A hook with an anchor sits inside a fragment that does
+   not export it - the export fixes the code section and the offset picks the
+   routine out of it. */
+struct usb_hook {
+	const char *lib;
+	const char *sym;
+	const char *name;
+	uint32 anchor;
+	uint32 target;
+	uint32 tvect;
+	uint32 code;
+	uint32 orig;
+	uint32 calls;
+};
+
+/* Code offsets in InputSprocket HID, read off its disassembly. */
+enum {
+	ISP_HID_TICKLE = 0x9ea8,
+	ISP_HID_SETACTIVE = 0x0170,
+	ISP_HID_REPORT = 0x25a8,
+	ISP_HID_FIELD = 0x2234,
+	ISP_HID_PUSHALL = 0x95e0
+};
+
+/* Offsets in InputSprocket HID's own device record, from the same reading. */
+enum {
+	ISP_DEV_TABLE = 0x50,
+	ISP_DEV_QUEUE = 0x64,
+	ISP_DEV_ENABLED = 0xcc,
+	ISP_DEV_GONE = 0xce,
+	ISP_DEV_INDIALOG = 0xcf,
+	ISP_DEV_FIELDS = 0x108,
+	ISP_DEV_NFIELDS = 0x10c,
+	ISP_DEV_PUSHVECT = 0x114,
+	ISP_DEV_VALID = 0x120,
+	ISP_DEV_NGROUPS = 0x14c,
+	ISP_FIELD_SIZE = 0xc4,
+	ISP_FIELD_ELEMENT = 0x00,
+	ISP_FIELD_KIND = 0x4c,
+	ISP_FIELD_TYPE = 0x74,
+	ISP_FIELD_FLAGS = 0x78,
+	ISP_FIELD_REPORTID = 0x7c,
+	ISP_FIELD_PAGE = 0x84,
+	ISP_FIELD_USAGE = 0x88,
+	ISP_FIELD_RAW = 0x94,
+	ISP_FIELD_VALUE = 0x98
+};
+
+static struct usb_hook usb_hooks[] = {
+	{ "\020InputSprocketLib", "\031ISpElement_PushSimpleData",
+		"PushSimple", 0, 0, 0, 0, 0, 0 },
+	{ "\020InputSprocketLib", "\032ISpElement_PushComplexData",
+		"PushComplex", 0, 0, 0, 0, 0, 0 },
+	{ "\020InputSprocketLib", "\016ISpElement_New",
+		"ElementNew", 0, 0, 0, 0, 0, 0 },
+	{ "\020InputSprocketLib", "\015ISpDevice_New",
+		"DeviceNew", 0, 0, 0, 0, 0, 0 },
+	{ "\020InputSprocketLib", "\031ISpElement_GetSimpleState",
+		"GetSimple", 0, 0, 0, 0, 0, 0 },
+	{ "\020InputSprocketLib", "\036ISpElement_NewVirtualFromNeeds",
+		"VirtualNeeds", 0, 0, 0, 0, 0, 0 },
+	{ "\020InputSprocketLib", "\030ISpDevices_ActivateClass",
+		"ActivateClass", 0, 0, 0, 0, 0, 0 },
+	{ "\020InputSprocketLib", "\023ISpDevices_Activate",
+		"Activate", 0, 0, 0, 0, 0, 0 },
+	{ "\020InputSprocketLib", "\022ISpDevice_IsActive",
+		"IsActive", 0, 0, 0, 0, 0, 0 },
+	{ "\015USBManagerLib", "\030USBGetDriverConnectionID",
+		"ConnectionID", 0, 0, 0, 0, 0, 0 },
+	{ "\014InterfaceLib", "\012FindSymbol",
+		"FindSymbol", 0, 0, 0, 0, 0, 0 },
+	{ "\021InputSprocket HID", "\020ISpDriver_Tickle",
+		"HIDSetActive", ISP_HID_TICKLE, ISP_HID_SETACTIVE, 0, 0, 0, 0 },
+	{ "\021InputSprocket HID", "\020ISpDriver_Tickle",
+		"HIDReport", ISP_HID_TICKLE, ISP_HID_REPORT, 0, 0, 0, 0 },
+	{ "\021InputSprocket HID", "\020ISpDriver_Tickle",
+		"HIDField", ISP_HID_TICKLE, ISP_HID_FIELD, 0, 0, 0, 0 },
+	{ "\021InputSprocket HID", "\020ISpDriver_Tickle",
+		"HIDPushAll", ISP_HID_TICKLE, ISP_HID_PUSHALL, 0, 0, 0, 0 }
+};
+
+enum {
+	HOOK_PUSH_SIMPLE = 0,
+	HOOK_PUSH_COMPLEX,
+	HOOK_ELEMENT_NEW,
+	HOOK_DEVICE_NEW,
+	HOOK_GET_SIMPLE,
+	HOOK_VIRTUAL_NEEDS,
+	HOOK_ACTIVATE_CLASS,
+	HOOK_ACTIVATE,
+	HOOK_IS_ACTIVE,
+	HOOK_CONNECTION_ID,
+	HOOK_FIND_SYMBOL,
+	HOOK_HID_SETACTIVE,
+	HOOK_HID_REPORT,
+	HOOK_HID_FIELD,
+	HOOK_HID_PUSHALL,
+	HOOK_COUNT
+};
+
+/* Field parsing is 21 calls a report at 60 reports a second, and every one
+   costs a decode-cache range clear. Enough passes to see each field's answer
+   several times, then the patch comes off for good. */
+enum { HOOK_FIELD_BUDGET = 400 };
+
+static void USBUIMHookSet(struct usb_hook *h, int on)
+{
+	uint32 word = h->orig;
+
+	if (on)
+		word = NativeOpcode(NATIVE_USB_EXPORT_HOOK);
+	WriteMacInt32(h->code, word);
+	FlushCodeCache(h->code, h->code + 4);
+}
+
+/* A routine a fragment does not export needs a transition vector of its own
+   before it can be called back; the TOC comes from the export used to find the
+   code section. It has to come from the procedure half of SheepMem: the data
+   half is the LIFO every SheepVar allocates from, and this is taken while a
+   nested guest call is on the host stack, so the moment that call unwound the
+   same bytes were handed to execute_macos_code's trampoline and the vector
+   read back as EXEC_RETURN. */
+static uint32 isp_tv_pool, isp_tv_next;
+/* InputSprocket HID is only prepared once a game starts InputSprocket, and
+   asking CFM to load a fragment from the VBL would prepare it here instead.
+   ISpDevice_New is the signal that the driver fragments are all in already. */
+static int isp_drivers_up;
+
+static uint32 USBUIMMakeTVector(uint32 code, uint32 toc)
+{
+	uint32 tv;
+
+	if (isp_tv_pool == 0) {
+		isp_tv_pool = SheepMem::ReserveProc(8 * HOOK_COUNT);
+		isp_tv_next = isp_tv_pool;
+	}
+	if (isp_tv_pool == 0)
+		return 0;
+	tv = isp_tv_next;
+	isp_tv_next += 8;
+	WriteMacInt32(tv, code);
+	WriteMacInt32(tv + 4, toc);
+	return tv;
+}
+
+/* A library is only resolvable once something has connected to it, so this keeps
+   asking until each one answers. */
+static void USBUIMHookInstall(void)
+{
+	static uint64 next_try;
+	const uint64 now = GetTicks_usec();
+	int i;
+
+	if (now < next_try)
+		return;
+	next_try = now + 1000000;
+	for (i = 0; i < HOOK_COUNT; i++) {
+		struct usb_hook *h = &usb_hooks[i];
+		uint32 tv;
+
+		if (h->code != 0)
+			continue;
+		if (h->anchor != 0 && isp_drivers_up == 0)
+			continue;
+		tv = FindLibSymbol((char *)h->lib, (char *)h->sym);
+		if (tv == 0)
+			continue;
+		if (h->anchor != 0) {
+			uint32 base = ReadMacInt32(tv) - h->anchor;
+
+			tv = USBUIMMakeTVector(base + h->target,
+				ReadMacInt32(tv + 4));
+			if (tv == 0)
+				continue;
+		}
+		h->tvect = tv;
+		h->code = ReadMacInt32(h->tvect);
+		if (h->code == 0)
+			continue;
+		h->orig = ReadMacInt32(h->code);
+		USBUIMHookSet(h, 1);
+		USBHIDLog("hooked %s at %08x tvect=%08x", h->name, h->code,
+			h->tvect);
+	}
+}
+
+/* A game never reaches the idle loop, so the only guest entry left is the one
+   the gamepad's completion uses - and that only runs when a report differs.
+   This keeps it running until every hook is in. */
+static int USBUIMHooksPending(void)
+{
+	int i;
+
+	for (i = 0; i < HOOK_COUNT; i++) {
+		if (usb_hooks[i].anchor != 0 && isp_drivers_up == 0)
+			continue;
+		if (usb_hooks[i].code == 0)
+			return 1;
+	}
+	return 0;
+}
+
+/* A guest reset takes the patched fragments with it, so every address here is
+   stale and the hooks have to be found again. */
+static void USBUIMHookForget(void)
+{
+	int i;
+
+	for (i = 0; i < HOOK_COUNT; i++) {
+		usb_hooks[i].tvect = 0;
+		usb_hooks[i].code = 0;
+		usb_hooks[i].orig = 0;
+	}
+	isp_tv_next = isp_tv_pool;
+	isp_drivers_up = 0;
+}
+
+/* The Pascal name a FindSymbol caller asked for. */
+static void USBUIMPascal(uint32 addr, char *out, int max)
+{
+	int n = 0;
+	int i;
+
+	if (addr != 0 && PPCGuestAddressValid(addr, 1))
+		n = ReadMacInt8(addr);
+	if (n > max - 1)
+		n = max - 1;
+	for (i = 0; i < n; i++)
+		out[i] = (char)ReadMacInt8(addr + 1 + i);
+	out[n] = 0;
+}
+
+/* The dispatch table InputSprocket reads a USB gamepad through. */
+static void USBUIMDumpTable(uint32 addr)
+{
+	char line[128];
+	int i;
+
+	if (addr == 0 || !PPCGuestAddressValid(addr, 64))
+		return;
+	line[0] = 0;
+	for (i = 0; i < 12; i++)
+		sprintf(line + 9 * i, "%08x ", ReadMacInt32(addr + 4 * i));
+	USBHIDLog("  table %08x: %s", addr, line);
+}
+
+/* Everything InputSprocket HID's device record says about its own state, and
+   the parsed value of every field. A report that arrives and leaves these
+   unchanged is a parse that failed; a record that never gets here at all is a
+   report handler that was never installed. */
+static void USBUIMDumpHIDDevice(uint32 dev, uint32 report, uint32 len)
+{
+	char line[64];
+	uint32 fields;
+	uint32 n;
+	uint32 i;
+	int p = 0;
+
+	if (dev == 0 || !PPCGuestAddressValid(dev, 0x188))
+		return;
+	n = ReadMacInt32(dev + ISP_DEV_NFIELDS);
+	fields = ReadMacInt32(dev + ISP_DEV_FIELDS);
+	USBHIDLog("  HID dev=%08x enabled=%u gone=%u indialog=%u valid=%u"
+		" table=%08x queue=%08x push=%08x fields=%u groups=%u len=%u",
+		dev, ReadMacInt8(dev + ISP_DEV_ENABLED),
+		ReadMacInt8(dev + ISP_DEV_GONE),
+		ReadMacInt8(dev + ISP_DEV_INDIALOG),
+		ReadMacInt8(dev + ISP_DEV_VALID),
+		ReadMacInt32(dev + ISP_DEV_TABLE),
+		ReadMacInt32(dev + ISP_DEV_QUEUE),
+		ReadMacInt32(dev + ISP_DEV_PUSHVECT),
+		n, ReadMacInt32(dev + ISP_DEV_NGROUPS), len);
+	if (report != 0 && PPCGuestAddressValid(report, 12)) {
+		for (i = 0; i < 12; i++)
+			p += sprintf(line + p, "%02x ", ReadMacInt8(report + i));
+		USBHIDLog("  HID report: %s", line);
+	}
+	if (fields == 0 || n > 32)
+		return;
+	for (i = 0; i < n; i++) {
+		uint32 f = fields + i * ISP_FIELD_SIZE;
+
+		if (!PPCGuestAddressValid(f, ISP_FIELD_SIZE))
+			return;
+		USBHIDLog("  HID field %u elem=%08x kind=%08x type=%u"
+			" flags=%08x rid=%u page=%04x usage=%04x raw=%08x"
+			" value=%08x", i,
+			ReadMacInt32(f + ISP_FIELD_ELEMENT),
+			ReadMacInt32(f + ISP_FIELD_KIND),
+			ReadMacInt32(f + ISP_FIELD_TYPE),
+			ReadMacInt32(f + ISP_FIELD_FLAGS),
+			ReadMacInt32(f + ISP_FIELD_REPORTID),
+			ReadMacInt32(f + ISP_FIELD_PAGE),
+			ReadMacInt32(f + ISP_FIELD_USAGE),
+			ReadMacInt32(f + ISP_FIELD_RAW),
+			ReadMacInt32(f + ISP_FIELD_VALUE));
+	}
+}
+
+uint32 USBUIMExportHook(uint32 site, uint32 r3, uint32 r4, uint32 r5,
+	uint32 r6, uint32 r7, uint32 r8)
+{
+	typedef uint32 (*any_ptr)(uint32, uint32, uint32, uint32, uint32,
+		uint32);
+	static uint32 field_calls;
+	struct usb_hook *h = 0;
+	char name[64];
+	uint32 res;
+	int which = -1;
+	int i;
+
+	for (i = 0; i < HOOK_COUNT; i++) {
+		if (usb_hooks[i].code == site) {
+			which = i;
+			h = &usb_hooks[i];
+			break;
+		}
+	}
+	if (h == 0)
+		return 0;
+	h->calls++;
+	if (which == HOOK_DEVICE_NEW)
+		isp_drivers_up = 1;
+	name[0] = 0;
+	if (which == HOOK_FIND_SYMBOL)
+		USBUIMPascal(r4, name, sizeof(name));
+
+	USBUIMHookSet(h, 0);
+	res = CallMacOS6(any_ptr, h->tvect, r3, r4, r5, r6, r7, r8);
+	if (which != HOOK_HID_FIELD)
+		USBUIMHookSet(h, 1);
+	else if (++field_calls < HOOK_FIELD_BUDGET)
+		USBUIMHookSet(h, 1);
+
+	if (which == HOOK_FIND_SYMBOL && strstr(name, "HID") != 0) {
+		const uint32 addr = ReadMacInt32(r5);
+
+		USBHIDLog("FindSymbol(conn=%08x, %s) -> %d addr=%08x",
+			r3, name, (int)(int32)res, addr);
+		USBUIMDumpTable(addr);
+	}
+	/* Which elements the game actually reads, each one named once. */
+	if (which == HOOK_GET_SIMPLE) {
+		static uint32 seen[32];
+		static int seen_n;
+		int k;
+
+		for (k = 0; k < seen_n; k++) {
+			if (seen[k] == r3)
+				break;
+		}
+		if (k == seen_n && seen_n < 32) {
+			seen[seen_n++] = r3;
+			USBHIDLog("game reads element %08x -> %d value=%08x",
+				r3, (int)(int32)res, ReadMacInt32(r4));
+		}
+	}
+	/* A working pipe pushes sixty times a second, so the log only carries the
+	   opening stretch; the per-second counts carry the rest. */
+	if (which == HOOK_PUSH_SIMPLE || which == HOOK_PUSH_COMPLEX) {
+		static uint32 pushes;
+
+		if (pushes < 200) {
+			pushes++;
+			USBHIDLog("%s element=%08x size=%u data=%08x -> %d",
+				h->name, r3, r4, ReadMacInt32(r5),
+				(int)(int32)res);
+		}
+	}
+	if (which == HOOK_VIRTUAL_NEEDS) {
+		USBHIDLog("NewVirtualFromNeeds count=%u needs=%08x out=%08x"
+			" -> %d", r3, r4, r5, (int)(int32)res);
+	}
+	if (which == HOOK_ACTIVATE_CLASS || which == HOOK_ACTIVATE) {
+		USBHIDLog("%s r3=%08x r4=%08x -> %d", h->name, r3, r4,
+			(int)(int32)res);
+	}
+	if (which == HOOK_IS_ACTIVE) {
+		static uint32 seen[8];
+		static int seen_n;
+		int k;
+
+		for (k = 0; k < seen_n; k++) {
+			if (seen[k] == r3)
+				break;
+		}
+		if (k == seen_n && seen_n < 8) {
+			seen[seen_n++] = r3;
+			USBHIDLog("IsActive device=%08x -> %d", r3,
+				(int)(int32)res);
+		}
+	}
+	if (which == HOOK_CONNECTION_ID) {
+		USBHIDLog("USBGetDriverConnectionID(ref=%08x) -> %d conn=%08x",
+			r3, (int)(int32)res, ReadMacInt32(r4));
+	}
+	if (which == HOOK_ELEMENT_NEW || which == HOOK_DEVICE_NEW) {
+		char hex[3 * 0x68 + 1];
+		int max = 24;
+		int b;
+
+		if (which == HOOK_ELEMENT_NEW)
+			max = 0x68;
+		for (b = 0; b < max; b++)
+			sprintf(hex + 3 * b, "%02x ", ReadMacInt8(r3 + b));
+		USBHIDLog("%s %s-> %d ref=%08x", h->name, hex,
+			(int)(int32)res, ReadMacInt32(r4));
+	}
+	/* The report handler, once a second: the whole device state at the moment
+	   a report was delivered. */
+	if (which == HOOK_HID_REPORT) {
+		static uint64 next_dump;
+		const uint64 now = GetTicks_usec();
+
+		if (now >= next_dump) {
+			next_dump = now + 1000000;
+			USBUIMDumpHIDDevice(r5, r3, r4);
+		}
+	}
+	if (which == HOOK_HID_SETACTIVE) {
+		USBHIDLog("HID SetActive dev=%08x on=%u -> %d", r3, r4,
+			(int)(int32)res);
+		USBUIMDumpHIDDevice(r3, 0, 0);
+	}
+	/* Only an answer that stops a field being pushed is worth a line. */
+	if (which == HOOK_HID_FIELD && res != 0) {
+		static uint32 shown;
+
+		if (shown < 64) {
+			shown++;
+			USBHIDLog("HID field %u parse -> %d dev=%08x len=%u",
+				r4, (int)(int32)res, r3, r6);
+		}
+	}
+	return res;
+}
+
+/* Every hooked routine, once a second, so a silent link in the chain shows up. */
+static void USBUIMHookReport(void)
+{
+	char line[512];
+	int n = 0;
+	int i;
+
+	for (i = 0; i < HOOK_COUNT; i++) {
+		n += sprintf(line + n, "%s=%u ", usb_hooks[i].name,
+			usb_hooks[i].calls);
+		usb_hooks[i].calls = 0;
+	}
+	USBHIDLog("ISp/USB calls: %s", line);
+}
+
+#else
+
+uint32 USBUIMExportHook(uint32 site, uint32 r3, uint32 r4, uint32 r5,
+	uint32 r6, uint32 r7, uint32 r8)
+{
+	(void)site; (void)r3; (void)r4; (void)r5; (void)r6; (void)r7; (void)r8;
+	return 0;
+}
+
+#endif /* USB_ISP_TRACE */
+
+/* Hand that report back, from a guest entry of our own making. */
+void USBUIMDeliverCompletions(void)
+{
+	typedef void (*completion_ptr)(uint32, uint32, uint32);
+	typedef void (*idle_ptr)(void);
+	const uint64 t0 = GetTicks_usec();
+	const uint32 proc = pad_done_proc;
+
+	pad_done_proc = 0;
+	if (proc != 0 && PPCGuestAddressValid(proc, 4))
+		CallMacOS3(completion_ptr, proc, pad_done_refcon, 0, pad_done_left);
+
+	/* An arrival is only queued by the Expert, and what empties that queue is
+	   a trap the Event Manager calls, so a driver that asks to be told about
+	   the gamepad during a game is never told and never opens a pipe. This is
+	   the flag byte the Expert's own trap handler tests. */
+	if (usb_expert_idle != 0 && usb_expert_pending != 0
+			&& ReadMacInt8(usb_expert_pending) != 0) {
+		static uint64 next_drain;
+		if (t0 >= next_drain) {
+			next_drain = t0 + 100000;
+			CallMacOS(idle_ptr, usb_expert_idle);
+		}
+	}
+#if USB_ISP_TRACE
+	USBUIMHookInstall();
+#endif
+	USBAdd(us_defer, GetTicks_usec() - t0);
+	USBCount(n_defer);
+}
+
+/* The interrupt half of a real UIM: sample the pipe, then hand back what
+   finished from a guest entry outside any call the family made into us. */
+void USBUIMVBL(void)
+{
+	const uint64 t0 = GetTicks_usec();
+
+	if (uim_seen_init && pad_pipe_armed) {
+		USBPadReport(t0);
+		/* Never from inside a call the family made into the UIM. */
+		if ((pad_done_proc != 0 || USBUIMHooksPending())
+				&& uim_in_dispatch == 0)
+			ExecuteNative(NATIVE_USB_UIM_COMPLETE);
+	}
+	USBAdd(us_vbl, GetTicks_usec() - t0);
+	USBCount(n_vbl);
 }
 
 /*
@@ -1604,7 +2229,7 @@ void USBUIMPortChanged(void)
 	WriteMacInt8(hub_int_buffer, 0x02);
 	USBHIDLog("  hub status change reported (status=%04x change=%04x)",
 		port_status, port_change);
-	USBUIMComplete(completion, refcon, 0, 1);
+	USBUIMComplete(completion, refcon, 0, hub_int_length - 1);
 }
 
 enum {
@@ -1641,25 +2266,52 @@ enum {
    Expert's normal LoadUIM path. */
 #define UIM_INIT_RESULT 0
 
+static uint32 USBUIMDispatchBody(uint32 slot, uint32 table, uint32 caller,
+	uint32 r3, uint32 r4, uint32 r5, uint32 r6, uint32 r7, uint32 r8,
+	uint32 r9, uint32 r10);
+
 uint32 USBUIMDispatch(uint32 slot, uint32 table, uint32 caller, uint32 r3,
 	uint32 r4, uint32 r5, uint32 r6, uint32 r7, uint32 r8, uint32 r9,
 	uint32 r10)
 {
+#if USBHID_LOG
+	const uint64 t0 = GetTicks_usec();
+#endif
+	uint32 res;
+
+	uim_in_dispatch++;
+	res = USBUIMDispatchBody(slot, table, caller, r3, r4, r5,
+		r6, r7, r8, r9, r10);
+	uim_in_dispatch--;
+	USBAdd(us_dispatch, GetTicks_usec() - t0);
+	USBCount(n_dispatch);
+	return res;
+}
+
+static uint32 USBUIMDispatchBody(uint32 slot, uint32 table, uint32 caller,
+	uint32 r3, uint32 r4, uint32 r5, uint32 r6, uint32 r7, uint32 r8,
+	uint32 r9, uint32 r10)
+{
+#if USBHID_LOG
 	/* Slots 21 and 24 are the polled heartbeat - USBIdleTask reaches them for
-	   every bus on every pass - so only the opening few are worth a line. */
+	   every bus on every pass - and 11 re-arms the gamepad pipe once a report,
+	   so only the opening few of those are worth a line. */
 	static int heartbeat;
 
-	if (slot != UIM_POLL_BUS && slot != UIM_GET_FRAME_NUMBER)
+	if (slot != UIM_POLL_BUS && slot != UIM_GET_FRAME_NUMBER
+			&& slot != UIM_CREATE_INTERRUPT_TRANSFER)
 		USBHIDLog("UIM slot %u tbl=%08x from=%08x (%08x %08x %08x %08x %08x %08x %08x %08x)",
 			slot, table, caller, r3, r4, r5, r6, r7, r8, r9, r10);
 	else if (heartbeat < 4) {
 		heartbeat++;
 		USBHIDLog("UIM slot %u (heartbeat) from=%08x r3=%08x", slot, caller, r3);
 	}
+#endif
 
 	switch (slot) {
 	case UIM_INITIALIZE:
 		uim_seen_init = 1;
+
 		USBUIMFindExpertStatus();
 		// UIMInitialize(busRef, flags, refcon). A UIM does not register
 		// itself: the ROM's own OHCI UIM imports no USB library at all, so
@@ -1718,12 +2370,13 @@ uint32 USBUIMDispatch(uint32 slot, uint32 table, uint32 caller, uint32 r3,
 	}
 
 	case UIM_POLL_BUS:
-		// Called for every bus on every pass of USL's own idle work, with no
-		// arguments: a polled UIM's service entry. Transfer completions belong
-		// here, and so does a port that has changed since the last look.
+#if USBHID_LOG
+		uim_polled = 1;
+#endif
+		// The Expert waits for a synchronous transfer by calling USBIdleTask in
+		// a loop, so this is the only place its completion can be run.
 		if (port_change)
 			USBUIMPortChanged();
-		USBPadReport();
 		USBUIMRunCompletions();
 		return 0;
 
@@ -1776,6 +2429,13 @@ void USBUIMReset(void)
 	port_change = 0;
 	hub_int_refcon = hub_int_completion = hub_int_buffer = hub_int_length = 0;
 	pad_int_refcon = pad_int_completion = pad_int_buffer = pad_int_length = 0;
+	uim_service_busy = 0;
+	pad_pipe_armed = 0;
+	pad_done_proc = 0;
+	USBPadReportReset();
+#if USB_ISP_TRACE
+	USBUIMHookForget();
+#endif
 }
 
 

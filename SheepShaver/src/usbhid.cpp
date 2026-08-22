@@ -47,21 +47,25 @@
 #define DEBUG 0
 #include "debug.h"
 
-/* Per-access register and transfer tracing. Off by default: every line is
-   flushed, and with the window trapping there is one call per guest load or
-   store, so a driver that polls a register would spend all its time in
-   fopen/fflush. Turn it on to watch a UIM bring the controller up. */
-#define USBHID_TRACE 0
-#if USBHID_TRACE
-#define USBHIDTrace USBHIDLog
-#else
-static inline void USBHIDTrace(const char *, ...) { }
-#endif
 
+#if USBHID_LOG
 static FILE *usb_logf;
+
+/* Which thread is driving the pipe. SDL joystick state on Windows is not
+   guaranteed to move for a thread other than the one that owns the input. */
+static unsigned long USBHIDThreadId(void)
+{
+#ifdef WIN32
+	return (unsigned long)GetCurrentThreadId();
+#else
+	return (unsigned long)(uintptr)pthread_self();
+#endif
+}
+#endif
 
 void USBHIDLog(const char *fmt, ...)
 {
+#if USBHID_LOG
 	va_list ap;
 	uint64 t;
 
@@ -84,7 +88,7 @@ void USBHIDLog(const char *fmt, ...)
 		if (usb_logf == NULL)
 			return;
 		fprintf(usb_logf, "usbhid log opened\n");
-		fflush(usb_logf);
+
 	}
 	/* Self-contained clock on purpose: the first devices are installed before
 	   timer_init() runs, and GetTicks_usec() divides by a frequency that is
@@ -110,7 +114,9 @@ void USBHIDLog(const char *fmt, ...)
 	vfprintf(usb_logf, fmt, ap);
 	va_end(ap);
 	fputc('\n', usb_logf);
-	fflush(usb_logf);
+#else
+	(void)fmt;
+#endif
 }
 
 /* Everything below is the device itself. ENABLE_USB 0 replaces the lot with
@@ -208,11 +214,7 @@ enum {
 };
 
 enum {
-	/* X and Y at 16 bits, the hat in a nibble with a nibble of padding, then one
-	   bit per button: 2*16 + 4 + 4 + 16 = 56 bits. Must match
-	   kJoystickReportDesc below exactly - the guest lays the report out from
-	   that descriptor and reads whatever the bit offsets land on. */
-	kHIDReportBytes = 7,
+	kHIDReportBytes = 11,
 	kHIDMaxButtons = 16
 };
 
@@ -220,12 +222,15 @@ static const uint8 kJoystickReportDesc[] = {
 	0x05, 0x01,
 	0x09, 0x04,
 	0xa1, 0x01,
-	0x09, 0x30, 0x09, 0x31,
+	0xa1, 0x00,
+	/* X and Y are the left stick, Z (0x32) and Rz (0x35) the right one. */
+	0x09, 0x30, 0x09, 0x31, 0x09, 0x32, 0x09, 0x35,
 	0x15, 0x00,			/* Logical Minimum 0 */
 	0x27, 0xff, 0xff, 0x00, 0x00,	/* Logical Maximum 65535 */
 	0x75, 0x10,
-	0x95, 0x02,
+	0x95, 0x04,
 	0x81, 0x02,
+	/* The hat, in the standard HID rose. */
 	0x09, 0x39,
 	0x15, 0x01,			/* Logical Minimum 1 */
 	0x25, 0x08,			/* Logical Maximum 8 */
@@ -235,6 +240,7 @@ static const uint8 kJoystickReportDesc[] = {
 	0x75, 0x04,			/* pad the hat out to a byte */
 	0x95, 0x01,
 	0x81, 0x01,
+	0xc0,
 	0x05, 0x09,
 	0x19, 0x01,
 	0x29, 0x10,
@@ -243,9 +249,6 @@ static const uint8 kJoystickReportDesc[] = {
 	0x75, 0x01,
 	0x95, 0x10,
 	0x81, 0x02,
-	0x75, 0x04,			/* pad to a byte boundary */
-	0x95, 0x01,
-	0x81, 0x01,
 	0xc0
 };
 
@@ -265,9 +268,14 @@ static const uint8 kCfgDesc[] = {
 	9, 0x21, 0x11, 0x01, 0, 1, 0x22,
 	(uint8)sizeof(kJoystickReportDesc),
 	(uint8)(sizeof(kJoystickReportDesc) >> 8),
-	7, 5, 0x81, 3, 16, 0, 8
+	/* wMaxPacketSize is the report, not a round number: HIDLib rejects a
+	   report whose length is not exactly what the descriptor declares, and the
+	   HID driver hands its pipe read straight on. */
+	7, 5, 0x81, 3, kHIDReportBytes, 0, 8
 };
 
+static uint8 hid_setup[8];
+static int hid_have_setup;
 static uint32 usb_ctl, usb_status, usb_intr, usb_intr_en;
 static uint32 usb_hcca, usb_ctrl_head, usb_ctrl_cur;
 static uint32 usb_bulk_head, usb_bulk_cur, usb_period_cur, usb_done;
@@ -278,6 +286,20 @@ static int usb_done_count;
 static uint8 usb_dev_addr;
 static uint8 usb_dev_cfg;
 static uint8 usb_hid_report[kHIDReportBytes];
+static JoyManagerDevice *open_device;
+static int open_axes, open_buttons, open_hats;
+#if USBHID_LOG
+static uint32 pack_calls;
+#endif
+
+static void hid_release_device(void)
+{
+	open_axes = open_buttons = open_hats = 0;
+	if (open_device == NULL)
+		return;
+	JoyManagerCloseDevice(open_device);
+	open_device = NULL;
+}
 static bool usb_installed;
 
 static uint32 ReadMacInt32LE(uint32 addr)
@@ -305,8 +327,9 @@ static void WriteMacInt16LE(uint32 addr, uint16 v)
 static void hid_pack_report(void)
 {
 	JoyManagerDevice *js;
-	int16 x = 0, y = 0;
-	uint16 ux, uy;
+	int16 x = 0, y = 0, z = 0, rz = 0;
+	uint16 ux, uy, uz, urz;
+	int naxes = 0;
 	uint8 hat = 0;
 	uint16 buttons = 0;
 	int i, nb;
@@ -314,46 +337,114 @@ static void hid_pack_report(void)
 	memset(usb_hid_report, 0, sizeof(usb_hid_report));
 	if (!JoyManagerInit())
 		goto store;
-	js = JoyManagerOpenDevice(0);
+	/* Held open across reports.  UIM_POLL_BUS runs this constantly, and
+	   opening and closing the host device every time it does is what made
+	   the emulator crawl with USB enabled. */
+	if (open_device != NULL && !JoyManagerDeviceAttached(open_device))
+		hid_release_device();
+	if (open_device == NULL) {
+		open_device = JoyManagerOpenDevice(0);
+		if (open_device != NULL) {
+			open_axes = JoyManagerNumAxes(open_device);
+			open_buttons = JoyManagerNumButtons(open_device);
+			open_hats = JoyManagerNumHats(open_device);
+		}
+	}
+	js = open_device;
 	if (js == NULL)
 		goto store;
-	x = JoyManagerAxis(js, 0);
-	y = JoyManagerAxis(js, 1);
-	nb = JoyManagerNumButtons(js);
+	/* JoyManagerSDLInit() disables joystick events, so the state only moves
+	   when someone asks for it.  Without this every axis and button reads 0 for
+	   ever, and a report that never changes is a report USBPadReport() never
+	   sends. */
+	JoyManagerUpdate();
+	naxes = open_axes;
+	/* Through the same dead zone the .JoyManager driver applies.  A stick
+	   idles a few percent off centre - this pad rests at -1691 on one axis and
+	   +2159 on another - and the descriptor declares no dead band, so raw SDL
+	   values are a permanent diagonal push the game cannot be trimmed out of. */
+	x = (int16)JoyManagerAxisRest(JoyManagerAxis(js, 0));
+	y = (int16)JoyManagerAxisRest(JoyManagerAxis(js, 1));
+	/* Usage 0x32 is where a throttle need binds, so Z carries the vertical. */
+	if (naxes > 3)
+		z = (int16)JoyManagerAxisRest(JoyManagerAxis(js, 3));
+	if (naxes > 2)
+		rz = (int16)JoyManagerAxisRest(JoyManagerAxis(js, 2));
+	nb = open_buttons;
 	if (nb > kHIDMaxButtons)
 		nb = kHIDMaxButtons;
 	for (i = 0; i < nb; i++) {
 		if (JoyManagerButton(js, i))
 			buttons |= (uint16)(1u << i);
 	}
-	/* 0 centred, 1..8 for the directions - the rose InputSprocket uses. */
-	if (JoyManagerNumHats(js) > 0)
-		hat = (uint8)JoyManagerHatPosition(JoyManagerHat(js, 0));
+	/* JoyManager's rose is the .JoyManager driver's; HID's starts north. */
+	if (open_hats > 0) {
+		static const uint8 to_hid[9] = { 0, 1, 5, 7, 3, 8, 2, 6, 4 };
+		int pos = JoyManagerHatPosition(JoyManagerHat(js, 0));
+
+		if (pos >= 0 && pos < 9)
+			hat = to_hid[pos];
+	}
+#if USBHID_LOG
+	pack_calls++;
 	{
 		static uint64 next_log;
-		if (GetTicks_usec() >= next_log) {
-			next_log = GetTicks_usec() + 1000000;
-			USBHIDLog("joy raw: axes=%d hats=%d buttons=%d"
-				" x=%d y=%d hat=%02x btn=%04x",
-				JoyManagerNumAxes(js), JoyManagerNumHats(js),
-				JoyManagerNumButtons(js), x, y,
-				JoyManagerNumHats(js) > 0 ? JoyManagerHat(js, 0) : 0xff,
-				buttons);
+		uint64 nowus = GetTicks_usec();
+
+		if (nowus >= next_log) {
+			const char *nm = JoyManagerDeviceName(js, 0);
+
+			next_log = nowus + 1000000;
+			USBHIDLog("joy '%s' dev=%d att=%d ax=%d/%d hat=%d btn=%d"
+				" packs=%u thr=%lu | a %d %d %d %d %d %d hat %02x/%d"
+				" btn %04x",
+				nm ? nm : "(none)", JoyManagerNumDevices(),
+				JoyManagerDeviceAttached(js) ? 1 : 0, naxes,
+				open_axes, open_hats,
+				open_buttons, pack_calls,
+				(unsigned long)USBHIDThreadId(),
+				x, y, z, rz,
+				naxes > 4 ? JoyManagerAxis(js, 4) : 0,
+				naxes > 5 ? JoyManagerAxis(js, 5) : 0,
+				open_hats > 0 ? JoyManagerHat(js, 0) : 0xff,
+				hat, buttons);
+			pack_calls = 0;
 		}
 	}
-	JoyManagerCloseDevice(js);
+#endif
 store:
 	/* Little endian, as every HID report is, and biased into the unsigned
 	   0..65535 the descriptor declares: rest is 0x8000. */
 	ux = (uint16)((int32)x + 32768);
 	uy = (uint16)((int32)y + 32768);
+	uz = (uint16)((int32)z + 32768);
+	urz = (uint16)((int32)rz + 32768);
 	usb_hid_report[0] = (uint8)ux;
 	usb_hid_report[1] = (uint8)(ux >> 8);
 	usb_hid_report[2] = (uint8)uy;
 	usb_hid_report[3] = (uint8)(uy >> 8);
-	usb_hid_report[4] = (uint8)(hat & 0x0f);
-	usb_hid_report[5] = (uint8)buttons;
-	usb_hid_report[6] = (uint8)(buttons >> 8);
+	usb_hid_report[4] = (uint8)uz;
+	usb_hid_report[5] = (uint8)(uz >> 8);
+	usb_hid_report[6] = (uint8)urz;
+	usb_hid_report[7] = (uint8)(urz >> 8);
+	usb_hid_report[8] = (uint8)(hat & 0x0f);
+	usb_hid_report[9] = (uint8)buttons;
+	usb_hid_report[10] = (uint8)(buttons >> 8);
+#if USBHID_TRACE
+	{
+		static uint8 seen[kHIDReportBytes];
+
+		if (memcmp(seen, usb_hid_report, sizeof(seen)) != 0) {
+			memcpy(seen, usb_hid_report, sizeof(seen));
+			USBHIDLog("  report %02x %02x %02x %02x %02x %02x"
+				" %02x %02x %02x %02x %02x",
+				usb_hid_report[0], usb_hid_report[1], usb_hid_report[2],
+				usb_hid_report[3], usb_hid_report[4], usb_hid_report[5],
+				usb_hid_report[6], usb_hid_report[7], usb_hid_report[8],
+				usb_hid_report[9], usb_hid_report[10]);
+		}
+	}
+#endif
 }
 
 static int hid_copy_desc(uint8 type, uint8 index, uint8 *dst, int max)
@@ -408,8 +499,10 @@ static int hid_control(const uint8 setup[8], uint8 *data, int *len, int dir_in)
 	uint16 index = (uint16)setup[4] | ((uint16)setup[5] << 8);
 	uint16 wlen = (uint16)setup[6] | ((uint16)setup[7] << 8);
 
-	USBHIDTrace("hid_control type=%02x req=%u value=%04x index=%04x wlen=%u dir_in=%d",
+#if USBHID_TRACE
+	USBHIDLog("hid_control type=%02x req=%u value=%04x index=%04x wlen=%u dir_in=%d",
 		type, req, value, index, wlen, dir_in);
+#endif
 	if (req == 5 && type == 0x00) {
 		usb_dev_addr = (uint8)(value & 0x7f);
 		*len = 0;
@@ -485,7 +578,9 @@ int USBHIDDeviceInterruptIn(uint8 *data, int max)
 
 static void ohci_soft_reset(void)
 {
+#if USBHID_LOG
 	USBHIDLog("ohci_soft_reset");
+#endif
 	usb_ctl = (usb_ctl & 0x100) | OHCI_USB_SUSPEND;
 	usb_status = 0;
 	usb_intr = 0;
@@ -504,7 +599,9 @@ static void ohci_soft_reset(void)
 
 static void ohci_hard_reset(void)
 {
+#if USBHID_LOG
 	USBHIDLog("ohci_hard_reset");
+#endif
 	ohci_soft_reset();
 	usb_ctl = 0;
 	/* One downstream port, ports always powered (NPS), POTPGT 1. */
@@ -586,7 +683,9 @@ static void ohci_reg_write(uint32 off, uint32 val)
 		old_state = usb_ctl & OHCI_CTL_HCFS;
 		usb_ctl = val;
 		new_state = usb_ctl & OHCI_CTL_HCFS;
+#if USBHID_LOG
 		USBHIDLog("HcControl %08x hcfs %02x -> %02x", val, old_state, new_state);
+#endif
 		if (old_state != new_state && new_state == OHCI_USB_RESET)
 			ohci_hard_reset();
 		break;
@@ -612,7 +711,9 @@ static void ohci_reg_write(uint32 off, uint32 val)
 		usb_hcca = val & 0xffffff00u;
 		/* The first HCCA write is the milestone: reaching it means the UIM
 		   got past ExpMgrConfigWriteWord and is really initialising us. */
+#if USBHID_LOG
 		USBHIDLog("HcHCCA = %08x", usb_hcca);
+#endif
 		break;
 	case 0x20:
 		usb_ctrl_head = val & OHCI_DPTR_MASK;
@@ -662,6 +763,7 @@ static void ohci_reg_write(uint32 off, uint32 val)
 	}
 }
 
+#if USBHID_LOG
 static int usb_first_accesses = 64;
 
 /* True while the opening burst of accesses should be logged. */
@@ -692,6 +794,7 @@ static bool usb_note_access(void)
 	usb_first_accesses--;
 	return true;
 }
+#endif
 
 static uint32 ohci_window_read(uint32 off, int size)
 {
@@ -700,10 +803,14 @@ static uint32 ohci_window_read(uint32 off, int size)
 	v >>= (off & 3) * 8;
 	if (size < 4)
 		v &= (1u << (size * 8)) - 1;
-	if (usb_note_access()) {
+#if USBHID_LOG
+	if (usb_note_access())
 		USBHIDLog("rd  %02x.%d = %08x", off, size, v);
-	} else
-		USBHIDTrace("rd  %02x.%d = %08x", off, size, v);
+#if USBHID_TRACE
+	else
+		USBHIDLog("rd  %02x.%d = %08x", off, size, v);
+#endif
+#endif
 	return v;
 }
 
@@ -712,12 +819,16 @@ static void ohci_window_write(uint32 off, int size, uint32 val)
 	uint32 word = off & ~3u;
 	int shift;
 
-	if (usb_note_access()) {
+#if USBHID_LOG
+	if (usb_note_access())
 		USBHIDLog("wr  %02x.%d = %08x ctl=%08x st=%08x ie=%08x is=%08x",
 			off, size, val, usb_ctl, usb_status, usb_intr_en, usb_intr);
-	} else
-		USBHIDTrace("wr  %02x.%d = %08x ctl=%08x st=%08x ie=%08x is=%08x",
+#if USBHID_TRACE
+	else
+		USBHIDLog("wr  %02x.%d = %08x ctl=%08x st=%08x ie=%08x is=%08x",
 			off, size, val, usb_ctl, usb_status, usb_intr_en, usb_intr);
+#endif
+#endif
 	if (size < 4) {
 		/* Merge a sub-word store into the register the guest is aiming at.
 		   Read-modify-write is right here: the UIM only ever does full-word
@@ -758,32 +869,32 @@ static int ohci_copy_td(uint32 cbp, uint32 be, uint8 *buf, int len, int to_mem)
 
 static int hid_handle_packet(int addr, int endp, int dir, uint8 *buf, int len)
 {
-	static uint8 setup[8];
-	static int have_setup;
 	int out_len = 0;
 
-	USBHIDTrace("hid_pkt addr=%d (dev=%u) endp=%d dir=%d len=%d",
+#if USBHID_TRACE
+	USBHIDLog("hid_pkt addr=%d (dev=%u) endp=%d dir=%d len=%d",
 		addr, usb_dev_addr, endp, dir, len);
+#endif
 	if (addr != 0 && addr != usb_dev_addr)
 		return -OHCI_CC_DEVICENOTRESPONDING;
 	if (endp == 0) {
 		if (dir == OHCI_TD_DIR_SETUP) {
 			if (len < 8)
 				return -OHCI_CC_STALL;
-			memcpy(setup, buf, 8);
-			have_setup = 1;
+			memcpy(hid_setup, buf, 8);
+			hid_have_setup = 1;
 			return 0;
 		}
-		if (!have_setup)
+		if (!hid_have_setup)
 			return 0;
 		if (len == 0) {
 			int dummy = 0;
-			if (setup[1] == 5 || setup[1] == 9)
-				hid_control(setup, buf, &dummy, 0);
-			have_setup = 0;
+			if (hid_setup[1] == 5 || hid_setup[1] == 9)
+				hid_control(hid_setup, buf, &dummy, 0);
+			hid_have_setup = 0;
 			return 0;
 		}
-		if (hid_control(setup, buf, &out_len, dir == OHCI_TD_DIR_IN) < 0)
+		if (hid_control(hid_setup, buf, &out_len, dir == OHCI_TD_DIR_IN) < 0)
 			return -OHCI_CC_STALL;
 		if (dir != OHCI_TD_DIR_IN)
 			out_len = len;
@@ -827,7 +938,9 @@ static int ohci_service_td(uint32 *ed_head, uint32 ed_flags)
 
 	ret = hid_handle_packet(ed_flags & OHCI_ED_FA_MASK,
 		(ed_flags >> OHCI_ED_EN_SHIFT) & 0xf, (int)dir, buf, len);
-	USBHIDTrace("TD %08x ret=%d dir=%u len=%d flags=%08x", td_addr, ret, dir, len, td_flags);
+#if USBHID_TRACE
+	USBHIDLog("TD %08x ret=%d dir=%u len=%d flags=%08x", td_addr, ret, dir, len, td_flags);
+#endif
 	if (ret == -OHCI_CC_DEVICENOTRESPONDING)
 		return 1;
 
@@ -960,17 +1073,26 @@ void USBHIDInstall(void)
 		return;
 	if (!MMIOMapWindow(USBHID_BAR, USBHID_BAR_SIZE,
 			ohci_window_read, ohci_window_write)) {
+#if USBHID_LOG
 		USBHIDLog("BAR map FAILED at %08x - controller not published",
 			USBHID_BAR);
+#endif
 		return;
 	}
 	ohci_hard_reset();
 	usb_installed = true;
+#if USBHID_LOG
 	USBHIDLog("OHCI window %08x..%08x", USBHID_BAR, USBHID_BAR + USBHID_BAR_SIZE);
+#endif
 }
 
 void USBHIDReset(void)
 {
+	hid_release_device();
+	/* Device-side state a reset must not carry over. */
+	memset(hid_setup, 0, sizeof(hid_setup));
+	hid_have_setup = 0;
+	memset(usb_hid_report, 0, sizeof(usb_hid_report));
 	if (!usb_installed)
 		return;
 	ohci_hard_reset();
@@ -992,7 +1114,7 @@ void USBHIDVBL(void)
 		ohci_frame();
 }
 
-#else
+#else /* USB disabled */
 void USBHIDInstall(void) { }
 void USBHIDReset(void) { }
 void USBHIDVBL(void) { }

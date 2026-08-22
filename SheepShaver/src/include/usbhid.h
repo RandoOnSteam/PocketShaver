@@ -1,6 +1,9 @@
 /*
  *  usbhid.h - OHCI USB host controller + HID joystick
  *
+ *  Publishes a pciclass,0c0310 controller so the ROM OHCIUIM / USB
+ *  Family can enumerate it.
+ *
  *	(C) 2026 Ryan Norton (battlemageloveryt@gmail.com)
  *
  *  This program is free software; you can redistribute it and/or modify
@@ -26,6 +29,17 @@
 /* Master switch for everything USB: the software UIM in usbuim.cpp, the HID
    joystick, the OHCI register window and the Name Registry node. */
 #ifndef ENABLE_USB
+//#define ENABLE_USB
+#endif
+#ifndef USBHID_LOG
+#define USBHID_LOG 0
+#endif
+#ifndef USBHID_TRACE
+#define USBHID_TRACE 0
+#endif
+#if USBHID_TRACE && !USBHID_LOG
+#undef USBHID_LOG
+#define USBHID_LOG 1
 #endif
 
 /* Guest physical address of the OHCI register page. Above SheepMem

@@ -60,6 +60,7 @@ bool JoyManagerDeviceAttached(JoyManagerDevice *joystick);
 const char *JoyManagerDeviceName(JoyManagerDevice *joystick,
 	int index);
 int16 JoyManagerAxis(JoyManagerDevice *joystick, int axis);
+int32 JoyManagerAxisRest(int32 v);
 uint8 JoyManagerButton(JoyManagerDevice *joystick, int button);
 uint8 JoyManagerHat(JoyManagerDevice *joystick, int hat);
 void JoyManagerUpdate(void);

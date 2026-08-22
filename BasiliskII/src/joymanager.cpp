@@ -1442,6 +1442,10 @@ int16 JoyManagerAxis(JoyManagerDevice *joystick, int axis)
 {
 	return 0;
 }
+int32 JoyManagerAxisRest(int32 v)
+{
+	return v;
+}
 uint8 JoyManagerButton(JoyManagerDevice *joystick, int button)
 {
 	return 0;
