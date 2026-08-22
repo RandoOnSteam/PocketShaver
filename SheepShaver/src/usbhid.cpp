@@ -220,50 +220,12 @@ static const uint8 kJoystickReportDesc[] = {
 	0x05, 0x01,
 	0x09, 0x04,
 	0xa1, 0x01,
-	/* X and Y only.
-	 *
-	 * Z (0x32) and Rz (0x35) used to be here as well, carrying the host pad's
-	 * right stick, and InputSprocket duly listed them - which is the problem.
-	 * Its HID module pairs usages 0x30 and 0x31 into one two-axis element
-	 * (InputSprocket Extension container 0x20e10, code 0x38d0) and makes every
-	 * other axis a plain independent axis element. A game that assigns a
-	 * throttle to the first spare axis then finds one sitting at mid range,
-	 * which is half open, and flies forward for ever. The host pad's axes are
-	 * all exactly 0 at rest (measured), so this was never off-centre hardware.
-	 *
-	 * Unsigned 0..65535 with rest at mid range, not signed -32767..32767 with
-	 * rest at 0. The guest reads the field as unsigned and uses the logical
-	 * range only for scaling, so a signed 0 is the bottom of the range: full
-	 * deflection, held for ever. That showed as a drift to the left, X being
-	 * the axis pinned at its minimum. Every USB pad of the period reported
-	 * unsigned axes centred at mid range, which is what the ROM's HID module
-	 * was written against.
-	 *
-	 * This was tried once before and appeared to change nothing, so it was
-	 * removed - wrongly. The ADB joystick was publishing its triggers at
-	 * -32768 for ever at the same time (JoyManagerAxisValue, kJoyUnknownLabel),
-	 * and that drift masked this one. */
 	0x09, 0x30, 0x09, 0x31,
 	0x15, 0x00,			/* Logical Minimum 0 */
 	0x27, 0xff, 0xff, 0x00, 0x00,	/* Logical Maximum 65535 */
 	0x75, 0x10,
 	0x95, 0x02,
 	0x81, 0x02,
-	/* The hat, in InputSprocket's own d-pad numbering.
-	 *
-	 * It was Logical Minimum 0 / Maximum 7 with the Null State bit, sending 8
-	 * when centred - HID's own convention, but one where centred is only centred
-	 * if the guest implements Null State. A parser that clamps out-of-range to
-	 * the maximum instead reads 7, north-west, held for ever: a permanent pull
-	 * up and to the left.
-	 *
-	 * InputSprocket enumerates a hat as a 'dpad' element, and its rose is 0
-	 * centred with 1..8 for the directions - which is exactly what
-	 * JoyManagerHatPosition() already returns, derived from ISp Joy itself
-	 * (docs/inputsprocket-joymanager.md, the rose remap at ISp code 0x2fb4).
-	 * Declaring 1..8 puts the directions in that numbering and leaves 0 as the
-	 * out-of-range null, so centred reads as centred whether or not Null State
-	 * is honoured. */
 	0x09, 0x39,
 	0x15, 0x01,			/* Logical Minimum 1 */
 	0x25, 0x08,			/* Logical Maximum 8 */
@@ -700,22 +662,9 @@ static void ohci_reg_write(uint32 off, uint32 val)
 	}
 }
 
-/*
- *  MMIO window. Offsets and values are little-endian, which is how a PCI
- *  register file looks to a PowerPC driver that byte-swaps for itself - the
- *  ROM UIM does exactly that with EndianSwap32Bit.
- */
-
-/* Bring-up is decided in the first few dozen register accesses, and which
-   ones arrive says exactly how far the UIM got before giving up. Log that
-   prefix unconditionally and then go quiet, so a normal run costs nothing. */
 static int usb_first_accesses = 64;
 
-/* True while the opening burst of accesses should be logged. The very first
-   one is the UIM running, so take the Expansion Manager's pulse there:
-   ExpandMem (low memory 0x2B6) -> +0x234 is its globals pointer, and every
-   ExpMgr entry point bails with -9070 when that is null - in which case no
-   PCI config cycle can ever be issued, whatever the Name Registry says. */
+/* True while the opening burst of accesses should be logged. */
 static bool usb_note_access(void)
 {
 	if (usb_first_accesses <= 0)
@@ -1041,19 +990,9 @@ void USBHIDVBL(void)
 	   stays put across a reset the way the driver expects. */
 	for (i = 0; i < OHCI_FRAMES_PER_VBL; i++)
 		ohci_frame();
-
-	/* Interrupt delivery is still missing: the UIM installs its handler into
-	   the Name Registry interrupt set named by the node's "driver-ist"
-	   property, and SheepShaver publishes no such set. TriggerInterrupt()
-	   used to be raised here, but that is the VIA path - it can never reach
-	   the UIM's handler. See docs/usb-ohci-uim.md section 4. */
 }
 
 #else
-
-/* USB compiled out - see ENABLE_USB in usbhid.h. USBHIDReady() saying false is
-   what stops name_registry.cpp publishing the node, so nothing else needs a
-   guard of its own. */
 void USBHIDInstall(void) { }
 void USBHIDReset(void) { }
 void USBHIDVBL(void) { }
@@ -1072,5 +1011,4 @@ int USBHIDDeviceInterruptIn(uint8 *data, int max)
 	(void)data; (void)max;
 	return 0;
 }
-
 #endif /* ENABLE_USB */

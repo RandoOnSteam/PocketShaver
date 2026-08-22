@@ -1639,9 +1639,6 @@ static void *tick_func(void *arg)
 			tick_counter = 0;
 			WriteMacInt32(0x20c, TimerDateTime());
 		}
-
-		// Keep the level asserted until the CPU can accept it. InterruptFlags
-		// coalesces repeated VBLs while external interrupts are masked.
 		SetInterruptFlag(INTFLAG_VIA);
 		TriggerInterrupt();
 	}

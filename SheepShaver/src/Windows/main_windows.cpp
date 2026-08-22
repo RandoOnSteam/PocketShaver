@@ -706,19 +706,10 @@ static DWORD WINAPI tick_func(void *arg)
 			tick_counter = 0;
 			WriteMacInt32(0x20c, TimerDateTime());
 		}
-
-		// The VIA interrupt is a level, not an edge which disappears while
-		// the processor has external interrupts masked. Latch it here and
-		// let the CPU-side interrupt arbiter accept it at the first eligible
-		// instruction boundary. InterruptFlags is a bitmask, so multiple VBLs
-		// while masked still coalesce rather than being replayed as a burst.
 		SetInterruptFlag(INTFLAG_VIA);
 		TriggerInterrupt();
 		USBUIMSampleGuest();
 #if EMULATED_PPC
-		// The tick thread is a host thread, so it still runs when the guest has
-		// stopped executing. That is the only vantage point on a guest wedged
-		// inside an exception handler.
 		PPCExceptionStallSample();
 #endif
 	}

@@ -116,7 +116,7 @@ static void extfs_log_write( char *s )
 
 int my_errno = 0;
 
-#define VIRTUAL_ROOT_ID ((HANDLE)0xFFFFFFFE)
+#define VIRTUAL_ROOT_ID ((HANDLE)(uintptr_t)0xFFFFFFFE)
 
 static LPCTSTR desktop_name = TEXT("Virtual Desktop");
 static const char *custom_icon_name = "Icon\r";

@@ -848,15 +848,8 @@ uint32_t GlideDispatch(uint32_t r3, uint32_t r4, uint32_t r5,
 		/* void grBufferSwap(int swap_interval) */
 		const int interval = (int)r3;
 		GlideLog("grBufferSwap begin interval=%d", interval);
-		/*
-		 * Make the back buffer visible (SubmitFrame + Present), same contract
-		 * as LFB unlock which already works for D2 movies. Instant software
-		 * completion: pending=0 after Present. free-run keeps Mac VBL alive
-		 * between swaps; see docs/d2-glide-menu-hang.md.
-		 */
 		GlideMetalBufferSwap(interval);
 		(void)dmc_set_active_owner(kDMCOwnerGlide);
-		(void)interval; /* hardware would wait ~interval VBLs; we present now */
 		GlideLog("grBufferSwap done (pending=0, presented)");
 		return 0;
 	}

@@ -159,9 +159,6 @@ static KernelData * kernel_data;
 // native-PPC and 68K emulator contexts have different low-level handlers.
 static const uint32 PPC_NATIVE_EXCEPTION_TABLE_OFFSET = 0x420;
 static const uint32 PPC_68K_EXCEPTION_TABLE_OFFSET = 0x360;
-
-// Aggregate rather than logging each 60 Hz request. Deferred counts are CPU
-// boundary retries of one coalesced level, not queued VBL events.
 static uint64 external_interrupt_accepted_count;
 static uint64 external_interrupt_nest_deferred_count;
 static uint64 external_interrupt_native_vector_count;

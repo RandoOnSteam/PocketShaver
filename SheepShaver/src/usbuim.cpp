@@ -864,7 +864,6 @@ void USBUIMSampleGuest(void)
 	pc = PPCSampleGuestPC();
 	off = pc - ROMBase;
 	if (off < ROM_AREA_SIZE) {
-		/* Fragment code sections, from docs/usb-ohci-uim.md section 1. */
 		if (off >= 0x21de10 && off < 0x227d28) {
 			USBHIDLog("guest in USBFamilyExpertLib code+%06x (pc=%08x)%s",
 				off - 0x21de10, pc, pc == last ? " SPINNING" : "");
@@ -933,24 +932,7 @@ static void PascalStr(uint32 addr, const char *s)
 	Host2Mac_memcpy(addr + 1, s, n);
 }
 
-/*
- *  Bring the bus up, preferring the Expert's own route.
- *
- *  LoadUIMForEntry is the Expert's exported "this registry node is a USB
- *  controller, load its UIM" entry, and it does more than USBAddBus: it
- *  allocates a bus record, copies the node's RegEntryID into it (Expert code
- *  0x113c), loads the plugin from the node's driver property with
- *  GetDriverForDevice, and only then calls USBAddBus (0x119c). That RegEntryID
- *  is the parent the Expert hangs its per-device registry nodes off - the
- *  AAPL,USBNodeType / deviceRef / AAPL,BusNumber entries that anything
- *  enumerating USB from the Name Registry reads. Calling USBAddBus ourselves
- *  gets a working bus but leaves the Expert with no registry entry for it, and
- *  so nothing to publish devices under.
- *
- *  Its earlier fnfErr was measured before USBServicesInitialise had run, so the
- *  order here matters: initialise USL first, then offer the node to the Expert,
- *  and only fall back to preparing the fragment ourselves if that fails.
- */
+/* Bring the bus up, preferring the Expert's own route. */
 void USBUIMRegisterBus(uint32 node)
 {
 	typedef int16 (*gmf_ptr)(uint32, uint32, uint32, uint32, uint32, uint32, uint32);
@@ -982,29 +964,11 @@ void USBUIMRegisterBus(uint32 node)
 	if (!gmf || !fsym || !addbus)
 		return;
 
-	/* Bring the USB Services Lib up first. It has no PEF initialisation
-	   routine of its own: INIT_USBExpert calls USBServicesInitialise, and only
-	   after it has found at least one "usb" device-tree node - which did not
-	   exist at startup, because we publish ours later. Until that call runs,
-	   USBServicesLib's request queue pointer (its TOC+0xdf0) is still null, so
-	   StartRootHub's PBEnqueueLast goes nowhere and the PBDequeueFirst right
-	   after it hands back an uninitialised stack word as the request block.
-	   That is the null completion routine the crash at USL code+0x258 was
-	   calling. -6993 here means it was already up, which is equally fine.
-
-	   Its one argument is the Expert's notification routine, stashed straight
-	   into a global (USL code 0x1c18) and called back through later. The
-	   Expert passes the same pointer it gave USBRegisterExpertNotification,
-	   and that entry does nothing but store it at USBManagerLib's TOC+0x58 -
-	   so read it back from there rather than reaching into the Expert's own
-	   TOC, which exports nothing that names it. */
+	/* Bring the USB Services Lib up first. */
 	notify = FindLibSymbol("\015USBManagerLib", "\027USBGetDeviceDescriptor");
 	if (notify)
 		notify = ReadMacInt32(ReadMacInt32(notify + 4) + 0x58);
-	/* Cross-check against the Expert's own TOC slot, which is where
-	   INIT_USBExpert reads it from (Expert code 0xbfc, TOC-0xec). The two must
-	   agree; if they do not, one of the two offsets is wrong and the family
-	   would be notified into nothing. */
+	/* Cross-check against the Expert's own TOC slot */
 	{
 		uint32 loaduim = FindLibSymbol("\022USBFamilyExpertLib",
 			"\017LoadUIMForEntry");

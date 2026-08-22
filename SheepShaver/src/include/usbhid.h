@@ -1,12 +1,6 @@
 /*
  *  usbhid.h - OHCI USB host controller + HID joystick
  *
- *  Publishes a pciclass,0c0310 controller so the ROM OHCIUIM / USB
- *  Family can enumerate it. Guest HIDLib, USBManagerLib and USBHID
- *  stay whatever the System already loaded - nothing is invented.
- *
- *  See docs/usb-ohci-uim.md for the ROM-side requirements this has to meet.
- *
  *	(C) 2026 Ryan Norton (battlemageloveryt@gmail.com)
  *
  *  This program is free software; you can redistribute it and/or modify

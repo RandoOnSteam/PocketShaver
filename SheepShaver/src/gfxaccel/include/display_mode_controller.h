@@ -30,15 +30,7 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-/*
- * DMC error codes - match kQA* / OSErr negative-int32 convention
- * (range -3001 .. -3099).
- *
- * These represent PROGRAMMER errors in native C++ code, not PPC-instruction
- * decode failures. They must NEVER be suppressed by the user-facing
- * ignoreIllegalInstructions preference (PROJECT.md security constraint).
- */
+/* DMC error codes - match kQA*; ranges -3001<->-3099 */
 enum DMCError {
 	kDMCNoErr                          = 0,
 	kDMCErrNotInitialized              = -3001,  /* call before dmc_create() */
