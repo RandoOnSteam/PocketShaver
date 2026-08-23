@@ -21,7 +21,7 @@
 #ifndef PPC_REPORT_H
 #define PPC_REPORT_H
 
-#define PPC_REPORT_BAD_EA 1
+#define PPC_REPORT_BAD_EA 0
 #define PPC_REPORT_EVERY_ACCESS 0
 
 #if PPC_REPORT_BAD_EA

@@ -5,7 +5,7 @@
  *  particular, clients read JoySimpleData and the live values in analogue
  *  JoyElement records directly, and consume JoyEventQueue without making a
  *  Device Manager call.
- * 
+ *
  *	(C) 2026 Ryan Norton (battlemageloveryt@gmail.com)
  *
  *  This program is free software; you can redistribute it and/or modify
@@ -50,10 +50,10 @@ enum {
 	JOYMANAGER_NORMAL_AXIS_NEUTRAL = 0,
 	JOYMANAGER_THROTTLE_AXIS_MAX = 16384,
 	JOYMANAGER_THROTTLE_AXIS_MIN = 0,
-	JOYMANAGER_THROTTLE_AXIS_NEUTRAL = 8192, 
+	JOYMANAGER_THROTTLE_AXIS_NEUTRAL = 8192,
 	JOYMANAGER_GASORBRAKE_AXIS_MAX = 32767,
 	JOYMANAGER_GASORBRAKE_AXIS_MIN = 0,
-	JOYMANAGER_GASORBRAKE_AXIS_NEUTRAL = 0, 
+	JOYMANAGER_GASORBRAKE_AXIS_NEUTRAL = 0,
 };
 enum {
 	kJoyXAxisAvailable = 0x0001,
@@ -69,8 +69,8 @@ enum {
 	kJoyElemButton = 0,
 	kJoyElemSelector = 1,
 	kJoyElemUnpublished = 3,
-	kJoyElemAxisFriction = 10000, /* neutral = min */
-	kJoyElemAxisCentered = 10001, /* neutral = (min + max) / 2 */
+	kJoyElemAxisSecondary = 10000,
+	kJoyElemAxisPrimary = 10001,
 	kJoyUnknownLabel = 0x7fff, /* NOT ACCEPTED BY ISP! */
 	kJoyLabelXAxis = 0,      /* 'xaxi' */
 	kJoyLabelYAxis = 1,      /* 'yaxi' */
@@ -83,13 +83,13 @@ enum {
 	kJoyLabelGas = 8,        /* 'gasp' */
 	kJoyLabelBrake = 9,      /* 'brak' */
 	kJoyLabelClutch = 10,    /* 'cltc' */
-	kJoyLabelUnknown11 = 11,    
-	kJoyLabelUnknown12 = 12,    
-	kJoyLabelUnknown13 = 13,    
-	kJoyLabelUnknown14 = 14,    
-	kJoyLabelUnknown15 = 15,    
+	kJoyLabelUnknown11 = 11,
+	kJoyLabelUnknown12 = 12,
+	kJoyLabelUnknown13 = 13,
+	kJoyLabelUnknown14 = 14,
+	kJoyLabelUnknown15 = 15,
 	kJoyLabelTrim = 16,    /* 'trim' - FSP Throttle; Friction 0<->0x3ff */
-	kJoyLabelUnknown17 = 17,    
+	kJoyLabelUnknown17 = 17,
 	kJoyLabelBrake2 = 18,    /* 'brak' */
 	kJoyLabelGas2 = 19,    /* 'gasp' */
 	kJoyLabelMax = 20
@@ -430,14 +430,19 @@ int JoyManagerAxisLabel(int axis)
 	}
 	return kJoyUnknownLabel;
 }
-
+int JoyManagerAxisKind(int label)
+{
+	if(label == kJoyLabelXAxis || label == kJoyLabelYAxis)
+		return kJoyElemAxisPrimary;
+	return kJoyElemAxisSecondary;
+}
 /* Declared [min, max] for one JoyElement.  ISp CH does:
  *
  *		scale = 4294967295.0 / (double)(max - min)
  *		v     = (double)(uint32)(raw - min) * scale
  *
  * so rest must sit at the midpoint or ISp sees 0 (hard over).  Descent II:
- * 
+ *
  *		centre = (min+max)>>1 via srawi/addze
  */
 void JoyManagerAxisRange(int label, int32 *min_value, int32 *max_value)
@@ -503,7 +508,7 @@ void JoyManagerWriteDeviceInfo(JoyHostDevice *device)
 		JoyManagerWriteElement(element, kJoyElemSelector,
 			kJoyUnknownLabel, 0, 8, 0);
 		element += joyElementSize;
-	}	
+	}
 	/* Descent II's JoyManager enumeration
 	 * walks this table and switches on JoyElement.label, taking exactly four:
 	 *
@@ -512,7 +517,7 @@ void JoyManagerWriteDeviceInfo(JoyHostDevice *device)
 	 *
 	 * and for each one it reads min (+0x08) and max (+0x0c) and keeps
 	 * center = (min + max) >> 1. InputSprocket CH scales
-	 * (unsigned)(raw - min) * 0xffffffff / (max - min) 
+	 * (unsigned)(raw - min) * 0xffffffff / (max - min)
 	 * at 0x3844.  ±32767. Rest 0 is that midpoint for both.
 	 *
 	 * Axes 4 and 5 are the triggers, published as 'brak' and 'gasp' over
@@ -529,7 +534,7 @@ void JoyManagerWriteDeviceInfo(JoyHostDevice *device)
 		label = JoyManagerAxisLabel(i);
 		JoyManagerAxisRange(label, &min_value, &max_value);
 		neutral_value = JoyManagerAxisNeutralValue(i);
-		kind = kJoyElemAxisCentered;
+		kind = JoyManagerAxisKind(label);
 		JoyManagerWriteElement(element, kind, label,
 			min_value, max_value, neutral_value);
 		element += joyElementSize;
@@ -605,7 +610,7 @@ bool JoyManagerPrepare(void)
 			count = 0;
 		if (count > JOYMANAGER_MAX_AXES) {
 			device->axis_count = JOYMANAGER_MAX_AXES;
-		} else { 
+		} else {
 			device->axis_count = count;
 		}
 		device->simple_axis_count = device->axis_count;
@@ -626,7 +631,7 @@ bool JoyManagerPrepare(void)
 			count = 0;
 		if (count > JOYMANAGER_MAX_HATS) {
 			device->hat_count = JOYMANAGER_MAX_HATS;
-		} else { 
+		} else {
 			device->hat_count = count;
 		}
 		device->button_element = 0;

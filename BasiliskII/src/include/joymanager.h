@@ -1,9 +1,9 @@
 /*
- * joymanager.h - SDL-backed replacement for the classic 
+ * joymanager.h - SDL-backed replacement for the classic
  * .JoyManager driver. Note that this also contains utilities used
  * by other backends - ENABLE_JOYMANAGER only gates the .JoyManager
  * driver implementation.
- * 
+ *
  *	(C) 2026 Ryan Norton (battlemageloveryt@gmail.com)
  *
  *  This program is free software; you can redistribute it and/or modify
