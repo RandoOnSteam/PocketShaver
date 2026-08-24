@@ -296,7 +296,7 @@ static int interrupt_thread_func(void *data)
 			D(bug("stream: waiting for ack\n"));
 			SDL_WaitSemaphore(audio_irq_done_sem);
 			D(bug("stream: ack received\n"));
-			
+
 			// Get size of audio data
 			uint32 apple_stream_info = ReadMacInt32(audio_data + adatStreamInfo);
 			if (apple_stream_info) {
@@ -333,7 +333,7 @@ static int interrupt_thread_func(void *data)
 				if (work_size == 0)
 					break; // no more audio available right now
 
-				uint8 buf[work_size];
+				uint8* buf = new uint8[work_size];
 
 				uint32 source_sample_rate = ReadMacInt32(apple_stream_info + scd_sampleRate);
 
@@ -349,6 +349,7 @@ static int interrupt_thread_func(void *data)
 				}
 
 				SDL_PutAudioStreamData(interrupt_stream, buf, work_size);
+				delete[] buf;
 			}
 			else {
 				SDL_ClearAudioStream(interrupt_stream);
@@ -402,7 +403,7 @@ static void SDLCALL stream_func(void *, SDL_AudioStream *stream, int stream_len,
 				stream_len, total_amount, margin, target_queue_size, bytes_available);
 #endif
 
-	uint8 src[stream_len], dst[stream_len];
+	uint8 *src = new uint8[stream_len], *dst = new uint8[stream_len];
 	int i = SDL_GetAudioStreamData(interrupt_stream, src, stream_len);
 	if (i < stream_len)
 		memset(src + i, silence_byte, stream_len - i);
@@ -414,6 +415,8 @@ static void SDLCALL stream_func(void *, SDL_AudioStream *stream, int stream_len,
 	MixAudio_bincue(dst, stream_len);
 #endif
 	SDL_PutAudioStreamData(stream, dst, stream_len);
+	delete[] src;
+	delete[] dst;
 }
 
 

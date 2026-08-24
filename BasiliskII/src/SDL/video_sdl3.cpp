@@ -69,6 +69,13 @@
 #include "vm_alloc.h"
 #include "cdrom.h"
 
+#if defined(ENABLE_GFXACCEL) && defined(SHEEPSHAVER)
+#include "metal_compositor.h"
+#include "display_mode_controller.h"
+#include "gfxaccel_resources.h"
+#include "nqd_accel.h"
+#endif
+
 #define DEBUG 0
 #include "debug.h"
 
@@ -226,12 +233,25 @@ extern void SysMountFirstFloppy(void);
 /*
  *  Framebuffer allocation routines
  */
+#if defined(ENABLE_GFXACCEL) && defined(SHEEPSHAVER)
+/* Persistent 80 MB framebuffer so the guest base stays stable across mode switches. */
+static void *fb_aperture = VM_MAP_FAILED;
+static const uint32 fb_aperture_size = 80 * 1024 * 1024;
+#endif
 
 static void *vm_acquire_framebuffer(uint32 size)
 {
 #if defined(HAVE_MACH_VM) || defined(HAVE_MMAP_VM) && defined(__aarch64__)
 	return vm_acquire_reserved(size);
 #else
+#if defined(ENABLE_GFXACCEL) && defined(SHEEPSHAVER)
+	if (size <= fb_aperture_size) {
+		if (fb_aperture == VM_MAP_FAILED)
+			fb_aperture = vm_acquire(fb_aperture_size, VM_MAP_DEFAULT | VM_MAP_32BIT);
+		if (fb_aperture != VM_MAP_FAILED)
+			return fb_aperture;
+	}
+#endif
 	// always try to reallocate framebuffer at the same address
 	static void *fb = VM_MAP_FAILED;
 	if (fb != VM_MAP_FAILED) {
@@ -251,6 +271,10 @@ static void *vm_acquire_framebuffer(uint32 size)
 static inline void vm_release_framebuffer(void *fb, uint32 size)
 {
 #if !(defined(HAVE_MACH_VM) || defined(HAVE_MMAP_VM) && defined(__aarch64__))
+#if defined(ENABLE_GFXACCEL) && defined(SHEEPSHAVER)
+	if (fb == fb_aperture)
+		return;
+#endif
 	vm_release(fb, size);
 #endif
 }
@@ -351,7 +375,7 @@ public:
 
 	// Called by the video driver to set the color palette (in indexed modes)
 	virtual void set_palette(uint8 *pal, int num) = 0;
-	
+
 	// Called by the video driver to set the gamma table
 	virtual void set_gamma(uint8 *gamma, int num) = 0;
 };
@@ -403,6 +427,10 @@ public:
 	bool video_open(void);
 	void video_close(void);
 };
+
+#if defined(ENABLE_GFXACCEL) && defined(SHEEPSHAVER)
+static void DMCModeDescFromVModesIndex(int idx, DMCModeDesc *out);
+#endif
 
 
 /*
@@ -667,16 +695,16 @@ static void delete_sdl_video_surfaces()
 		SDL_DestroyTexture(sdl_texture);
 		sdl_texture = NULL;
 	}
-	
+
 	if (host_surface) {
 		if (host_surface == guest_surface) {
 			guest_surface = NULL;
 		}
-		
+
 		SDL_DestroySurface(host_surface);
 		host_surface = NULL;
 	}
-	
+
 	if (guest_surface) {
 		SDL_DestroySurface(guest_surface);
 		guest_surface = NULL;
@@ -689,7 +717,7 @@ static void delete_sdl_video_window()
 		SDL_DestroyRenderer(sdl_renderer);
 		sdl_renderer = NULL;
 	}
-	
+
 	if (sdl_window) {
 		SDL_DestroyWindow(sdl_window);
 		sdl_window = NULL;
@@ -699,6 +727,13 @@ static void delete_sdl_video_window()
 static void shutdown_sdl_video()
 {
 	delete_sdl_video_surfaces();
+#if defined(ENABLE_GFXACCEL) && defined(SHEEPSHAVER)
+	/* Resources subscribed second, so they shut down first. */
+	if (nqd_metal_available) {
+		gfxaccel_resources_shutdown();
+		MetalCompositorShutdown();
+	}
+#endif
 	delete_sdl_video_window();
 }
 
@@ -710,51 +745,91 @@ static float get_mag_rate()
 	return m < 1 ? 1 : m > 4 ? 4 : m;
 }
 
+/* SDL2 was DPI-unaware on Windows, so the mag_rate * guest size it asked for
+ * was in virtualized pixels that the desktop then stretched by the display's
+ * scale factor: on a 200% 4K desktop SDL2 reported 1920x1080, and a 960x720
+ * request became a 1920x1440 window. SDL3 is DPI-aware and sizes in real
+ * pixels, so the identical request comes out `scale` times smaller on screen
+ * and mag_rate looks like it does nothing. Fold the scale back in so mag_rate
+ * keeps the magnification it had under SDL2 - and unlike SDL2 the result is a
+ * genuine high-density backbuffer rather than a stretched one.
+ *
+ * The factor wanted is content scale over pixel density, i.e. what
+ * SDL_GetWindowDisplayScale() reports once a window exists. That is 1.0 on
+ * backends which already hand out high-density window coordinates (macOS
+ * Retina, Wayland), where SDL2 sized in points too and no correction is due. */
+static float get_display_scale()
+{
+	float scale = 0.0f;
+	if (sdl_window)
+		scale = SDL_GetWindowDisplayScale(sdl_window);
+	if (scale <= 0.0f) {
+		// No window yet, so derive the same ratio from the desktop mode.
+		SDL_DisplayID displayID = SDL_GetPrimaryDisplay();
+		if (displayID) {
+			const SDL_DisplayMode *desktop_mode =
+				SDL_GetDesktopDisplayMode(displayID);
+			const float density = (desktop_mode && desktop_mode->pixel_density > 0.0f)
+								? desktop_mode->pixel_density : 1.0f;
+			scale = SDL_GetDisplayContentScale(displayID) / density;
+		}
+	}
+	return scale > 0.0f ? scale : 1.0f;
+}
+
 static SDL_Surface *init_sdl_video(int width, int height, int depth, Uint32 flags, int pitch)
 {
     if (guest_surface) {
         delete_sdl_video_surfaces();
     }
-    
+
 	int window_width = width;
 	int window_height = height;
 	Uint32 window_flags = SDL_WINDOW_HIGH_PIXEL_DENSITY;
 	const int window_flags_to_monitor = SDL_WINDOW_FULLSCREEN;
-	
+
 	if (flags & SDL_WINDOW_FULLSCREEN) {
 		window_flags |= SDL_WINDOW_FULLSCREEN;
 		window_width = sdl_display_width();
 		window_height = sdl_display_height();
 	}
-	
+
 	if (sdl_window) {
 		int old_window_width, old_window_height, old_window_flags;
 		SDL_GetWindowSize(sdl_window, &old_window_width, &old_window_height);
 		old_window_flags = SDL_GetWindowFlags(sdl_window);
-		if (old_window_width != window_width ||
-			old_window_height != window_height ||
+		float m = get_mag_rate() * get_display_scale();
+		if (old_window_width != m * window_width ||
+			old_window_height != m * window_height ||
 			(old_window_flags & window_flags_to_monitor) != (window_flags & window_flags_to_monitor))
 		{
 			delete_sdl_video_window();
 		}
 	}
-	
+
 #ifdef SDL_PLATFORM_MACOS
 	if (MetalIsAvailable()) window_flags |= SDL_WINDOW_METAL;
 #endif
-	
+#if defined(ENABLE_GFXACCEL) && defined(SHEEPSHAVER)
+	window_flags |= SDL_WINDOW_OPENGL;
+#endif
+
 	if (!sdl_window) {
-		float m = get_mag_rate();
+		float m = get_mag_rate() * get_display_scale();
 #ifdef VIDEO_CHROMAKEY
 		if (display_type == DISPLAY_CHROMAKEY) {
 			window_flags |= SDL_WINDOW_BORDERLESS | SDL_WINDOW_TRANSPARENT;
 			SDL_SetHint("SDL_MOUSE_FOCUS_CLICKTHROUGH", "1");
 		}
 #endif
+		D(bug("X: %d -> %d Y: %d -> %d m: %f", window_width,
+			(int)(window_width*m),
+			window_height,
+			  (int)(window_height*m), m));
 		sdl_window = SDL_CreateWindow(
 			"",
-			m * window_width,
-			m * window_height,
+			(int)(m * window_width),
+			(int)(m * window_height),
 			window_flags);
 		if (!sdl_window) {
 			shutdown_sdl_video();
@@ -763,7 +838,7 @@ static SDL_Surface *init_sdl_video(int width, int height, int depth, Uint32 flag
 		SDL_SyncWindow(sdl_window); // needed for fullscreen
 		set_window_name();
 	}
-	
+
 	// Some SDL events (regarding some native-window events), need processing
 	// as they are generated.  SDL2 has a facility, SDL_AddEventWatch(), which
 	// allows events to be processed as they are generated.
@@ -802,7 +877,7 @@ static SDL_Surface *init_sdl_video(int width, int height, int depth, Uint32 flag
 
 		printf("Using SDL_Renderer driver: %s\n", SDL_GetRendererName(sdl_renderer));
 	}
-    
+
     if (!sdl_update_video_mutex) {
         sdl_update_video_mutex = SDL_CreateMutex();
     }
@@ -882,7 +957,7 @@ static SDL_Surface *init_sdl_video(int width, int height, int depth, Uint32 flag
 static int present_sdl_video()
 {
 	if (SDL_RectEmpty(&sdl_update_video_rect)) return 0;
-	
+
 	if (!sdl_renderer || !sdl_texture || !guest_surface) {
 		printf("WARNING: A video mode does not appear to have been set.\n");
 		return -1;
@@ -902,7 +977,7 @@ static int present_sdl_video()
 	// correction), the colored bars can be an unknown color.
 	SDL_SetRenderDrawColor(sdl_renderer, 0, 0, 0, 0);	// Use black
 	SDL_RenderClear(sdl_renderer);						// Clear the display
-	
+
 	// We're about to work with sdl_update_video_rect, so stop other threads from
 	// modifying it!
 	LOCK_PALETTE;
@@ -921,7 +996,7 @@ static int present_sdl_video()
 		}
 	}
 	UNLOCK_PALETTE; // passed potential deadlock, can unlock palette
-	
+
 	// Update the host OS' texture
 	uint32_t *dstPixels, *srcPixels = (uint32_t *)((uint8_t *)host_surface->pixels +
 		sdl_update_video_rect.y * host_surface->pitch +
@@ -936,7 +1011,7 @@ static int present_sdl_video()
 		for (int y = 0; y < sdl_update_video_rect.h; y++) {
 			for (int x = 0; x < sdl_update_video_rect.w; x++) {
 				uint32 d = srcPixels[x];
-				dstPixels[x] = __builtin_bswap32(d | (d == VIDEO_CHROMAKEY ? 0 : 0xff)); // alpha value
+				dstPixels[x] = SDL_Swap32(d | (d == VIDEO_CHROMAKEY ? 0 : 0xff)); // alpha value
 			}
 			srcPixels += host_surface->pitch >> 2;
 			dstPixels += dstPitch >> 2;
@@ -946,7 +1021,7 @@ static int present_sdl_video()
 		if (host_surface == guest_surface)
 			for (int y = 0; y < sdl_update_video_rect.h; y++) {
 				for (int x = 0; x < sdl_update_video_rect.w; x++)
-					dstPixels[x] = __builtin_bswap32(srcPixels[x]);
+					dstPixels[x] = SDL_Swap32(srcPixels[x]);
 				srcPixels += host_surface->pitch >> 2;
 				dstPixels += dstPitch >> 2;
 			}
@@ -970,10 +1045,10 @@ static int present_sdl_video()
     if (!SDL_RenderTexture(sdl_renderer, sdl_texture, NULL, NULL)) {
 		return -1;
 	}
-	
+
     // Update the display
 	SDL_RenderPresent(sdl_renderer);
-    
+
     // Indicate success to the caller!
     return 0;
 }
@@ -982,7 +1057,7 @@ void update_sdl_video(SDL_Surface *s, int numrects, SDL_Rect *rects)
 {
     // TODO: make sure SDL_Renderer resources get displayed, if and when
     // MacsBug is running (and VideoInterrupt() might not get called)
-    
+
     SDL_LockMutex(sdl_update_video_mutex);
     for (int i = 0; i < numrects; ++i) {
 		SDL_GetRectUnion(&sdl_update_video_rect, &rects[i], &sdl_update_video_rect);
@@ -1081,8 +1156,66 @@ void driver_base::init()
 	// Set frame buffer base
 	set_mac_frame_buffer(monitor, VIDEO_MODE_DEPTH, true);
 
+#if defined(ENABLE_GFXACCEL) && defined(SHEEPSHAVER)
+	{
+		if (dmc_current_snapshot() == NULL) {
+			DMCModeDesc initial;
+			DMCModeDescFromVModesIndex(cur_mode, &initial);
+			initial.screen_base_mac = screen_base;
+			if (screen_base != 0)
+				initial.screen_base_host = Mac2HostAddr(screen_base);
+			else
+				initial.screen_base_host = NULL;
+			int32_t dmc_err = dmc_create(&initial);
+			if (dmc_err != kDMCNoErr) {
+				fprintf(stderr, "[DMC] dmc_create FAILED after initial "
+					"framebuffer bind (err=%d, base=0x%08x host=%p)\n",
+					(int)dmc_err, (unsigned)initial.screen_base_mac,
+					initial.screen_base_host);
+			}
+		}
+
+		int fb_width = VIDEO_MODE_X;
+		int fb_height = VIDEO_MODE_Y;
+		if (MetalCompositorIsInitialized()) {
+			int metal_rc = MetalCompositorResize(fb_width, fb_height,
+			                                      VIDEO_MODE_DEPTH,
+			                                      VIDEO_MODE_ROW_BYTES,
+			                                      pitch, the_buffer,
+			                                      the_buffer_size);
+			if (metal_rc != 0) {
+				bug("[metal_compositor] resize FAILED (err=%d) "
+				                "for %dx%d depth=%d rb=%d pitch=%d - "
+				                "preserving previous compositor state\n",
+				        metal_rc, fb_width, fb_height, VIDEO_MODE_DEPTH,
+				        VIDEO_MODE_ROW_BYTES, pitch);
+			}
+		} else {
+			int metal_rc = MetalCompositorInit(fb_width, fb_height,
+			                                    VIDEO_MODE_DEPTH,
+			                                    VIDEO_MODE_ROW_BYTES,
+			                                    pitch, the_buffer,
+			                                    the_buffer_size);
+			if (metal_rc != 0) {
+				bug("[metal_compositor] init FAILED (err=%d) "
+				                "for %dx%d depth=%d rb=%d pitch=%d\n",
+				        metal_rc, fb_width, fb_height, VIDEO_MODE_DEPTH,
+				        VIDEO_MODE_ROW_BYTES, pitch);
+				MetalCompositorShutdown();
+				return;
+			}
+			int32_t gfxres_err = gfxaccel_resources_init();
+			if (gfxres_err != 0) {
+				bug("[gfxaccel_resources] init FAILED (err=%d) - "
+				                "proceeding with compositor-only framebuffer "
+				                "(fallback)\n", (int)gfxres_err);
+			}
+		}
+	}
+#endif
+
 	adapt_to_video_mode();
-	
+
 	// set default B/W palette
 	sdl_palette = SDL_CreatePalette(256);
 	sdl_palette->colors[1].r = 0;
@@ -1090,6 +1223,13 @@ void driver_base::init()
 	sdl_palette->colors[1].b = 0;
 	sdl_palette->colors[1].a = 255;
 	SDL_SetSurfacePalette(s, sdl_palette);
+#if defined(ENABLE_GFXACCEL) && defined(SHEEPSHAVER)
+	{
+		uint8 bw_pal[6] = {255,255,255, 0,0,0};
+		MetalCompositorUpdatePalette(bw_pal, 2);
+		dmc_record_palette_change();
+	}
+#endif
 
 	if (PrefsFindBool("init_grab") && !PrefsFindBool("hardcursor")) grab_mouse();
 }
@@ -1132,7 +1272,7 @@ void driver_base::adapt_to_video_mode() {
 	sdl_update_video_rect.w = VIDEO_MODE_X;
 	sdl_update_video_rect.h = VIDEO_MODE_Y;
 	SDL_UnlockMutex(sdl_update_video_mutex);
-	
+
 	// Hide cursor
 	hardware_cursor ? SDL_ShowCursor() : SDL_HideCursor();
 
@@ -1265,7 +1405,8 @@ static void keycode_init(void)
 		if (f == NULL) {
 			char str[256];
 			snprintf(str, sizeof(str), GetString(STR_KEYCODE_FILE_WARN), kc_path ? kc_path : KEYCODE_FILE_NAME, strerror(errno));
-			WarningAlert(str);
+			/*WarningAlert(str);*/
+			D(bug("%s", str));
 			return;
 		}
 
@@ -1321,7 +1462,8 @@ static void keycode_init(void)
 		if (!video_driver_found) {
 			char str[256];
 			snprintf(str, sizeof(str), GetString(STR_KEYCODE_VENDOR_WARN), video_driver ? video_driver : "", kc_path ? kc_path : KEYCODE_FILE_NAME);
-			WarningAlert(str);
+			/*WarningAlert(str);*/
+			D(bug("%s", str));
 			return;
 		}
 
@@ -1376,6 +1518,31 @@ bool SDL_monitor_desc::video_open(void)
 #endif
 	return true;
 }
+
+#if defined(ENABLE_GFXACCEL) && defined(SHEEPSHAVER)
+static void DMCModeDescFromVModesIndex(int idx, DMCModeDesc *out)
+{
+	out->width      = (uint32_t)VModes[idx].viXsize;
+	out->height     = (uint32_t)VModes[idx].viYsize;
+	int apple = (int)VModes[idx].viAppleMode;
+	uint32_t bit_depth;
+	switch (apple) {
+		case VIDEO_DEPTH_1BIT:  bit_depth = 1;  break;
+		case VIDEO_DEPTH_2BIT:  bit_depth = 2;  break;
+		case VIDEO_DEPTH_4BIT:  bit_depth = 4;  break;
+		case VIDEO_DEPTH_8BIT:  bit_depth = 8;  break;
+		case VIDEO_DEPTH_16BIT: bit_depth = 16; break;
+		case VIDEO_DEPTH_32BIT: bit_depth = 32; break;
+		default:                bit_depth = 8;  break;
+	}
+	out->depth            = bit_depth;
+	out->row_bytes        = (uint32_t)VModes[idx].viRowBytes;
+	out->pitch            = out->row_bytes;
+	out->vbl_usec         = 0;
+	out->screen_base_mac  = 0;
+	out->screen_base_host = NULL;
+}
+#endif
 
 #ifdef SHEEPSHAVER
 bool VideoInit(void)
@@ -1516,8 +1683,14 @@ bool VideoInit(bool classic)
 			for (int i = 0; video_modes[i].w != 0; i++) {
 				const int w = video_modes[i].w;
 				const int h = video_modes[i].h;
+#if defined(ENABLE_GFXACCEL) && defined(SHEEPSHAVER)
+				if (i > 0 && ((w == default_width && h == default_height) ||
+				              w > sdl_display_width() || h > sdl_display_height()))
+					continue;
+#else
 				if (i > 0 && (w >= default_width || h >= default_height))
 					continue;
+#endif
 				for (int d = VIDEO_DEPTH_1BIT; d <= default_depth; d++)
 					add_mode(display_type, w, h, video_modes[i].resolution_id, TrivialBytesPerRow(w, (video_depth)d), d);
 			}
@@ -1633,6 +1806,12 @@ void SDL_monitor_desc::video_close(void)
 
 void VideoExit(void)
 {
+#if defined(ENABLE_GFXACCEL) && defined(SHEEPSHAVER)
+	if (nqd_metal_available) {
+		NQDMetalCleanup();
+	}
+#endif
+
 	// Close displays
 	vector<monitor_desc *>::iterator i, end = VideoMonitors.end();
 	for (i = VideoMonitors.begin(); i != end; ++i)
@@ -1677,7 +1856,7 @@ static void do_toggle_fullscreen(void)
 			display_type = DISPLAY_WINDOW;
 			SDL_SetWindowFullscreen(sdl_window, false);
 			const VIDEO_MODE &mode = drv->mode;
-			float m = get_mag_rate();
+			float m = get_mag_rate() * get_display_scale();
 			SDL_SetWindowSize(sdl_window, m * VIDEO_MODE_X, m * VIDEO_MODE_Y);
 #ifndef SDL_PLATFORM_MACOS
 			SDL_SetWindowPosition(sdl_window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
@@ -1707,7 +1886,7 @@ static void do_toggle_fullscreen(void)
 
 	// while SetVideoMode is happening, control key up may be missed
 	ADBKeyUp(0x36);
-	
+
 	// resume redraw thread
 	toggle_fullscreen = false;
 #ifndef USE_CPU_EMUL_SERVICES
@@ -1757,7 +1936,13 @@ void VideoVBL(void)
 	if (toggle_fullscreen)
 		do_toggle_fullscreen();
 
+#if defined(ENABLE_GFXACCEL) && defined(SHEEPSHAVER)
+	if (nqd_metal_available)
+		NQDMetalFlush();
+	MetalCompositorPresent();
+#else
 	present_sdl_video();
+#endif
 
 	// Temporarily give up frame buffer lock (this is the point where
 	// we are suspended when the user presses Ctrl-Tab)
@@ -1813,7 +1998,7 @@ void video_set_palette(void)
 	}
 	monitor->set_palette(pal, n_colors);
 }
-	
+
 void video_set_gamma(int n_colors)
 {
 	monitor_desc * monitor = VideoMonitors[0];
@@ -1826,22 +2011,22 @@ void video_set_gamma(int n_colors)
 	monitor->set_gamma(gamma, n_colors);
 }
 #endif
-	
+
 void SDL_monitor_desc::set_palette(uint8 *pal, int num_in)
 {
-	
+
 	const VIDEO_MODE &mode = get_current_mode();
-	
+
 	LOCK_PALETTE;
 
 	// Convert colors to XColor array
 	int num_out = 256;
 	bool stretch = false;
-	
+
 	if (!sdl_palette) {
 		sdl_palette = SDL_CreatePalette(num_out);
 	}
-	
+
 	SDL_Color *p = sdl_palette->colors;
 	for (int i=0; i<num_out; i++) {
 		int c = (stretch ? (i * num_in) / num_out : i);
@@ -1872,22 +2057,27 @@ void SDL_monitor_desc::set_palette(uint8 *pal, int num_in)
 	// Tell redraw thread to change palette
 	sdl_palette_changed = true;
 
+#if defined(ENABLE_GFXACCEL) && defined(SHEEPSHAVER)
+	MetalCompositorUpdatePalette(pal, num_in);
+	dmc_record_palette_change();
+#endif
+
 	UNLOCK_PALETTE;
 }
-	
+
 void SDL_monitor_desc::set_gamma(uint8 *gamma, int num_in)
 {
 	// handle the gamma ramp
-		
+
 	if (gamma[0] == 127 && gamma[num_in*3-1] == 127) // solid grey
 		return; // ignore
 
 	uint16 red[256];
 	uint16 green[256];
 	uint16 blue[256];
-	
+
 	int repeats = 256 / num_in;
-			
+
 	for (int i = 0; i < num_in; i++) {
 		for (int j = 0; j < repeats; j++) {
 			red[i*repeats + j] = gamma[i*3 + 0] << 8;
@@ -1902,11 +2092,11 @@ void SDL_monitor_desc::set_gamma(uint8 *gamma, int num_in)
 		green[i] = gamma[(num_in - 1) * 3 + 1] << 8;
 		blue[i] = gamma[(num_in - 1) * 3 + 2] << 8;
 	}
-	
+
 	bool changed = (memcmp(red, last_gamma_red, 512) != 0 ||
 					memcmp(green, last_gamma_green, 512) != 0 ||
 					memcmp(blue, last_gamma_blue, 512) != 0);
-	
+
 	if (changed) {
 		memcpy(last_gamma_red, red, 512);
 		memcpy(last_gamma_green, green, 512);
@@ -1923,38 +2113,139 @@ void SDL_monitor_desc::set_gamma(uint8 *gamma, int num_in)
  */
 
 #ifdef SHEEPSHAVER
+static int16 video_switch_to_mode_index(int mode_index)
+{
+	if (mode_index < 0 || mode_index >= 64 ||
+		VModes[mode_index].viType == DIS_INVALID) {
+		return paramErr;
+	}
+
+	if (mode_index == cur_mode) {
+		if (private_data != NULL) {
+			private_data->saveBaseAddr = screen_base;
+			private_data->saveData = VModes[cur_mode].viAppleID;
+			private_data->saveMode = VModes[cur_mode].viAppleMode;
+			private_data->savePage = 0;
+		}
+		return noErr;
+	}
+
+	const int previous_mode = cur_mode;
+#if defined(ENABLE_GFXACCEL) && defined(SHEEPSHAVER)
+	video_screen_publish_cm_suspend();
+#endif
+	DisableInterrupt();
+#ifndef USE_CPU_EMUL_SERVICES
+	thread_stop_ack = false;
+	thread_stop_req = true;
+	while (!thread_stop_ack) ;
+#endif
+
+#if defined(ENABLE_GFXACCEL) && defined(SHEEPSHAVER)
+	DMCModeDesc new_mode;
+	DMCModeDescFromVModesIndex(mode_index, &new_mode);
+	int32_t dmc_err = dmc_prepare_mode_switch(&new_mode);
+	if (dmc_err != kDMCNoErr) {
+		fprintf(stderr, "[DMC] dmc_prepare_mode_switch FAILED (err=%d) - "
+			"video-driver mode switch cancelled\n",
+			(int)dmc_err);
+#ifndef USE_CPU_EMUL_SERVICES
+		thread_stop_req = false;
+#endif
+		EnableInterrupt();
+		video_screen_publish_cm_resume();
+		return paramErr;
+	}
+#endif
+
+	cur_mode = mode_index;
+	VideoMonitors[0]->switch_to_current_mode();
+
+#if defined(ENABLE_GFXACCEL) && defined(SHEEPSHAVER)
+	DMCModeDesc bound_mode;
+	DMCModeDescFromVModesIndex(cur_mode, &bound_mode);
+	bound_mode.screen_base_mac = screen_base;
+	if (screen_base != 0)
+		bound_mode.screen_base_host = Mac2HostAddr(screen_base);
+	else
+		bound_mode.screen_base_host = NULL;
+	if (bound_mode.screen_base_mac == 0 ||
+		bound_mode.screen_base_host == NULL) {
+		cur_mode = previous_mode;
+		VideoMonitors[0]->switch_to_current_mode();
+		(void)dmc_cancel_prepared_mode_switch();
+#ifndef USE_CPU_EMUL_SERVICES
+		thread_stop_req = false;
+#endif
+		EnableInterrupt();
+		video_screen_publish_cm_resume();
+		return paramErr;
+	}
+	dmc_err = dmc_request_mode_switch(&bound_mode);
+	if (dmc_err != kDMCNoErr) {
+		fprintf(stderr, "[DMC] dmc_request_mode_switch commit FAILED "
+			"(err=%d) after driver installed %dx%d mode index=%d; "
+			"rolling platform mode back\n",
+			(int)dmc_err, (int)bound_mode.width, (int)bound_mode.height,
+			mode_index);
+		cur_mode = previous_mode;
+		VideoMonitors[0]->switch_to_current_mode();
+		if (private_data != NULL) {
+			private_data->saveBaseAddr = screen_base;
+			private_data->saveData = VModes[cur_mode].viAppleID;
+			private_data->saveMode = VModes[cur_mode].viAppleMode;
+			private_data->savePage = 0;
+		}
+#ifndef USE_CPU_EMUL_SERVICES
+		thread_stop_req = false;
+#endif
+		EnableInterrupt();
+		video_screen_publish_cm_resume();
+		return paramErr;
+	}
+#endif
+
+	if (private_data != NULL) {
+		private_data->saveBaseAddr = screen_base;
+		private_data->saveData = VModes[cur_mode].viAppleID;
+		private_data->saveMode = VModes[cur_mode].viAppleMode;
+		private_data->savePage = 0;
+	}
+
+#ifndef USE_CPU_EMUL_SERVICES
+	thread_stop_req = false;
+#endif
+	EnableInterrupt();
+#if defined(ENABLE_GFXACCEL) && defined(SHEEPSHAVER)
+	video_screen_publish_cm_resume();
+#endif
+	return noErr;
+}
+
 int16 video_mode_change(VidLocals *csSave, uint32 ParamPtr)
 {
-	/* return if no mode change */
+	uint16 req_mode = ReadMacInt16(ParamPtr + csMode);
+	{
+		uint32 abs = video_abs_depth_from_rel(req_mode);
+		if (abs != 0) req_mode = (uint16)abs;
+	}
+
 	if ((csSave->saveData == ReadMacInt32(ParamPtr + csData)) &&
-	    (csSave->saveMode == ReadMacInt16(ParamPtr + csMode))) return noErr;
+	    (csSave->saveMode == req_mode)) return noErr;
 
-	/* first find video mode in table */
 	for (int i=0; VModes[i].viType != DIS_INVALID; i++) {
-		if ((ReadMacInt16(ParamPtr + csMode) == VModes[i].viAppleMode) &&
+		if ((req_mode == VModes[i].viAppleMode) &&
 		    (ReadMacInt32(ParamPtr + csData) == VModes[i].viAppleID)) {
-			csSave->saveMode = ReadMacInt16(ParamPtr + csMode);
-			csSave->saveData = ReadMacInt32(ParamPtr + csData);
-			csSave->savePage = ReadMacInt16(ParamPtr + csPage);
-
-			// Disable interrupts and pause redraw thread
-			DisableInterrupt();
-			thread_stop_ack = false;
-			thread_stop_req = true;
-			while (!thread_stop_ack) ;
-
-			cur_mode = i;
-			monitor_desc *monitor = VideoMonitors[0];
-			monitor->switch_to_current_mode();
+			int16 switch_err = video_switch_to_mode_index(i);
+			if (switch_err != noErr)
+				return switch_err;
 
 			WriteMacInt32(ParamPtr + csBaseAddr, screen_base);
 			csSave->saveBaseAddr=screen_base;
-			csSave->saveData=VModes[cur_mode].viAppleID;/* First mode ... */
-			csSave->saveMode=VModes[cur_mode].viAppleMode;
+			csSave->saveData=VModes[i].viAppleID;
+			csSave->saveMode=VModes[i].viAppleMode;
 
-			// Enable interrupts and resume redraw thread
-			thread_stop_req = false;
-			EnableInterrupt();
+			csSave->savePage=ReadMacInt16(ParamPtr + csPage);
 			return noErr;
 		}
 	}
@@ -1969,10 +2260,10 @@ static bool is_cursor_in_mac_screen()
 	float cursorX, cursorY;
 	int deltaX, deltaY;
 	bool out;
-	
+
 	// TODO figure out a check for full screen mode
 	if (display_type == DISPLAY_SCREEN)
-		return true; 
+		return true;
 
 	if (display_type == DISPLAY_WINDOW) {
 
@@ -1985,7 +2276,7 @@ static bool is_cursor_in_mac_screen()
 		deltaY = (int)cursorY - windowY;
 		D(bug("cursor relative {%d,%d}\n", deltaX, deltaY));
 		const VIDEO_MODE &mode = drv->mode;
-		float m = get_mag_rate();
+		float m = get_mag_rate() * get_display_scale();
 		out = deltaX >= 0 && deltaX < VIDEO_MODE_X * m &&
 				deltaY >= 0 && deltaY < VIDEO_MODE_Y * m;
 		D(bug("cursor in window? %s\n", out? "yes" : "no"));
@@ -1995,7 +2286,7 @@ static bool is_cursor_in_mac_screen()
 	return false;
 }
 #endif
-	
+
 void SDL_monitor_desc::switch_to_current_mode(void)
 {
 	// Close and reopen display
@@ -2274,7 +2565,7 @@ static bool SDLCALL on_sdl_event_generated(void *userdata, SDL_Event *event)
 			return EVENT_DROP_FROM_QUEUE;
 			break;
 	}
-	
+
 	return EVENT_ADD_TO_QUEUE;
 }
 
@@ -2288,7 +2579,7 @@ static void handle_events(void)
 	while ((n_events = SDL_PeepEvents(events, n_max_events, SDL_GETEVENT, SDL_EVENT_FIRST, SDL_EVENT_LAST)) > 0) {
 		for (int i = 0; i < n_events; i++) {
 			SDL_Event & event = events[i];
-			
+
 			switch (event.type) {
 
 			// Mouse button
@@ -2372,7 +2663,7 @@ static void handle_events(void)
 							opt_down = true;
 						if (code == 0x37)
 							cmd_down = true;
-						
+
 					} else {
 						if (code == 0x31)
 							drv->resume();	// Space wakes us up
@@ -2399,12 +2690,12 @@ static void handle_events(void)
 				}
 				break;
 			}
-			
+
 			case SDL_EVENT_WINDOW_EXPOSED:
 				// Hidden parts exposed, force complete refresh of window
 				force_complete_window_refresh();
 				break;
-					
+
 			case SDL_EVENT_WINDOW_RESTORED:
 				// Force a complete window refresh when activating, to avoid redraw artifacts otherwise.
 				force_complete_window_refresh();
@@ -2462,7 +2753,7 @@ static void update_display_static(driver_base *drv)
 			const int pixels_per_byte = 8/mac_depth_of_video_depth(VIDEO_MODE_DEPTH);
 
 			const uint32 line_len = TrivialBytesPerRow(VIDEO_MODE_X, VIDEO_MODE_DEPTH);
-			
+
 			x1 = line_len;
 			for (uint32 j = y1; j <= y2; j++) {
 				p = &the_buffer[j * bytes_per_row];
@@ -2584,6 +2875,11 @@ static void update_display_static(driver_base *drv)
 // XXX use NQD bounding boxes to help detect dirty areas?
 static void update_display_static_bbox(driver_base *drv)
 {
+#if defined(ENABLE_GFXACCEL) && defined(SHEEPSHAVER)
+	if (MetalCompositorIsInitialized())
+		return;
+#endif
+
 	const VIDEO_MODE &mode = drv->mode;
 	bool blit = (int)VIDEO_MODE_DEPTH == VIDEO_DEPTH_16BIT;
 
@@ -2697,7 +2993,7 @@ static void video_refresh_dga_vosf(void)
 {
 	// Quit DGA mode if requested
 	possibly_quit_dga_mode();
-	
+
 	// Update display (VOSF variant)
 	static uint32 tick_counter = 0;
 	if (++tick_counter >= frame_skip) {
@@ -2715,7 +3011,7 @@ static void video_refresh_window_vosf(void)
 {
 	// Ungrab mouse if requested
 	possibly_ungrab_mouse();
-	
+
 	// Update display (VOSF variant)
 	static uint32 tick_counter = 0;
 	if (++tick_counter >= frame_skip) {
@@ -2857,6 +3153,50 @@ void video_set_dirty_area(int x, int y, int w, int h)
 #endif
 
 	// XXX handle dirty bounding boxes for non-VOSF modes
+}
+bool video_get_framebuffer_drawable_rect(int *out_x, int *out_y,
+										 int *out_w, int *out_h)
+{
+	int drawable_w = 0, drawable_h = 0;
+	SDL_GetWindowSizeInPixels(sdl_window, &drawable_w, &drawable_h);
+	if (drawable_w <= 0 || drawable_h <= 0)
+		return false;
+
+	/* Guest size: prefer the live driver mode, else VModes[cur_mode]. */
+	int guest_w = 0, guest_h = 0;
+	if (drv != NULL) {
+		const VIDEO_MODE &mode = drv->mode;
+		guest_w = VIDEO_MODE_X;
+		guest_h = VIDEO_MODE_Y;
+	}
+	if ((guest_w <= 0 || guest_h <= 0) &&
+		cur_mode >= 0 && cur_mode < 64 &&
+		VModes[cur_mode].viType != DIS_INVALID) {
+		guest_w = VModes[cur_mode].viXsize;
+		guest_h = VModes[cur_mode].viYsize;
+	}
+	if (guest_w <= 0 || guest_h <= 0) {
+		*out_x = 0;
+		*out_y = 0;
+		*out_w = drawable_w;
+		*out_h = drawable_h;
+		return true;
+	}
+
+	/* Continuous aspect-fit: window is mag_rate * guest, so scale == mag_rate
+	 * for matching aspects (including 1.5). */
+	const double scale = std::min((double)drawable_w / (double)guest_w,
+								  (double)drawable_h / (double)guest_h);
+	int view_w = (int)lround((double)guest_w * scale);
+	int view_h = (int)lround((double)guest_h * scale);
+	view_w = std::max(1, std::min(drawable_w, view_w));
+	view_h = std::max(1, std::min(drawable_h, view_h));
+
+	*out_x = (drawable_w - view_w) / 2;
+	*out_y = (drawable_h - view_h) / 2;
+	*out_w = view_w;
+	*out_h = view_h;
+	return true;
 }
 #endif
 

@@ -133,7 +133,7 @@ bool InitAll(const char *vmdir)
 	SCSIInit();
 
 	// Init external file system
-	ExtFSInit(); 
+	ExtFSInit();
 
 	// Init ADB
 	ADBInit();

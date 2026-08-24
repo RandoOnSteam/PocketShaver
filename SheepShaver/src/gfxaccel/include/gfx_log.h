@@ -59,9 +59,10 @@ inline bool accel_log_verbose() {
     static bool v = accel_log_verbose_env(); return v; }
 
 #define ACCEL_LOG_VERBOSE true//(accel_log_verbose())
-
+#define GFX_DEBUG_EMIT(prefix, ...) gfx_log_emit((prefix), __VA_ARGS__)
 #else  /* !ACCEL_LOGGING_ENABLED */
 #define ACCEL_LOG_VERBOSE false
+#define GFX_DEBUG_EMIT(prefix, ...) gfx_log_emit((prefix), __VA_ARGS__)
 #endif
 
 static inline void gfx_log_emitv(const char *prefix,
@@ -86,8 +87,6 @@ static inline void gfx_log_emit(const char *prefix, const char *format, ...)
     gfx_log_emitv(prefix, format, args);
     va_end(args);
 }
-
-#define GFX_DEBUG_EMIT(prefix, ...) gfx_log_emit((prefix), __VA_ARGS__)
 
 #endif /* __cplusplus */
 

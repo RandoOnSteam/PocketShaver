@@ -1107,9 +1107,6 @@ static int present_sdl_video()
 bool video_get_framebuffer_drawable_rect(int *out_x, int *out_y,
 										 int *out_w, int *out_h)
 {
-	if (!sdl_window || !out_x || !out_y || !out_w || !out_h)
-		return false;
-
 	int drawable_w = 0, drawable_h = 0;
 #if defined(ENABLE_GFXACCEL) && \
 	(!defined(TARGET_OS_IPHONE) || !TARGET_OS_IPHONE)

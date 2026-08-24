@@ -41,7 +41,7 @@ unset(_macemu_sheepshaver_jit_default)
 option(ENABLE_GTK				"GTK preferences UI on Unix" OFF)
 option(ENABLE_BINCUE		 "BIN/CUE CD image support" ON)
 option(ENABLE_VOSF			 "Video on SEGV signals" OFF)
-option(USE_SDL3					"Use SDL 3 instead of SDL 2" OFF)
+option(USE_SDL3					"Use SDL 3 instead of SDL 2" ON)
 option(ENABLE_GFXACCEL	 "SheepShaver graphics accel (NQD/RAVE/GL/DSp)" ON)
 option(ENABLE_QD3D_INIT_LOGGING
 	"Compile focused SheepShaver QuickDraw 3D/RAVE initialization diagnostics"
@@ -65,9 +65,15 @@ option(ENABLE_NATIVE_CINEPAK_PATCH
 # auto = Metal on Apple, OpenGL elsewhere
 set(GFXACCEL_BACKEND "auto" CACHE STRING "gfxaccel GPU backend (auto|opengl|metal)")
 set_property(CACHE GFXACCEL_BACKEND PROPERTY STRINGS auto opengl metal)
-if(WIN32 AND NOT SDL2_DIR)
-	set(SDL2_DIR "third_party/SDL2/cmake" CACHE PATH
-		"Directory containing SDL2Config.cmake")
+if(WIN32)
+	if(NOT USE_SDL3 AND NOT SDL2_DIR)
+		set(SDL2_DIR "thirdparty/SDL2/cmake" CACHE PATH
+			"Directory containing SDL2Config.cmake")
+	elseif(USE_SDL3 AND NOT SDL3_DIR)
+		set(SDL3_DIR "thirdparty/SDL3/cmake" CACHE PATH
+			"Directory containing SDL3 cmake files")
+		message(STATUS "SDL3Dir set")
+	endif()
 endif()
 if(NOT BUILD_BASILISKII AND NOT BUILD_SHEEPSHAVER)
 	message(FATAL_ERROR "Enable at least one of BUILD_BASILISKII or BUILD_SHEEPSHAVER")

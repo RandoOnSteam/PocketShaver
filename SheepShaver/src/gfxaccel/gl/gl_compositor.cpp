@@ -50,6 +50,16 @@
 #define COMPOSITOR_LOG(...) GFX_DEBUG_EMIT("[compositor] ", __VA_ARGS__)
 #define COMPOSITOR_ERR(...) GFX_DEBUG_EMIT("[compositor ERROR] ", __VA_ARGS__)
 
+#if SDL_MAJOR_VERSION >= 3
+	#undef SDL_GL_DeleteContext
+	#undef SDL_GL_GetDrawableSize
+	#define SDL_GL_DeleteContext SDL_GL_DestroyContext
+	#define SDL_GL_GetDrawableSize SDL_GetWindowSizeInPixels
+	#define SDL_GL_MakeCurrentFAILURE false
+#else
+	#define SDL_GL_MakeCurrentFAILURE -1
+#endif
+
 extern SDL_Window *sdl_window;
 SDL_Window *gl_device_sdl_window = NULL;
 static SDL_GLContext s_gl_ctx = NULL;
@@ -129,7 +139,8 @@ bool GLCompositorDeviceInit(void)
 		return false;
 	}
 
-	if (SDL_GL_MakeCurrent(sdl_window, s_gl_ctx) != 0) {
+	if (SDL_GL_MakeCurrent(sdl_window, s_gl_ctx)
+			== SDL_GL_MakeCurrentFAILURE) {
 		QD3D_INIT_LOG("GLCompositorDeviceInit: SDL_GL_MakeCurrent FAILED: %s", SDL_GetError());
 		fprintf(stderr, "[gfxaccel-gl] SDL_GL_MakeCurrent failed: %s\n", SDL_GetError());
 		SDL_GL_DeleteContext(s_gl_ctx);
@@ -929,7 +940,8 @@ void *SharedMetalDevice(void)
 		gl_device_sdl_window != sdl_window)
 		return NULL;
 	if (SDL_GL_GetCurrentContext() != s_gl_ctx) {
-		if (SDL_GL_MakeCurrent(gl_device_sdl_window, s_gl_ctx) != 0) {
+		if (SDL_GL_MakeCurrent(gl_device_sdl_window, s_gl_ctx)
+				== SDL_GL_MakeCurrentFAILURE) {
 			QD3D_INIT_LOG("SDL_GL_MakeCurrent failed: %s", SDL_GetError());
 			return NULL;
 		}

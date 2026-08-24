@@ -59,6 +59,10 @@
 #if !SDL_VERSION_ATLEAST(3, 0, 0)
 #define SDL_EVENT_KEY_UP	SDL_KEYUP
 #define SDL_EVENT_KEY_DOWN	SDL_KEYDOWN
+#define SDL_InitFAILURE -1
+#else
+#include <SDL_main.h>
+#define SDL_InitFAILURE false
 #endif
 
 // Constants
@@ -310,7 +314,7 @@ int main(int argc, char **argv)
 	sdl_flags |= SDL_INIT_AUDIO;
 #endif
 	assert(sdl_flags != 0);
-	if (SDL_Init(sdl_flags) == -1) {
+	if (SDL_Init(sdl_flags) == SDL_InitFAILURE) {
 		char str[256];
 		sprintf(str, "Could not initialize SDL: %s.\n", SDL_GetError());
 		ErrorAlert(str);

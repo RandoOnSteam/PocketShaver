@@ -43,7 +43,7 @@ enum {
 	JOYMANAGER_MAX_BUTTONS = 64,
 	JOYMANAGER_MAX_HATS = 4,
 	JOYMANAGER_EVENT_COUNT = 64,
-	JOYMANAGER_AXIS_REST = 4000,
+	JOYMANAGER_AXIS_REST = 8000, /* SDL3 recommendation */
 	JOYMANAGER_GUEST_STORAGE_SIZE = 0x4000,
 	JOYMANAGER_NORMAL_AXIS_MAX = 32767,
 	JOYMANAGER_NORMAL_AXIS_MIN = -32767,
@@ -64,7 +64,6 @@ enum {
 	kJoyBrakeAvailable = 0x0040,
 	kJoyXAndYAxisAvailable = 0x0100 /* Only checked by ISp and newer games */
 };
-
 enum {
 	kJoyElemButton = 0,
 	kJoyElemSelector = 1,
@@ -94,13 +93,11 @@ enum {
 	kJoyLabelGas2 = 19,    /* 'gasp' */
 	kJoyLabelMax = 20
 };
-
 enum {
 	kJoyEvtDown = 2,
 	kJoyEvtUp = 3,
 	kJoyEvtPosition = 4
 };
-
 enum {
 	kJoyCsStart = 1002,
 	kJoyCsStop = 1003,
@@ -111,25 +108,6 @@ enum {
 	kJoyCsGetEventQueue = 1010,
 	kJoyCsGetElementName = 1016
 };
-
-#if JOYMANAGER_TRACE && defined(SHEEPSHAVER)
-#define JoyTrace bug
-/* True once a second, for the periodic dumps. */
-static bool JoyTraceTick(void)
-{
-	static uint64 next;
-	uint64 now = GetTicks_usec();
-
-	if (now < next)
-		return false;
-	next = now + 1000000;
-	return true;
-}
-#else
-static inline void JoyTrace(const char *, ...) { }
-static inline bool JoyTraceTick(void) { return false; }
-#endif
-
 enum {
 	joySimpleFeatures = 0x00,
 	joySimpleAxis = 0x04,
@@ -165,9 +143,27 @@ enum {
 	joyEventSize = 0x0c
 };
 
+#if JOYMANAGER_TRACE && defined(SHEEPSHAVER)
+#define JoyTrace bug
+/* True once a second, for the periodic dumps. */
+static bool JoyTraceTick(void)
+{
+	static uint64 next;
+	uint64 now = GetTicks_usec();
+
+	if (now < next)
+		return false;
+	next = now + 1000000;
+	return true;
+}
+#else
+static inline void JoyTrace(const char *, ...) { }
+static inline bool JoyTraceTick(void) { return false; }
+#endif
+
 #ifdef USE_SDL
 struct JoyHostDevice {
-	SDL_Joystick *joystick;
+	JoyManagerDevice *joystick;
 	char name[36];
 	uint32 simple_addr;
 	uint32 info_addr;
@@ -211,6 +207,74 @@ uint32 JoyManagerGuestStorageSize(void)
 }
 
 #ifdef USE_SDL
+/* SDL2 and SDL3 hand out raw joystick axes in a different order, because SDL3
+ * dropped the Windows XInput joystick backend and reports the plain HID report
+ * order instead.  For an Xbox pad:
+ *
+ *		            LX  LY  RX  RY  LT  RT
+ *		SDL2 axis    0   1   2   3   4   5
+ *		SDL3 axis    0   1   3   4   2   5
+ *
+ * so the left trigger lands on axis 2, where JoyManagerAxisLabel() expects the
+ * rudder.  A trigger rests at -32768, which JoyManagerAxisValue() turns into a
+ * rudder pinned hard over - the guest steers by itself.
+ *
+ * SDL knows the raw index of every semantic axis from its controller mapping
+ * database, so ask it rather than guessing from the index.  That is static
+ * data, not device state: no calibration pass, and nothing breaks if the stick
+ * happens to be held when the emulator starts.  Reading still goes through
+ * SDL_Joystick, so the SDL1 build is unaffected - it simply has no mapping
+ * database and keeps the raw index order, which is what a real flight stick
+ * (HID X, Y, Rx, slider) wants anyway. */
+#if SDL_VERSION_ATLEAST(2, 0, 0)
+#define JOYMANAGER_USESDLGAMEPAD 1
+/* X, Y, Rudder, Throttle, Brake, Gas - see JoyManagerSDLGamepadAxis(). */
+#define JOYMANAGER_GAMEPAD_AXES 6
+#endif
+
+#ifdef JOYMANAGER_USESDLGAMEPAD
+#if SDL_VERSION_ATLEAST(3, 0, 0)
+typedef SDL_Gamepad JoyManagerSDLPad;
+#else
+typedef SDL_GameController JoyManagerSDLPad;
+#endif
+
+static JoyManagerSDLPad *JoyManagerSDLGamepad(JoyManagerDevice *joystick)
+{
+	if (joystick == NULL)
+		return NULL;
+#if SDL_VERSION_ATLEAST(3, 0, 0)
+	return SDL_GetGamepadFromID(SDL_GetJoystickID((SDL_Joystick*)joystick));
+#else
+	return SDL_GameControllerFromInstanceID(
+		SDL_JoystickInstanceID((SDL_Joystick*)joystick));
+#endif
+}
+static int JoyManagerSDLGamepadAxis(int axis)
+{
+#if SDL_VERSION_ATLEAST(3, 0, 0)
+	switch (axis) {
+		case 0: return SDL_GAMEPAD_AXIS_LEFTX;
+		case 1: return SDL_GAMEPAD_AXIS_LEFTY;
+		case 2: return SDL_GAMEPAD_AXIS_RIGHTX;
+		case 3: return SDL_GAMEPAD_AXIS_RIGHTY;
+		case 4: return SDL_GAMEPAD_AXIS_LEFT_TRIGGER;
+		case 5: return SDL_GAMEPAD_AXIS_RIGHT_TRIGGER;
+	}
+#else
+	switch (axis) {
+		case 0: return SDL_CONTROLLER_AXIS_LEFTX;
+		case 1: return SDL_CONTROLLER_AXIS_LEFTY;
+		case 2: return SDL_CONTROLLER_AXIS_RIGHTX;
+		case 3: return SDL_CONTROLLER_AXIS_RIGHTY;
+		case 4: return SDL_CONTROLLER_AXIS_TRIGGERLEFT;
+		case 5: return SDL_CONTROLLER_AXIS_TRIGGERRIGHT;
+	}
+#endif
+	return -1;
+}
+#endif
+
 int JoyManagerSDLNumDevices(void)
 {
 #if SDL_VERSION_ATLEAST(3, 0, 0)
@@ -227,7 +291,7 @@ int JoyManagerSDLNumDevices(void)
 #endif
 }
 
-SDL_Joystick *JoyManagerSDLOpenDevice(int index)
+JoyManagerDevice *JoyManagerSDLOpenDevice(int index)
 {
 #if SDL_VERSION_ATLEAST(3, 0, 0)
 	int count;
@@ -237,115 +301,181 @@ SDL_Joystick *JoyManagerSDLOpenDevice(int index)
 	count = 0;
 	joystick = NULL;
 	ids = SDL_GetJoysticks(&count);
-	if (ids != NULL && index >= 0 && index < count)
-		joystick = SDL_OpenJoystick(ids[index]);
+	if (ids != NULL && index >= 0 && index < count) {
+#ifdef JOYMANAGER_USESDLGAMEPAD
+		/* Opening as a pad also opens the joystick underneath it, and gives
+		 * JoyManagerSDLGamepad() something to find later. */
+		if (SDL_IsGamepad(ids[index])) {
+			SDL_Gamepad *pad;
+
+			pad = SDL_OpenGamepad(ids[index]);
+			if (pad != NULL)
+				joystick = SDL_GetGamepadJoystick(pad);
+		}
+#endif
+		if (joystick == NULL)
+			joystick = SDL_OpenJoystick(ids[index]);
+	}
 	if (ids != NULL)
 		SDL_free(ids);
-	return joystick;
+	return (JoyManagerDevice*)joystick;
 #else
-	return SDL_JoystickOpen(index);
+#ifdef JOYMANAGER_USESDLGAMEPAD
+	if (SDL_IsGameController(index)) {
+		SDL_GameController *pad;
+
+		pad = SDL_GameControllerOpen(index);
+		if (pad != NULL)
+			return (JoyManagerDevice*)SDL_GameControllerGetJoystick(pad);
+	}
+#endif
+	return (JoyManagerDevice*)SDL_JoystickOpen(index);
 #endif
 }
 
-void JoyManagerSDLCloseDevice(SDL_Joystick *joystick)
+void JoyManagerSDLCloseDevice(JoyManagerDevice *joystick)
 {
+#ifdef JOYMANAGER_USESDLGAMEPAD
+	JoyManagerSDLPad *pad;
+#endif
+
 	if (joystick == NULL)
 		return;
+#ifdef JOYMANAGER_USESDLGAMEPAD
+	/* Closing the pad closes the joystick it opened, so do not do both. */
+	pad = JoyManagerSDLGamepad(joystick);
+	if (pad != NULL) {
 #if SDL_VERSION_ATLEAST(3, 0, 0)
-	SDL_CloseJoystick(joystick);
+		SDL_CloseGamepad(pad);
 #else
-	SDL_JoystickClose(joystick);
+		SDL_GameControllerClose(pad);
+#endif
+		return;
+	}
+#endif
+#if SDL_VERSION_ATLEAST(3, 0, 0)
+	SDL_CloseJoystick((SDL_Joystick*)joystick);
+#else
+	SDL_JoystickClose((SDL_Joystick*)joystick);
 #endif
 }
 
-bool JoyManagerSDLDeviceAttached(SDL_Joystick *joystick)
+bool JoyManagerSDLDeviceAttached(JoyManagerDevice *joystick)
 {
 #if SDL_VERSION_ATLEAST(3, 0, 0)
-	return SDL_JoystickConnected(joystick);
+	return SDL_JoystickConnected((SDL_Joystick*)joystick);
 #elif SDL_VERSION_ATLEAST(2, 0, 0)
-	return SDL_JoystickGetAttached(joystick) != SDL_FALSE;
+	return SDL_JoystickGetAttached((SDL_Joystick*)joystick) != SDL_FALSE;
 #else
 	return joystick != NULL;
 #endif
 }
 
-bool JoyManagerSDLHasRudderThrottle(SDL_Joystick *joystick)
+bool JoyManagerSDLHasRudderThrottle(JoyManagerDevice *joystick)
 {
 #if SDL_VERSION_ATLEAST(3, 0, 0)
-	return SDL_GetJoystickType(joystick) == SDL_JOYSTICK_TYPE_FLIGHT_STICK;
+	return SDL_GetJoystickType((SDL_Joystick*)joystick)
+		== SDL_JOYSTICK_TYPE_FLIGHT_STICK;
 #elif SDL_VERSION_ATLEAST(2, 0, 6)
-	return SDL_JoystickGetType(joystick) == SDL_JOYSTICK_TYPE_FLIGHT_STICK;
+	return SDL_JoystickGetType((SDL_Joystick*)joystick)
+		== SDL_JOYSTICK_TYPE_FLIGHT_STICK;
 #else
 	(void)joystick;
 	return true;
 #endif
 }
 
-const char *JoyManagerSDLDeviceName(SDL_Joystick *joystick, int index)
+const char *JoyManagerSDLDeviceName(JoyManagerDevice *joystick, int index)
 {
 #if SDL_VERSION_ATLEAST(3, 0, 0)
 	(void)index;
-	return SDL_GetJoystickName(joystick);
+	return SDL_GetJoystickName((SDL_Joystick*)joystick);
 #elif SDL_VERSION_ATLEAST(2, 0, 0)
 	(void)index;
-	return SDL_JoystickName(joystick);
+	return SDL_JoystickName((SDL_Joystick*)joystick);
 #else
 	(void)joystick;
 	return SDL_JoystickName(index);
 #endif
 }
 
-int JoyManagerSDLNumAxes(SDL_Joystick *joystick)
+int JoyManagerSDLNumAxes(JoyManagerDevice *joystick)
 {
+#ifdef JOYMANAGER_USESDLGAMEPAD
+	/* A mapped pad always presents the same six, however many the raw device
+	 * reports (SDL3 gives an Xbox pad 6, but in a different order). */
+	if (JoyManagerSDLGamepad(joystick) != NULL)
+		return JOYMANAGER_GAMEPAD_AXES;
+#endif
 #if SDL_VERSION_ATLEAST(3, 0, 0)
-	return SDL_GetNumJoystickAxes(joystick);
+	return SDL_GetNumJoystickAxes((SDL_Joystick*)joystick);
 #else
-	return SDL_JoystickNumAxes(joystick);
+	return SDL_JoystickNumAxes((SDL_Joystick*)joystick);
 #endif
 }
 
-int JoyManagerSDLNumButtons(SDL_Joystick *joystick)
+int JoyManagerSDLNumButtons(JoyManagerDevice *joystick)
 {
 #if SDL_VERSION_ATLEAST(3, 0, 0)
-	return SDL_GetNumJoystickButtons(joystick);
+	return SDL_GetNumJoystickButtons((SDL_Joystick*)joystick);
 #else
-	return SDL_JoystickNumButtons(joystick);
+	return SDL_JoystickNumButtons((SDL_Joystick*)joystick);
 #endif
 }
 
-int JoyManagerSDLNumHats(SDL_Joystick *joystick)
+int JoyManagerSDLNumHats(JoyManagerDevice *joystick)
 {
 #if SDL_VERSION_ATLEAST(3, 0, 0)
-	return SDL_GetNumJoystickHats(joystick);
+	return SDL_GetNumJoystickHats((SDL_Joystick*)joystick);
 #else
-	return SDL_JoystickNumHats(joystick);
+	return SDL_JoystickNumHats((SDL_Joystick*)joystick);
 #endif
 }
 
-int16 JoyManagerSDLAxis(SDL_Joystick *joystick, int axis)
+int16 JoyManagerSDLAxis(JoyManagerDevice *joystick, int axis)
 {
+#ifdef JOYMANAGER_USESDLGAMEPAD
+	JoyManagerSDLPad *pad;
+	int mapped;
+
+	pad = JoyManagerSDLGamepad(joystick);
+	if (pad != NULL) {
+		mapped = JoyManagerSDLGamepadAxis(axis);
+		if (mapped < 0)
+			return 0;
+		/* Sticks come back -32768..32767 and triggers 0..32767 on both SDL2
+		 * and SDL3, so a released trigger reads as rest rather than as hard
+		 * over the way the raw axis does. */
 #if SDL_VERSION_ATLEAST(3, 0, 0)
-	return (int16)SDL_GetJoystickAxis(joystick, axis);
+		return (int16)SDL_GetGamepadAxis(pad, (SDL_GamepadAxis)mapped);
 #else
-	return (int16)SDL_JoystickGetAxis(joystick, axis);
+		return (int16)SDL_GameControllerGetAxis(pad,
+			(SDL_GameControllerAxis)mapped);
+#endif
+	}
+#endif
+#if SDL_VERSION_ATLEAST(3, 0, 0)
+	return (int16)SDL_GetJoystickAxis((SDL_Joystick*)joystick, axis);
+#else
+	return (int16)SDL_JoystickGetAxis((SDL_Joystick*)joystick, axis);
 #endif
 }
 
-uint8 JoyManagerSDLButton(SDL_Joystick *joystick, int button)
+uint8 JoyManagerSDLButton(JoyManagerDevice *joystick, int button)
 {
 #if SDL_VERSION_ATLEAST(3, 0, 0)
-	return (uint8)SDL_GetJoystickButton(joystick, button);
+	return (uint8)SDL_GetJoystickButton((SDL_Joystick*)joystick, button);
 #else
-	return SDL_JoystickGetButton(joystick, button);
+	return SDL_JoystickGetButton((SDL_Joystick*)joystick, button);
 #endif
 }
 
-uint8 JoyManagerSDLHat(SDL_Joystick *joystick, int hat)
+uint8 JoyManagerSDLHat(JoyManagerDevice *joystick, int hat)
 {
 #if SDL_VERSION_ATLEAST(3, 0, 0)
-	return (uint8)SDL_GetJoystickHat(joystick, hat);
+	return (uint8)SDL_GetJoystickHat((SDL_Joystick*)joystick, hat);
 #else
-	return (uint8)SDL_JoystickGetHat(joystick, hat);
+	return (uint8)SDL_JoystickGetHat((SDL_Joystick*)joystick, hat);
 #endif
 }
 
@@ -372,6 +502,20 @@ bool JoyManagerSDLInit(void)
 	}
 	if (!initialized)
 		return false;
+#ifdef JOYMANAGER_USESDLGAMEPAD
+	/* The controller mapping database lives in this subsystem.  If it will not
+	 * start, JoyManagerSDLGamepad() just finds nothing and every device falls
+	 * back to the raw axis order. */
+#if SDL_VERSION_ATLEAST(3, 0, 0)
+	if ((SDL_WasInit(SDL_INIT_GAMEPAD) & SDL_INIT_GAMEPAD) == 0)
+		SDL_InitSubSystem(SDL_INIT_GAMEPAD);
+	SDL_SetGamepadEventsEnabled(false);
+#else
+	if ((SDL_WasInit(SDL_INIT_GAMECONTROLLER) & SDL_INIT_GAMECONTROLLER) == 0)
+		SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER);
+	SDL_GameControllerEventState(SDL_IGNORE);
+#endif
+#endif
 #if SDL_VERSION_ATLEAST(3, 0, 0)
 	SDL_SetJoystickEventsEnabled(false);
 #else
@@ -586,7 +730,7 @@ bool JoyManagerPrepare(void)
 
 	for (i = 0; i < available; i++) {
 		JoyHostDevice *device;
-		SDL_Joystick *joystick;
+		JoyManagerDevice *joystick;
 		const char *name;
 		int count;
 
@@ -821,20 +965,20 @@ void JoyManagerSnapshotDevice(JoyHostDevice *device)
 		device->hats[i] = JoyManagerSDLHat(device->joystick, i);
 }
 
-/* Treat a stick resting slightly off centre as centred, then stretch what is
-   left so full deflection still reaches the ends. */
 int32 JoyManagerAxisRest(int32 v)
 {
-	int32 out;
+	  int32 span;
 
-	if (v > -JOYMANAGER_AXIS_REST && v < JOYMANAGER_AXIS_REST)
-		return 0;
-	if (v > 0)
-		v -= JOYMANAGER_AXIS_REST;
-	else
-		v += JOYMANAGER_AXIS_REST;
-	out = v * -JOYMANAGER_NORMAL_AXIS_MIN / (-JOYMANAGER_NORMAL_AXIS_MIN - JOYMANAGER_AXIS_REST);
-	return out;
+	  if (v > -JOYMANAGER_AXIS_REST && v < JOYMANAGER_AXIS_REST)
+			  return 0;
+	  if (v > 0) {
+			  v -= JOYMANAGER_AXIS_REST;
+			  span = JOYMANAGER_NORMAL_AXIS_MAX - JOYMANAGER_AXIS_REST;
+	  } else { /* the raw negative side runs one further, to -32768 */
+			  v += JOYMANAGER_AXIS_REST;
+			  span = JOYMANAGER_NORMAL_AXIS_MAX + 1 - JOYMANAGER_AXIS_REST;
+	  }
+	  return v * JOYMANAGER_NORMAL_AXIS_MAX / span;
 }
 
 int32 JoyManagerAxisValue(JoyHostDevice *device, int axis)
@@ -1343,7 +1487,7 @@ int16 JoyManagerClose(uint32 pb, uint32 dce)
 #ifdef USE_SDL
 JoyManagerDevice *JoyManagerOpenDevice(int index)
 {
-	return JoyManagerSDLOpenDevice(index);
+	return (JoyManagerDevice*)JoyManagerSDLOpenDevice(index);
 }
 void JoyManagerCloseDevice(JoyManagerDevice *joystick)
 {

@@ -46,7 +46,7 @@ extern void JoyManagerSetDCE(uint32 dce);
 extern void JoyManagerIntPoll(void);
 
 /* low level API, typically for ADB joysticks */
-typedef struct _SDL_Joystick JoyManagerDevice;
+typedef struct JoyManagerDevice JoyManagerDevice;
 JoyManagerDevice *JoyManagerOpenDevice(int index);
 void JoyManagerCloseDevice(JoyManagerDevice *joystick);
 int JoyManagerNumDevices(void);
