@@ -42,6 +42,11 @@ option(ENABLE_GTK				"GTK preferences UI on Unix" OFF)
 option(ENABLE_BINCUE		 "BIN/CUE CD image support" ON)
 option(ENABLE_VOSF			 "Video on SEGV signals" OFF)
 option(USE_SDL3					"Use SDL 3 instead of SDL 2" ON)
+option(USE_SDLGPU				"Use SDL-GPU for SheepShaver gfxaccel" ON)
+option(USE_SDLGPU_SHADERCROSS "Use SDL_shadercross as an SDL-GPU shader fallback" OFF)
+option(ENABLE_SDLGPU_TRANSITION_LOGGING
+	"Compile SDL-GPU transition diagnostics"
+	OFF)
 option(ENABLE_GFXACCEL	 "SheepShaver graphics accel (NQD/RAVE/GL/DSp)" ON)
 option(ENABLE_QD3D_INIT_LOGGING
 	"Compile focused SheepShaver QuickDraw 3D/RAVE initialization diagnostics"
@@ -61,10 +66,13 @@ option(ENABLE_QD3D_WAIT_LOGGING
 option(ENABLE_NATIVE_CINEPAK_PATCH
 	"Patch QuickTime to use native Cinepak decoder"
 	OFF)
-# GFXACCEL_BACKEND: auto | opengl | metal
+# GFXACCEL_BACKEND: auto | opengl | metal | sdlgpu
 # auto = Metal on Apple, OpenGL elsewhere
-set(GFXACCEL_BACKEND "auto" CACHE STRING "gfxaccel GPU backend (auto|opengl|metal)")
-set_property(CACHE GFXACCEL_BACKEND PROPERTY STRINGS auto opengl metal)
+set(GFXACCEL_BACKEND "auto" CACHE STRING "gfxaccel GPU backend (auto|opengl|metal|sdlgpu)")
+set_property(CACHE GFXACCEL_BACKEND PROPERTY STRINGS auto opengl metal sdlgpu)
+if(USE_SDLGPU)
+	set(USE_SDL3 ON CACHE BOOL "Use SDL 3 instead of SDL 2" FORCE)
+endif()
 if(WIN32)
 	if(NOT USE_SDL3 AND NOT SDL2_DIR)
 		set(SDL2_DIR "thirdparty/SDL2/cmake" CACHE PATH
@@ -105,6 +113,9 @@ message(STATUS "	SheepShaver	: ${BUILD_SHEEPSHAVER}")
 message(STATUS "	Basilisk JIT : ${ENABLE_JIT}")
 message(STATUS "	Sheep JIT		: ${ENABLE_SHEEPSHAVER_JIT}")
 message(STATUS "	SDL3				 : ${USE_SDL3}")
+message(STATUS "	SDL-GPU			 : ${USE_SDLGPU}")
+message(STATUS "	SDL-GPU shadercross: ${USE_SDLGPU_SHADERCROSS}")
+message(STATUS "	SDL-GPU transition log: ${ENABLE_SDLGPU_TRANSITION_LOGGING}")
 message(STATUS "	gfxaccel		 : ${ENABLE_GFXACCEL} (${GFXACCEL_BACKEND})")
 message(STATUS "	QD3D init log: ${ENABLE_QD3D_INIT_LOGGING}")
 message(STATUS "	QD3D graphics log: ${ENABLE_QD3D_GRAPHICS_LOGGING}")

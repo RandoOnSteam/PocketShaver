@@ -21,6 +21,13 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
 	option(ENABLE_QD3D_WAIT_LOGGING
 	"Compile high-volume timing/wait diagnostics" OFF)
 	option(USE_SDL3 "Use SDL3" OFF)
+	option(USE_SDLGPU "Use SDL-GPU for gfxaccel" OFF)
+	option(ENABLE_SDLGPU_TRANSITION_LOGGING
+		"Compile SDL-GPU transition diagnostics" ON)
+	option(USE_SDLGPU_SHADERCROSS "Use SDL_shadercross as an SDL-GPU shader fallback" OFF)
+	if(USE_SDLGPU)
+		set(USE_SDL3 ON CACHE BOOL "Use SDL3" FORCE)
+	endif()
 	set(MACEMU_CMAKE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../cmake")
 	list(APPEND CMAKE_MODULE_PATH "${MACEMU_CMAKE_DIR}")
 	include(MacEmuCommon)
@@ -271,8 +278,9 @@ if(NOT DEFINED ENABLE_GFXACCEL)
 	option(ENABLE_GFXACCEL "SheepShaver graphics accel (NQD/RAVE/GL/DSp)" ON)
 endif()
 if(NOT DEFINED GFXACCEL_BACKEND)
-	set(GFXACCEL_BACKEND "auto" CACHE STRING "gfxaccel GPU backend (auto|opengl|metal)")
+	set(GFXACCEL_BACKEND "auto" CACHE STRING "gfxaccel GPU backend (auto|opengl|metal|sdlgpu)")
 endif()
+set_property(CACHE GFXACCEL_BACKEND PROPERTY STRINGS auto opengl metal sdlgpu)
 
 set(SS_GFXACCEL)
 set(SS_GFXACCEL_INC)
@@ -319,16 +327,19 @@ if(ENABLE_GFXACCEL)
 		)
 	endif()
 	# Resolve backend
-	set(_gfx_backend "${GFXACCEL_BACKEND}")
-	if(_gfx_backend STREQUAL "auto")
+	set(GFXACCEL_BACKEND "${GFXACCEL_BACKEND}")
+	if(USE_SDLGPU)
+	set(GFXACCEL_BACKEND "sdlgpu")
+	endif()
+	if(GFXACCEL_BACKEND STREQUAL "auto")
 	if(APPLE)
-		set(_gfx_backend "metal")
+		set(GFXACCEL_BACKEND "metal")
 	else()
-		set(_gfx_backend "opengl")
+		set(GFXACCEL_BACKEND "opengl")
 	endif()
 	endif()
 
-	if(_gfx_backend STREQUAL "metal")
+	if(GFXACCEL_BACKEND STREQUAL "metal")
 	if(NOT APPLE)
 		message(FATAL_ERROR "GFXACCEL_BACKEND=metal requires Apple platforms")
 	endif()
@@ -353,7 +364,66 @@ if(ENABLE_GFXACCEL)
 	find_library(QUARTZCORE_LIB QuartzCore)
 	find_library(FOUNDATION_LIB Foundation)
 	list(APPEND SS_GFXACCEL_LIBS ${METAL_LIB} ${QUARTZCORE_LIB} ${FOUNDATION_LIB})
-	else()
+	elseif(GFXACCEL_BACKEND STREQUAL "sdlgpu")
+	if(NOT USE_SDL3)
+		message(FATAL_ERROR "SDL-GPU requires SDL3")
+	endif()
+	set(SDLGPU_SHADERCROSS_TARGET)
+	if(USE_SDLGPU_SHADERCROSS)
+		find_package(SDL3_shadercross CONFIG REQUIRED)
+		if(TARGET SDL3_shadercross::SDL3_shadercross)
+			set(SDLGPU_SHADERCROSS_TARGET SDL3_shadercross::SDL3_shadercross)
+		elseif(TARGET SDL3_shadercross::SDL3_shadercross-static)
+			set(SDLGPU_SHADERCROSS_TARGET SDL3_shadercross::SDL3_shadercross-static)
+		else()
+			message(FATAL_ERROR "SDL3_shadercross package has no supported CMake target")
+		endif()
+	endif()
+	list(PREPEND SS_GFXACCEL_INC "${GA}/sdlgpu")
+	list(REMOVE_ITEM SS_GFXACCEL
+		"${GA}/dsp_dispatch.cpp"
+		"${GA}/dsp_draw_context.cpp"
+		"${GA}/gl_dispatch.cpp"
+		"${GA}/gl_engine.cpp"
+		"${GA}/glide_dispatch.cpp"
+		"${GA}/rave_draw_context.cpp"
+		"${GA}/rave_dispatch.cpp"
+		"${GA}/glide_state.cpp")
+	list(REMOVE_ITEM SS_CORE "${B2_SRC}/SDL/video_sdl3.cpp")
+	list(APPEND SS_CORE "${GA}/sdlgpu/video_sdlgpu.cpp")
+	list(APPEND SS_GFXACCEL_DEFS
+		ENABLE_GFXACCEL=1
+		GFXACCEL_USE_OPENGL=1
+		GFXACCEL_USE_SDLGPU=1)
+	if(USE_SDLGPU_SHADERCROSS)
+		list(APPEND SS_GFXACCEL_DEFS GFXACCEL_USE_SHADERCROSS=1)
+	endif()
+	list(APPEND SS_GFXACCEL
+		"${GA}/sdlgpu/sdlgpu_gl_compat.cpp"
+		"${GA}/sdlgpu/dsp_dispatch_sdlgpu.cpp"
+		"${GA}/sdlgpu/dsp_draw_context_sdlgpu.cpp"
+		"${GA}/sdlgpu/gl_dispatch_sdlgpu.cpp"
+		"${GA}/sdlgpu/gl_engine_sdlgpu.cpp"
+		"${GA}/sdlgpu/glide_dispatch_sdlgpu.cpp"
+		"${GA}/sdlgpu/rave_draw_context_sdlgpu.cpp"
+		"${GA}/sdlgpu/rave_dispatch_sdlgpu.cpp"
+		"${GA}/sdlgpu/glide_state_sdlgpu.cpp"
+		"${GA}/sdlgpu/gl_compositor_sdlgpu.cpp"
+		"${GA}/sdlgpu/vbl_source_sdlgpu.cpp"
+		"${GA}/sdlgpu/gfxaccel_resources_sdlgpu.cpp"
+		"${GA}/sdlgpu/gfxaccel_resources_heap_sdlgpu.cpp"
+		"${GA}/sdlgpu/gfxaccel_arc_shim.cpp"
+		"${GA}/sdlgpu/pso_archive_sdlgpu.cpp"
+		"${GA}/sdlgpu/nqd_sdlgpu_renderer.cpp"
+		"${GA}/sdlgpu/rave_sdlgpu_renderer.cpp"
+		"${GA}/sdlgpu/gl_ffp_sdlgpu_renderer.cpp"
+		"${GA}/sdlgpu/dsp_sdlgpu_renderer.cpp"
+		"${GA}/sdlgpu/glide_sdlgpu_renderer.cpp"
+	)
+	if(SDLGPU_SHADERCROSS_TARGET)
+		list(APPEND SS_GFXACCEL_LIBS ${SDLGPU_SHADERCROSS_TARGET})
+	endif()
+	elseif(GFXACCEL_BACKEND STREQUAL "opengl")
 	# OpenGL + SDL backend (default on Windows/Linux)
 	list(APPEND SS_GFXACCEL_DEFS ENABLE_GFXACCEL=1 GFXACCEL_USE_OPENGL=1)
 	list(APPEND SS_GFXACCEL
@@ -378,9 +448,11 @@ if(ENABLE_GFXACCEL)
 		find_package(OpenGL REQUIRED)
 		list(APPEND SS_GFXACCEL_LIBS OpenGL::GL)
 	endif()
+	else()
+	message(FATAL_ERROR "Unknown GFXACCEL_BACKEND=${GFXACCEL_BACKEND}")
 	endif()
 
-	message(STATUS "SheepShaver gfxaccel: backend=${_gfx_backend}")
+	message(STATUS "SheepShaver gfxaccel: backend=${GFXACCEL_BACKEND}")
 endif()
 
 # ---------------------------------------------------------------------------
@@ -461,6 +533,10 @@ endif()
 if(ENABLE_QD3D_WAIT_LOGGING)
 	target_compile_definitions(SheepShaver PRIVATE QD3D_WAIT_LOGGING_ENABLED=1)
 endif()
+if(ENABLE_SDLGPU_TRANSITION_LOGGING)
+	target_compile_definitions(SheepShaver PRIVATE
+		SDLGPU_TRANSITION_LOGGING_ENABLED=1)
+endif()
 if(ENABLE_NATIVE_CINEPAK_PATCH)
 	target_compile_definitions(SheepShaver PRIVATE
 		ENABLE_NATIVE_CINEPAK_PATCH=1)
@@ -485,3 +561,4 @@ message(STATUS "SheepShaver: QD3D graphics logging=${ENABLE_QD3D_GRAPHICS_LOGGIN
 message(STATUS "SheepShaver: QD3D audio logging=${ENABLE_QD3D_AUDIO_LOGGING}")
 message(STATUS "SheepShaver: QD3D media logging=${ENABLE_QD3D_MEDIA_LOGGING}")
 message(STATUS "SheepShaver: QD3D wait logging=${ENABLE_QD3D_WAIT_LOGGING}")
+message(STATUS "SheepShaver: SDL-GPU transition logging=${ENABLE_SDLGPU_TRANSITION_LOGGING}")
