@@ -21,6 +21,10 @@
 #ifndef PPC_CPU_H
 #define PPC_CPU_H
 
+#ifdef SHEEPSHAVER
+#include "ppc-report.h"
+#endif
+
 #include "basic-cpu.hpp"
 #include "nvmemfun.hpp"
 #include "cpu/vm.hpp"
@@ -123,13 +127,18 @@ protected:
 	void write_decrementer(uint32 value);
 	bool service_decrementer();
 	virtual bool decrementer_exception();
+
+	// A floating-point instruction with MSR[FP] clear has to take the register
+	// file over first. Embedders which do not park it anywhere just claim it.
+	static const uint32 MSR_FP = 0x00002000;
+	virtual void acquire_fp_registers() { msr() |= MSR_FP; }
 #ifdef SHEEPSHAVER
 	// Accept a pending level-sensitive external interrupt at the current
 	// architectural instruction boundary. Embedders which model real exception
 	// vectors override this; the base implementation retains the legacy
 	// register-copy callback for non-native execution modes.
 	virtual bool external_interrupt();
-#ifdef SHEEPSHAVER
+#if PPC_DEBUG_TRACE
 	virtual void watch_event_queue() { }
 #endif
 #endif
@@ -165,9 +174,19 @@ protected:
 	void get_decrementer_diagnostics(decrementer_diagnostics_t &d);
 	int current_execute_depth() const { return execute_depth; }
 
-	// Condition codes management
+	// Condition codes management. LT/GT/EQ and SO land in one write: the
+	// field is four bits and every Rc=1 instruction in the guest pays for it.
 	void record_cr(int crfd, int32 value)
-		{ cr().compute(crfd, value); cr().set_so(crfd, xer().get_so()); }
+	{
+		uint32 f = standalone_CR_EQ_field::mask();
+		if (value < 0)
+			f = standalone_CR_LT_field::mask();
+		else if (value > 0)
+			f = standalone_CR_GT_field::mask();
+		if (xer().get_so())
+			f |= standalone_CR_SO_field::mask();
+		cr().set(crfd, f);
+	}
 	void record_cr0(int32 value)
 		{ record_cr(0, value); }
 	void record_cr1()
@@ -493,7 +512,18 @@ private:
 	uint32 cache_generation;
 #endif
 
+#if PPC_PROFILE_GUEST && PPC_PROFILE_EXCURSIONS
+	// Hot-pc sketch plus the 68k routine an excursion enters and its caller.
+	void profile_block(uint32 bpc, uint32 n);
+#endif
+
 #if PPC_DECODE_CACHE
+	// Shortest run of same-form load/stores that is worth one decode entry:
+	// two already trade two dispatches for one plus a two-pass loop.
+	static const uint32 FUSE_RUN_MIN = 2;
+	uint32 fuse_loadstore_run(uint32 dpc, uint32 opcode,
+		block_info::decode_info *di);
+
 	// Decode Cache
 	static const uint32 DECODE_CACHE_MAX_ENTRIES = 32768;
 	static const uint32 DECODE_CACHE_SIZE = DECODE_CACHE_MAX_ENTRIES * sizeof(block_info::decode_info);
@@ -548,6 +578,11 @@ private:
 	void execute_loadstore(uint32 opcode);
 	template< class RA, class DP, bool LD >
 	void execute_loadstore_multiple(uint32 opcode);
+	// Folded runs of same-form load/stores over one base, see fuse_loadstore_run().
+	void execute_fused_load_word(uint32 opcode);
+	void execute_fused_store_word(uint32 opcode);
+	void execute_fused_load_double(uint32 opcode);
+	void execute_fused_store_double(uint32 opcode);
 	template< class RA, bool IM, class NB >
 	void execute_load_string(uint32 opcode);
 	template< class RA, bool IM, class NB >

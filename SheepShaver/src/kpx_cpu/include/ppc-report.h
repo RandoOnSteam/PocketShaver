@@ -24,8 +24,32 @@
 #define PPC_REPORT_BAD_EA 0
 #define PPC_REPORT_EVERY_ACCESS 0
 
-#if PPC_REPORT_BAD_EA
+/* Shared with the CPU core so the per-block event-queue watch compiles out of
+ * the interpreter's inner loop instead of costing a virtual call each block. */
+#ifndef PPC_DEBUG_TRACE
+#define PPC_DEBUG_TRACE 0
+#endif
 
+/* Guest hot-PC histogram. Costs a hash and an add per executed block, so it is
+ * a diagnostic switch, not a ship setting. */
+#ifndef PPC_PROFILE_GUEST
+#define PPC_PROFILE_GUEST 0
+#endif
+
+/* Histogram of the 68k pc each excursion enters and its RAM-side caller. */
+#ifndef PPC_PROFILE_EXCURSIONS
+#define PPC_PROFILE_EXCURSIONS 0
+#endif
+
+/* Fold a run of same-form load/stores over one base into a single decode
+ * entry. Scoped to the ROM area, where the nanokernel's register-file context
+ * switch runs on every trap. */
+#ifndef PPC_FUSE_LOADSTORE
+#define PPC_FUSE_LOADSTORE 1
+#endif
+
+#if PPC_REPORT_BAD_EA
+#include "sysdeps.h"
 enum {
 	PPC_68K_BRANCHES = 1024,	// Ring entries
 	PPC_68K_BRANCH_DUMP = 256,	// Newest entries a dump prints

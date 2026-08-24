@@ -93,6 +93,13 @@ enum {
     NATIVE_FINDNEXTCOMPONENT_CINEPAK_HOOK, /* Same trigger on FindNextComponent 
 		(the path QuickTime's ICM actually uses) */
   #endif /* ENABLE_NATIVE_CINEPAK_PATCH */
+  /* The nanokernel entry stubs rom_patches writes, one per trap kind. Each
+     is the same register shuffle with a different saved-LR slot. */
+  NATIVE_KERNEL_ENTRY_68K,
+  NATIVE_KERNEL_ENTRY_MIXED,
+  NATIVE_KERNEL_ENTRY_RESET,
+  NATIVE_KERNEL_ENTRY_FE0A,
+  NATIVE_KERNEL_ENTRY_FE0F,
   NATIVE_OP_MAX
 };
 

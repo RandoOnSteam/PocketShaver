@@ -72,6 +72,21 @@ unsigned long IdleWaitCount = 0;
 static uint64 op_irq_entry_count = 0;
 static uint64 via_service_count = 0;
 
+// True while OP_IRQ is running its service, so the CPU can mask a further
+// level 1 the way the hardware does instead of nesting the whole routine.
+bool InterruptInService = false;
+
+class InterruptInServiceScope {
+public:
+	InterruptInServiceScope() : nested(InterruptInService)
+		{ InterruptInService = true; }
+	~InterruptInServiceScope() { InterruptInService = nested; }
+private:
+	InterruptInServiceScope(const InterruptInServiceScope &);
+	InterruptInServiceScope &operator=(const InterruptInServiceScope &);
+	bool nested;
+};
+
 void GetInterruptServiceDiagnostics(InterruptServiceDiagnostics &d)
 {
 	d.op_irq_entries = op_irq_entry_count;
@@ -349,22 +364,27 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 #ifdef USE_SDL_AUDIO
 			PlayStartupSound();
 #endif
-			// Enable DR emulator (disabled for now)
-			if (PrefsFindBool("jit68k") && 0) {
+			// Enable ROM's 68k recompiler
+			if (PrefsFindBool("jit68k")) {
 				D(bug("DR activated\n"));
 				WriteMacInt32(KernelDataAddr + 0x17a0, 3);		// Prepare for DR emulator activation
 				WriteMacInt32(KernelDataAddr + 0x17c0, DR_CACHE_BASE);
 				WriteMacInt32(KernelDataAddr + 0x17c4, DR_CACHE_SIZE);
 				WriteMacInt32(KernelDataAddr + 0x1b04, DR_CACHE_BASE);
 				WriteMacInt32(KernelDataAddr + 0x1b00, DR_EMULATOR_BASE);
-				memcpy((void *)DR_EMULATOR_BASE, 
-					(void *)(uintptr_t)(ROMBase + 0x370000), DR_EMULATOR_SIZE);
+				memcpy(Mac2HostAddr(DR_EMULATOR_BASE),
+					ROMBaseHost + 0x370000, DR_EMULATOR_SIZE);
 				MakeExecutable(0, DR_EMULATOR_BASE, DR_EMULATOR_SIZE);
 			}
 			tick_inhibit = false;
 			break;
 
-		case OP_IRQ:			// Level 1 interrupt
+		case OP_IRQ: {			// Level 1 interrupt
+			// Real hardware masks level 1 for the duration of its own service.
+			// Without that here a tick arriving while this one still runs guest
+			// code is accepted at once and runs the whole 68k interrupt routine
+			// nested inside itself.
+			InterruptInServiceScope irq_scope;
 			op_irq_entry_count++;
 			WriteMacInt16(ReadMacInt32(KernelDataAddr + 0x67c), 0);	// Clear interrupt
 			r->d[0] = 0;
@@ -423,6 +443,7 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 			} else
 				r->d[0] = 1;
 			break;
+		}
 
 		case OP_SCSI_DISPATCH: {	// SCSIDispatch() replacement
 			uint32 ret = ReadMacInt32(r->a[7]);

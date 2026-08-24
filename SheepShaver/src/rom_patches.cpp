@@ -1184,155 +1184,50 @@ static bool patch_68k_emul(void)
 	*lp = htonl(0x4e800020);						// blr
 #endif
 
-	// Extra routine for 68k emulator start
-	lp = (uint32 *)(ROMBaseHost + 0x36f900);
-	*lp++ = htonl(0x7c2903a6);					// mtctr	r1
-	*lp++ = htonl(0x80200000 + XLM_IRQ_NEST);	// lwz		r1,XLM_IRQ_NEST
-	*lp++ = htonl(0x38210001);					// addi		r1,r1,1
-	*lp++ = htonl(0x90200000 + XLM_IRQ_NEST);	// stw		r1,XLM_IRQ_NEST
-	*lp++ = htonl(0x80200000 + XLM_KERNEL_DATA);// lwz		r1,XLM_KERNEL_DATA
-	*lp++ = htonl(0x90c10018);					// stw		r6,0x18(r1)
-	*lp++ = htonl(0x7cc902a6);					// mfctr	r6
-	*lp++ = htonl(0x90c10004);					// stw		r6,$0004(r1)
-	*lp++ = htonl(0x80c1065c);					// lwz		r6,$065c(r1)
-	*lp++ = htonl(0x90e6013c);					// stw		r7,$013c(r6)
-	*lp++ = htonl(0x91060144);					// stw		r8,$0144(r6)
-	*lp++ = htonl(0x9126014c);					// stw		r9,$014c(r6)
-	*lp++ = htonl(0x91460154);					// stw		r10,$0154(r6)
-	*lp++ = htonl(0x9166015c);					// stw		r11,$015c(r6)
-	*lp++ = htonl(0x91860164);					// stw		r12,$0164(r6)
-	*lp++ = htonl(0x91a6016c);					// stw		r13,$016c(r6)
-	*lp++ = htonl(0x7da00026);					// mfcr		r13
-	*lp++ = htonl(0x80e10660);					// lwz		r7,$0660(r1)
-	*lp++ = htonl(0x7d8802a6);					// mflr		r12
-	*lp++ = htonl(0x50e74001);					// rlwimi.	r7,r7,8,$80000000
-	*lp++ = htonl(0x814105f0);					// lwz		r10,0x05f0(r1)
-	*lp++ = htonl(0x7d4803a6);					// mtlr		r10
-	*lp++ = htonl(0x7d8a6378);					// mr		r10,r12
-	*lp++ = htonl(0x3d600002);					// lis		r11,0x0002
-	*lp++ = htonl(0x616bf072);					// ori		r11,r11,0xf072 (MSR)
-	*lp++ = htonl(0x50e7deb4);					// rlwimi	r7,r7,27,$00000020
-	*lp = htonl(0x4e800020);					// blr
-
-	// Extra routine for Mixed Mode
-	lp = (uint32 *)(ROMBaseHost + 0x36fa00);
-	*lp++ = htonl(0x7c2903a6);					// mtctr	r1
-	*lp++ = htonl(0x80200000 + XLM_IRQ_NEST);	// lwz		r1,XLM_IRQ_NEST
-	*lp++ = htonl(0x38210001);					// addi		r1,r1,1
-	*lp++ = htonl(0x90200000 + XLM_IRQ_NEST);	// stw		r1,XLM_IRQ_NEST
-	*lp++ = htonl(0x80200000 + XLM_KERNEL_DATA);// lwz		r1,XLM_KERNEL_DATA
-	*lp++ = htonl(0x90c10018);					// stw		r6,0x18(r1)
-	*lp++ = htonl(0x7cc902a6);					// mfctr	r6
-	*lp++ = htonl(0x90c10004);					// stw		r6,$0004(r1)
-	*lp++ = htonl(0x80c1065c);					// lwz		r6,$065c(r1)
-	*lp++ = htonl(0x90e6013c);					// stw		r7,$013c(r6)
-	*lp++ = htonl(0x91060144);					// stw		r8,$0144(r6)
-	*lp++ = htonl(0x9126014c);					// stw		r9,$014c(r6)
-	*lp++ = htonl(0x91460154);					// stw		r10,$0154(r6)
-	*lp++ = htonl(0x9166015c);					// stw		r11,$015c(r6)
-	*lp++ = htonl(0x91860164);					// stw		r12,$0164(r6)
-	*lp++ = htonl(0x91a6016c);					// stw		r13,$016c(r6)
-	*lp++ = htonl(0x7da00026);					// mfcr		r13
-	*lp++ = htonl(0x80e10660);					// lwz		r7,$0660(r1)
-	*lp++ = htonl(0x7d8802a6);					// mflr		r12
-	*lp++ = htonl(0x50e74001);					// rlwimi.	r7,r7,8,$80000000
-	*lp++ = htonl(0x814105f4);					// lwz		r10,0x05f4(r1)
-	*lp++ = htonl(0x7d4803a6);					// mtlr		r10
-	*lp++ = htonl(0x7d8a6378);					// mr		r10,r12
-	*lp++ = htonl(0x3d600002);					// lis		r11,0x0002
-	*lp++ = htonl(0x616bf072);					// ori		r11,r11,0xf072 (MSR)
-	*lp++ = htonl(0x50e7deb4);					// rlwimi	r7,r7,27,$00000020
-	*lp = htonl(0x4e800020);					// blr
-
-	// Extra routine for Reset/FC1E opcode
-	lp = (uint32 *)(ROMBaseHost + 0x36fb00);
-	*lp++ = htonl(0x7c2903a6);					// mtctr	r1
-	*lp++ = htonl(0x80200000 + XLM_IRQ_NEST);	// lwz		r1,XLM_IRQ_NEST
-	*lp++ = htonl(0x38210001);					// addi		r1,r1,1
-	*lp++ = htonl(0x90200000 + XLM_IRQ_NEST);	// stw		r1,XLM_IRQ_NEST
-	*lp++ = htonl(0x80200000 + XLM_KERNEL_DATA);// lwz		r1,XLM_KERNEL_DATA
-	*lp++ = htonl(0x90c10018);					// stw		r6,0x18(r1)
-	*lp++ = htonl(0x7cc902a6);					// mfctr	r6
-	*lp++ = htonl(0x90c10004);					// stw		r6,$0004(r1)
-	*lp++ = htonl(0x80c1065c);					// lwz		r6,$065c(r1)
-	*lp++ = htonl(0x90e6013c);					// stw		r7,$013c(r6)
-	*lp++ = htonl(0x91060144);					// stw		r8,$0144(r6)
-	*lp++ = htonl(0x9126014c);					// stw		r9,$014c(r6)
-	*lp++ = htonl(0x91460154);					// stw		r10,$0154(r6)
-	*lp++ = htonl(0x9166015c);					// stw		r11,$015c(r6)
-	*lp++ = htonl(0x91860164);					// stw		r12,$0164(r6)
-	*lp++ = htonl(0x91a6016c);					// stw		r13,$016c(r6)
-	*lp++ = htonl(0x7da00026);					// mfcr		r13
-	*lp++ = htonl(0x80e10660);					// lwz		r7,$0660(r1)
-	*lp++ = htonl(0x7d8802a6);					// mflr		r12
-	*lp++ = htonl(0x50e74001);					// rlwimi.	r7,r7,8,$80000000
-	*lp++ = htonl(0x814105f8);					// lwz		r10,0x05f8(r1)
-	*lp++ = htonl(0x7d4803a6);					// mtlr		r10
-	*lp++ = htonl(0x7d8a6378);					// mr		r10,r12
-	*lp++ = htonl(0x3d600002);					// lis		r11,0x0002
-	*lp++ = htonl(0x616bf072);					// ori		r11,r11,0xf072 (MSR)
-	*lp++ = htonl(0x50e7deb4);					// rlwimi	r7,r7,27,$00000020
-	*lp = htonl(0x4e800020);					// blr
-
-	// Extra routine for FE0A opcode (QuickDraw 3D needs this)
-	lp = (uint32 *)(ROMBaseHost + 0x36fc00);
-	*lp++ = htonl(0x7c2903a6);					// mtctr	r1
-	*lp++ = htonl(0x80200000 + XLM_IRQ_NEST);	// lwz		r1,XLM_IRQ_NEST
-	*lp++ = htonl(0x38210001);					// addi		r1,r1,1
-	*lp++ = htonl(0x90200000 + XLM_IRQ_NEST);	// stw		r1,XLM_IRQ_NEST
-	*lp++ = htonl(0x80200000 + XLM_KERNEL_DATA);// lwz		r1,XLM_KERNEL_DATA
-	*lp++ = htonl(0x90c10018);					// stw		r6,0x18(r1)
-	*lp++ = htonl(0x7cc902a6);					// mfctr	r6
-	*lp++ = htonl(0x90c10004);					// stw		r6,$0004(r1)
-	*lp++ = htonl(0x80c1065c);					// lwz		r6,$065c(r1)
-	*lp++ = htonl(0x90e6013c);					// stw		r7,$013c(r6)
-	*lp++ = htonl(0x91060144);					// stw		r8,$0144(r6)
-	*lp++ = htonl(0x9126014c);					// stw		r9,$014c(r6)
-	*lp++ = htonl(0x91460154);					// stw		r10,$0154(r6)
-	*lp++ = htonl(0x9166015c);					// stw		r11,$015c(r6)
-	*lp++ = htonl(0x91860164);					// stw		r12,$0164(r6)
-	*lp++ = htonl(0x91a6016c);					// stw		r13,$016c(r6)
-	*lp++ = htonl(0x7da00026);					// mfcr		r13
-	*lp++ = htonl(0x80e10660);					// lwz		r7,$0660(r1)
-	*lp++ = htonl(0x7d8802a6);					// mflr		r12
-	*lp++ = htonl(0x50e74001);					// rlwimi.	r7,r7,8,$80000000
-	*lp++ = htonl(0x814105fc);					// lwz		r10,0x05fc(r1)
-	*lp++ = htonl(0x7d4803a6);					// mtlr		r10
-	*lp++ = htonl(0x7d8a6378);					// mr		r10,r12
-	*lp++ = htonl(0x3d600002);					// lis		r11,0x0002
-	*lp++ = htonl(0x616bf072);					// ori		r11,r11,0xf072 (MSR)
-	*lp++ = htonl(0x50e7deb4);					// rlwimi	r7,r7,27,$00000020
-	*lp = htonl(0x4e800020);					// blr
-
-	// Extra routine for FE0F opcode (power management)
-	lp = (uint32 *)(ROMBaseHost + 0x36fd00);
-	*lp++ = htonl(0x7c2903a6);					// mtctr	r1
-	*lp++ = htonl(0x80200000 + XLM_IRQ_NEST);	// lwz		r1,XLM_IRQ_NEST
-	*lp++ = htonl(0x38210001);					// addi		r1,r1,1
-	*lp++ = htonl(0x90200000 + XLM_IRQ_NEST);	// stw		r1,XLM_IRQ_NEST
-	*lp++ = htonl(0x80200000 + XLM_KERNEL_DATA);// lwz		r1,XLM_KERNEL_DATA
-	*lp++ = htonl(0x90c10018);					// stw		r6,0x18(r1)
-	*lp++ = htonl(0x7cc902a6);					// mfctr	r6
-	*lp++ = htonl(0x90c10004);					// stw		r6,$0004(r1)
-	*lp++ = htonl(0x80c1065c);					// lwz		r6,$065c(r1)
-	*lp++ = htonl(0x90e6013c);					// stw		r7,$013c(r6)
-	*lp++ = htonl(0x91060144);					// stw		r8,$0144(r6)
-	*lp++ = htonl(0x9126014c);					// stw		r9,$014c(r6)
-	*lp++ = htonl(0x91460154);					// stw		r10,$0154(r6)
-	*lp++ = htonl(0x9166015c);					// stw		r11,$015c(r6)
-	*lp++ = htonl(0x91860164);					// stw		r12,$0164(r6)
-	*lp++ = htonl(0x91a6016c);					// stw		r13,$016c(r6)
-	*lp++ = htonl(0x7da00026);					// mfcr		r13
-	*lp++ = htonl(0x80e10660);					// lwz		r7,$0660(r1)
-	*lp++ = htonl(0x7d8802a6);					// mflr		r12
-	*lp++ = htonl(0x50e74001);					// rlwimi.	r7,r7,8,$80000000
-	*lp++ = htonl(0x81410604);					// lwz		r10,0x0604(r1)
-	*lp++ = htonl(0x7d4803a6);					// mtlr		r10
-	*lp++ = htonl(0x7d8a6378);					// mr		r10,r12
-	*lp++ = htonl(0x3d600002);					// lis		r11,0x0002
-	*lp++ = htonl(0x616bf072);					// ori		r11,r11,0xf072 (MSR)
-	*lp++ = htonl(0x50e7deb4);					// rlwimi	r7,r7,27,$00000020
-	*lp = htonl(0x4e800020);					// blr
+	// The five nanokernel entry stubs are one register shuffle apart from the
+	// saved-LR slot they pick up, and two of them run on every Mixed Mode
+	// excursion. The emulated CPU does the whole thing in one dispatch.
+	static const struct { uint32 addr; int op; uint32 slot; } kentry[] = {
+		{ 0x36f900, NATIVE_KERNEL_ENTRY_68K,   0x05f0 },	// 68k emulator start
+		{ 0x36fa00, NATIVE_KERNEL_ENTRY_MIXED, 0x05f4 },	// Mixed Mode
+		{ 0x36fb00, NATIVE_KERNEL_ENTRY_RESET, 0x05f8 },	// Reset/FC1E opcode
+		{ 0x36fc00, NATIVE_KERNEL_ENTRY_FE0A,  0x05fc },	// FE0A opcode
+		{ 0x36fd00, NATIVE_KERNEL_ENTRY_FE0F,  0x0604 }		// FE0F opcode
+	};
+	for (int i = 0; i < (int)(sizeof(kentry) / sizeof(kentry[0])); i++) {
+		lp = (uint32 *)(ROMBaseHost + kentry[i].addr);
+#if EMULATED_PPC
+		*lp = htonl(NativeOpcode(kentry[i].op));
+#else
+		*lp++ = htonl(0x7c2903a6);					// mtctr	r1
+		*lp++ = htonl(0x80200000 + XLM_IRQ_NEST);	// lwz		r1,XLM_IRQ_NEST
+		*lp++ = htonl(0x38210001);					// addi		r1,r1,1
+		*lp++ = htonl(0x90200000 + XLM_IRQ_NEST);	// stw		r1,XLM_IRQ_NEST
+		*lp++ = htonl(0x80200000 + XLM_KERNEL_DATA);// lwz		r1,XLM_KERNEL_DATA
+		*lp++ = htonl(0x90c10018);					// stw		r6,0x18(r1)
+		*lp++ = htonl(0x7cc902a6);					// mfctr	r6
+		*lp++ = htonl(0x90c10004);					// stw		r6,$0004(r1)
+		*lp++ = htonl(0x80c1065c);					// lwz		r6,$065c(r1)
+		*lp++ = htonl(0x90e6013c);					// stw		r7,$013c(r6)
+		*lp++ = htonl(0x91060144);					// stw		r8,$0144(r6)
+		*lp++ = htonl(0x9126014c);					// stw		r9,$014c(r6)
+		*lp++ = htonl(0x91460154);					// stw		r10,$0154(r6)
+		*lp++ = htonl(0x9166015c);					// stw		r11,$015c(r6)
+		*lp++ = htonl(0x91860164);					// stw		r12,$0164(r6)
+		*lp++ = htonl(0x91a6016c);					// stw		r13,$016c(r6)
+		*lp++ = htonl(0x7da00026);					// mfcr		r13
+		*lp++ = htonl(0x80e10660);					// lwz		r7,$0660(r1)
+		*lp++ = htonl(0x7d8802a6);					// mflr		r12
+		*lp++ = htonl(0x50e74001);					// rlwimi.	r7,r7,8,$80000000
+		*lp++ = htonl(0x81410000 + kentry[i].slot);	// lwz		r10,slot(r1)
+		*lp++ = htonl(0x7d4803a6);					// mtlr		r10
+		*lp++ = htonl(0x7d8a6378);					// mr		r10,r12
+		*lp++ = htonl(0x3d600002);					// lis		r11,0x0002
+		*lp++ = htonl(0x616bf072);					// ori		r11,r11,0xf072 (MSR)
+		*lp++ = htonl(0x50e7deb4);					// rlwimi	r7,r7,27,$00000020
+		*lp = htonl(0x4e800020);					// blr
+#endif
+	}
 
 	// Patch DR emulator to jump to right address when an interrupt occurs
 	lp = (uint32 *)(ROMBaseHost + 0x370000);
@@ -1391,29 +1286,17 @@ static bool patch_nanokernel(void)
 	static const uint8 save_fpu_dat[] = {0x7d, 0x00, 0x00, 0xa6, 0x61, 0x08, 0x20, 0x00, 0x7d, 0x00, 0x01, 0x24};
 	if ((base = find_rom_data(0x310000, 0x314000, save_fpu_dat, sizeof(save_fpu_dat))) == 0) return false;
 	D(bug("save_fpu %08lx\n", base));
-	lp = (uint32 *)(ROMBaseHost + base);		// Don't modify MSR to turn on FPU
-	if (ntohl(lp[4]) != 0x556b04e2) return false;
+	// Left alone. The CPU takes the 0x800 FP Unavailable exception now, so the
+	// nanokernel's own lazy scheme works and the save and the restore stay
+	// conditional instead of moving all 32 registers on every trap. Still
+	// located, to keep verifying the ROM layout.
+	if (ntohl(((uint32 *)(ROMBaseHost + base))[4]) != 0x556b04e2) return false;
 	loc = base;
-#if 1
-	// FIXME: is that really intended?
-	*lp++ = htonl(POWERPC_NOP);
-	lp++;
-	*lp++ = htonl(POWERPC_NOP);
-	lp++;
-	*lp = htonl(POWERPC_NOP);
-#else
-	lp[0] = htonl(POWERPC_NOP);
-	lp[1] = htonl(POWERPC_NOP);
-	lp[2] = htonl(POWERPC_NOP);
-	lp[3] = htonl(POWERPC_NOP);
-#endif
 
 	static const uint8 save_fpu_caller_dat[] = {0x93, 0xa6, 0x01, 0xec, 0x93, 0xc6, 0x01, 0xf4, 0x93, 0xe6, 0x01, 0xfc, 0x40};
 	if ((base = find_rom_data(0x310000, 0x314000, save_fpu_caller_dat, sizeof(save_fpu_caller_dat))) == 0) return false;
 	D(bug("save_fpu_caller %08lx\n", base + 12));
 	if (rom_powerpc_branch_target(base + 12) != loc) return false;
-	lp = (uint32 *)(ROMBaseHost + base + 12);	// Always save FPU state
-	*lp = htonl(0x48000000 | (ntohl(*lp) & 0xffff));	// bl	0x00312e88
 
 	static const uint8 mdec_dat[] = {0x7f, 0xf6, 0x02, 0xa6, 0x2c, 0x08, 0x00, 0x00, 0x93, 0xe1, 0x06, 0x68, 0x7d, 0x16, 0x03, 0xa6};
 	if ((base = find_rom_data(0x310000, 0x314000, mdec_dat, sizeof(mdec_dat))) == 0) return false;
@@ -1425,9 +1308,6 @@ static bool patch_nanokernel(void)
 	static const uint8 restore_fpu_caller_dat[] = {0x81, 0x06, 0x00, 0xf4, 0x81, 0x46, 0x00, 0xfc, 0x7d, 0x09, 0x03, 0xa6, 0x40};
 	if ((base = find_rom_data(0x310000, 0x314000, restore_fpu_caller_dat, sizeof(restore_fpu_caller_dat))) == 0) return false;
 	D(bug("restore_fpu_caller %08lx\n", base + 12));
-	lp = (uint32 *)(ROMBaseHost + base + 12);	// Always restore FPU state
-	*lp = htonl(0x48000000 | (ntohl(*lp) & 0xffff));	// bl	0x00312ddc
-
 	static const uint8 m68k_excp_tbl_dat[] = {0x81, 0x21, 0x06, 0x58, 0x39, 0x01, 0x03, 0x60, 0x7d, 0x13, 0x43, 0xa6};
 	if ((base = find_rom_data(0x310000, 0x314000, m68k_excp_tbl_dat, sizeof(m68k_excp_tbl_dat))) == 0) return false;
 	D(bug("m68k_excp %08lx\n", base + 4));
@@ -1435,26 +1315,15 @@ static bool patch_nanokernel(void)
 	*lp++ = htonl(0x39000000 + MODE_68K);		// li	r8,MODE_68K
 	*lp = htonl(0x91000000 + XLM_RUN_MODE);		// stw	r8,XLM_RUN_MODE
 
-	// Patch 68k emulator trap routine
 	static const uint8 restore_fpu_caller2_dat[] = {0x81, 0x86, 0x00, 0x8c, 0x80, 0x66, 0x00, 0x94, 0x80, 0x86, 0x00, 0x9c, 0x40};
 	if ((base = find_rom_data(0x310000, 0x314000, restore_fpu_caller2_dat, sizeof(restore_fpu_caller2_dat))) == 0) return false;
 	D(bug("restore_fpu_caller2 %08lx\n", base + 12));
 	loc = rom_powerpc_branch_target(base + 12);
-	lp = (uint32 *)(ROMBaseHost + base + 12);	// Always restore FPU state
-	*lp = htonl(0x48000000 | (ntohl(*lp) & 0xffff));	// bl	0x00312dd4
 
 	static const uint8 restore_fpu_dat[] = {0x55, 0x68, 0x04, 0xa5, 0x4c, 0x82, 0x00, 0x20, 0x81, 0x06, 0x00, 0xe4};
 	if ((base = find_rom_data(0x310000, 0x314000, restore_fpu_dat, sizeof(restore_fpu_dat))) == 0) return false;
 	D(bug("restore_fpu %08lx\n", base));
 	if (base != loc) return false;
-	lp = (uint32 *)(ROMBaseHost + base + 4);	// Don't modify MSR to turn on FPU
-	*lp++ = htonl(POWERPC_NOP);
-	lp += 2;
-	*lp++ = htonl(POWERPC_NOP);
-	lp++;
-	*lp++ = htonl(POWERPC_NOP);
-	*lp++ = htonl(POWERPC_NOP);
-	*lp = htonl(POWERPC_NOP);
 
 	// Disable suspend (FE0F opcode)
 	// TODO: really suspend SheepShaver?

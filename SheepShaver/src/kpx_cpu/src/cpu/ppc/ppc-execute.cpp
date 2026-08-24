@@ -67,6 +67,12 @@ static inline uint64 get_tb_ticks(void);
 
 #include "gfx_log.h"
 
+#define PPC_CHECK_FP_ENABLED()							do {													if ((msr() & MSR_FP) == 0)								acquire_fp_registers();						} while (0)
+#if !PPC_REPORT_EVERY_ACCESS
+#define PPC_CHECK_EA(ea_, is_load_) do { } while (0)
+#define PPC_CHECK_EA_STORE(ea_) do { } while (0)
+#endif
+
 /**
  *	Illegal & NOP instructions
  **/
@@ -665,6 +671,7 @@ void powerpc_cpu::record_fpscr(int exceptions)
 template< class FP, class OP, class RD, class RA, class RB, class RC, class Rc, bool FPSCR >
 void powerpc_cpu::execute_fp_arith(uint32 opcode)
 {
+	PPC_CHECK_FP_ENABLED();
 	const double a = RA::get(this, opcode);
 	const double b = RB::get(this, opcode);
 	const double c = RC::get(this, opcode);
@@ -775,10 +782,6 @@ extern uint32 ppc_recover_68k_sp(uint32 a7);
 #endif
 #endif
 
-#if !PPC_REPORT_EVERY_ACCESS
-#define PPC_CHECK_EA(ea_, is_load_) do { } while (0)
-#define PPC_CHECK_EA_STORE(ea_) do { } while (0)
-#endif
 
 template< class OP, class RA, class RB, bool LD, int SZ, bool UP, bool RX >
 void powerpc_cpu::execute_loadstore(uint32 opcode)
@@ -883,6 +886,85 @@ void powerpc_cpu::execute_loadstore_multiple(uint32 opcode)
 }
 
 /**
+ *	Folded load/store runs
+ *
+ *	Predecode collapses a run of same-form load/stores sharing one base and a
+ *	constant stride into one of these, which is what the nanokernel's register
+ *	file save and restore is on every trap. The folded operand is
+ *	(stride flag)<<31 | (count-1)<<26 | first register<<21 | base<<16 | d.
+ **/
+
+void powerpc_cpu::execute_fused_load_word(uint32 opcode)
+{
+	const uint32 n = ((opcode >> 26) & 0x1f) + 1;
+	const uint32 step = 4u << (opcode >> 31);
+	const uint32 rd = (opcode >> 21) & 0x1f;
+	uint32 ea = gpr((opcode >> 16) & 0x1f) + (uint32)(int32)(int16)opcode;
+	uint32 i;
+
+	PPC_CHECK_EA(ea, 1);
+	for (i = 0; i < n; i++) {
+		gpr(rd + i) = vm_read_memory_4(ea);
+		ea += step;
+	}
+
+	increment_pc(4 * n);
+}
+
+void powerpc_cpu::execute_fused_store_word(uint32 opcode)
+{
+	const uint32 n = ((opcode >> 26) & 0x1f) + 1;
+	const uint32 step = 4u << (opcode >> 31);
+	const uint32 rs = (opcode >> 21) & 0x1f;
+	uint32 ea = gpr((opcode >> 16) & 0x1f) + (uint32)(int32)(int16)opcode;
+	uint32 i;
+
+	PPC_CHECK_EA_STORE(ea);
+	for (i = 0; i < n; i++) {
+		vm_write_memory_4(ea, gpr(rs + i));
+		ea += step;
+	}
+
+	increment_pc(4 * n);
+}
+
+void powerpc_cpu::execute_fused_load_double(uint32 opcode)
+{
+	PPC_CHECK_FP_ENABLED();
+	const uint32 n = ((opcode >> 26) & 0x1f) + 1;
+	const uint32 step = 8u << (opcode >> 31);
+	const uint32 rd = (opcode >> 21) & 0x1f;
+	uint32 ea = gpr((opcode >> 16) & 0x1f) + (uint32)(int32)(int16)opcode;
+	uint32 i;
+
+	PPC_CHECK_EA(ea, 1);
+	for (i = 0; i < n; i++) {
+		fpr_dw(rd + i) = vm_read_memory_8(ea);
+		ea += step;
+	}
+
+	increment_pc(4 * n);
+}
+
+void powerpc_cpu::execute_fused_store_double(uint32 opcode)
+{
+	PPC_CHECK_FP_ENABLED();
+	const uint32 n = ((opcode >> 26) & 0x1f) + 1;
+	const uint32 step = 8u << (opcode >> 31);
+	const uint32 rs = (opcode >> 21) & 0x1f;
+	uint32 ea = gpr((opcode >> 16) & 0x1f) + (uint32)(int32)(int16)opcode;
+	uint32 i;
+
+	PPC_CHECK_EA_STORE(ea);
+	for (i = 0; i < n; i++) {
+		vm_write_memory_8(ea, fpr_dw(rs + i));
+		ea += step;
+	}
+
+	increment_pc(4 * n);
+}
+
+/**
  *	Floating-point load/store instructions
  *
  *		RA		Base operand
@@ -895,6 +977,7 @@ void powerpc_cpu::execute_loadstore_multiple(uint32 opcode)
 template< class RA, class RB, bool LD, bool DB, bool UP >
 void powerpc_cpu::execute_fp_loadstore(uint32 opcode)
 {
+	PPC_CHECK_FP_ENABLED();
 	const uint32 a = RA::get(this, opcode);
 	const uint32 b = RB::get(this, opcode);
 	const uint32 ea = a + b;
@@ -928,6 +1011,7 @@ void powerpc_cpu::execute_fp_loadstore(uint32 opcode)
 // single/double.
 void powerpc_cpu::execute_stfiwx(uint32 opcode)
 {
+	PPC_CHECK_FP_ENABLED();
 	const uint32 a = operand_RA_or_0::get(this, opcode);
 	const uint32 b = operand_RB::get(this, opcode);
 	const uint32 ea = PPCStfiwxEffectiveAddress(a, b);
@@ -1075,6 +1159,7 @@ void powerpc_cpu::execute_stwcx(uint32 opcode)
 template< bool OC >
 void powerpc_cpu::execute_fp_compare(uint32 opcode)
 {
+	PPC_CHECK_FP_ENABLED();
 	const double a = operand_fp_RA::get(this, opcode);
 	const double b = operand_fp_RB::get(this, opcode);
 	const int crfd = crfD_field::extract(opcode);
@@ -1118,6 +1203,7 @@ void powerpc_cpu::execute_fp_compare(uint32 opcode)
 template< class RN, class Rc >
 void powerpc_cpu::execute_fp_int_convert(uint32 opcode)
 {
+	PPC_CHECK_FP_ENABLED();
 	const double b = operand_fp_RB::get(this, opcode);
 	const uint32 r = RN::get(this, opcode);
 	any_register d;
@@ -1227,6 +1313,7 @@ void powerpc_cpu::fp_classify(FP x)
 template< class Rc >
 void powerpc_cpu::execute_fp_round(uint32 opcode)
 {
+	PPC_CHECK_FP_ENABLED();
 	const double b = operand_fp_RB::get(this, opcode);
 
 #if PPC_ENABLE_FPU_EXCEPTIONS
@@ -1364,6 +1451,7 @@ void powerpc_cpu::execute_mcrf(uint32 opcode)
 
 void powerpc_cpu::execute_mcrfs(uint32 opcode)
 {
+	PPC_CHECK_FP_ENABLED();
 	const int crfS = crfS_field::extract(opcode);
 	const int crfD = crfD_field::extract(opcode);
 
@@ -1402,6 +1490,7 @@ void powerpc_cpu::execute_mtcrf(uint32 opcode)
 template< class FM, class RB, class Rc >
 void powerpc_cpu::execute_mtfsf(uint32 opcode)
 {
+	PPC_CHECK_FP_ENABLED();
 	const uint64 fsf = RB::get(this, opcode);
 	const uint32 f = FM::get(this, opcode);
 	uint32 m = field2mask[f];
@@ -1434,6 +1523,7 @@ void powerpc_cpu::execute_mtfsf(uint32 opcode)
 template< class RB, class Rc >
 void powerpc_cpu::execute_mtfsfi(uint32 opcode)
 {
+	PPC_CHECK_FP_ENABLED();
 	const uint32 crfD = crfD_field::extract(opcode);
 	uint32 m = 0xf << (4 * (7 - crfD));
 
@@ -1465,6 +1555,7 @@ void powerpc_cpu::execute_mtfsfi(uint32 opcode)
 template< class RB, class Rc >
 void powerpc_cpu::execute_mtfsb(uint32 opcode)
 {
+	PPC_CHECK_FP_ENABLED();
 	const bool set_bit = RB::get(this, opcode);
 
 	// The mtfsb0 and mtfsb1 instructions cannot alter FPSCR[FEX] nor FPSCR[VX] explicitly
@@ -1491,6 +1582,7 @@ void powerpc_cpu::execute_mtfsb(uint32 opcode)
 template< class Rc >
 void powerpc_cpu::execute_mffs(uint32 opcode)
 {
+	PPC_CHECK_FP_ENABLED();
 	// Move FPSCR to FPR(FRD)
 	operand_fp_dw_RD::set(this, opcode, fpscr());
 
@@ -1851,6 +1943,9 @@ bool powerpc_cpu::decrementer_exception()
 	return false;
 }
 
+// Decrementer exceptions delivered, so a nanokernel storm is attributable.
+uint32 PPCDecrementerDeliveries = 0;
+
 bool powerpc_cpu::service_decrementer()
 {
 	(void)read_decrementer();
@@ -1865,6 +1960,7 @@ bool powerpc_cpu::service_decrementer()
 	spcflags().clear(SPCFLAG_CPU_DECREMENTER);
 	if (decrementer_exception()) {
 		decrementer_delivery_count++;
+		PPCDecrementerDeliveries++;
 #ifdef SHEEPSHAVER
 		schedule_decrementer_timer(decrementer_next_underflow);
 #endif

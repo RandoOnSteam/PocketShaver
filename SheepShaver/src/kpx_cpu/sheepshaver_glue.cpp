@@ -20,10 +20,10 @@
 
 #include "sysdeps.h"
 #include "cpu_emulation.h"
-#include "ppc-report.h"
 #include "main.h"
 #include "prefs.h"
 #include "xlowmem.h"
+#include "ppc-report.h"
 
 #if defined(__APPLE__)
 #include <TargetConditionals.h>
@@ -212,6 +212,7 @@ public:
 
 	// Execute NATIVE_OP routine
 	void execute_native_op(uint32 native_op);
+	void execute_kernel_entry(uint32 lr_slot);
 	static void call_execute_native_op(powerpc_cpu * cpu, uint32 native_op);
 
 	// Execute EMUL_OP routine
@@ -227,6 +228,7 @@ public:
 	// Execute MacOS/PPC code
 	uint32 execute_macos_code(uint32 tvect, int nargs, uint32 const *args);
 
+
 	// Hand a taken trap to the MacOS exception handler chain
 	const char *deliver_trap_exception(uint32 opcode);
 	const char *enter_exception_vector(uint32 vector, uint32 handler_slot,
@@ -234,6 +236,7 @@ public:
 	void exception_step(void);
 	void return_from_exception(uint32 saved_pc, uint32 saved_msr);
 	bool decrementer_exception();
+	void acquire_fp_registers();
 	bool external_interrupt();
 #if PPC_DEBUG_TRACE
 	void watch_event_queue(void);
@@ -2085,7 +2088,6 @@ const char *sheepshaver_cpu::enter_exception_vector(
 		(ReadMacInt32(XLM_RUN_MODE) == MODE_NATIVE
 			? PPC_NATIVE_EXCEPTION_TABLE_OFFSET
 			: PPC_68K_EXCEPTION_TABLE_OFFSET);
-	sprg(3) = table;
 	const uint32 vector_pc = ROMBase + vector;
 	if (!guest_addr_ok(table + handler_slot, 4))
 		return "the nanokernel exception table is not mapped";
@@ -2110,6 +2112,7 @@ const char *sheepshaver_cpu::enter_exception_vector(
 	// SheepShaver's other nanokernel entry paths. The architectural rfi handler
 	// consumes it on return.
 	const uint32 interrupted_msr = msr();
+	sprg(3) = table;
 	srr0() = saved_pc;
 	srr1() = saved_msr;
 	msr() = ppc_exception_msr(interrupted_msr);
@@ -2153,9 +2156,30 @@ const char *sheepshaver_cpu::enter_exception_vector(
 bool sheepshaver_cpu::decrementer_exception()
 {
 	return enter_exception_vector(PPC_DECREMENTER_VECTOR,
-		PPC_DECREMENTER_HANDLER_SLOT, pc(), ppc_exception_srr1(msr(), 0)) == NULL;
+		PPC_DECREMENTER_HANDLER_SLOT, pc(),
+		ppc_exception_srr1(msr(), 0)) == NULL;
 }
 
+void sheepshaver_cpu::acquire_fp_registers()
+{
+	msr() |= MSR_FP;
+	if (KernelDataAddr == 0)
+		return;
+	{
+		const uint32 kd = (uint32)KernelDataAddr;
+		const uint32 ctx = ReadMacInt32(kd + 0x65c);
+		int i;
+
+		if (!guest_addr_ok(ctx + 0x200, 32 * 8))
+			return;
+		WriteMacInt32(kd + 0xf28, ReadMacInt32(kd + 0xf28) + 1);
+		fpscr() = ReadMacInt32(ctx + 0xe4);
+		for (i = 0; i < 32; i++) {
+			const uint32 a = ctx + 0x200 + i * 8;
+			fpr_dw(i) = ((uint64)ReadMacInt32(a) << 32) | ReadMacInt32(a + 4);
+		}
+	}
+}
 
 bool sheepshaver_cpu::external_interrupt()
 {
@@ -2208,7 +2232,8 @@ bool sheepshaver_cpu::external_interrupt()
 		ReadMacInt32(KERNEL_DATA_BASE + 0x674));
 
 	const char *why = enter_exception_vector(PPC_EXTERNAL_VECTOR,
-		PPC_EXTERNAL_HANDLER_SLOT, pc(), ppc_exception_srr1(msr(), 0));
+		PPC_EXTERNAL_HANDLER_SLOT, pc(),
+		ppc_exception_srr1(msr(), 0));
 	if (why != NULL) {
 		external_interrupt_mode_deferred_count++;
 		return false;
@@ -2859,10 +2884,10 @@ static void ppc_report_context(const char *what, uint32 pc, uint32 ea)
 			char msg[500];
 			if (!guest_addr_ok(base, 0x20))
 				continue;
-			o = snprintf(msg, sizeof(msg), 
+			o = snprintf(msg, sizeof(msg),
 				"[bad-ea] a%d %08x:", reg, base);
 			for (k = 0; k < 0x20; k += 4)
-				o += snprintf(msg + o, sizeof(msg) - o, 
+				o += snprintf(msg + o, sizeof(msg) - o,
 					" %08x", ReadMacInt32(base + k));
 			bug("%s\n", msg);
 		}
@@ -3453,6 +3478,45 @@ void sheepshaver_cpu::call_execute_native_op(powerpc_cpu * cpu, uint32 selector)
 	static_cast<sheepshaver_cpu *>(cpu)->execute_native_op(selector);
 }
 
+
+// Combines 27 instructions, twice per Mixed Mode excursion.
+void sheepshaver_cpu::execute_kernel_entry(uint32 lr_slot)
+{
+	const uint32 saved_sp = gpr(1);
+	uint32 kd, ctx, v;
+
+	ctr() = saved_sp;								// mtctr r1
+	WriteMacInt32(XLM_IRQ_NEST, ReadMacInt32(XLM_IRQ_NEST) + 1);
+	kd = ReadMacInt32(XLM_KERNEL_DATA);
+	gpr(1) = kd;
+	WriteMacInt32(kd + 0x18, gpr(6));
+	gpr(6) = saved_sp;								// mfctr r6
+	WriteMacInt32(kd + 0x04, gpr(6));
+	gpr(6) = ReadMacInt32(kd + 0x65c);
+	ctx = gpr(6);
+	WriteMacInt32(ctx + 0x13c, gpr(7));
+	WriteMacInt32(ctx + 0x144, gpr(8));
+	WriteMacInt32(ctx + 0x14c, gpr(9));
+	WriteMacInt32(ctx + 0x154, gpr(10));
+	WriteMacInt32(ctx + 0x15c, gpr(11));
+	WriteMacInt32(ctx + 0x164, gpr(12));
+	WriteMacInt32(ctx + 0x16c, gpr(13));
+	gpr(13) = get_cr();								// mfcr r13
+	gpr(7) = ReadMacInt32(kd + 0x660);
+	gpr(12) = lr();									// mflr r12
+	// rlwimi. r7,r7,8,0,0
+	v = gpr(7);
+	gpr(7) = (v & 0x7fffffffu) | (((v << 8) | (v >> 24)) & 0x80000000u);
+	record_cr0((int32)gpr(7));
+	gpr(10) = ReadMacInt32(kd + lr_slot);
+	lr() = gpr(10);									// mtlr r10
+	gpr(10) = gpr(12);								// mr r10,r12
+	gpr(11) = 0x0002f072u;
+	// rlwimi r7,r7,27,26,26
+	v = gpr(7);
+	gpr(7) = (v & ~0x20u) | (((v << 27) | (v >> 5)) & 0x20u);
+}
+
 // Execute NATIVE_OP routine
 void sheepshaver_cpu::execute_native_op(uint32 selector)
 {
@@ -3462,6 +3526,11 @@ void sheepshaver_cpu::execute_native_op(uint32 selector)
 #endif
 
 	switch (selector) {
+	case NATIVE_KERNEL_ENTRY_68K:	execute_kernel_entry(0x5f0);	break;
+	case NATIVE_KERNEL_ENTRY_MIXED:	execute_kernel_entry(0x5f4);	break;
+	case NATIVE_KERNEL_ENTRY_RESET:	execute_kernel_entry(0x5f8);	break;
+	case NATIVE_KERNEL_ENTRY_FE0A:	execute_kernel_entry(0x5fc);	break;
+	case NATIVE_KERNEL_ENTRY_FE0F:	execute_kernel_entry(0x604);	break;
 	case NATIVE_PATCH_NAME_REGISTRY:
 		DoPatchNameRegistry();
 		break;
@@ -3958,8 +4027,11 @@ const char *DeliverTrapException(uint32 opcode)
  *  r->a[7] is unused, the routine runs on the caller's stack
  */
 
+uint32 GuestNestedCalls = 0;
+
 void Execute68k(uint32 pc, M68kRegisters *r)
 {
+	GuestNestedCalls++;
 	ppc_cpu->execute_68k(pc, r);
 }
 

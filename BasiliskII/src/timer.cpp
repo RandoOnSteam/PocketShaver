@@ -23,6 +23,7 @@
 #include "macos_util.h"
 #include "main.h"
 #include "cpu_emulation.h"
+#include <string.h>
 
 #ifdef PRECISE_TIMING_POSIX
 #include <pthread.h>
@@ -63,7 +64,7 @@ static TMDesc *tmDescList;
 #ifdef PRECISE_TIMING_BEOS
 static thread_id timer_thread = -1;
 static bool thread_active = true;
-static const tm_time_t wakeup_time_max = 0x7fffffffffffffff; 
+static const tm_time_t wakeup_time_max = 0x7fffffffffffffff;
 static volatile tm_time_t wakeup_time = wakeup_time_max;
 static sem_id wakeup_time_sem = -1;
 static int32 timer_func(void *arg);
@@ -273,7 +274,7 @@ void TimerInit(void)
 	resume_thread(timer_thread);
 #elif PRECISE_TIMING_MACH
 	pthread_t pthread;
-	
+
 	host_get_clock_service(mach_host_self(), REALTIME_CLOCK, &system_clock);
 	semaphore_create(mach_task_self(), &wakeup_time_sem, SYNC_POLICY_FIFO, 1);
 
@@ -559,13 +560,13 @@ static void *timer_func(void *arg)
 {
 	timer_thread = mach_thread_self();
 	timer_thread_active = true;
-	
+
 	while (timer_thread_active) {
 		clock_sleep(system_clock, TIME_ABSOLUTE, wakeup_time, NULL);
 		semaphore_wait(wakeup_time_sem);
-	   
+
 		tm_time_t system_time;
-		
+
 		timer_current_time(system_time);
 		if (timer_cmp_time(wakeup_time, system_time) < 0) {
 			wakeup_time = wakeup_time_max;
@@ -606,34 +607,141 @@ static void *timer_func(void *arg)
  *  Timer interrupt function (executed as part of 60Hz interrupt)
  */
 
+// Time Manager tasks actually dispatched, so the delivered rate is visible.
+uint32 TimerTaskRuns = 0;
+
+// Per-task dispatch tallies, reported once a second next to the frame budget.
+#define TM_WATCH_MAX 12
+struct TMWatch {
+	uint32 task;
+	uint32 addr;
+	uint32 tvector;
+	uint32 ppc_tvector;
+	uint32 code;
+	uint32 toc;
+	uint32 runs;
+	uint32 runs_reported;
+	bool   identified;
+};
+static TMWatch tm_watch[TM_WATCH_MAX];
+static int tm_watch_count = 0;
+
+static TMWatch *tm_watch_find(uint32 tm, uint32 addr)
+{
+	int i;
+	for (i = 0; i < tm_watch_count; i++)
+		if (tm_watch[i].task == tm)
+			return &tm_watch[i];
+	if (tm_watch_count >= TM_WATCH_MAX)
+		return NULL;
+	TMWatch *w = &tm_watch[tm_watch_count++];
+	memset(w, 0, sizeof(*w));
+	w->task = tm;
+	w->addr = addr;
+	/* A Mixed Mode routine descriptor names the PPC TVector, and the TVector
+	   names the code and TOC the fragment was loaded at. */
+	if (ReadMacInt16(addr) == 0xaafe) {
+		w->tvector = ReadMacInt32(addr + 20);
+		if (w->tvector) {
+			w->code = ReadMacInt32(w->tvector);
+			w->toc = ReadMacInt32(w->tvector + 4);
+		}
+		/* routineCount 0 is a single routine and ISA 1 is PowerPC. A timer proc
+		   is handed nothing but its TMTask pointer, so such a task can be run
+		   natively instead of through the ROM's 68k emulator. */
+		if (ReadMacInt16(addr + 10) == 0 && ReadMacInt8(addr + 17) == 1 &&
+			w->code != 0)
+			w->ppc_tvector = w->tvector;
+	}
+	return w;
+}
+
+void TimerReportTasks(void)
+{
+	int i;
+	for (i = 0; i < tm_watch_count; i++) {
+		TMWatch *w = &tm_watch[i];
+		const uint32 delta = w->runs - w->runs_reported;
+		w->runs_reported = w->runs;
+		if (!w->identified) {
+			uint32 op[4];
+			int k;
+			w->identified = true;
+			for (k = 0; k < 4; k++) {
+				op[k] = 0;
+				if (w->code)
+					op[k] = ReadMacInt32(w->code + k * 4);
+			}
+			const char *how = "68k";
+			if (w->ppc_tvector)
+				how = "ppc";
+			bug("[tm] task %08x tmAddr %08x tvector %08x code %08x toc %08x "
+				"via %s first %08x %08x %08x %08x",
+				w->task, w->addr, w->tvector, w->code, w->toc, how,
+				op[0], op[1], op[2], op[3]);
+		}
+		bug("[tm] task %08x ran %u/s", w->task, delta);
+	}
+}
+
+extern void ppc_profile_report(void);
+
 void TimerInterrupt(void)
 {
+	// The only tick that survives a game taking over the display
+	ppc_profile_report();
+
 	// Look for active TMTasks that have expired
 	tm_time_t now;
 	timer_current_time(now);
-	TMDesc *desc = tmDescList;
-	while (desc) {
-		TMDesc *next = desc->next;
-		uint32 tm = desc->task;
-		if ((ReadMacInt16(tm + qType) & 0x8000) && timer_cmp_time(desc->wakeup, now) <= 0) {
+	// Without PRECISE_TIMING this runs off the 60Hz interrupt, so a task whose
+	// period is under 16.6ms owes more than one run per call. An extended task
+	// reprimes relative to its own last wakeup, so firing it once per call
+	// leaves it permanently behind and its clock ticks at 60Hz whatever rate it
+	// asked for. Keep dispatching while anything is overdue, bounded so a task
+	// that reprimes into the past cannot spin here.
+	int passes = 32;
+	bool fired;
+	do {
+		fired = false;
+		TMDesc *desc = tmDescList;
+		while (desc) {
+			TMDesc *next = desc->next;
+			uint32 tm = desc->task;
+			if ((ReadMacInt16(tm + qType) & 0x8000) && timer_cmp_time(desc->wakeup, now) <= 0) {
 
-			// Found one, mark as inactive and remove it from the Time Manager queue
-			WriteMacInt16(tm + qType, ReadMacInt16(tm + qType) & 0x7fff);
-			dequeue_tm(tm);
+				// Found one, mark as inactive and remove it from the Time Manager queue
+				WriteMacInt16(tm + qType, ReadMacInt16(tm + qType) & 0x7fff);
+				dequeue_tm(tm);
 
-			// Call timer function
-			uint32 addr = ReadMacInt32(tm + tmAddr);
-			if (addr) {
-				D(bug("Calling TimeTask %08lx, addr %08lx\n", tm, addr));
-				M68kRegisters r;
-				r.a[0] = addr;
-				r.a[1] = tm;
-				Execute68k(r.a[0], &r);
-				D(bug(" returned from TimeTask\n"));
+				// Call timer function
+				uint32 addr = ReadMacInt32(tm + tmAddr);
+				if (addr) {
+					TMWatch *w = tm_watch_find(tm, addr);
+					uint32 tvect = 0;
+					if (w) {
+						w->runs++;
+						tvect = w->ppc_tvector;
+					}
+					TimerTaskRuns++;
+					D(bug("Calling TimeTask %08lx, addr %08lx\n", tm, addr));
+					// Mixed Mode is not just an ISA switch: it is the state the
+					// ROM uses to get back to 68k when the task calls the
+					// Toolbox, which this one does. Entering the PowerPC side
+					// directly skips that bookkeeping and the guest hangs on
+					// the first trap out of the task.
+					(void)tvect;
+					M68kRegisters r;
+					r.a[0] = addr;
+					r.a[1] = tm;
+					Execute68k(r.a[0], &r);
+					D(bug(" returned from TimeTask\n"));
+				}
+				fired = true;
 			}
+			desc = next;
 		}
-		desc = next;
-	}
+	} while (fired && --passes > 0);
 
 #if PRECISE_TIMING
 	// Look for next task to be called and set wakeup_time

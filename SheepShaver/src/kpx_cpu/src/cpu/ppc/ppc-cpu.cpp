@@ -21,7 +21,9 @@
 #include "sysdeps.h"
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 #include <assert.h>
+#include <time.h>
 #include "vm_alloc.h"
 #include "cpu/vm.hpp"
 #include "cpu/ppc/ppc-cpu.hpp"
@@ -30,6 +32,7 @@
 #endif
 
 #ifdef SHEEPSHAVER
+extern bool InterruptInService;  // set while OP_IRQ services a level 1
 #include "cpu_emulation.h"  // RAMBase / RAMSize / ROMBase / ROM_SIZE for in_guest_range
 #endif
 
@@ -44,6 +47,11 @@
 
 #define DEBUG 0
 #include "debug.h"
+
+#if PPC_PROFILE_GUEST
+extern void ppc_profile_add(uint32 pc, uint32 n);
+#endif
+extern void ppc_profile_report(void);
 
 #if PPC_PROFILE_GENERIC_CALLS
 uint32 powerpc_cpu::generic_calls_count[PPC_I(MAX)];
@@ -655,7 +663,8 @@ bool powerpc_cpu::check_spcflags()
 		// execute() calls and must retain their established interrupt paths.
 		// The SheepShaver override alone rejects a native hardware-vector entry
 		// from a nested host frame, where a context switch cannot safely escape.
-		if (!processing_interrupt && (msr() & 0x00008000) != 0) {
+		if (!processing_interrupt && !InterruptInService &&
+			(msr() & 0x00008000) != 0) {
 			// Consume before calling out so an assertion racing with the handler
 			// remains visible. A handler which cannot accept this boundary
 			// reasserts the level below.
@@ -668,7 +677,7 @@ bool powerpc_cpu::check_spcflags()
 		}
 	}
 #endif
-#ifdef SHEEPSHAVER
+#if PPC_DEBUG_TRACE
 	// One read and a compare unless the Event Manager queue actually moved.
 	watch_event_queue();
 #endif
@@ -741,6 +750,373 @@ void * PF_CONVENTION powerpc_cpu::compile_chain_block(block_info *sbi)
 }
 #endif
 
+// Instructions run without the decode cache, which is every nested execute()
+// frame: Time Manager tasks, Mixed Mode callbacks and ADB handlers.
+uint64 ppc_uncached_instructions = 0;
+
+#if PPC_PROFILE_GUEST
+/* Lossy top-N sketch: a colliding pc pays the incumbent down before taking the
+ * slot, so a genuinely hot pc keeps its bucket and cold ones churn. Sized to
+ * stay in L1: this is a random index taken once per dispatched block, so a
+ * table that misses cache costs more than everything it measures. The blocks
+ * worth reporting are percent-scale and hold their slots easily. */
+#define PPC_PROFILE_SLOTS 2048
+struct ppc_profile_slot { uint32 pc; uint32 count; uint32 size; };
+static ppc_profile_slot ppc_profile_table[PPC_PROFILE_SLOTS];
+static uint64 ppc_profile_total = 0;
+
+void ppc_profile_add(uint32 pc, uint32 n)
+{
+	const uint32 h = ((pc >> 2) ^ (pc >> 16)) & (PPC_PROFILE_SLOTS - 1);
+	ppc_profile_slot *s = &ppc_profile_table[h];
+	ppc_profile_total += n;
+	if (s->pc != pc) {
+		if (s->count > n) {
+			s->count -= n;
+			return;
+		}
+		s->pc = pc;
+		s->count = 0;
+	}
+	s->size = n;
+	s->count += n;
+}
+
+#if PPC_PROFILE_EXCURSIONS
+/* Second sketch, over the PowerPC blocks that ran just before each excursion.
+ * What an excursion costs is settled; what issues tens of thousands a second
+ * is not. */
+#define PPC_PROFILE_SITE_SLOTS 2048
+struct ppc_profile_site { uint32 pc; uint32 count; };
+#define PPC_PROFILE_CALLER_DEPTH 3
+static ppc_profile_site
+	ppc_profile_caller[PPC_PROFILE_CALLER_DEPTH][PPC_PROFILE_SITE_SLOTS];
+static uint32 ppc_profile_site_total = 0;
+/* Last few distinct RAM blocks, newest first. The block right before an
+ * excursion is the Mixed Mode glue, so the one that issued it is further
+ * back. */
+static uint32 ppc_profile_ram_pc[PPC_PROFILE_CALLER_DEPTH];
+/* The Mixed Mode Manager tests its callee with lhz r0,0(r3) / cmplwi r0,0xaafe,
+ * so r3 there is the routine descriptor - that names the 68k routine an
+ * excursion runs, which no block address does. The block moves between runs,
+ * so it is found by that compare and then remembered. */
+static ppc_profile_site ppc_profile_descriptor[PPC_PROFILE_SITE_SLOTS];
+static uint32 ppc_profile_mm_test = 0;
+
+static void ppc_profile_site_add(ppc_profile_site *tbl, uint32 pc)
+{
+	const uint32 h = ((pc >> 1) ^ (pc >> 13)) & (PPC_PROFILE_SITE_SLOTS - 1);
+	ppc_profile_site *s = &tbl[h];
+	if (s->pc != pc) {
+		if (s->count > 1) {
+			s->count--;
+			return;
+		}
+		s->pc = pc;
+		s->count = 0;
+	}
+	s->count++;
+}
+
+/* Fed from the 68k emulator start stub SheepShaver writes at ROM 0x36f900,
+ * which runs once per excursion. */
+void powerpc_cpu::profile_block(uint32 bpc, uint32 n)
+{
+	int i;
+
+	ppc_profile_add(bpc, n);
+#ifdef SHEEPSHAVER
+	if (bpc - RAMBase < RAMSize) {
+		if (bpc == ppc_profile_mm_test)
+			ppc_profile_site_add(ppc_profile_descriptor, gpr(3));
+		else if (ppc_profile_mm_test == 0
+			&& bpc - RAMBase <= RAMSize - 20
+			&& vm_read_memory_4(bpc + 16) == 0x2800aafe)
+			ppc_profile_mm_test = bpc;
+		if (bpc != ppc_profile_ram_pc[0]) {
+			for (i = PPC_PROFILE_CALLER_DEPTH - 1; i > 0; i--)
+				ppc_profile_ram_pc[i] = ppc_profile_ram_pc[i - 1];
+			ppc_profile_ram_pc[0] = bpc;
+		}
+		return;
+	}
+	// Whichever megabyte of the ROM area holds the live copy.
+	if (bpc - ROMBase < ROM_AREA_SIZE
+		&& ((bpc - ROMBase) & 0xfffff) == 0x6f900) {
+		for (i = 0; i < PPC_PROFILE_CALLER_DEPTH; i++)
+			ppc_profile_site_add(ppc_profile_caller[i],
+				ppc_profile_ram_pc[i]);
+		ppc_profile_site_total++;
+	}
+#endif
+}
+
+#endif
+
+/* Where a hot pc lives, so guest code is separable from ROM and drivers.
+ * Returns NULL when the address is not backed, because a sample can outlive
+ * the fragment it came from and reading it would fault the host. */
+static const char *ppc_profile_where(uint32 pc, uint32 *offset)
+{
+	/* The whole 32-byte window a report prints has to be inside the
+	   region, not just the first byte: a pc landing in the last words of
+	   RAM would otherwise read off the end of the mapping. */
+	if (pc >= ROMBase && pc - ROMBase <= ROM_SIZE - 32) {
+		*offset = pc - ROMBase;
+		return "ROM";
+	}
+	/* The ROM area outruns the ROM file, and what lives up there is the
+	   relocated 68k emulator - worth naming apart from the rest. */
+	if (pc >= ROMBase && pc - ROMBase <= ROM_AREA_SIZE - 32) {
+		*offset = pc - ROMBase;
+		return "68kemu";
+	}
+	if (pc >= RAMBase && pc - RAMBase <= RAMSize - 32) {
+		*offset = pc - RAMBase;
+		return "RAM";
+	}
+	*offset = pc;
+	return NULL;
+}
+
+#if PPC_PROFILE_EXCURSIONS
+/* Top of a site sketch, with the code at each address so the block is
+ * identifiable. ppc_profile_where() has already put the whole printed window
+ * inside a region, so the read is safe. */
+static void ppc_profile_report_sites(const char *what, ppc_profile_site *tbl)
+{
+	const int want = 8;
+	int top[8];
+	int found = 0;
+	int i, j;
+
+	if (ppc_profile_site_total == 0)
+		return;
+
+	for (i = 0; i < PPC_PROFILE_SITE_SLOTS; i++) {
+		if (tbl[i].count == 0)
+			continue;
+		if (found < want) {
+			top[found++] = i;
+			continue;
+		}
+		{
+			int worst = 0;
+			for (j = 1; j < want; j++)
+				if (tbl[top[j]].count < tbl[top[worst]].count)
+					worst = j;
+			if (tbl[i].count > tbl[top[worst]].count)
+				top[worst] = i;
+		}
+	}
+	for (i = 0; i < found; i++)
+		for (j = i + 1; j < found; j++)
+			if (tbl[top[j]].count > tbl[top[i]].count) {
+				const int t = top[i]; top[i] = top[j]; top[j] = t;
+			}
+
+	bug("[prof] %s, %u excursions, top %d:", what, ppc_profile_site_total,
+		found);
+	for (i = 0; i < found; i++) {
+		uint32 off = 0;
+		const uint32 pc = tbl[top[i]].pc;
+		const uint32 n = tbl[top[i]].count;
+		const char *where = ppc_profile_where(pc, &off);
+		if (where == NULL) {
+			bug("[prof]   %2d. %08x unmapped      %10u", i + 1, pc, n);
+			continue;
+		}
+		bug("[prof]   %2d. %08x %s+%08x %10u  "
+			"%08x %08x %08x %08x %08x %08x %08x %08x",
+			i + 1, pc, where, off, n,
+			vm_read_memory_4(pc), vm_read_memory_4(pc + 4),
+			vm_read_memory_4(pc + 8), vm_read_memory_4(pc + 12),
+			vm_read_memory_4(pc + 16), vm_read_memory_4(pc + 20),
+			vm_read_memory_4(pc + 24), vm_read_memory_4(pc + 28));
+	}
+}
+#endif
+
+#ifdef SHEEPSHAVER
+extern uint32 TimerTaskRuns;
+extern uint32 GuestNestedCalls;
+extern uint32 PPCDecrementerDeliveries;
+#endif
+#if PPC_DECODE_CACHE
+extern uint32 ppc_fuse_runs, ppc_fuse_folded;
+#else
+static const uint32 ppc_fuse_runs = 0, ppc_fuse_folded = 0;
+#endif
+
+/* Driven from the 60Hz timer rather than from a present, because a game that
+ * takes the display through Glide or DrawSprocket stops presenting and the
+ * report used to go with it. */
+void ppc_profile_report(void)
+{
+	const int want = 16;
+	static clock_t last_report = 0;
+	static uint32 last_tm = 0, last_e68k = 0, last_dec = 0;
+	static uint64 last_nocache = 0;
+	const clock_t now = clock();
+	int top[16];
+	int found = 0;
+	int i, j;
+
+	if (last_report != 0 && now - last_report < CLOCKS_PER_SEC)
+		return;
+	last_report = now;
+
+	if (ppc_profile_total == 0)
+		return;
+
+#ifdef SHEEPSHAVER
+	bug("[prof] 1s: tmtask=%u e68k=%u nocache=%uk dec=%u fold=%u/%u",
+		TimerTaskRuns - last_tm, GuestNestedCalls - last_e68k,
+		(unsigned)((ppc_uncached_instructions - last_nocache) / 1000),
+		PPCDecrementerDeliveries - last_dec,
+		ppc_fuse_runs, ppc_fuse_folded);
+	last_tm = TimerTaskRuns;
+	last_e68k = GuestNestedCalls;
+	last_dec = PPCDecrementerDeliveries;
+	last_nocache = ppc_uncached_instructions;
+#endif
+
+	for (i = 0; i < PPC_PROFILE_SLOTS; i++) {
+		if (ppc_profile_table[i].count == 0)
+			continue;
+		if (found < want) {
+			top[found++] = i;
+		} else {
+			int worst = 0;
+			for (j = 1; j < want; j++)
+				if (ppc_profile_table[top[j]].count <
+					ppc_profile_table[top[worst]].count)
+					worst = j;
+			if (ppc_profile_table[i].count >
+				ppc_profile_table[top[worst]].count)
+				top[worst] = i;
+		}
+	}
+	for (i = 0; i < found; i++)
+		for (j = i + 1; j < found; j++)
+			if (ppc_profile_table[top[j]].count >
+				ppc_profile_table[top[i]].count) {
+				const int t = top[i]; top[i] = top[j]; top[j] = t;
+			}
+
+	bug("[prof] %llu guest dispatches, top %d pc:",
+		(unsigned long long)ppc_profile_total, found);
+	for (i = 0; i < found; i++) {
+		uint32 off = 0;
+		const uint32 pc = ppc_profile_table[top[i]].pc;
+		const uint32 n = ppc_profile_table[top[i]].count;
+		const char *where = ppc_profile_where(pc, &off);
+		const double share = 100.0 * (double)n / (double)ppc_profile_total;
+		if (where == NULL) {
+			bug("[prof]   %2d. %08x unmapped      %10u %5.2f%%",
+				i + 1, pc, n, share);
+			continue;
+		}
+		/* The four words at the hot pc locate it in the fragment's own
+		   binary, which is what makes a bare guest address useful. */
+		bug("[prof]   %2d. %08x %s+%08x %10u %5.2f%% n=%u/s  %08x %08x %08x %08x",
+			i + 1, pc, where, off, n,
+			100.0 * (double)n / (double)ppc_profile_total,
+			n / (ppc_profile_table[top[i]].size + (ppc_profile_table[top[i]].size == 0)),
+			vm_read_memory_4(pc), vm_read_memory_4(pc + 4),
+			vm_read_memory_4(pc + 8), vm_read_memory_4(pc + 12));
+	}
+
+#if PPC_PROFILE_EXCURSIONS
+	{
+		static const char * const depth[PPC_PROFILE_CALLER_DEPTH] =
+			{ "caller-0", "caller-1", "caller-2" };
+		for (i = 0; i < PPC_PROFILE_CALLER_DEPTH; i++)
+			ppc_profile_report_sites(depth[i], ppc_profile_caller[i]);
+	}
+	ppc_profile_report_sites("descriptor", ppc_profile_descriptor);
+	memset(ppc_profile_descriptor, 0, sizeof(ppc_profile_descriptor));
+	memset(ppc_profile_caller, 0, sizeof(ppc_profile_caller));
+	ppc_profile_site_total = 0;
+#endif
+
+	memset(ppc_profile_table, 0, sizeof(ppc_profile_table));
+	ppc_profile_total = 0;
+}
+#else
+void ppc_profile_report(void) { }
+#endif
+
+#if PPC_DECODE_CACHE
+uint32 ppc_fuse_runs = 0;
+uint32 ppc_fuse_folded = 0;
+
+/* A run of same-form load/stores sharing one base and a constant stride costs
+ * one decode entry instead of one per register. The nanokernel saves and
+ * restores the whole register file on every trap, which is where a PowerPC
+ * guest spends its Mixed Mode and 68k transitions. Returns instructions
+ * folded, or 0 when the run is too short to be worth an entry. */
+uint32 powerpc_cpu::fuse_loadstore_run(uint32 dpc, uint32 opcode,
+	block_info::decode_info *di)
+{
+	const uint32 op = opcode >> 26;
+	const uint32 rd = (opcode >> 21) & 0x1f;
+	const uint32 ra = (opcode >> 16) & 0x1f;
+	const int32 d = (int32)(int16)opcode;
+	uint32 unit, step, n, wide;
+
+	// A base field of 0 is the literal zero operand, not gpr(0).
+	if (ra == 0)
+		return 0;
+	if (op == 32 || op == 36)
+		unit = 4;
+	else if (op == 50 || op == 54)
+		unit = 8;
+	else
+		return 0;
+
+	step = 0;
+	for (n = 1; rd + n < 32; n++) {
+		const uint32 next = vm_read_memory_4(dpc + n * 4);
+		const int32 nd = (int32)(int16)next;
+		if ((next >> 26) != op || ((next >> 21) & 0x1f) != rd + n
+			|| ((next >> 16) & 0x1f) != ra)
+			break;
+		if (n == 1) {
+			// Only the two strides the folded operand can carry.
+			if (nd != d + (int32)unit && nd != d + (int32)(unit * 2))
+				break;
+			step = (uint32)(nd - d);
+		}
+		else if (nd != d + (int32)(step * n))
+			break;
+	}
+
+	// A word load that reloads its own base has to walk from the new value.
+	if (op == 32 && ra - rd < n)
+		n = ra - rd;
+	if (n < FUSE_RUN_MIN)
+		return 0;
+
+	wide = 0;
+	if (step != unit)
+		wide = 1;
+	di->opcode = (wide << 31) | ((n - 1) << 26) | (rd << 21) | (ra << 16)
+		| (opcode & 0xffff);
+	if (op == 32)
+		di->execute = nv_mem_fun(&powerpc_cpu::execute_fused_load_word);
+	else if (op == 36)
+		di->execute = nv_mem_fun(&powerpc_cpu::execute_fused_store_word);
+	else if (op == 50)
+		di->execute = nv_mem_fun(&powerpc_cpu::execute_fused_load_double);
+	else
+		di->execute = nv_mem_fun(&powerpc_cpu::execute_fused_store_double);
+	ppc_fuse_runs++;
+	ppc_fuse_folded += n;
+	return n;
+}
+#endif
+
 void powerpc_cpu::execute(uint32 entry)
 {
 	bool invalidated_cache = false;
@@ -756,7 +1132,7 @@ void powerpc_cpu::execute(uint32 entry)
 	// pure-interpreter tier exactly as in JIT-less builds
 	if (execute_depth == 1 || use_jit) {
 #else
-	if (execute_depth == 1 || (PPC_ENABLE_JIT && PPC_REENTRANT_JIT)) {
+	/* if (execute_depth == 1 || (PPC_ENABLE_JIT && PPC_REENTRANT_JIT)) */ {
 #endif
 #if PPC_ENABLE_JIT
 		if (use_jit) {
@@ -831,6 +1207,16 @@ void powerpc_cpu::execute(uint32 entry)
 #endif
 				di->opcode = opcode;
 				di->execute = ii->execute;
+#if !PPC_EXECUTE_DUMP_STATE && PPC_FUSE_LOADSTORE
+				// Whole-register-file moves become one entry, which
+				// cannot carry a per-instruction recorder step
+				if (!is_logging()) {
+					const uint32 fused =
+						fuse_loadstore_run(dpc, opcode, di);
+					if (fused != 0)
+						dpc += (fused - 1) * 4;
+				}
+#endif
 				di++;
 #if PPC_EXECUTE_DUMP_STATE
 				if (dump_state) {
@@ -840,6 +1226,12 @@ void powerpc_cpu::execute(uint32 entry)
 				}
 #endif
 				if (di >= decode_cache_end_p) {
+					if (execute_depth > 1) {
+						// Compacting here would move blocks an outer frame is
+						// still stepping through. Interpret this frame instead.
+						my_block_cache.delete_blockinfo(bi);
+						goto do_interpret;
+					}
 					// Invalidate cache and move current code to start
 					invalidate_cache();
 					const int blocklen = di - bi->di;
@@ -868,6 +1260,11 @@ void powerpc_cpu::execute(uint32 entry)
 			// Execute all cached blocks
 		  pdi_execute:
 			for (;;) {
+#if PPC_PROFILE_GUEST && PPC_PROFILE_EXCURSIONS
+				profile_block(bi->pc, (uint32)bi->size);
+#elif PPC_PROFILE_GUEST
+				ppc_profile_add(bi->pc, (uint32)bi->size);
+#endif
 				const int r = bi->size % 4;
 				di = bi->di + r;
 				int n = (bi->size + 3) / 4;
@@ -881,7 +1278,7 @@ void powerpc_cpu::execute(uint32 entry)
 					} while (--n > 0);
 				}
 
-#ifdef SHEEPSHAVER
+#if PPC_DEBUG_TRACE
 				watch_event_queue();
 #endif
 				if (!spcflags().empty()) {
@@ -908,6 +1305,10 @@ void powerpc_cpu::execute(uint32 entry)
   do_interpret:
 	for (;;) {
 		uint32 opcode = vm_read_memory_4(pc());
+		ppc_uncached_instructions++;
+#if PPC_PROFILE_GUEST
+		ppc_profile_add(pc(), 1);
+#endif
 		const instr_info_t *ii = decode(opcode);
 #if PPC_EXECUTE_DUMP_STATE
 		if (dump_state)

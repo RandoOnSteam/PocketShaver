@@ -360,23 +360,25 @@ int main(int argc, char **argv)
 	KernelDataAddr = KERNEL_DATA_BASE;
 	D(bug("Kernel Data at %p (%08x)\n", kernel_data, KERNEL_DATA_BASE));
 	D(bug("Emulator Data at %p (%08x)\n", emulator_data, KERNEL_DATA_BASE + offsetof(KernelData, ed)));
-#if 0
-	// Create area for DR Cache
-	if (vm_mac_acquire(DR_EMULATOR_BASE, DR_EMULATOR_SIZE) < 0) {
-		sprintf(str, GetString(STR_DR_EMULATOR_MMAP_ERR), strerror(errno));
-		ErrorAlert(str);
-		goto quit;
+
+	if (PrefsFindBool("jit68k")) {
+		// Create area for DR Cache
+		if (vm_mac_acquire(DR_EMULATOR_BASE, DR_EMULATOR_SIZE) < 0) {
+			sprintf(str, GetString(STR_DR_EMULATOR_MMAP_ERR), strerror(errno));
+			ErrorAlert(str);
+			goto quit;
+		}
+		dr_emulator_area_mapped = true;
+		if (vm_mac_acquire(DR_CACHE_BASE, DR_CACHE_SIZE) < 0) {
+			sprintf(str, GetString(STR_DR_CACHE_MMAP_ERR), strerror(errno));
+			ErrorAlert(str);
+			goto quit;
+		}
+		dr_cache_area_mapped = true;
+		DRCacheAddr = DR_CACHE_BASE;
+		D(bug("DR Cache at %p (%08x)\n", DRCacheAddr, DR_CACHE_BASE));
 	}
-	dr_emulator_area_mapped = true;
-	if (vm_mac_acquire(DR_CACHE_BASE, DR_CACHE_SIZE) < 0) {
-		sprintf(str, GetString(STR_DR_CACHE_MMAP_ERR), strerror(errno));
-		ErrorAlert(str);
-		goto quit;
-	}
-	dr_cache_area_mapped = true;
-	DRCacheAddr = (uint32)Mac2HostAddr(DR_CACHE_BASE);
-	D(bug("DR Cache at %p (%08x)\n", DRCacheAddr, DR_CACHE_BASE));
-#endif
+
 	// Create area for SheepShaver data
 	if (!SheepMem::Init()) {
 		sprintf(str, GetString(STR_SHEEP_MEM_MMAP_ERR), strerror(errno));
