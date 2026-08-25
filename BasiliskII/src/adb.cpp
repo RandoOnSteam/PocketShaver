@@ -328,8 +328,8 @@ typedef struct ADBGRAVISFIREBIRD {
 	/* 0x0EA */ char   mUnknown2[0xDA];    /* 218 bytes                  */
 	/* 0x1C4 */ short  mXIn;
 		/* Absolute stick position, left/right. Signed. This is the physical
-		 * stick angle, not a cursor coordinate. Descent II stores it verbatim 
-		 * and works out the usable range from the player's calibration pass, 
+		 * stick angle, not a cursor coordinate. Descent II stores it verbatim
+		 * and works out the usable range from the player's calibration pass,
 		 * so the driver's units never have to be known. */
 
 	/* 0x1C6 */ short  mYIn;
@@ -353,12 +353,12 @@ typedef struct ADBGRAVISFIREBIRD {
 		/* All 17 controls in one word, one bit each, bit N = control N in the
 		 * table in section 6.5.
 		 *
-		 * THE BITS ARE INVERTED: a bit reading 0 means that control is 
+		 * THE BITS ARE INVERTED: a bit reading 0 means that control is
 		 * currently HELD DOWN; 1 means it is up. With nothing pressed the
 		 * low 17 bits are all set, i.e. the word reads 0x0001FFFF. Pressing
 		 * the trigger (bit 0) makes it 0x0001FFFE.
 		 *
-		 * Not 4-byte aligned -- read it with a byte-safe load or a memcpy on 
+		 * Not 4-byte aligned -- read it with a byte-safe load or a memcpy on
 		 * architectures that care.
 		 *
 		 * Descent II consumes bits 0..16 and ignores 17..31. */
@@ -367,20 +367,20 @@ typedef struct ADBGRAVISFIREBIRD {
 
 	/* 0x1E0 */ char   mEmulationEnable[3];
 		/* Three on/off switches controlling whether the Gravis driver
-		 * keeps doing its normal desktop job -- translating this stick 
+		 * keeps doing its normal desktop job -- translating this stick
 		 * into mouse pointer movement, mouse clicks and keystrokes.
 		 *
-		 * write 0 to all three : hands off. The driver stops generating 
-		 *	events; the application reads 
+		 * write 0 to all three : hands off. The driver stops generating
+		 *	events; the application reads
 		 *	mXIn / mYIn / mThrottle / mButtons
 		 *	itself. Descent II does this the moment it adopts the device.
-		 * write 1 to all three : normal behaviour resumes. Descent II 
+		 * write 1 to all three : normal behaviour resumes. Descent II
 		 *	does this when
 		 *	the player picks a different joystick, and on quit.
 		 *
-		 * Descent II always writes all three together with the same value 
-		 * and never reads them, so which switch covers which group 
-		 * (stick / buttons / hat) is not determined here. These are the 
+		 * Descent II always writes all three together with the same value
+		 * and never reads them, so which switch covers which group
+		 * (stick / buttons / hat) is not determined here. These are the
 		 * Firebird's equivalent of mStick1_cursorCouple in
 		 * the older 'Jeff' layout. */
 
@@ -393,9 +393,9 @@ typedef struct ADBTHRUSTMASTER {
 	/* 0x03 */ char           yaw;     /* extsb, -127 (left) +127 (right) */
 
 	/* 0x04  ONE 16-bit storage unit, read with lhz, MSB-first: */
-	union 
+	union
 	{
-		struct 
+		struct
 		{
 			short rockerDown :1;   /* bit 15 -> Descent II button 15 "Rkr D" */
 			short rockerUp   :1;   /* bit 14 -> 14 "Rkr U" */
@@ -416,8 +416,8 @@ typedef struct ADBTHRUSTMASTER {
 		} bitmasks;
 		short fullvalue;
 	} buttons;
-		/* Bit sense is the NORMAL one here: 1 means the control is 
-		 * currently held down, 0 means it is up, so an untouched stick 
+		/* Bit sense is the NORMAL one here: 1 means the control is
+		 * currently held down, 0 means it is up, so an untouched stick
 		 * reads 0x0000. Descent II uses each bit directly with no inversion.
 		 * This is the opposite of both Gravis devices, whose drivers publish
 		 * button bits inverted (0 = held) and which Descent II therefore
@@ -441,7 +441,7 @@ typedef struct ADBTHRUSTMASTER {
 #pragma options align=reset
 #endif
 
-#define JOY_HARDWARE_FIREBIRD 0
+#define JOY_HARDWARE_FIREBIRD 1
 #define JOY_HARDWARE_MOUSESTICKII 0
 #define JOY_HARDWARE_BLACKHAWK 0
 #define JOY_HARDWARE_GAMEPAD 0
@@ -489,7 +489,7 @@ typedef struct ADBTHRUSTMASTER {
 #endif
 #if JOY_HARDWARE_SIDEWINDER
 #define JOY_SIDEWINDER_ORIGADBADDR 0x6
-#define JOY_SIDEWINDER_DEVTYPE     0x36 
+#define JOY_SIDEWINDER_DEVTYPE     0x36
 #define JOY_SIDEWINDER_COUNT       7
 #endif
 #define JOY_ADB_FIRST 4
@@ -515,7 +515,7 @@ struct joy_adb_dev {
 	uint8 enabled; /* Enabled via extension/control panel. Not thrustmaster */
 	uint16 cmd_param; /* last R2 write, echoed on the next R2 read */
 	uint16 cmd_status; /* returned when armed */
-	uint8 cmd_armed; /* next R2 read is status and not echo */	  
+	uint8 cmd_armed; /* next R2 read is status and not echo */
 	uint8 last_packet_len;
 	uint8 last_packet[8];
 #if JOY_HARDWARE_MACALLY
@@ -525,7 +525,7 @@ struct joy_adb_dev {
 	JoyManagerDevice* dev;
 };
 static joy_adb_dev joy_adb_devs[JOY_ADB_MAX];
-static int joy_adb_count = 0; 
+static int joy_adb_count = 0;
 void joy_adb_init(void)
 {
 	int i, idevindex;
@@ -539,7 +539,7 @@ void joy_adb_init(void)
 			joy_adb_count -= JOY_DEVSPERDEVICE;
 			continue;
 		}
-	#if JOY_HARDWARE_FIREBIRD 
+	#if JOY_HARDWARE_FIREBIRD
 		joy_adb_devs[i].orig_addr = JOY_FIREBIRD_ORIGADBADDR;
 		joy_adb_devs[i].reg_3[0] = 0x60 | joy_adb_devs[i].orig_addr;
 		joy_adb_devs[i].dev = dev;
@@ -649,7 +649,7 @@ void joy_adb_init(void)
 void joy_adb_exit(void)
 {
 	int i, numdevs;
-	numdevs = joy_adb_count; 
+	numdevs = joy_adb_count;
 	joy_adb_count = 0;
 	for (i = 0; i < numdevs; i += JOY_DEVSPERDEVICE)
 		JoyManagerCloseDevice(joy_adb_devs[i].dev);
@@ -718,7 +718,7 @@ void joy_adb_reset_addr(void)
 int joy_adb_find(uint8 adr)
 {
 	int i;
-	for (i = 0; i < joy_adb_count; i++) { 
+	for (i = 0; i < joy_adb_count; i++) {
 		if (adr == (joy_adb_devs[i].reg_3[0] & 0x0f)) {
 			return i;
 		}
@@ -800,7 +800,7 @@ uint8 joy_adb_pack_gravis_firebird(int i, uint8 reg, uint8 *buf)
 		buf[0] = (uint8)(v >> 8);
 		buf[1] = (uint8)v;
 		return 2;
-	}  
+	}
 	if (reg != 0)
 		return 0;
 
@@ -835,7 +835,7 @@ static int16 joy_adb_axis_600(JoyManagerDevice *dev, int axis)
 }
 /* SDL button index -> packet bit, active low. ISp Gravis reads Jeff +0x32
    the same way: bit 2 trigger, 0 top base, 1 bottom base, 3 thumb L, 4 thumb R. */
-static const uint8 joy_adb_gravis_mousestick_ii_pack_button_bit[5] = 
+static const uint8 joy_adb_gravis_mousestick_ii_pack_button_bit[5] =
 	{ 2, 0, 1, 3, 4 };
 uint8 joy_adb_pack_gravis_mousestick_ii(int i, uint8 reg, uint8 *buf)
 { /* fill up to 8 bytes of buf, return filled # of bytes */
@@ -864,7 +864,7 @@ uint8 joy_adb_pack_gravis_mousestick_ii(int i, uint8 reg, uint8 *buf)
 		nb = 5;
 	for (ibutton = 0; ibutton < nb; ++ibutton) {
 		if (JoyManagerButton(dev, ibutton))
-			buttons &= ~(1u 
+			buttons &= ~(1u
 				<< joy_adb_gravis_mousestick_ii_pack_button_bit[ibutton]);
 	}
 
@@ -918,11 +918,11 @@ uint8 joy_adb_pack_thrustmaster(int i, uint8 reg, uint8 *buf)
 			nb = 16;
 	for (c = 0; c < nb; ++c) {
 		if (JoyManagerButton(dev, c))
-			buttons |= (uint16) 
+			buttons |= (uint16)
 				(1u << joy_adb_thrustmaster_button_bit[c]);
 	}
 
-	/* joy_adb_owns_cursor() - Firebird is the finder mouse controller 
+	/* joy_adb_owns_cursor() - Firebird is the finder mouse controller
 	!mouse_adb_pointer_hidden() - Not in a game or app essentially */
 	if (!mouse_adb_pointer_hidden() && joy_adb_owns_cursor()) {
 		buf[0] = buf[1] = buf[3] = 0;	/* signed axes: 0 is centre */
@@ -941,9 +941,9 @@ uint8 joy_adb_pack_thrustmaster(int i, uint8 reg, uint8 *buf)
 }
 #endif /* #if JOY_HARDWARE_THRUSTMASTER */
 #if JOY_HARDWARE_CH_FLIGHTSTICKPRO
-/* SDL int16 -> the stick's 10-bit field, 512 centred.  invert 
+/* SDL int16 -> the stick's 10-bit field, 512 centred.  invert
 	matches the wire: Y and throttle are sent inverted, X is not. */
-static uint16 joy_ch_flightstickpro_axis(JoyManagerDevice *dev, 
+static uint16 joy_ch_flightstickpro_axis(JoyManagerDevice *dev,
 	int axis, bool invert)
 {
 	int v;
@@ -1182,7 +1182,7 @@ uint8 joy_adb_pack_gravis_gamepad(int i, uint8 reg, uint8 *buf)
 	if (reg != 0)
 		return 0;
 
-	/* Digital only. Jeff +0x32 is 8 bits active low: 
+	/* Digital only. Jeff +0x32 is 8 bits active low:
 		U D L R Blue Red Green Yellow. */
 	buttons = 0xff;
 	if (JoyManagerNumHats(dev) > 0) {
@@ -1241,7 +1241,7 @@ uint8 joy_adb_pack_macally(int i, uint8 reg, uint8 *buf)
 	if (reg != 0)
 		return 0;
 
-	/* Talk R0 count 5. lo,lo,hi,hi; 10-bit, 0x200 rest; 
+	/* Talk R0 count 5. lo,lo,hi,hi; 10-bit, 0x200 rest;
 		2 buttons active high. */
 	x = joy_adb_axis_10bit(dev, 0);
 	y = joy_adb_axis_10bit(dev, 1);
@@ -1495,9 +1495,9 @@ void joy_adb_op(int i, uint8 cmd, uint8 reg, uint8* data) {
 		}
 	} else if (cmd == 3) { /* Read */
 		switch (reg) {
-			case 3: /* direct read */                
+			case 3: /* direct read */
 				data[0] = 2;
-				data[1] = (joy_adb_devs[i].reg_3[0] 
+				data[1] = (joy_adb_devs[i].reg_3[0]
 					& 0xf0) | (rand() & 0x0f);
 				data[2] = joy_adb_devs[i].reg_3[1];
 				break;
@@ -2252,8 +2252,8 @@ static void adb_bases_invalidate(void)
 	adb_bases_valid = false;
 }
 
-/* Entry N's dbServiceRtPtr sits at ADBBase + 4 + 12*N -- the same 
-	assumption the hardcoded +4/+16 pair always made, just parameterised 
+/* Entry N's dbServiceRtPtr sits at ADBBase + 4 + 12*N -- the same
+	assumption the hardcoded +4/+16 pair always made, just parameterised
 	and checked. */
 #define ADB_ENTRY_STRIDE 12
 
@@ -3039,7 +3039,7 @@ void ADBVBL(void)
 				joy_adb_enable_blackhawk(i);
 				if (!joy_adb_devs[i].enabled)
 					continue;
-			} 
+			}
 			#endif
 			#if JOY_HARDWARE_FIREBIRD
 			if (joy_adb_devs[i].real_devtype == JOY_FIREBIRD_DEVTYPE) {
@@ -3049,7 +3049,7 @@ void ADBVBL(void)
 			}
 			#endif
 			#if JOY_HARDWARE_MOUSESTICKII
-			if (joy_adb_devs[i].real_devtype 
+			if (joy_adb_devs[i].real_devtype
 					== JOY_GRAVISMOUSESTICKII_DEVTYPE) {
 				joy_adb_enable_gravis_mousestick_ii(i);
 				if (!joy_adb_devs[i].enabled)
@@ -3072,7 +3072,7 @@ void ADBVBL(void)
 				ReadMacInt32(joy_adb_devs[i].entry_base + 4),
 				ReadMacInt32(ReadMacInt32(joy_adb_devs[i].entry_base + 4)),
 				ReadMacInt32(ReadMacInt32(joy_adb_devs[i].entry_base + 4) + 4),
-				ReadMacInt32(ReadMacInt32(joy_adb_devs[i].entry_base + 4) 
+				ReadMacInt32(ReadMacInt32(joy_adb_devs[i].entry_base + 4)
 					+ 8)));
 		} else
 		#endif
@@ -3168,7 +3168,7 @@ void ADBInterrupt(void)
 		adb_log_regs("key: out", &r);
 #endif
 	}
-	
+
 	// Clear temporary data
 	WriteMacInt32(tmp_data, 0);
 	WriteMacInt32(tmp_data + 4, 0);

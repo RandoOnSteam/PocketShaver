@@ -302,7 +302,6 @@ static inline int cd_read_with_retry(file_handle *fh, ULONG offset, int count, c
 /*
  * Generic offset read function for a file or a device that behaves like one
  */
- 
 static DWORD file_offset_read(HANDLE fh, loff_t offset, int count, char *buf)
 {
 	// Seek to position
@@ -588,7 +587,9 @@ void *Sys_open(const char *path_name, bool read_only, bool is_cdrom)
 			fh->is_cdrom = is_cdrom;
 
 			// Detect disk image file layout
-			loff_t size = GetFileSize(h, NULL);
+			DWORD sizehigh;
+			loff_t size = GetFileSize(h, &sizehigh);
+			size += ((loff_t)sizehigh) << 32;
 			DWORD bytes_read;
 			uint8 data[256];
 			ReadFile(h, data, sizeof(data), &bytes_read, NULL);
@@ -734,7 +735,7 @@ loff_t SysGetFileSize(void *arg)
 #if defined(BINCUE)
 	if (fh->is_bincue)
 		return size_bincue(fh->bincue_fd);
-#endif 
+#endif
 
 	if (fh->is_file)
 		return fh->file_size;
@@ -1203,7 +1204,7 @@ void SysCDGetVolume(void *arg, uint8 &left, uint8 &right)
 	if (fh->is_bincue)
 		CDGetVol_bincue(fh->bincue_fd,&left,&right);
 #endif
-	
+
 	if (fh->is_cdrom) {
 
 		VOLUME_CONTROL vc;
