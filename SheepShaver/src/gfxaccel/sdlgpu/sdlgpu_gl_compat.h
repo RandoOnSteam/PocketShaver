@@ -20,8 +20,36 @@
 
 #ifndef GFXACCEL_SDLGPU_GL_COMPAT_H
 #define GFXACCEL_SDLGPU_GL_COMPAT_H
-#include <SDL.h>
+#include "my_sdl.h"
+#ifdef SDL_PLATFORM_IOS
+#undef SDL_PLATFORM_IOS
+#define WASSDLIOS
+#endif
+#if USE_SDL3
+#include <SDL3/SDL_opengl.h>
+#else
 #include <SDL_opengl.h>
+#endif
+#ifdef WASSDLIOS
+#undef WASSDLIOS
+#define SDL_PLATFORM_IOS
+#endif
+#if 0
+typedef unsigned int GLuint;
+typedef int GLint;
+typedef unsigned int GLenum;
+typedef unsigned char GLboolean;
+typedef float GLfloat;
+typedef double GLdouble;
+typedef char GLchar;
+typedef int GLsizei;
+typedef float GLclampf;
+typedef unsigned char GLubyte;
+typedef int GLbitfield;
+typedef double GLclampd;
+#define APIENTRY
+#endif
+
 #include "sdlgpu_transition_trace.h"
 
 #ifdef __cplusplus
@@ -235,6 +263,8 @@ inline GfxGLExt &gfx_gl_ext()
 	};
 	return ext;
 }
+
+//#undef APIENTRY
 
 #define GFXACCEL_GL_EXT_H 1
 

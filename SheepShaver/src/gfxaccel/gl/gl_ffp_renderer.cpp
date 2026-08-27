@@ -28,7 +28,11 @@
 #include "gl_ext.h"
 #include "gfxaccel_backend.h"
 #include "gl_metal_draw_state.h"
+#if USE_SDL3
+#include <SDL3/SDL_opengl.h>
+#else
 #include <SDL_opengl.h>
+#endif
 #include <vector>
 #include <cstring>
 #include <cstdio>

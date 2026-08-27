@@ -25,7 +25,11 @@
 #include "vbl_source.h"
 #include "metal_device_shared.h"
 
+#if USE_SDL3
+#include <SDL3/SDL_opengl.h>
+#else
 #include <SDL_opengl.h>
+#endif
 #include <cstdio>
 #include <cstring>
 

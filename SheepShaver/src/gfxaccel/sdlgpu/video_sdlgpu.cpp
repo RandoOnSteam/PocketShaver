@@ -16,7 +16,7 @@
  *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
-#include <SDL.h>
+#include "my_sdl.h"
 #include <cmath>
 #include "dsp_pixmap_offsets.h"
 #include "sdlgpu_transition_trace.h"

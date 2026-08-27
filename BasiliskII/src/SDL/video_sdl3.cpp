@@ -3200,4 +3200,57 @@ bool video_get_framebuffer_drawable_rect(int *out_x, int *out_y,
 }
 #endif
 
+#if TARGET_OS_IPHONE
+#import "MiscellaneousSettingsObjCCppHeader.h"
+bool suggest_mouse_grab = false;
+void set_relative_mouse_enabled() {
+	 drv->grab_mouse();
+ }
+
+ void set_relative_mouse_disabled() {
+ #if TARGET_OS_IPHONE
+	 if (objc_getRelateiveMouseModeSettingIsAlwaysOn()) {
+		 return;
+	 }
+ #endif
+	 drv->ungrab_mouse();
+ }
+
+ void toggle_relative_mouse() {
+ #if TARGET_OS_IPHONE
+	 if (mouse_grabbed && objc_getRelateiveMouseModeSettingIsAlwaysOn()) {
+		 return;
+	 }
+ #endif
+	 drv->toggle_mouse_grab();
+ }
+
+ void set_relative_mouse_automatic() {
+	 if (suggest_mouse_grab) {
+		 set_relative_mouse_enabled();
+	 } else {
+		 set_relative_mouse_disabled();
+	 }
+ }
+
+ void report_relative_mouse_capability() {
+	 suggest_mouse_grab = true;
+ #if TARGET_OS_IPHONE
+	 if (objc_getRelateiveMouseModeSettingIsAutomatic()) {
+		 set_relative_mouse_enabled();
+	 }
+ #endif
+ }
+
+ void set_input_disabled(bool is_disabled) {
+ }
+void setup_frame_rate() {
+}
+extern "C" void VideoMapWindowPointToGuestAndMove(double winX, double winY) {
+	
+}
+
+#endif //IPHONE
+
+
 #endif	// ends: SDL version check

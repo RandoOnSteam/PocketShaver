@@ -27,9 +27,14 @@
 // Invokes the specified function with an NSAutoReleasePool in place.
 void NSAutoReleasePool_wrap(void (*fn)(void));
 
-#ifdef USE_SDL
+#if USE_SDL2
 #include <SDL2/SDL.h>
 #include "SDL2/SDL_version.h"
+#elif USE_SDL3
+#include <SDL3/SDL.h>
+#include "SDL3/SDL_version.h"
+#endif
+#if USE_SDL2 || USE_SDL3
 #if SDL_VERSION_ATLEAST(2,0,0)
 void disable_SDL2_macosx_menu_bar_keyboard_shortcuts();
 bool is_fullscreen_osx(SDL_Window * window);

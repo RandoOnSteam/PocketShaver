@@ -28,7 +28,9 @@
 #include "macos_util.h"
 #include "cpu_emulation.h"
 #include "xlowmem.h"
-
+#ifndef MAIN_H /* OSX doesn't have M68kRegisters in main.h */
+struct M68kRegisters { uint32 d[8], a[8]; };
+#endif
 #ifdef USE_SDL
 #include "my_sdl.h"
 #endif

@@ -48,3 +48,10 @@ static int32_t SDLGPUCompositorModeEnter(const struct DMCModeSnapshot *incoming,
 		return 0;
 	return s_sdlgpu_compositor_mode_enter(incoming, context);
 }
+
+extern "C" double MetalCompositorWindowedContentInsetTop() {
+	return 0.0;
+}
+extern "C" void MetalCompositorReapplyWindowPinning() {
+	
+}

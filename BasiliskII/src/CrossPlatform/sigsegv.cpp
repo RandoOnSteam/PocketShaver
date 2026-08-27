@@ -1051,7 +1051,7 @@ static inline int ix86_step_over_modrm(unsigned char * p)
 }
 
 static bool ix86_skip_instruction(SIGSEGV_REGISTER_TYPE * regs,
-								  uintptr dev_addr = 0)
+                                  sigsegv_uintptr_t dev_addr = 0)
 {
 	unsigned char * eip = (unsigned char *)regs[X86_REG_EIP];
 

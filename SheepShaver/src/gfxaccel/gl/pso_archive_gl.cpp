@@ -18,7 +18,7 @@
  *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 #include "pso_archive.h"
-
+#include <stddef.h> /* NULL */
 int32_t pso_archive_init(void) { return kGfxAccelErrPSOArchiveNotAvailable; }
 void pso_archive_shutdown(void) {}
 void *pso_archive_lookup_render(void *) { return NULL; }

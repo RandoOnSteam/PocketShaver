@@ -26,7 +26,7 @@
 #include "my_sdl.h"
 #include "utils_ios.h"
 
-#if SDL_VERSION_ATLEAST(2,0,0)
+#if USE_SDL2
 #include <SDL2/SDL_syswm.h>
 #endif
 

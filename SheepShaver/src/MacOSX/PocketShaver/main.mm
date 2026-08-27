@@ -17,6 +17,10 @@
  * syntax after this import. */
 #import "PocketShaver-Swift-ObjCHeader.h"
 
+#if USE_SDL3
+#include <SDL3/SDL_main.h>
+#define SDL_MAIN_HANDLED
+#endif
 
 extern "C" int main_ios(int argc, char* argv[]);
 
