@@ -52,7 +52,7 @@ static inline uint64 get_tb_ticks(void);
 #include "timer.h"
 #endif
 
-#ifdef TARGET_OS_IPHONE
+#if TARGET_OS_IPHONE
 #import "FatalErrorAlertViewControllerObjCCppHeader.h"
 #import "MiscellaneousSettingsObjCCppHeader.h"
 #endif
@@ -226,7 +226,7 @@ void powerpc_cpu::execute_fault_report(uint32 opcode)
 		}
 	}
 
-#ifdef TARGET_OS_IPHONE
+#if TARGET_OS_IPHONE
 	if (objc_getIgnoreIllegalInstructions()) {
 		increment_pc(4);
 		return;

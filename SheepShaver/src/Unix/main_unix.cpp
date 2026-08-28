@@ -1087,7 +1087,7 @@ int main(int argc, char *argv[])
 #endif
 	
 	// Create area for Mac RAM
-#ifdef TARGET_OS_IPHONE
+#if TARGET_OS_IPHONE
 	if (!check_prefs())
 		goto quit;
 	

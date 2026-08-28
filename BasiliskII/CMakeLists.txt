@@ -33,17 +33,15 @@ file(MAKE_DIRECTORY "${B2_GEN}")
 
 if(WIN32)
 	set(B2_SYSDEPS "${B2_SRC}/Windows")
-elseif(${CMAKE_SYSTEM_NAME} MATCHES "Darwin|OSX")
-	set(B2_SYSDEPS "${B2_SRC}/MacOSX")
+elseif(APPLE)
+	# Do not overwrite BasiliskII/src/MacOSX/config.h; generate in the build tree.
+	set(B2_SYSDEPS "${CMAKE_CURRENT_BINARY_DIR}")
 else()
 	set(B2_SYSDEPS "${B2_SRC}/Unix")
 endif()
 macemu_write_config(
 	"${B2_SYSDEPS}"
 	"Basilisk II" "BasiliskII" "1.0" "Christian.Bauer@uni-mainz.de")
-if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
-	target_include_directories(BasiliskII PRIVATE "${B2_SYSDEPS}")
-endif()
 # ---------------------------------------------------------------------------
 # UAE codegen host tools
 # ---------------------------------------------------------------------------
@@ -59,9 +57,9 @@ if(ENABLE_JIT)
 	add_custom_command(
 		OUTPUT "${B2_GEN}/cpudefs.cpp"
 		COMMAND ${CMAKE_COMMAND}
-		-DTOOL=$<TARGET_FILE:build68k>
-		-DARGS=${UAE_DIR}/table68k
-		-DOUT=${B2_GEN}/cpudefs.cpp
+		-DMACEMU_REDIRECT_TOOL=$<TARGET_FILE:build68k>
+		-DMACEMU_REDIRECT_ARGS=${UAE_DIR}/table68k
+		-DMACEMU_REDIRECT_OUTPUT=${B2_GEN}/cpudefs.cpp
 		-P ${MACEMU_CMAKE_DIR}/run_redirect.cmake
 		DEPENDS build68k "${UAE_DIR}/table68k"
 		COMMENT "Generating cpudefs.cpp"
@@ -83,11 +81,11 @@ if(ENABLE_JIT)
 		target_compile_definitions(gencpu PRIVATE _CRT_SECURE_NO_WARNINGS)
 	endif()
 
-	set(UAE_GEN_SRCS
+	set(B2_UAE_GEN_SRCS
 		"${B2_GEN}/cpuemu.cpp" "${B2_GEN}/cpustbl.cpp" "${B2_GEN}/cputbl.h"
 		"${B2_GEN}/cpuemu_nf.cpp" "${B2_GEN}/cpustbl_nf.cpp")
 	add_custom_command(
-		OUTPUT ${UAE_GEN_SRCS}
+		OUTPUT ${B2_UAE_GEN_SRCS}
 		COMMAND gencpu
 		DEPENDS gencpu "${B2_GEN}/cpudefs.cpp"
 		WORKING_DIRECTORY "${B2_GEN}"
@@ -95,7 +93,7 @@ if(ENABLE_JIT)
 		VERBATIM
 	)
 
-	set(JIT_GEN_SRCS)
+	set(B2_JIT_GEN_SRCS)
 
 	add_executable(gencomp "${UAE_DIR}/compiler/gencomp.c")
 	target_link_libraries(gencomp PRIVATE uae_readcpu)
@@ -104,10 +102,10 @@ if(ENABLE_JIT)
 	if(MSVC)
 	target_compile_definitions(gencomp PRIVATE _CRT_SECURE_NO_WARNINGS)
 	endif()
-	set(JIT_GEN_SRCS
+	set(B2_JIT_GEN_SRCS
 	"${B2_GEN}/compemu.cpp" "${B2_GEN}/compstbl.cpp" "${B2_GEN}/comptbl.h")
 	add_custom_command(
-	OUTPUT ${JIT_GEN_SRCS}
+	OUTPUT ${B2_JIT_GEN_SRCS}
 	COMMAND gencomp
 	DEPENDS gencomp "${B2_GEN}/cpudefs.cpp"
 	WORKING_DIRECTORY "${B2_GEN}"
@@ -232,7 +230,7 @@ endif()
 # Executable
 # ---------------------------------------------------------------------------
 add_executable(BasiliskII
-	${B2_CORE} ${B2_SLIRP} ${B2_UAE} ${B2_PLATFORM} ${UAE_GEN_SRCS} ${JIT_GEN_SRCS})
+	${B2_CORE} ${B2_SLIRP} ${B2_UAE} ${B2_PLATFORM} ${B2_UAE_GEN_SRCS} ${B2_JIT_GEN_SRCS})
 if(WIN32)
 elseif(${CMAKE_SYSTEM_NAME} MATCHES "Darwin|OSX")
 else()

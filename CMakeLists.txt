@@ -8,8 +8,28 @@
 #	 cmake -S . -B build -DBUILD_SHEEPSHAVER=OFF
 #	 cmake -S . -B build -DBUILD_BASILISKII=OFF
 #
+# Apple (CMake-only; does not use any .xcodeproj):
+#	 cmake -S . -B build && cmake --build build --target SheepShaver
+#	 cmake -S . -B build-ios -G Xcode \
+#		 -DCMAKE_TOOLCHAIN_FILE=cmake/ios.toolchain.cmake \
+#		 -DCMAKE_OSX_SYSROOT=iphonesimulator
+#	 cmake --build build-ios --target PocketShaver
+#	 cmake -S . -B build-catalyst -G Xcode \
+#		 -DCMAKE_TOOLCHAIN_FILE=cmake/catalyst.toolchain.cmake
+#	 cmake --build build-catalyst --target PocketShaver
+#
 cmake_minimum_required(VERSION 3.16)
-project(macemu VERSION 1.0 LANGUAGES C CXX)
+if(CMAKE_HOST_APPLE AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
+	if(NOT CMAKE_OSX_DEPLOYMENT_TARGET)
+		set(CMAKE_OSX_DEPLOYMENT_TARGET "12.1" CACHE STRING
+			"macOS deployment target")
+	endif()
+endif()
+if(CMAKE_HOST_APPLE)
+	project(macemu VERSION 1.0 LANGUAGES C CXX OBJC OBJCXX)
+else()
+	project(macemu VERSION 1.0 LANGUAGES C CXX)
+endif()
 
 # The C++ in this tree is written to C++98: no <atomic>/<thread>/<chrono>/
 # <unordered_map>, no auto/lambdas/nullptr/constexpr/range-for/move.  See
@@ -26,18 +46,24 @@ set(CMAKE_C_STANDARD 99)
 # ---------------------------------------------------------------------------
 # Options
 # ---------------------------------------------------------------------------
-option(BUILD_BASILISKII	"Build Basilisk II (68k Mac emulator)" ON)
+if(CMAKE_HOST_APPLE)
+	set(BASILISKII_OPTION_DEFAULT OFF)
+else()
+	set(BASILISKII_OPTION_DEFAULT ON)
+endif()
+option(BUILD_BASILISKII	"Build Basilisk II (68k Mac emulator)" ${BASILISKII_OPTION_DEFAULT})
+unset(BASILISKII_OPTION_DEFAULT)
 option(BUILD_SHEEPSHAVER "Build SheepShaver (PowerPC Mac emulator)" ON)
 option(ENABLE_JIT				"Enable the Basilisk II UAE JIT" OFF)
 if(MSVC AND CMAKE_SIZEOF_VOID_P EQUAL 8)
-	set(_macemu_sheepshaver_jit_default OFF)
+	set(SHEEPSHAVER_JIT_OPTION_DEFAULT OFF)
 else()
-	set(_macemu_sheepshaver_jit_default "${ENABLE_JIT}")
+	set(SHEEPSHAVER_JIT_OPTION_DEFAULT "${ENABLE_JIT}")
 endif()
 option(ENABLE_SHEEPSHAVER_JIT
 	"Enable the SheepShaver dyngen JIT (unsafe with 64-bit MSVC)"
-	${_macemu_sheepshaver_jit_default})
-unset(_macemu_sheepshaver_jit_default)
+	${SHEEPSHAVER_JIT_OPTION_DEFAULT})
+unset(SHEEPSHAVER_JIT_OPTION_DEFAULT)
 option(ENABLE_GTK				"GTK preferences UI on Unix" OFF)
 option(ENABLE_BINCUE		 "BIN/CUE CD image support" ON)
 option(ENABLE_VOSF			 "Video on SEGV signals" OFF)
@@ -91,6 +117,11 @@ set(MACEMU_CMAKE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 list(APPEND CMAKE_MODULE_PATH "${MACEMU_CMAKE_DIR}")
 include(MacEmuCommon)
 
+if(APPLE)
+	macemu_apple_init()
+	macemu_apple_enable_languages()
+endif()
+
 macemu_detect_host()
 macemu_find_sdl()
 
@@ -123,4 +154,9 @@ message(STATUS "	QD3D audio log: ${ENABLE_QD3D_AUDIO_LOGGING}")
 message(STATUS "	QD3D media log: ${ENABLE_QD3D_MEDIA_LOGGING}")
 message(STATUS "	QD3D wait log: ${ENABLE_QD3D_WAIT_LOGGING}")
 message(STATUS "	Platform		 : ${CMAKE_SYSTEM_NAME} / ${CMAKE_SYSTEM_PROCESSOR}")
+if(APPLE)
+	message(STATUS "	Apple target	 : ${MACEMU_APPLE_TARGET}")
+	message(STATUS "	SheepShaver.app: ${MACEMU_BUILD_DESKTOP_SHEEPSHAVER}")
+	message(STATUS "	PocketShaver.app: ${MACEMU_BUILD_POCKETSHAVER}")
+endif()
 message(STATUS "")

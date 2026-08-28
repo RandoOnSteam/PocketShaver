@@ -1407,7 +1407,7 @@ static int16 VideoStatus(uint32 pb, VidLocals *csSave)
 			 * apps parse. */
 			WriteMacInt16(param + csResolutionFlags, 0);
 			WriteMacInt32(param + csResolutionFlags + 2, 0);	// csReserved
-#ifdef TARGET_OS_IPHONE
+#if TARGET_OS_IPHONE
 			uint32 x, y;
 			get_size_of_resolution(work_id, x, y);
 			WriteMacInt32(param + csHorizontalPixels, x);
