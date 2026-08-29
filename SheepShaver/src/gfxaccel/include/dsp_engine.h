@@ -566,8 +566,8 @@ extern bool DSpIsRegistered(void);
  *  if (PrefsFindBool("dspaccel")) branch. Resolves DrawSprocketLib CFM
  *  exports via FindLibSymbol and overwrites the first 4 PPC instructions at
  *  each resolved orig_code to branch into dsp_method_tvects[subop].
- *  Idempotent + retry-guarded: up to 3 accRun ticks before giving up if
- *  DrawSprocketLib is not yet loaded.
+ *  Idempotent. A sweep that cannot resolve DrawSprocketLib leaves no state
+ *  behind; the next 'cfrg' resource load arms another one.
  *
  *  See SheepShaver/src/gfxaccel/dsp_install_hooks.cpp for the byte-for-byte
  *  mirror of GLInstallHooks() in gl_engine.cpp.
@@ -582,24 +582,6 @@ extern void DSpInstallHooks(void);
 extern void DSpResetForReboot(void);
 
 
-
-/*
- *  DSpInstallHooksSweepComplete - retry-driver gate.
- *
- *  Returns true once DSpInstallHooks() has either committed (FULL SUCCESS
- *  or FINAL PARTIAL COMMIT) OR exhausted DSP_HOOKS_MAX_ATTEMPTS without
- *  patching anything. Used by sony.cpp's accRun periodic-action gate
- *  (case 65) so the disk driver keeps invoking PatchAfterStartup() until
- *  the DSp install sweep has had all 3 chances to resolve late-bound CFM
- *  symbols. Without this gate the accRun action gets disabled as soon as
- *  RaveIsRegistered() returns true, which pinned DSpInstallHooks to a single
- *  attempt - masking the late-CFM-binding case.
- *
- *  Idempotent + thread-safe under the emul-thread single-writer model
- *  (sony.cpp's accRun is invoked on the emul thread via the same trap
- *  path that drives DSpInstallHooks itself, so no locking required).
- */
-extern bool DSpInstallHooksSweepComplete(void);
 
 /*
  *  Thunk-table init - called from thunks.cpp:ThunksInit() after

@@ -324,7 +324,6 @@ enum {
 
 void GlideThunksInit(void);
 void GlideInstallHooks(void);
-bool GlideInstallHooksSweepComplete(void);
 void GlideResetForReboot(void);
 void GlideForceReinstallHooks(void);
 /* No-op: guest already has the extension (DSp model). */

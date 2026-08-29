@@ -655,20 +655,10 @@ void JoyManagerWriteDeviceInfo(JoyHostDevice *device)
 			kJoyUnknownLabel, 0, 8, 0);
 		element += joyElementSize;
 	}
-	/* Descent II's JoyManager enumeration
-	 * walks this table and switches on JoyElement.label, taking exactly four:
+	/* Descent II's JoyManager enumeration:
 	 *
 	 *     label 0 -> slot 0 X ("X1")        label 7 -> slot 2 Rudder ("X2")
 	 *     label 1 -> slot 1 Y ("Y1")        label 6 -> slot 3 Throttle ("Y2")
-	 *
-	 * and for each one it reads min (+0x08) and max (+0x0c) and keeps
-	 * center = (min + max) >> 1. InputSprocket CH scales
-	 * (unsigned)(raw - min) * 0xffffffff / (max - min)
-	 * at 0x3844.  ±32767. Rest 0 is that midpoint for both.
-	 *
-	 * Axes 4 and 5 are the triggers, published as 'brak' and 'gasp' over
-	 * 0..32767.  Descent's switch takes only 0/1/7/6 so they stay invisible to
-	 * it, while ISp gets two pedals resting at 0.
 	 */
 	for (i = 0; i < device->axis_count; i++) {
 		int kind;

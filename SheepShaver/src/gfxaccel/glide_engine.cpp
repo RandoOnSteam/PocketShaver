@@ -36,8 +36,6 @@ extern uint32_t glide_scratch_addr;
 
 static bool glide_hooks_installed = false;
 static bool glide_hooks_in_progress = false;
-static int  glide_hooks_attempts = 0;
-static const int GLIDE_HOOKS_MAX_ATTEMPTS = 3;
 
 struct GlideInstallSymbol {
 	const char *pascal_sym;
@@ -244,17 +242,13 @@ void GlideInstallHooks(void)
 {
 	if (!PrefsFindBool("glideaccel")) return;
 	if (glide_hooks_installed) return;
-	if (glide_hooks_attempts >= GLIDE_HOOKS_MAX_ATTEMPTS) return;
 	if (glide_hooks_in_progress) {
 		QD3D_INIT_LOG("GlideInstallHooks: skipped (re-entrant)");
 		return;
 	}
 	glide_hooks_in_progress = true;
 
-	const int attempt_number = glide_hooks_attempts + 1;
-	QD3D_INIT_LOG("GlideInstallHooks: installing FindLibSymbol hooks for Glide "
-				  "(ATTEMPT %d / %d)",
-				  attempt_number, GLIDE_HOOKS_MAX_ATTEMPTS);
+	QD3D_INIT_LOG("GlideInstallHooks: installing FindLibSymbol hooks for Glide");
 
 	/*
 	 * ---- Find EVERY installed Glide library, not just the first ----
@@ -302,12 +296,13 @@ void GlideInstallHooks(void)
 	}
 
 	if (glide_lib_count == 0) {
-		QD3D_INIT_LOG("GlideInstallHooks: no Glide library candidate resolved "
-					  "on this attempt (guest extension present?)");
-	} else {
-		QD3D_INIT_LOG("GlideInstallHooks: %d Glide fragment(s) will be hooked",
-					  glide_lib_count);
+		QD3D_INIT_LOG("GlideInstallHooks: no Glide library resolved yet "
+					  "(guest extension present?)");
+		glide_hooks_in_progress = false;
+		return;
 	}
+	QD3D_INIT_LOG("GlideInstallHooks: %d Glide fragment(s) will be hooked",
+				  glide_lib_count);
 
 	struct CachedTVECT {
 		uint32_t tvect;
@@ -322,9 +317,8 @@ void GlideInstallHooks(void)
 	for (int lib = 0; lib < glide_lib_count; lib++) {
 		const char *glide_lib = glide_libs[lib];
 		int lib_found = 0, lib_not_found = 0;
-		QD3D_INIT_LOG("GlideInstallHooks: unresolved-symbol-diagnostic begin - "
-					  "ATTEMPT %d / %d (candidate lib = \"%s\")",
-					  attempt_number, GLIDE_HOOKS_MAX_ATTEMPTS, glide_lib + 1);
+		QD3D_INIT_LOG("GlideInstallHooks: unresolved-symbol-diagnostic begin "
+					  "(candidate lib = \"%s\")", glide_lib + 1);
 		int length_mismatches = 0;
 		for (int i = 0; i < num_glide_symbols; i++) {
 			const char *psym = glide_symbols[i].pascal_sym;
@@ -360,10 +354,10 @@ void GlideInstallHooks(void)
 				lib_not_found++;
 			}
 		}
-		QD3D_INIT_LOG("GlideInstallHooks: unresolved-symbol-diagnostic end - "
-					  "ATTEMPT %d / %d lib \"%s\" (%d / %d resolved; "
+		QD3D_INIT_LOG("GlideInstallHooks: unresolved-symbol-diagnostic end "
+					  "lib \"%s\" (%d / %d resolved; "
 					  "%d length mismatches; %d not found)",
-					  attempt_number, GLIDE_HOOKS_MAX_ATTEMPTS, glide_lib + 1,
+					  glide_lib + 1,
 					  lib_found, num_glide_symbols, length_mismatches,
 					  lib_not_found);
 	}
@@ -376,63 +370,29 @@ void GlideInstallHooks(void)
 												 cached_tvects[i].name);
 	}
 
-	QD3D_INIT_LOG("GlideInstallHooks: ATTEMPT %d / %d - patched %d functions total "
+	QD3D_INIT_LOG("GlideInstallHooks: patched %d functions total "
 				  "(resolved = %d, table = %d)",
-				  attempt_number, GLIDE_HOOKS_MAX_ATTEMPTS,
 				  patched_count, found_count, num_glide_symbols);
 
 	glide_hooks_in_progress = false;
 
-	/*
-	 * Commit threshold (DSp-style). Our table may list more names than a given
-	 * Glide 2/3 PEF exports, so success is "patched everything we resolved"
-	 * with a minimum core surface (grGlideInit + friends), not table size.
-	 */
-	if (patched_count == found_count) {
-		glide_hooks_installed = true;
-		QD3D_INIT_LOG("GlideInstallHooks: FULL SUCCESS - %d symbols patched "
-					  "on attempt %d (%d table rows not in this PEF)",
-					  patched_count, attempt_number, not_found_count);
-	} else if (patched_count > 0) {
-		glide_hooks_attempts++;
-		if (glide_hooks_attempts >= GLIDE_HOOKS_MAX_ATTEMPTS) {
-			glide_hooks_installed = true;
-			QD3D_INIT_LOG("GlideInstallHooks: FINAL PARTIAL COMMIT after %d attempts - "
-						  "%d symbols patched; committing installed=true",
-						  glide_hooks_attempts, patched_count);
-		} else {
-			QD3D_INIT_LOG("GlideInstallHooks: PARTIAL SUCCESS - %d patched "
-						  "on attempt %d, will retry",
-						  patched_count, attempt_number);
-		}
-	} else {
-		glide_hooks_attempts++;
-		if (glide_hooks_attempts >= GLIDE_HOOKS_MAX_ATTEMPTS)
-			QD3D_INIT_LOG("GlideInstallHooks: Glide library not available after %d "
-						  "attempts, giving up",
-						  glide_hooks_attempts);
-		else
-			QD3D_INIT_LOG("GlideInstallHooks: patched 0, will retry on next accRun "
-						  "(attempt %d/%d)",
-						  glide_hooks_attempts, GLIDE_HOOKS_MAX_ATTEMPTS);
+	if (patched_count == 0) {
+		QD3D_INIT_LOG("GlideInstallHooks: resolved %d fragment(s) but patched 0 "
+					  "functions", glide_lib_count);
+		return;
 	}
+
+	glide_hooks_installed = true;
+	QD3D_INIT_LOG("GlideInstallHooks: installed - %d / %d resolved symbols patched "
+				  "(%d table rows not in this PEF)",
+				  patched_count, found_count, not_found_count);
 }
 
 void GlideResetForReboot(void)
 {
-	QD3D_INIT_LOG("GlideResetForReboot: hooksInstalled=%d attempts=%d",
-				  glide_hooks_installed, glide_hooks_attempts);
+	QD3D_INIT_LOG("GlideResetForReboot: hooksInstalled=%d", glide_hooks_installed);
 	glide_hooks_installed = false;
 	glide_hooks_in_progress = false;
-	/* Keep attempts at 0 so grGlideInit re-patch is allowed. */
-	glide_hooks_attempts = 0;
-}
-
-
-bool GlideInstallHooksSweepComplete(void)
-{
-	return glide_hooks_installed ||
-		   glide_hooks_attempts >= GLIDE_HOOKS_MAX_ATTEMPTS;
 }
 
 uint32_t glide_method_tvects[GLIDE_MAX_SUBOPCODE];

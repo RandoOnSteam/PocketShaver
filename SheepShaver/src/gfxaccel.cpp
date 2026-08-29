@@ -28,6 +28,7 @@
 #include "dsp_engine.h"
 #include "glide_engine.h"
 #include "nqd_accel.h"
+#include "sony.h"
 #include "gfx_log.h"
 #if defined(ENABLE_NATIVE_CINEPAK_PATCH) \
 		&& ENABLE_NATIVE_CINEPAK_PATCH
@@ -542,36 +543,15 @@ bool NQD_bitblt_hook(uint32 p)
 		(int32)(ReadMacInt32(p + acclSrcRowBytes) ^ ReadMacInt32(p + acclDestRowBytes)) >= 0 &&
 		NQD_bitblt_rects_byte_aligned_for_depth(p, ReadMacInt32(p + acclSrcPixelSize))) {
 		const uint32 mode = ReadMacInt32(p + acclTransferMode);
-		// The colorizing Boolean SOURCE modes
-		// (1, 3-7 - srcOr/srcBic/notSrcCopy/notSrcOr/notSrcXor/notSrcBic) at a
-		// COLOUR depth (multi-bit source, acclSrcPixelSize >= 8) are the general
-		// multi-bit-colour-source-under-a-Boolean-op case, whose Color-QuickDraw
-		// semantics are defined only for 1-bit-style sources (rare/ill-defined
-		// for multi-bit colour sources per IWQD). Decline these to software
-		// QuickDraw rather than invent semantics - the Metal kernel's
-		// colorize arm handles ONLY the 1-bit source (bits_per_pixel == 1) case.
-		// srcCopy (0) and srcXor (2) are depth-agnostic raw copy/bitwise ops and
-		// stay accelerated at every depth; arithmetic (32-39) and hilite (50) are
-		// unaffected. Never leave a
-		// multi-bit-colour Boolean source running raw per-byte bitwise on the GPU.
 		const uint32 src_px = ReadMacInt32(p + acclSrcPixelSize);
 		const bool colorizing_bool = (mode == 1 || (mode >= 3 && mode <= 7));
 		if (colorizing_bool && src_px >= 8) {
 			// Fall through to the CPU fallback / software QuickDraw (DELIBERATE).
 		} else if (mode <= 7 || (mode >= 32 && mode <= 39) || mode == 50) {
-			// Same-surface overlapping blits: the nqd_bitblt kernel is one
-			// flat unordered dispatch, and only the standard-depth Boolean
-			// family diverts overlaps to the ordered CPU scratch path inside
-			// NQDMetalBitblt (NQD-02). Packed-depth Boolean and
-			// arithmetic/hilite (32-39, 50) overlaps have no ordered route on
-			// the accelerated path - decline them to software QuickDraw
-			// (DELIBERATE), which observes sequential source reads.
 			if ((src_px < 8 || mode >= 32) &&
 				NQDMetalBitbltSameSurfaceOverlap(p)) {
 				// Fall through to the CPU fallback / software QuickDraw.
 			} else {
-				// All accelerated transfer modes via Metal - no pre-check on
-				// 0x018, 0x128, 0x130, 0x15c.
 				WriteMacInt32(p + acclDrawProc, NativeTVECT(NATIVE_NQD_BITBLT));
 				return true;
 			}
@@ -755,15 +735,17 @@ bool NQD_sync_hook(uint32 arg)
 	return true;
 }
 
-
-/*
- *	Install Native QuickDraw acceleration hooks
- */
-
-// Cleared on guest soft reboot (GfxAccelResetForReboot) so VideoInstallAccel,
-// which the accRun periodic action keeps calling, reinstalls the NQD hooks into
-// the freshly reset guest instead of short-circuiting on the stale latch.
 static bool nqd_hooks_installed = false;
+static bool gfxaccel_install_sweep_armed = true;
+void GfxAccelRequestInstallSweep(void)
+{
+	gfxaccel_install_sweep_armed = true;
+	SonyRearmPeriodicAction();
+}
+bool GfxAccelInstallSweepPending(void)
+{
+	return gfxaccel_install_sweep_armed;
+}
 
 /*
  *	Unwind guest-facing gfxaccel registration for a guest soft reboot
@@ -780,6 +762,7 @@ void GfxAccelResetForReboot(void)
 	QD3D_INIT_LOG("GfxAccelResetForReboot: nqdHooks=%d raveRegistered=%d",
 	              nqd_hooks_installed, RaveIsRegistered());
 	nqd_hooks_installed = false;
+	gfxaccel_install_sweep_armed = true;
 	RaveResetForReboot();
 	GLResetForReboot();
 	DSpResetForReboot();
@@ -863,6 +846,10 @@ void VideoInstallAccel(void)
 		}
 	}
 
+	if (!gfxaccel_install_sweep_armed)
+		return;
+	gfxaccel_install_sweep_armed = false;
+
 	// Register RAVE engine for 3D acceleration.
 	// RaveRegisterEngine has its own guards (rave_registered, rave_reg_in_progress)
 	// and returns immediately if already registered. May be called multiple times
@@ -877,23 +864,9 @@ void VideoInstallAccel(void)
 	}
 
 	// Install OpenGL hooks for GL/AGL/GLU/GLUT function interception.
-	// GLInstallHooks has its own guards and returns immediately if already installed.
 	if (PrefsFindBool("glaccel"))
 		GLInstallHooks();
 
-	// DSp (DrawSprocket) engine - fourth engine peer to NQD/RAVE/GL.
-	// Gated on "dspaccel" prefs key (default true) so users
-	// can disable cleanly to isolate regressions. Both DSpInit and the install
-	// hook live in the SAME gated branch: DSpInit registers the engine +
-	// host-bridge observer (idempotent, safe to call multiply); the install
-	// hook patches the emulated-PPC DrawSprocketLib CFM symbol-table entries
-	// to redirect into our dsp_method_tvects[] thunks. The installer has
-	// its own retry-guard triplet (dsp_hooks_installed + dsp_hooks_in_progress
-	// + dsp_hooks_attempts) and caps at DSP_HOOKS_MAX_ATTEMPTS=3 - mirrors
-	// GLInstallHooks wired 3 lines above. The CFM fragment may not be loaded
-	// on the first accRun tick (apps lazy-load DrawSprocketLib), so
-	// VideoInstallAccel calls into this branch on every accRun tick until
-	// hooks install.
 	if (PrefsFindBool("dspaccel")) {
 		DSpInit();
 		DSpInstallHooks();
@@ -905,15 +878,9 @@ void VideoInstallAccel(void)
 		GlideInstallHooks();
 	}
 	#endif
-	
+
 	#if defined(ENABLE_NATIVE_CINEPAK_PATCH) \
 			&& ENABLE_NATIVE_CINEPAK_PATCH
-		// Register the native Cinepak ('imdc'/'cvid') decompressor. This runs in
-		// native-op context (VideoInstallAccel is invoked via
-		// NATIVE_VIDEO_INSTALL_ACCEL), where RegisterComponent's nested guest
-		// call is safe - unlike InitCallUniversalProc's EMUL_OP context.
-		// Idempotent + retried each accRun tick until the Component Manager is
-		// up, mirroring the DSp/RAVE late-binding pattern.
 		CinepakRegisterFromNative();
 	#endif
 }

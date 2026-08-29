@@ -16,6 +16,13 @@
  *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 #include "sdlgpu_gl_compat.h"
+#include "../include/gfxaccel_resources.h"
+
+static void *SDLGPUVendGlideOverlayTexture(uint32_t engine_id,
+	uint32_t texture_index, uint32_t width, uint32_t height,
+	uint32_t pixel_format);
+
+#define gfxaccel_resources_vend_overlay_texture_indexed SDLGPUVendGlideOverlayTexture
 #if SDLGPU_TRANSITION_LOGGING_ENABLED
 #define GlideMetalInit SDLGPUOriginalGlideMetalInit
 #define GlideMetalShutdown SDLGPUOriginalGlideMetalShutdown
@@ -23,6 +30,19 @@
 #define GlideMetalWinClose SDLGPUOriginalGlideMetalWinClose
 #endif
 #include "../gl/glide_gl_renderer.cpp"
+#undef gfxaccel_resources_vend_overlay_texture_indexed
+
+static void *SDLGPUVendGlideOverlayTexture(uint32_t engine_id,
+	uint32_t texture_index, uint32_t width, uint32_t height,
+	uint32_t pixel_format)
+{
+	void *texture = gfxaccel_resources_vend_overlay_texture_indexed(
+		engine_id, texture_index, width, height, pixel_format);
+	if (texture)
+		SDLGPUSetTexturePresentationYFlip((GLuint)(uintptr_t)texture, true);
+	return texture;
+}
+
 #if SDLGPU_TRANSITION_LOGGING_ENABLED
 #undef GlideMetalWinClose
 #undef GlideMetalWinOpen

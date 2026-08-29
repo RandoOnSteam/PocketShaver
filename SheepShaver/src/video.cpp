@@ -878,6 +878,18 @@ bool video_prepare_guest_display(void)
 	return guest_dm_set_display_mode != 0;
 }
 
+void video_guest_hide_cursor(void)
+{
+	if (guest_hide_cursor != 0)
+		(void)call_macos(guest_hide_cursor);
+}
+
+void video_guest_show_cursor(void)
+{
+	if (guest_show_cursor != 0)
+		(void)call_macos(guest_show_cursor);
+}
+
 void video_screen_publish_cm_suspend(void)
 {
 	while (s_screen_publish_cm_depth > 0) {

@@ -313,7 +313,7 @@ struct RoutineRecord {
 	int8 							reserved1;					/* Must be 0 */
 	ISAType 						ISA;						/* Instruction Set Architecture */
 	RoutineFlagsType 				routineFlags;				/* Flags for each routine */
-	ProcPtr 						procDescriptor;				/* Where is the thing we’re calling? */
+	ProcPtr 						procDescriptor;				/* Where is the thing we're calling? */
 	uint32 							reserved2;					/* Must be 0 */
 	uint32 							selector;					/* For dispatched routines, the selector */
 };

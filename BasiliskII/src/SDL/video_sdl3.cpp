@@ -277,7 +277,7 @@ static void *vm_acquire_framebuffer(uint32 size)
 	if (fb != VM_MAP_FAILED) {
 		if (vm_acquire_fixed(fb, size) < 0) {
 #ifndef SHEEPSHAVER
-			printf("FATAL: Could not reallocate framebuffer at previous address\n");
+			bug("FATAL: Could not reallocate framebuffer at previous address\n");
 #endif
 			fb = VM_MAP_FAILED;
 		}
@@ -857,6 +857,15 @@ static SDL_Surface *init_sdl_video(int width, int height, int depth, Uint32 flag
 #endif
 #if defined(ENABLE_GFXACCEL) && defined(SHEEPSHAVER)
 	window_flags |= SDL_WINDOW_OPENGL;
+#if !defined(GFXACCEL_USE_SDLGPU)
+	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
+	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 1);
+	SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
+	SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
+	SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8);
+	SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK,
+		                SDL_GL_CONTEXT_PROFILE_COMPATIBILITY);
+#endif
 #endif
 
 	if (!sdl_window) {
@@ -908,6 +917,7 @@ static SDL_Surface *init_sdl_video(int width, int height, int depth, Uint32 flag
 		did_add_event_watch = true;
 	}
 
+#if !(defined(ENABLE_GFXACCEL) && defined(SHEEPSHAVER)) || defined(GFXACCEL_USE_SDLGPU)
 	if (!sdl_renderer) {
 		const char *render_driver = PrefsFindString("sdlrender");
 		if (render_driver) {
@@ -935,13 +945,15 @@ static SDL_Surface *init_sdl_video(int width, int height, int depth, Uint32 flag
 		}
 		sdl_renderer_thread_id = SDL_ThreadID();
 
-		printf("Using SDL_Renderer driver: %s\n", SDL_GetRendererName(sdl_renderer));
+		D(bug("Using SDL_Renderer driver: %s\n", SDL_GetRendererName(sdl_renderer)));
 	}
+#endif
 
     if (!sdl_update_video_mutex) {
         sdl_update_video_mutex = SDL_CreateMutex();
     }
 
+#if !(defined(ENABLE_GFXACCEL) && defined(SHEEPSHAVER)) || defined(GFXACCEL_USE_SDLGPU)
 	SDL_assert(sdl_texture == NULL);
 	sdl_texture = SDL_CreateTexture(sdl_renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, width, height);
     if (!sdl_texture) {
@@ -949,6 +961,7 @@ static SDL_Surface *init_sdl_video(int width, int height, int depth, Uint32 flag
         return NULL;
     }
 	SDL_SetTextureBlendMode(sdl_texture, SDL_BLENDMODE_NONE);
+#endif
 
     sdl_update_video_rect.x = 0;
     sdl_update_video_rect.y = 0;
@@ -982,7 +995,7 @@ static SDL_Surface *init_sdl_video(int width, int height, int depth, Uint32 flag
 			host_surface = guest_surface;
 			break;
         default:
-            printf("WARNING: An unsupported depth of %d was used\n", depth);
+            bug("WARNING: An unsupported depth of %d was used\n", depth);
             break;
     }
     if (!guest_surface) {
@@ -991,25 +1004,31 @@ static SDL_Surface *init_sdl_video(int width, int height, int depth, Uint32 flag
     }
 
     if (!host_surface) {
+#if defined(ENABLE_GFXACCEL) && defined(SHEEPSHAVER) && !defined(GFXACCEL_USE_SDLGPU)
+		SDL_PixelFormat texture_format = SDL_PIXELFORMAT_ARGB8888;
+#else
 		SDL_PropertiesID props = SDL_GetTextureProperties(sdl_texture);
 		SDL_PixelFormat texture_format = (SDL_PixelFormat)SDL_GetNumberProperty(props, SDL_PROP_TEXTURE_FORMAT_NUMBER, 0);
+#endif
         host_surface = SDL_CreateSurface(width, height, texture_format);
         if (!host_surface) {
-        	printf("ERROR: Unable to create host SDL_surface: %s\n", SDL_GetError());
+        	bug("ERROR: Unable to create host SDL_surface: %s\n", SDL_GetError());
             shutdown_sdl_video();
             return NULL;
         }
     }
 
+#if !(defined(ENABLE_GFXACCEL) && defined(SHEEPSHAVER)) || defined(GFXACCEL_USE_SDLGPU)
 	if (!SDL_SetRenderLogicalPresentation(sdl_renderer, width, height,
 		PrefsFindBool("scale_integer") ? SDL_LOGICAL_PRESENTATION_INTEGER_SCALE : SDL_LOGICAL_PRESENTATION_LETTERBOX)) {
-		printf("ERROR: Unable to set SDL rendeer's logical size (to %dx%d): %s\n",
+		bug("ERROR: Unable to set SDL rendeer's logical size (to %dx%d): %s\n",
 			   width, height, SDL_GetError());
 		shutdown_sdl_video();
 		return NULL;
 	}
 	if (PrefsFindBool("scale_nearest"))
 		SDL_SetTextureScaleMode(sdl_texture, SDL_SCALEMODE_NEAREST);
+#endif
 
     return guest_surface;
 }
@@ -1019,7 +1038,7 @@ static int present_sdl_video()
 	if (SDL_RectEmpty(&sdl_update_video_rect)) return 0;
 
 	if (!sdl_renderer || !sdl_texture || !guest_surface) {
-		printf("WARNING: A video mode does not appear to have been set.\n");
+		bug("WARNING: A video mode does not appear to have been set.\n");
 		return -1;
 	}
 
@@ -1272,7 +1291,7 @@ void driver_base::init()
 	}
 	else if (!video_vosf_profitable()) {
 		video_vosf_exit();
-		printf("VOSF acceleration is not profitable on this platform, disabling it\n");
+		bug("VOSF acceleration is not profitable on this platform, disabling it\n");
 		use_vosf = false;
 	}
     if (!use_vosf) {
@@ -1307,7 +1326,7 @@ void driver_base::init()
 				initial.screen_base_host = NULL;
 			int32_t dmc_err = dmc_create(&initial);
 			if (dmc_err != kDMCNoErr) {
-				fprintf(stderr, "[DMC] dmc_create FAILED after initial "
+				bug("[DMC] dmc_create FAILED after initial "
 					"framebuffer bind (err=%d, base=0x%08x host=%p)\n",
 					(int)dmc_err, (unsigned)initial.screen_base_mac,
 					initial.screen_base_host);
@@ -1681,7 +1700,7 @@ bool SDL_monitor_desc::video_open(void)
 	redraw_thread_cancel = false;
 	redraw_thread_active = ((redraw_thread = SDL_CreateThread(redraw_func, "Redraw Thread", NULL)) != NULL);
 	if (!redraw_thread_active) {
-		printf("FATAL: cannot create redraw thread\n");
+		bug("FATAL: cannot create redraw thread\n");
 		return false;
 	}
 #else
@@ -2347,7 +2366,7 @@ static int16 video_switch_to_mode_index(int mode_index)
 	DMCModeDescFromVModesIndex(mode_index, &new_mode);
 	int32_t dmc_err = dmc_prepare_mode_switch(&new_mode);
 	if (dmc_err != kDMCNoErr) {
-		fprintf(stderr, "[DMC] dmc_prepare_mode_switch FAILED (err=%d) - "
+		bug("[DMC] dmc_prepare_mode_switch FAILED (err=%d) - "
 			"video-driver mode switch cancelled\n",
 			(int)dmc_err);
 #ifndef USE_CPU_EMUL_SERVICES
@@ -2384,7 +2403,7 @@ static int16 video_switch_to_mode_index(int mode_index)
 	}
 	dmc_err = dmc_request_mode_switch(&bound_mode);
 	if (dmc_err != kDMCNoErr) {
-		fprintf(stderr, "[DMC] dmc_request_mode_switch commit FAILED "
+		bug("[DMC] dmc_request_mode_switch commit FAILED "
 			"(err=%d) after driver installed %dx%d mode index=%d; "
 			"rolling platform mode back\n",
 			(int)dmc_err, (int)bound_mode.width, (int)bound_mode.height,

@@ -1075,7 +1075,7 @@ static bool SDLGPUEnsureTextureTransferCapacity(Uint32 size)
 
 static void SDLGPUCopyTexturePixels(unsigned char *destination, const void *pixels,
 	int width, int height, int depth, GLenum format, GLenum type, int alignment,
-	GLint internal_format)
+	GLint internal_format, bool flip_rows)
 {
 #if SDLGPU_TRANSITION_LOGGING_ENABLED
 	Uint64 profile_start_tick = SDLGPUProfileNow();
@@ -1100,10 +1100,13 @@ static void SDLGPUCopyTexturePixels(unsigned char *destination, const void *pixe
 	bool force_opaque = internal_format == GL_RGB || internal_format == GL_RGB8;
 	for (int z = 0; z < depth; z++) {
 		for (int y = 0; y < height; y++) {
+			int destination_y = y;
+			if (flip_rows)
+				destination_y = height - 1 - y;
 			const unsigned char *source_row = source +
 				(size_t)(z * height + y) * (size_t)source_pitch;
 			unsigned char *destination_row = destination +
-				(size_t)(z * height + y) * (size_t)width * 4;
+				(size_t)(z * height + destination_y) * (size_t)width * 4;
 			if (format == GL_BGRA && !force_opaque) {
 				std::memcpy(destination_row, source_row, (size_t)width * 4);
 				continue;
@@ -1163,7 +1166,8 @@ static bool SDLGPUUploadTextureRegion(TextureObject *object, int level, int x, i
 #endif
 	}
 	SDLGPUCopyTexturePixels(static_cast<unsigned char *>(mapped), pixels, width,
-		height, depth, format, type, alignment, internal_format);
+		height, depth, format, type, alignment, internal_format,
+		object->presentation_y_flip);
 	SDL_UnmapGPUTransferBuffer(s_device, s_texture_transfer);
 	SDL_GPUCommandBuffer *command = SDLGPUAcquireDeferredCommand();
 	if (!command) {
@@ -1189,10 +1193,16 @@ static bool SDLGPUUploadTextureRegion(TextureObject *object, int level, int x, i
 	source.transfer_buffer = s_texture_transfer;
 	source.pixels_per_row = (Uint32)width;
 	source.rows_per_layer = (Uint32)height;
+	int destination_y = y;
+	if (object->presentation_y_flip) {
+		destination_y = std::max(1, object->height >> level) - y - height;
+		if (destination_y < 0)
+			destination_y = 0;
+	}
 	destination.texture = object->texture;
 	destination.mip_level = (Uint32)level;
 	destination.x = (Uint32)x;
-	destination.y = (Uint32)y;
+	destination.y = (Uint32)destination_y;
 	destination.z = (Uint32)z;
 	destination.w = (Uint32)width;
 	destination.h = (Uint32)height;

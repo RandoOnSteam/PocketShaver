@@ -453,7 +453,7 @@ static void expand_framebuffer_rect_rgba(const GuestScreenRect &rect,
 		return;
 	}
 
-	/* Indexed 1/2/4/8 — resolve CLUT only, no display gamma. */
+	/* Indexed 1/2/4/8 - resolve CLUT only, no display gamma. */
 	for (int y = 0; y < rect.height; y++) {
 		const uint8_t *row = src + (size_t)(rect.y + y) * (size_t)rb;
 		uint8_t *dst = vec_data(out) + (size_t)y * rect.width * 4;
@@ -1143,7 +1143,7 @@ void MetalCompositorPresent_(bool presentvbltick = true)
 		present_w = dw;
 		present_h = dh;
 	}
-	/* Aspect-fit guest → drawable (mag_rate). GL y is bottom-left. */
+	/* Aspect-fit guest -> drawable (mag_rate). GL y is bottom-left. */
 	glViewport(present_x, dh - present_y - present_h,
 			   present_w, present_h);
 

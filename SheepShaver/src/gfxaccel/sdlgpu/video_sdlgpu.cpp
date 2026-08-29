@@ -23,6 +23,11 @@
 
 static SDL_Surface *s_sdlgpu_video_renderer_surface = NULL;
 
+
+#define GDEVICE_OFF_GDTYPE 0x04
+
+extern "C" bool GLCompositorCopyCurrentPaletteRGB(uint8_t out_rgb[768]);
+
 extern "C" void SDLGPUReleaseVideoWindow(SDL_Window *window);
 #if SDLGPU_TRANSITION_LOGGING_ENABLED
 #define XLM_RUN_MODE 0x2810
@@ -131,6 +136,55 @@ static bool SDLGPUConvertEventCoordinates(SDL_Renderer *renderer, SDL_Event *eve
 #undef SDL_WINDOW_METAL
 #undef SDL_WINDOW_OPENGL
 
+static uint32 s_sdlgpu_indexed_clut = 0;
+static const uint16 s_sdlgpu_arrow_cursor[34] = {
+	0x0000, 0x4000, 0x6000, 0x7000, 0x7800, 0x7c00, 0x7e00, 0x7f00,
+	0x7f80, 0x7c00, 0x6c00, 0x4600, 0x0600, 0x0300, 0x0300, 0x0000,
+	0xc000, 0xe000, 0xf000, 0xf800, 0xfc00, 0xfe00, 0xff00, 0xff80,
+	0xffc0, 0xffc0, 0xfe00, 0xef00, 0x0f00, 0x0780, 0x0780, 0x0300,
+	0x0001, 0x0001
+};
+static uint32 s_sdlgpu_guest_set_cursor = 0;
+
+
+
+void SDLGPUVideoPrepareGuestDisplay(void)
+{
+	if (s_sdlgpu_guest_set_cursor == 0)
+		s_sdlgpu_guest_set_cursor =
+			FindLibSymbol("\014InterfaceLib", "\011SetCursor");
+	video_prepare_guest_display();
+}
+void SDLGPUVideoRefreshGuestCursor(void)
+{
+	SDLGPUVideoPrepareGuestDisplay();
+	if (s_sdlgpu_guest_set_cursor == 0)
+		return;
+
+	SheepVar shapes(2 * 68);
+	const uint32 blank = shapes.addr();
+	const uint32 arrow = blank + 68;
+	for (int i = 0; i < 34; i++) {
+		WriteMacInt16(blank + i * 2, 0);
+		WriteMacInt16(arrow + i * 2, s_sdlgpu_arrow_cursor[i]);
+	}
+	(void)call_macos1(s_sdlgpu_guest_set_cursor, blank);
+	(void)call_macos1(s_sdlgpu_guest_set_cursor, arrow);
+}
+
+void SDLGPUVideoHideGuestCursor(void)
+{
+	SDLGPUVideoPrepareGuestDisplay();
+	video_guest_hide_cursor();
+}
+
+void SDLGPUVideoShowGuestCursor(void)
+{
+	SDLGPUVideoPrepareGuestDisplay();
+	video_guest_show_cursor();
+}
+
+
 static uint32 SDLGPUVideoModePixelDepth(uint32 apple_mode)
 {
 	switch (apple_mode) {
@@ -168,6 +222,13 @@ static void SDLGPUWriteGuestDisplayMode(int mode_index, uint32 gdevice,
 		component_size = 8;
 	}
 
+	if (ReadMacInt16(pixmap + DSP_MAINDEVICE_PIXMAP_OFF_PIXELSIZE) <= 8) {
+		const uint32 live_clut =
+			ReadMacInt32(pixmap + DSP_MAINDEVICE_PIXMAP_OFF_PMTABLE);
+		if (live_clut != 0)
+			s_sdlgpu_indexed_clut = live_clut;
+	}
+
 	WriteMacInt32(pixmap + DSP_MAINDEVICE_PIXMAP_OFF_BASEADDR, screen_base);
 	WriteMacInt16(pixmap + DSP_MAINDEVICE_PIXMAP_OFF_ROWBYTES,
 		(uint16)(0x8000u | mode.viRowBytes));
@@ -202,8 +263,19 @@ static void SDLGPUWriteGuestDisplayMode(int mode_index, uint32 gdevice,
 	WriteMacInt16(0x0106, (uint16)mode.viRowBytes);
 	WriteMacInt32(0x0824, screen_base);
 	WriteMacInt32(0x0898, screen_base);
+	uint16 gd_type = 2;
 	if (depth <= 8)
+		gd_type = 0;
+	WriteMacInt16(gdevice + GDEVICE_OFF_GDTYPE, gd_type);
+	if (depth <= 8) {
+		if (s_sdlgpu_indexed_clut != 0)
+			WriteMacInt32(pixmap + DSP_MAINDEVICE_PIXMAP_OFF_PMTABLE,
+				  s_sdlgpu_indexed_clut);
+		uint8 clut_rgb[768];
+		if (GLCompositorCopyCurrentPaletteRGB(clut_rgb))
+			(void)video_install_guest_clut(clut_rgb, depth, 0, 255);
 		video_set_palette();
+	}
 }
 
 bool SDLGPUVideoSwitchGuestDisplay(int mode_index)
@@ -214,29 +286,32 @@ bool SDLGPUVideoSwitchGuestDisplay(int mode_index)
 		return false;
 	}
 
+	SDLGPUVideoHideGuestCursor();
+
 	const int previous_mode = cur_mode;
-	if (video_switch_to_mode_index(mode_index) != noErr)
+	if (video_switch_to_mode_index(mode_index) != noErr) {
+		SDLGPUVideoShowGuestCursor();
 		return false;
+	}
 
 	const uint32 main_device_handle = ReadMacInt32(LMADDR_MAIN_DEVICE);
 	const uint32 pixmap = video_get_live_main_device_pixmap();
-	if (main_device_handle == 0 || main_device_handle == 0xffffffffu ||
-		pixmap == 0) {
-		if (video_switch_guest_display(mode_index))
-			return true;
-		(void)video_switch_to_mode_index(previous_mode);
-		return false;
-	}
+	uint32 gdevice = 0;
+	if (main_device_handle != 0 && main_device_handle != 0xffffffffu &&
+		pixmap != 0)
+		gdevice = ReadMacInt32(main_device_handle);
 
-	const uint32 gdevice = ReadMacInt32(main_device_handle);
 	if (gdevice == 0 || gdevice == 0xffffffffu) {
-		if (video_switch_guest_display(mode_index))
-			return true;
-		(void)video_switch_to_mode_index(previous_mode);
-		return false;
+		const bool ok = video_switch_guest_display(mode_index);
+		if (!ok)
+			(void)video_switch_to_mode_index(previous_mode);
+		SDLGPUVideoShowGuestCursor();
+		return ok;
 	}
 
 	SDLGPUWriteGuestDisplayMode(mode_index, gdevice, pixmap);
+	SDLGPUVideoRefreshGuestCursor();
+	SDLGPUVideoShowGuestCursor();
 	return true;
 }
 

@@ -2371,9 +2371,8 @@ static void GLRegisterResourceHandlers(void)
 
 // GL hook state
 static bool gl_hooks_installed = false;
+static bool glu_hooks_installed = false;
 static bool gl_hooks_in_progress = false;
-static int gl_hooks_attempts = 0;
-static const int GL_HOOKS_MAX_ATTEMPTS = 3;
 
 /*
  *  GLInstallHooks - Hook GL/AGL function lookups via FindLibSymbol
@@ -2392,8 +2391,7 @@ static const int GL_HOOKS_MAX_ATTEMPTS = 3;
  */
 void GLInstallHooks()
 {
-	if (gl_hooks_installed) return;
-	if (gl_hooks_attempts >= GL_HOOKS_MAX_ATTEMPTS) return;
+	if (gl_hooks_installed && glu_hooks_installed) return;
 	if (gl_hooks_in_progress) {
 		GL_LOG("GLInstallHooks: skipped (re-entrant call)");
 		return;
@@ -2967,7 +2965,7 @@ void GLInstallHooks()
 	int not_found_count = 0;
 
 	// Search AGL functions in OpenGLLibrary
-	for (int i = 0; i < num_agl; i++) {
+	for (int i = 0; !gl_hooks_installed && i < num_agl; i++) {
 		uint32_t tvect = FindLibSymbol(gl_lib, agl_symbols[i].pascal_sym);
 		if (tvect != 0) {
 			cached_tvects.push_back({ tvect, agl_symbols[i].sub_opcode, agl_symbols[i].name });
@@ -2982,7 +2980,7 @@ void GLInstallHooks()
 
 	// Search core GL functions in OpenGLLibrary
 	int gl_found = 0, gl_notfound = 0;
-	for (int i = 0; i < num_gl; i++) {
+	for (int i = 0; !gl_hooks_installed && i < num_gl; i++) {
 		uint32_t tvect = FindLibSymbol(gl_lib, gl_symbols[i].pascal_sym);
 		if (tvect != 0) {
 			cached_tvects.push_back({ tvect, gl_symbols[i].sub_opcode, gl_symbols[i].name });
@@ -2996,7 +2994,7 @@ void GLInstallHooks()
 	// Search GL/extension functions without expanding the core AGL context
 	// dispatch table.
 	int gl_extra_found = 0, gl_extra_notfound = 0;
-	for (int i = 0; i < num_gl_extra; i++) {
+	for (int i = 0; !gl_hooks_installed && i < num_gl_extra; i++) {
 		uint32_t tvect = FindLibSymbol(gl_lib, gl_extra_symbols[i].pascal_sym);
 		if (tvect != 0) {
 			cached_tvects.push_back({ tvect, gl_extra_symbols[i].sub_opcode, gl_extra_symbols[i].name });
@@ -3014,8 +3012,9 @@ void GLInstallHooks()
 	// first and fall back to gl_lib. A found TVECT is patched by Step 2 exactly
 	// like the AGL/GL ones (its hook is gl_method_tvects[GLU sub-opcode], which
 	// GLThunksInit already allocates for the 700..753 GLU range).
+	const size_t glu_range_begin = cached_tvects.size();
 	int glu_found = 0, glu_notfound = 0;
-	for (int i = 0; i < num_glu; i++) {
+	for (int i = 0; !glu_hooks_installed && i < num_glu; i++) {
 		uint32_t tvect = FindLibSymbol(glu_lib, glu_symbols[i].pascal_sym);
 		if (tvect == 0)
 			tvect = FindLibSymbol(gl_lib, glu_symbols[i].pascal_sym);
@@ -3043,6 +3042,7 @@ void GLInstallHooks()
 
 	const uint32_t r11 = 11;
 	int patched_count = 0;
+	int glu_patched_count = 0;
 	int synthetic_count = 0;
 
 	for (size_t i = 0; i < cached_tvects.size(); i++) {
@@ -3092,26 +3092,25 @@ void GLInstallHooks()
 #endif
 
 		patched_count++;
+		if (i >= glu_range_begin)
+			glu_patched_count++;
 		GL_LOG("  patched %s: orig_code=0x%08x -> hook_code=0x%08x",
 			   cached_tvects[i].name, orig_code, hook_code);
 	}
 
-	GL_LOG("GLInstallHooks: patched %d real exports, %d synthetic (skipped)",
-		   patched_count, synthetic_count);
+	GL_LOG("GLInstallHooks: patched %d real exports (%d GLU), %d synthetic (skipped)",
+		   patched_count, glu_patched_count, synthetic_count);
 
-	if (patched_count > 0) {
+	gl_hooks_in_progress = false;
+
+	if (patched_count > glu_patched_count)
 		gl_hooks_installed = true;
-		gl_hooks_in_progress = false;
-	} else {
-		gl_hooks_in_progress = false;
-		gl_hooks_attempts++;
-		if (gl_hooks_attempts >= GL_HOOKS_MAX_ATTEMPTS)
-			GL_LOG("GLInstallHooks: OpenGL library not available after %d attempts, giving up", gl_hooks_attempts);
-		else
-			GL_LOG("GLInstallHooks: patched 0 functions, will retry on next accRun (attempt %d/%d)",
-				   gl_hooks_attempts, GL_HOOKS_MAX_ATTEMPTS);
-		return;
-	}
+	if (glu_patched_count > 0)
+		glu_hooks_installed = true;
+	if (!gl_hooks_installed)
+		GL_LOG("GLInstallHooks: OpenGLLibrary not resolved yet");
+	if (!glu_hooks_installed)
+		GL_LOG("GLInstallHooks: OpenGLUtility not resolved yet");
 }
 
 
@@ -3126,11 +3125,11 @@ void GLInstallHooks()
  */
 void GLResetForReboot(void)
 {
-	GL_LOG("GLResetForReboot: hooksInstalled=%d attempts=%d",
-		   gl_hooks_installed, gl_hooks_attempts);
+	GL_LOG("GLResetForReboot: hooksInstalled=%d gluInstalled=%d",
+		   gl_hooks_installed, glu_hooks_installed);
 	gl_hooks_installed   = false;
+	glu_hooks_installed  = false;
 	gl_hooks_in_progress = false;
-	gl_hooks_attempts    = 0;
 }
 
 

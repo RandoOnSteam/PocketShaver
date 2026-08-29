@@ -1052,7 +1052,7 @@ static uint16 joy_sidewinder_rudder(JoyManagerDevice *dev, int axis)
 		v = 0;
 	return (uint16)v;
 }
-/* SDL hat bits U=1 R=2 D=4 L=8 → Microsoft 0=idle, 1=N clockwise. */
+/* SDL hat bits U=1 R=2 D=4 L=8 -> Microsoft 0=idle, 1=N clockwise. */
 static uint8 joy_sidewinder_hat_nibble(uint8 h)
 {
 	switch (h & 0x0f) {

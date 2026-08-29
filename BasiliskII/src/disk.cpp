@@ -156,21 +156,7 @@ static void find_hfs_partition(disk_drive_info &info)
 }
 
 
-/*
- *	Classic HFS mount fixes as mac can semi-corrupt it leading to an issue
- *	where HFV Explorer can mount it but mac will say cannot initialize. 
- *
- *	1) Shared .Disk DCE: dCtlPosition is one field for all drives — fixed via
- *		per-drive head_pos + full ioPosMode handling in DiskPrime.
- *
- *	2) Some images have B-tree header free-space offset 0 instead of
- *		nodeSize-2*(nRec+1) (0x01F8 for 512-byte/3-record headers). MountVol
- *		aborts after reading the extents header.
- *
- *	3) Dirty MDB (kHFSVolumeUnmountedBit clear) takes the scavenger path, which
- *		fails on pathological huge B-trees even when a clean mount would work.
- *		Force the clean bit on MDB *reads* and at open; do not rewrite maps.
- */
+//  Classic HFS mount fixes
 static const uint16 kHFSVolumeUnmountedBit = 0x0100;
 
 static uint16 hfs_be16(const uint8 *p)
@@ -221,7 +207,6 @@ static bool hfs_force_mdb_clean(uint8 *mdb, size_t len)
 	return true;
 }
 
-// Only touch known metadata positions — never arbitrary file data.
 static void hfs_sanitize_io(disk_drive_info &info, uint8 *buf, size_t len,
 							loff_t position, bool is_read)
 {
