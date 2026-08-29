@@ -61,6 +61,30 @@ void pocketshaver_migrate_home_if_needed();
 
 bool MetalIsAvailable();
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+/* Native UIWindow backing the SDL window (UIWindow *), or NULL. */
+void *PocketShaverGetSDLUIWindow(void);
+/* Register the UIView that fills the host window (Metal overlay or SDL's
+ * own content view). Pinning, letterbox colour, and present-rect tracking
+ * all operate on this view. Pass NULL to clear. */
+void PocketShaverInstallWindowContentView(void *uiview);
+/* Re-insert and re-pin the registered content view after SDL swaps its
+ * container (mode switch). Idempotent. */
+void PocketShaverRehomeWindowContentView(void);
+/* Use SDL's UIKit content view as the window-filling view (SDL-GPU path). */
+void PocketShaverAdoptSDLWindowContentView(void);
+/* Present-rect cache in window coordinates (same ABI video_sdl* already
+ * calls through metal_compositor.h). */
+void MetalCompositorRefreshPresentRect(void);
+void MetalCompositorGetPresentRect(int *out_x, int *out_y, int *out_w, int *out_h);
+void MetalCompositorReapplyWindowPinning(void);
+double MetalCompositorWindowedContentInsetTop(void);
+#ifdef __cplusplus
+}
+#endif
+
 extern void set_relative_mouse_enabled();
 extern void set_relative_mouse_disabled();
 extern void toggle_relative_mouse();

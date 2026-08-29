@@ -90,6 +90,7 @@ prefs_desc common_prefs_items[] = {
 	// (which serializes the descriptor tables, not the runtime list) persists it to disk;
 	// without it the pref lives only in memory and reverts to its default every launch.
 	{"catalystfullscreen", TYPE_BOOLEAN, false,	"Mac Catalyst: launch emulation full screen"},
+	{"skiposxstartup", TYPE_BOOLEAN, false,	"Mac Catalyst: skip the startup preferences screen"},
 #endif
 	{NULL, TYPE_END, false, NULL} // End of list
 };
@@ -118,6 +119,7 @@ void AddPrefsDefaults(void)
 	// always-fullscreen behavior. A brand-new key, so existing installs pick up this
 	// default automatically (no migration needed). Only read on Catalyst.
 	PrefsAddBool("catalystfullscreen", true);
+	PrefsAddBool("skiposxstartup", false);
 #else
 	PrefsAddInt32("ramsize", 16 * 1024 * 1024);
 	PrefsAddInt32("frameskip", 8);

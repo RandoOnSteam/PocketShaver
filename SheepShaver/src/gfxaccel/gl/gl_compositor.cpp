@@ -1413,6 +1413,7 @@ void MetalCompositorUpdateGammaLUT(const uint8_t *lut)
 								 s_gamma_lut);
 }
 
+#if !(defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE)
 void MetalCompositorRefreshPresentRect(void)
 {
 	int window_w = 0, window_h = 0;
@@ -1449,6 +1450,7 @@ void MetalCompositorGetPresentRect(int *out_x, int *out_y, int *out_w, int *out_
 	if (out_w) *out_w = (int)(uint32_t)(s >> 32);
 	if (out_h) *out_h = (int)(uint32_t)(s & 0xffffffffu);
 }
+#endif
 
 /* Internal helpers used by Metal submitframe module - provide stubs. */
 extern "C" int MetalCompositorSubmitFrame_BindPresentationContext(

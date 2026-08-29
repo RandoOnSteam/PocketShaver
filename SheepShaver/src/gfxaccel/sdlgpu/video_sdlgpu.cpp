@@ -313,7 +313,11 @@ void VideoVBL(void)
 		nqd_ticks = SDL_GetPerformanceCounter() - section_tick;
 	}
 	section_tick = SDL_GetPerformanceCounter();
-	MetalCompositorPresent();
+	if (MetalCompositorIsInitialized())
+		MetalCompositorPresent();
+	else {
+		present_sdl_video_windowsurface();
+	}
 	compositor_ticks = SDL_GetPerformanceCounter() - section_tick;
 	section_tick = SDL_GetPerformanceCounter();
 	UNLOCK_FRAME_BUFFER;

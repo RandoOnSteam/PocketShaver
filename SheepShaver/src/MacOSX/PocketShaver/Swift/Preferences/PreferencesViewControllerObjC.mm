@@ -14,10 +14,11 @@
 // (defined above that block), so forward-declare it here.
 static void catalyst_detect_fullscreen_change(void);
 static void catalyst_resize_window_for_guest(int guest_w, int guest_h);
-// Defined in metal_compositor.mm — re-pins the compositor view (full-bounds vs title-bar-safe)
+// Defined in utils_ios.mm — re-pins the host content view (full-bounds vs title-bar-safe)
 // on a full-screen change, and reports the windowed drawable's top inset (safe-area top).
 extern "C" void MetalCompositorReapplyWindowPinning(void);
 extern "C" double MetalCompositorWindowedContentInsetTop(void);
+extern "C" bool MetalIsAvailable(void);
 // Last guest resolution the window auto-resize saw; used to re-size the window when returning
 // to windowed so no stray letterbox lingers.
 static int s_last_guest_w = 0;
@@ -272,6 +273,12 @@ __weak __typeof(PreferencesViewController) *vc;
 void objc_displayPreferencesStartup(void) {
 	@autoreleasepool {
 #if TARGET_OS_MACCATALYST
+		if (objc_findBool(@"skiposxstartup")) {
+			[PreferencesViewController prepareSkippedStartup];
+			return;
+		}
+#endif
+#if TARGET_OS_MACCATALYST
 		// Stop macOS from restoring this window to full screen on the NEXT launch, so the
 		// startup menu comes up windowed with no animated exit-from-full-screen. Emulation
 		// still enters full screen below when the pref asks for it.
@@ -307,13 +314,9 @@ void objc_displayPreferencesStartup(void) {
 		[PreferencesViewController resetPrefsWindow];
 
 #if TARGET_OS_MACCATALYST
-		// The startup settings menu ran as a normal window; now that it's dismissed
-		// and the emulator is about to boot, take the app full screen for emulation.
-		// Pump a live run loop until the transition lands (bounded to ~2s so a stuck
-		// transition can't hang launch), because right after this returns the
-		// emulator claims the main thread and only NSEvent-pumps AppKit afterward —
-		// too coarse to drive the full-screen animation to completion.
-		// Honor the user's Windowed/Full Screen choice on launch (windowed skips the wait).
+#if defined(GFXACCEL_USE_METAL)
+		// Metal compositor (video_sdl2.cpp): AppKit full screen after the
+		// startup menu, matching PocketShaver.xcodeproj.
 		bool wantFullscreen = objc_findBool(@"catalystfullscreen");
 		catalyst_set_fullscreen(wantFullscreen);
 		for (int i = 0; wantFullscreen && i < 120 && !catalyst_front_window_is_fullscreen(); i++) {
@@ -321,11 +324,22 @@ void objc_displayPreferencesStartup(void) {
 			[[NSRunLoop currentRunLoop] runMode:NSDefaultRunLoopMode
 									 beforeDate:[NSDate dateWithTimeIntervalSinceNow:(1.0 / 60.0)]];
 		}
-		// Emulation is starting: enable two-way full-screen sync now. Its first tick seeds to
-		// the state we just applied, so this programmatic change doesn't fire the detector.
+#else
+		// SDL-GPU (video_sdl3.cpp): do not toggleFullScreen here. Combined
+		// with SDL_SyncWindow / a display-sized window while the emulator
+		// is about to own the main thread, this deadlocks WindowServer.
+		// video_sdl3.cpp applies the pref after the compositor is up.
+#endif
 		s_fullscreen_sync_active = true;
 #endif
 	}
+}
+
+void objc_apply_catalyst_emulation_fullscreen(void) {
+#if TARGET_OS_MACCATALYST
+	if (objc_findBool(@"catalystfullscreen"))
+		catalyst_set_fullscreen(true);
+#endif
 }
 
 void objc_displayPreferencesDuringEmulationOnMain(void) {

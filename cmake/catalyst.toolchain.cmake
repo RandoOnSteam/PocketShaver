@@ -2,15 +2,17 @@
 #
 #	 cmake -S . -B build-catalyst -G Xcode \
 #		 -DCMAKE_TOOLCHAIN_FILE=cmake/catalyst.toolchain.cmake
+#	 cmake --build build-catalyst --config Debug --target PocketShaver
 #
-# CMAKE_SYSTEM_NAME=iOS with CMAKE_OSX_SYSROOT=macosx is CMake's Mac Catalyst
-# combination (arm64/x86_64-apple-ios-macabi). Does not use any .xcodeproj.
+# Do not set CMAKE_OSX_ARCHITECTURES here. This file is loaded before
+# enable_language(Swift); an iOS x86_64 compiler test has no Swift.
+# ARCHS_STANDARD + the Mac Catalyst destination selects x86_64 or arm64.
 set(CMAKE_SYSTEM_NAME iOS)
-set(CMAKE_OSX_SYSROOT macosx)
 if(NOT CMAKE_OSX_DEPLOYMENT_TARGET)
 	set(CMAKE_OSX_DEPLOYMENT_TARGET "15.2" CACHE STRING
 		"iOS deployment target used by Mac Catalyst")
 endif()
 set(CMAKE_MACOSX_BUNDLE YES)
+set(CMAKE_XCODE_ATTRIBUTE_SUPPORTS_MACCATALYST YES)
 set(MACEMU_APPLE_TARGET "catalyst" CACHE STRING
 	"Apple target (macos|ios|catalyst)")

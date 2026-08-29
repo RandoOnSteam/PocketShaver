@@ -47,10 +47,16 @@
 #include <errno.h>
 #include <vector>
 #include <string>
+#include <algorithm>
 #include <math.h>
 
 #ifdef SDL_PLATFORM_MACOS
 #include "utils_macosx.h"
+#endif
+#if TARGET_OS_IPHONE
+#include "utils_ios.h"
+#include "PreferencesViewControllerObjCCppHeader.h"
+#include "MiscellaneousSettingsObjCCppHeader.h"
 #endif
 
 #ifdef WIN32
@@ -74,6 +80,10 @@
 #include "display_mode_controller.h"
 #include "gfxaccel_resources.h"
 #include "nqd_accel.h"
+#if defined(GFXACCEL_USE_SDLGPU)
+#include "vbl_source.h"
+extern "C" void vbl_source_sdl_tick(double target_ts);
+#endif
 #endif
 
 #define DEBUG 0
@@ -168,6 +178,12 @@ static bool toggle_fullscreen = false;
 static bool did_add_event_watch = false;
 
 static bool mouse_grabbed = false;
+#if defined(ENABLE_GFXACCEL) && defined(SHEEPSHAVER) && defined(GFXACCEL_USE_SDLGPU)
+static bool fallback_vbl_active = false;
+#endif
+#if TARGET_OS_IPHONE
+static bool input_disabled = false;
+#endif
 
 // Mutex to protect SDL events
 static SDL_Mutex *sdl_events_lock = NULL;
@@ -728,6 +744,12 @@ static void shutdown_sdl_video()
 {
 	delete_sdl_video_surfaces();
 #if defined(ENABLE_GFXACCEL) && defined(SHEEPSHAVER)
+#if defined(GFXACCEL_USE_SDLGPU)
+	if (fallback_vbl_active) {
+		vbl_source_shutdown();
+		fallback_vbl_active = false;
+	}
+#endif
 	/* Resources subscribed second, so they shut down first. */
 	if (nqd_metal_available) {
 		gfxaccel_resources_shutdown();
@@ -835,7 +857,14 @@ static SDL_Surface *init_sdl_video(int width, int height, int depth, Uint32 flag
 			shutdown_sdl_video();
 			return NULL;
 		}
+#if TARGET_OS_IPHONE
+		/* SDL_SyncWindow waits for a window-server fullscreen handshake.
+		 * The emulator owns the main thread, so that wait deadlocks
+		 * WindowServer (machine-wide lock, forced restart). UIKit/AppKit
+		 * own fullscreen on this platform. */
+#else
 		SDL_SyncWindow(sdl_window); // needed for fullscreen
+#endif
 		set_window_name();
 	}
 
@@ -868,7 +897,6 @@ static SDL_Surface *init_sdl_video(int width, int height, int depth, Uint32 flag
 		}
 
 		sdl_renderer = SDL_CreateRenderer(sdl_window, NULL);
-
 		if (!sdl_renderer) {
 			shutdown_sdl_video();
 			return NULL;
@@ -1157,7 +1185,7 @@ void driver_base::init()
 	set_mac_frame_buffer(monitor, VIDEO_MODE_DEPTH, true);
 
 #if defined(ENABLE_GFXACCEL) && defined(SHEEPSHAVER)
-	{
+	if (s) {
 		if (dmc_current_snapshot() == NULL) {
 			DMCModeDesc initial;
 			DMCModeDescFromVModesIndex(cur_mode, &initial);
@@ -1177,6 +1205,12 @@ void driver_base::init()
 
 		int fb_width = VIDEO_MODE_X;
 		int fb_height = VIDEO_MODE_Y;
+#if defined(GFXACCEL_USE_SDLGPU)
+		if (fallback_vbl_active) {
+			vbl_source_shutdown();
+			fallback_vbl_active = false;
+		}
+#endif
 		if (MetalCompositorIsInitialized()) {
 			int metal_rc = MetalCompositorResize(fb_width, fb_height,
 			                                      VIDEO_MODE_DEPTH,
@@ -1202,7 +1236,6 @@ void driver_base::init()
 				        metal_rc, fb_width, fb_height, VIDEO_MODE_DEPTH,
 				        VIDEO_MODE_ROW_BYTES, pitch);
 				MetalCompositorShutdown();
-				return;
 			}
 			int32_t gfxres_err = gfxaccel_resources_init();
 			if (gfxres_err != 0) {
@@ -1211,27 +1244,54 @@ void driver_base::init()
 				                "(fallback)\n", (int)gfxres_err);
 			}
 		}
+		if (!MetalCompositorIsInitialized()) {
+#if defined(GFXACCEL_USE_SDLGPU)
+			fallback_vbl_active = vbl_source_init(NULL, NULL, NULL) == 0;
+#endif
+			/* Same present path as video_sdl2.cpp before PR #28: the
+			 * window SDL_Renderer created in init_sdl_video, drawn by
+			 * present_sdl_video() from VideoVBL. */
+			bug("[video] gfxaccel compositor unavailable; "
+			    "using SDL framebuffer present\n");
+		}
+#if TARGET_OS_IPHONE
+		objc_resize_catalyst_window_for_guest(VIDEO_MODE_X, VIDEO_MODE_Y);
+#if TARGET_OS_MACCATALYST
+		/* AppKit full screen only after the compositor can fill the
+		 * display. toggleFullScreen before SDL window/compositor init,
+		 * with the emulator about to own the main thread, wedges
+		 * WindowServer. */
+		if (PrefsFindBool("catalystfullscreen")) {
+			if (MetalCompositorIsInitialized())
+				objc_apply_catalyst_emulation_fullscreen();
+			else
+				bug("[video] skipping Catalyst full screen; compositor not initialized\n");
+		}
+#endif
+#endif
 	}
 #endif
 
 	adapt_to_video_mode();
 
 	// set default B/W palette
-	sdl_palette = SDL_CreatePalette(256);
-	sdl_palette->colors[1].r = 0;
-	sdl_palette->colors[1].g = 0;
-	sdl_palette->colors[1].b = 0;
-	sdl_palette->colors[1].a = 255;
-	SDL_SetSurfacePalette(s, sdl_palette);
+	if (s) {
+		sdl_palette = SDL_CreatePalette(256);
+		sdl_palette->colors[1].r = 0;
+		sdl_palette->colors[1].g = 0;
+		sdl_palette->colors[1].b = 0;
+		sdl_palette->colors[1].a = 255;
+		SDL_SetSurfacePalette(s, sdl_palette);
+	}
 #if defined(ENABLE_GFXACCEL) && defined(SHEEPSHAVER)
-	{
+	if (MetalCompositorIsInitialized()) {
 		uint8 bw_pal[6] = {255,255,255, 0,0,0};
 		MetalCompositorUpdatePalette(bw_pal, 2);
 		dmc_record_palette_change();
 	}
 #endif
 
-	if (PrefsFindBool("init_grab") && !PrefsFindBool("hardcursor")) grab_mouse();
+	if (s && PrefsFindBool("init_grab") && !PrefsFindBool("hardcursor")) grab_mouse();
 }
 
 void driver_base::adapt_to_video_mode() {
@@ -1601,7 +1661,14 @@ bool VideoInit(bool classic)
 		if (sscanf(mode_str, "win/%d/%d", &default_width, &default_height) == 2)
 			display_type = DISPLAY_WINDOW;
 		else if (sscanf(mode_str, "dga/%d/%d", &default_width, &default_height) == 2)
+#if TARGET_OS_IPHONE
+			/* UIKit/AppKit owns fullscreen (catalystfullscreen). SDL DGA
+			 * would CreateWindow(FULLSCREEN) and later DestroyWindow from
+			 * the redraw thread on focus loss. */
+			display_type = DISPLAY_WINDOW;
+#else
 			display_type = DISPLAY_SCREEN;
+#endif
 #ifdef VIDEO_CHROMAKEY
 		else if (strncmp(mode_str, "chromakey", 9) == 0) {
 			display_type = DISPLAY_CHROMAKEY;
@@ -1843,6 +1910,15 @@ static void ApplyGammaRamp() {
 
 static void do_toggle_fullscreen(void)
 {
+#if TARGET_OS_IPHONE
+	/* SDL exclusive fullscreen + SyncWindow deadlocks WindowServer on
+	 * Catalyst (emulator owns the main thread). AppKit owns the space. */
+	toggle_fullscreen = false;
+#if TARGET_OS_MACCATALYST
+	objc_set_catalyst_fullscreen(!catalyst_is_window_fullscreen());
+#endif
+	return;
+#else
 #ifndef USE_CPU_EMUL_SERVICES
 	// pause redraw thread
 	thread_stop_ack = false;
@@ -1892,6 +1968,7 @@ static void do_toggle_fullscreen(void)
 #ifndef USE_CPU_EMUL_SERVICES
 	thread_stop_req = false;
 #endif
+#endif /* !TARGET_OS_IPHONE */
 }
 
 /*
@@ -1939,7 +2016,16 @@ void VideoVBL(void)
 #if defined(ENABLE_GFXACCEL) && defined(SHEEPSHAVER)
 	if (nqd_metal_available)
 		NQDMetalFlush();
-	MetalCompositorPresent();
+	if (MetalCompositorIsInitialized())
+		MetalCompositorPresent();
+#if defined(GFXACCEL_USE_SDLGPU)
+	else {
+		present_sdl_video();
+	}
+#else
+	else
+		present_sdl_video();
+#endif
 #else
 	present_sdl_video();
 #endif
@@ -2548,6 +2634,14 @@ enum {
 static bool SDLCALL on_sdl_event_generated(void *userdata, SDL_Event *event)
 {
 	switch (event->type) {
+#if TARGET_OS_IPHONE
+		case SDL_EVENT_MOUSE_BUTTON_DOWN:
+		case SDL_EVENT_MOUSE_BUTTON_UP:
+		case SDL_EVENT_MOUSE_MOTION:
+		case SDL_EVENT_MOUSE_WHEEL:
+			MetalCompositorRefreshPresentRect();
+			break;
+#endif
 		case SDL_EVENT_KEY_UP: {
 			SDL_KeyboardEvent const &key = event->key;
 			switch (key.key) {
@@ -2584,6 +2678,10 @@ static void handle_events(void)
 
 			// Mouse button
 			case SDL_EVENT_MOUSE_BUTTON_DOWN: {
+#if TARGET_OS_IPHONE
+				if (input_disabled)
+					break;
+#endif
 				unsigned int button = event.button.button;
 				if (button == SDL_BUTTON_LEFT)
 					ADBMouseDown(0);
@@ -2606,9 +2704,19 @@ static void handle_events(void)
 
 			// Mouse moved
 			case SDL_EVENT_MOUSE_MOTION:
+#if TARGET_OS_IPHONE
+				if (input_disabled)
+					break;
+#endif
 				if (mouse_grabbed) {
 					drv->mouse_moved(event.motion.xrel, event.motion.yrel);
 				} else {
+#if TARGET_OS_MACCATALYST
+					(void)event;
+#elif TARGET_OS_IPHONE
+					SDL_ConvertEventToRenderCoordinates(sdl_renderer, &event);
+					drv->mouse_moved(event.motion.x, event.motion.y);
+#else
 					SDL_ConvertEventToRenderCoordinates(sdl_renderer, &event);
 #ifdef VIDEO_CHROMAKEY
 					if (display_type == DISPLAY_CHROMAKEY) {
@@ -2622,6 +2730,7 @@ static void handle_events(void)
 					}
 #endif
 					drv->mouse_moved(event.motion.x, event.motion.y);
+#endif
 				}
 				break;
 
@@ -2950,8 +3059,14 @@ static inline void possibly_quit_dga_mode()
 	// want to give control back to the user)
 	if (quit_full_screen) {
 		quit_full_screen = false;
+#if TARGET_OS_IPHONE
+		/* The SDL window is the process UIWindow. Destroying it from the
+		 * redraw thread crashes UIKit (FBSScene detachLayer). */
+		return;
+#else
 		delete drv;
 		drv = NULL;
+#endif
 	}
 }
 
@@ -3049,6 +3164,9 @@ static void video_refresh_window_static(void)
 
 static void VideoRefreshInit(void)
 {
+#if TARGET_OS_IPHONE
+	setup_frame_rate();
+#endif
 	// TODO: set up specialised 8bpp VideoRefresh handlers ?
 	if (display_type == DISPLAY_SCREEN) {
 #if ENABLE_VOSF && (REAL_ADDRESSING || DIRECT_ADDRESSING)
@@ -3079,7 +3197,20 @@ static inline void do_video_refresh(void)
 
 	// Set new palette if it was changed
 	handle_palette_changes();
+
 }
+
+#if defined(ENABLE_GFXACCEL) && defined(SHEEPSHAVER)
+void VideoFallbackVBL(void)
+{
+#if defined(GFXACCEL_USE_SDLGPU)
+	if (fallback_vbl_active) {
+		vbl_source_sdl_tick(0.0);
+		present_sdl_video();
+	}
+#endif
+}
+#endif
 
 // This function is called on non-threaded platforms from a timer interrupt
 void VideoRefresh(void)
@@ -3093,8 +3224,13 @@ void VideoRefresh(void)
 	do_video_refresh();
 }
 
+#if TARGET_OS_IPHONE
+int VIDEO_REFRESH_HZ = 60;
+int VIDEO_REFRESH_DELAY = 1000000 / 60;
+#else
 const int VIDEO_REFRESH_HZ = 60;
 const int VIDEO_REFRESH_DELAY = 1000000 / VIDEO_REFRESH_HZ;
+#endif
 
 #ifndef USE_CPU_EMUL_SERVICES
 static int redraw_func(void *arg)
@@ -3201,53 +3337,76 @@ bool video_get_framebuffer_drawable_rect(int *out_x, int *out_y,
 #endif
 
 #if TARGET_OS_IPHONE
-#import "MiscellaneousSettingsObjCCppHeader.h"
 bool suggest_mouse_grab = false;
 void set_relative_mouse_enabled() {
-	 drv->grab_mouse();
- }
-
- void set_relative_mouse_disabled() {
- #if TARGET_OS_IPHONE
-	 if (objc_getRelateiveMouseModeSettingIsAlwaysOn()) {
-		 return;
-	 }
- #endif
-	 drv->ungrab_mouse();
- }
-
- void toggle_relative_mouse() {
- #if TARGET_OS_IPHONE
-	 if (mouse_grabbed && objc_getRelateiveMouseModeSettingIsAlwaysOn()) {
-		 return;
-	 }
- #endif
-	 drv->toggle_mouse_grab();
- }
-
- void set_relative_mouse_automatic() {
-	 if (suggest_mouse_grab) {
-		 set_relative_mouse_enabled();
-	 } else {
-		 set_relative_mouse_disabled();
-	 }
- }
-
- void report_relative_mouse_capability() {
-	 suggest_mouse_grab = true;
- #if TARGET_OS_IPHONE
-	 if (objc_getRelateiveMouseModeSettingIsAutomatic()) {
-		 set_relative_mouse_enabled();
-	 }
- #endif
- }
-
- void set_input_disabled(bool is_disabled) {
- }
-void setup_frame_rate() {
+	drv->grab_mouse();
 }
-extern "C" void VideoMapWindowPointToGuestAndMove(double winX, double winY) {
-	
+
+void set_relative_mouse_disabled() {
+	if (objc_getRelateiveMouseModeSettingIsAlwaysOn())
+		return;
+	drv->ungrab_mouse();
+}
+
+void toggle_relative_mouse() {
+	if (mouse_grabbed && objc_getRelateiveMouseModeSettingIsAlwaysOn())
+		return;
+	drv->toggle_mouse_grab();
+}
+
+void set_relative_mouse_automatic() {
+	if (suggest_mouse_grab)
+		set_relative_mouse_enabled();
+	else
+		set_relative_mouse_disabled();
+}
+
+void report_relative_mouse_capability() {
+	suggest_mouse_grab = true;
+	if (objc_getRelateiveMouseModeSettingIsAutomatic())
+		set_relative_mouse_enabled();
+}
+
+void set_input_disabled(bool is_disabled) {
+	input_disabled = is_disabled;
+}
+
+void setup_frame_rate() {
+	VIDEO_REFRESH_HZ = objc_getFrameRateSetting();
+	if (VIDEO_REFRESH_HZ <= 0)
+		VIDEO_REFRESH_HZ = 60;
+	VIDEO_REFRESH_DELAY = 1000000 / VIDEO_REFRESH_HZ;
+}
+
+extern "C" void VideoMapWindowPointToGuestAndMove(double winX, double winY)
+{
+#if TARGET_OS_MACCATALYST
+	if (!drv)
+		return;
+	if (ADBIsRelativeMouseMode())
+		return;
+	MetalCompositorRefreshPresentRect();
+	int rx = 0, ry = 0, rw = 0, rh = 0;
+	MetalCompositorGetPresentRect(&rx, &ry, &rw, &rh);
+	if (rw <= 0 || rh <= 0)
+		return;
+	float mag = std::min((float)rw / drv->VIDEO_MODE_X,
+	                     (float)rh / drv->VIDEO_MODE_Y);
+	if (mag <= 0.f)
+		return;
+	float ox = rx + (rw - drv->VIDEO_MODE_X * mag) * 0.5f;
+	float oy = ry + (rh - drv->VIDEO_MODE_Y * mag) * 0.5f;
+	int fx = (int)(((float)winX - ox) / mag);
+	int fy = (int)(((float)winY - oy) / mag);
+	if (fx < 0) fx = 0;
+	if (fy < 0) fy = 0;
+	if (fx >= (int)drv->VIDEO_MODE_X) fx = (int)drv->VIDEO_MODE_X - 1;
+	if (fy >= (int)drv->VIDEO_MODE_Y) fy = (int)drv->VIDEO_MODE_Y - 1;
+	ADBMouseMoved(fx, fy);
+#else
+	(void)winX;
+	(void)winY;
+#endif
 }
 
 #endif //IPHONE

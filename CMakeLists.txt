@@ -16,7 +16,11 @@
 #	 cmake --build build-ios --target PocketShaver
 #	 cmake -S . -B build-catalyst -G Xcode \
 #		 -DCMAKE_TOOLCHAIN_FILE=cmake/catalyst.toolchain.cmake
-#	 cmake --build build-catalyst --target PocketShaver
+#	 cmake --build build-catalyst --config Debug --target PocketShaver
+#	 Metal compositor (PocketShaver.xcodeproj: SDL2 + video_sdl2.cpp):
+#	   -DGFXACCEL_BACKEND=metal
+#	 SDL-GPU compositor (PocketShaver SDLGPU.xcodeproj: SDL3 + video_sdl3.cpp):
+#	   -DUSE_SDLGPU=ON   (default)
 #
 cmake_minimum_required(VERSION 3.16)
 if(CMAKE_HOST_APPLE AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
@@ -93,9 +97,23 @@ option(ENABLE_NATIVE_CINEPAK_PATCH
 	"Patch QuickTime to use native Cinepak decoder"
 	OFF)
 # GFXACCEL_BACKEND: auto | opengl | metal | sdlgpu
-# auto = Metal on Apple, OpenGL elsewhere
+#   metal  = PocketShaver.xcodeproj (SDL2 + video_sdl2.cpp + Metal compositor)
+#   sdlgpu = "PocketShaver SDLGPU.xcodeproj" (SDL3 + video_sdl3.cpp)
+# auto = Metal on Apple when USE_SDLGPU is OFF, OpenGL elsewhere.
+# USE_SDLGPU=ON selects sdlgpu unless GFXACCEL_BACKEND is set to metal.
 set(GFXACCEL_BACKEND "auto" CACHE STRING "gfxaccel GPU backend (auto|opengl|metal|sdlgpu)")
 set_property(CACHE GFXACCEL_BACKEND PROPERTY STRINGS auto opengl metal sdlgpu)
+if(GFXACCEL_BACKEND STREQUAL "metal")
+	set(USE_SDLGPU OFF)
+	# PocketShaver.xcodeproj links SDL2.xcframework; video_sdl2.cpp is
+	# compiled only when SDL < 3. iOS/Catalyst Metal therefore uses SDL2.
+	# Desktop SheepShaver keeps the configured SDL (typically SDL3).
+	if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+		set(USE_SDL3 OFF CACHE BOOL "Use SDL 3 instead of SDL 2" FORCE)
+	endif()
+elseif(USE_SDLGPU AND (GFXACCEL_BACKEND STREQUAL "auto" OR GFXACCEL_BACKEND STREQUAL "sdlgpu"))
+	set(GFXACCEL_BACKEND "sdlgpu")
+endif()
 if(USE_SDLGPU)
 	set(USE_SDL3 ON CACHE BOOL "Use SDL 3 instead of SDL 2" FORCE)
 endif()

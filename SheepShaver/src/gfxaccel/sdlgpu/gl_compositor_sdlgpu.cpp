@@ -49,9 +49,13 @@ static int32_t SDLGPUCompositorModeEnter(const struct DMCModeSnapshot *incoming,
 	return s_sdlgpu_compositor_mode_enter(incoming, context);
 }
 
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
+#if !(defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE)
 extern "C" double MetalCompositorWindowedContentInsetTop() {
 	return 0.0;
 }
 extern "C" void MetalCompositorReapplyWindowPinning() {
-	
 }
+#endif

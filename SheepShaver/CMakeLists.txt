@@ -348,10 +348,16 @@ if(ENABLE_GFXACCEL)
 		"${SS_GFXACCEL_DIR}/cinepak_hooks.cpp"
 		)
 	endif()
-	# Resolve backend
-	set(GFXACCEL_BACKEND "${GFXACCEL_BACKEND}")
-	if(USE_SDLGPU)
-	set(GFXACCEL_BACKEND "sdlgpu")
+	# Resolve backend. Explicit metal matches PocketShaver.xcodeproj
+	# (SDL2 + video_sdl2.cpp) and must not be overwritten by USE_SDLGPU.
+	# SDL-GPU remains SDL3 + video_sdl3.cpp.
+	if(GFXACCEL_BACKEND STREQUAL "metal")
+		set(USE_SDLGPU OFF)
+		if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+			set(USE_SDL3 OFF)
+		endif()
+	elseif(USE_SDLGPU AND (GFXACCEL_BACKEND STREQUAL "auto" OR GFXACCEL_BACKEND STREQUAL "sdlgpu"))
+		set(GFXACCEL_BACKEND "sdlgpu")
 	endif()
 	if(GFXACCEL_BACKEND STREQUAL "auto")
 	if(APPLE)
@@ -381,11 +387,24 @@ if(ENABLE_GFXACCEL)
 		"${SS_GFXACCEL_DIR}/gfxaccel_arc_shim.mm"
 		"${SS_GFXACCEL_DIR}/vbl_source.mm"
 		"${SS_GFXACCEL_DIR}/pso_archive.mm"
+		"${SS_GFXACCEL_DIR}/compositor_shaders.metal"
+		"${SS_GFXACCEL_DIR}/nqd_shaders.metal"
+		"${SS_GFXACCEL_DIR}/gl_shaders.metal"
+		"${SS_GFXACCEL_DIR}/rave_shaders.metal"
 	)
-	find_library(METAL_LIB Metal)
-	find_library(QUARTZCORE_LIB QuartzCore)
-	find_library(FOUNDATION_LIB Foundation)
-	list(APPEND SS_GFXACCEL_LIBS ${METAL_LIB} ${QUARTZCORE_LIB} ${FOUNDATION_LIB})
+	set_source_files_properties(
+		"${SS_GFXACCEL_DIR}/compositor_shaders.metal"
+		"${SS_GFXACCEL_DIR}/nqd_shaders.metal"
+		"${SS_GFXACCEL_DIR}/gl_shaders.metal"
+		"${SS_GFXACCEL_DIR}/rave_shaders.metal"
+		PROPERTIES
+			LANGUAGE METAL
+			XCODE_EXPLICIT_FILE_TYPE sourcecode.metal)
+	# -framework, not find_library: find_library embeds the configure-time
+	# iPhoneOS SDK path, which then shadows MacOSX.sdk when building
+	# Catalyst (Foundation/NSURLHandle.h).
+	list(APPEND SS_GFXACCEL_LIBS
+		"-framework Metal" "-framework QuartzCore" "-framework Foundation")
 	elseif(GFXACCEL_BACKEND STREQUAL "sdlgpu")
 	if(NOT USE_SDL3)
 		message(FATAL_ERROR "SDL-GPU requires SDL3")

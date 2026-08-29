@@ -18,15 +18,17 @@
 #import "PocketShaver-Swift-ObjCHeader.h"
 
 #if USE_SDL3
-#include <SDL3/SDL_main.h>
 #define SDL_MAIN_HANDLED
+#include <SDL3/SDL_main.h>
+#else
+#include <SDL2/SDL_main.h>
 #endif
 
 extern "C" int main_ios(int argc, char* argv[]);
 
 
-// Because main is #defined as SDL_main, this function is actually SDL_main. This gets called from -[SDLUIKitDelegate postFinishLaunch].
-int main(int argc, char * argv[]) {
+// SDL_main is invoked from SDL_RunApp after UIKit is up (see main() below).
+int SDL_main(int argc, char * argv[]) {
 	/* Diagnostic stdio capture: when PS_STDIO_FILE is set (Xcode scheme env
 	 * or launchctl setenv), mirror stdout+stderr to that file so emulator
 	 * printf/fprintf diagnostics survive launches without an attached
@@ -72,7 +74,6 @@ int main(int argc, char * argv[]) {
 // This is where we turn off the #define of SDL_main. This function is our actual main(), which does here exactly
 // what it would do in SDL_uikit_main.c, which cannot be linked in to a dynamic library such as a framework. (Well,
 // it can, but main() can't be found when it's in a dynamic library, so the app will not have a main to link with.)
-#ifndef SDL_MAIN_HANDLED
 #ifdef main
 #undef main
 #endif
@@ -80,6 +81,9 @@ int main(int argc, char * argv[]) {
 int
 main(int argc, char *argv[])
 {
+#if USE_SDL3
+	return SDL_RunApp(argc, argv, SDL_main, NULL);
+#else
 	return SDL_UIKitRunApp(argc, argv, SDL_main);
+#endif
 }
-#endif /* !SDL_MAIN_HANDLED */

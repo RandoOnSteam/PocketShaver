@@ -22,9 +22,11 @@
  */
 
 #include <UIKit/UIKit.h>
+#import <QuartzCore/CAMetalLayer.h>
 #include "sysdeps.h"
 #include "my_sdl.h"
 #include "utils_ios.h"
+#include "atomic.h"
 
 #if USE_SDL2
 #include <SDL2/SDL_syswm.h>
@@ -231,5 +233,246 @@ bool MetalIsAvailable() {
 	bool r = dev != nil;
 	[dev release];
 	return r;
+#endif
+}
+
+extern SDL_Window *sdl_window;
+#if TARGET_OS_MACCATALYST
+extern "C" bool catalyst_is_window_fullscreen(void);
+#endif
+
+static UIView *s_window_content_view = nil;
+#if TARGET_OS_MACCATALYST
+static NSArray<NSLayoutConstraint *> *s_window_pin_constraints = nil;
+#endif
+static atomic_uint64 s_present_rect_origin = 0;
+static atomic_uint64 s_present_rect_size = 0;
+
+void *PocketShaverGetSDLUIWindow(void)
+{
+	if (!sdl_window)
+		return NULL;
+#if USE_SDL3
+	SDL_PropertiesID props = SDL_GetWindowProperties(sdl_window);
+	return SDL_GetPointerProperty(props, SDL_PROP_WINDOW_UIKIT_WINDOW_POINTER, NULL);
+#elif USE_SDL2
+	SDL_SysWMinfo wmInfo;
+	SDL_VERSION(&wmInfo.version);
+	if (!SDL_GetWindowWMInfo(sdl_window, &wmInfo))
+		return NULL;
+	if (wmInfo.subsystem != SDL_SYSWM_UIKIT)
+		return NULL;
+	return (__bridge void *)wmInfo.info.uikit.window;
+#else
+	return NULL;
+#endif
+}
+
+#if TARGET_OS_MACCATALYST
+static void PocketShaverPinContentView(void)
+{
+	UIView *view = s_window_content_view;
+	if (!view || !view.superview)
+		return;
+	if (s_window_pin_constraints) {
+		[NSLayoutConstraint deactivateConstraints:s_window_pin_constraints];
+		s_window_pin_constraints = nil;
+	}
+	view.translatesAutoresizingMaskIntoConstraints = NO;
+	UIView *superview = view.superview;
+	BOOL fullscreen = catalyst_is_window_fullscreen();
+	NSLayoutYAxisAnchor *topAnchor = fullscreen ? superview.topAnchor
+	                                             : superview.safeAreaLayoutGuide.topAnchor;
+	NSArray<NSLayoutConstraint *> *pins = @[
+		[view.topAnchor constraintEqualToAnchor:topAnchor],
+		[view.leadingAnchor constraintEqualToAnchor:superview.leadingAnchor],
+		[view.trailingAnchor constraintEqualToAnchor:superview.trailingAnchor],
+		[view.bottomAnchor constraintEqualToAnchor:superview.bottomAnchor],
+	];
+	[NSLayoutConstraint activateConstraints:pins];
+	s_window_pin_constraints = pins;
+}
+
+static void PocketShaverApplyLetterboxColor(void)
+{
+	UIView *view = s_window_content_view;
+	if (!view)
+		return;
+	if (catalyst_is_window_fullscreen()) {
+		view.backgroundColor = [UIColor blackColor];
+	} else {
+		view.backgroundColor = [UIColor colorWithDynamicProvider:^UIColor *(UITraitCollection *traits) {
+			return traits.userInterfaceStyle == UIUserInterfaceStyleDark
+				? [UIColor colorWithWhite:0.16 alpha:1.0]
+				: [UIColor colorWithWhite:0.93 alpha:1.0];
+		}];
+	}
+}
+#endif
+
+static UIView *PocketShaverFindMetalView(UIView *root)
+{
+	if (!root)
+		return nil;
+	if ([root.layer isKindOfClass:[CAMetalLayer class]])
+		return root;
+	for (UIView *child in root.subviews) {
+		UIView *found = PocketShaverFindMetalView(child);
+		if (found)
+			return found;
+	}
+	return nil;
+}
+
+static UIView *PocketShaverSDLMetalView(void)
+{
+	UIWindow *uiWindow = (__bridge UIWindow *)PocketShaverGetSDLUIWindow();
+	if (!uiWindow)
+		return nil;
+	UIView *root = uiWindow.rootViewController.view;
+#if USE_SDL3
+	if (sdl_window) {
+		SDL_PropertiesID props = SDL_GetWindowProperties(sdl_window);
+		NSInteger tag = (NSInteger)SDL_GetNumberProperty(props,
+			SDL_PROP_WINDOW_UIKIT_METAL_VIEW_TAG_NUMBER, 0);
+		if (tag != 0 && root) {
+			UIView *tagged = [root viewWithTag:tag];
+			if (tagged)
+				return tagged;
+		}
+	}
+#endif
+	return PocketShaverFindMetalView(root);
+}
+
+static void PocketShaverInsertContentView(UIView *view)
+{
+	if (!view)
+		return;
+	UIWindow *uiWindow = (__bridge UIWindow *)PocketShaverGetSDLUIWindow();
+	UIView *sdlContainer = uiWindow.rootViewController.view;
+	if (sdlContainer && view != sdlContainer && view.superview != sdlContainer)
+		[sdlContainer insertSubview:view atIndex:0];
+	else if (!view.superview && uiWindow)
+		[uiWindow insertSubview:view atIndex:0];
+}
+
+void PocketShaverInstallWindowContentView(void *uiview)
+{
+	UIView *view = (__bridge UIView *)uiview;
+#if TARGET_OS_MACCATALYST
+	if (s_window_pin_constraints) {
+		[NSLayoutConstraint deactivateConstraints:s_window_pin_constraints];
+		s_window_pin_constraints = nil;
+	}
+#endif
+	s_window_content_view = view;
+	if (!view)
+		return;
+	PocketShaverInsertContentView(view);
+#if TARGET_OS_MACCATALYST
+	PocketShaverPinContentView();
+	PocketShaverApplyLetterboxColor();
+#else
+	view.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+	if (view.superview)
+		view.frame = view.superview.bounds;
+#endif
+	MetalCompositorRefreshPresentRect();
+}
+
+void PocketShaverRehomeWindowContentView(void)
+{
+	if (!s_window_content_view)
+		return;
+	PocketShaverInsertContentView(s_window_content_view);
+#if TARGET_OS_MACCATALYST
+	PocketShaverPinContentView();
+#endif
+	MetalCompositorRefreshPresentRect();
+}
+
+void PocketShaverAdoptSDLWindowContentView(void)
+{
+	UIView *metal = PocketShaverSDLMetalView();
+	if (metal) {
+		fprintf(stderr, "[pocketshaver] pinning SDL Metal view %p bounds=%.0fx%.0f\n",
+			metal, metal.bounds.size.width, metal.bounds.size.height);
+		PocketShaverInstallWindowContentView((__bridge void *)metal);
+		return;
+	}
+	/* Do not Auto Layout-pin SDL's container: that collapses the Metal
+	 * drawable on Catalyst. Size the container with the autoresizing mask. */
+	UIWindow *uiWindow = (__bridge UIWindow *)PocketShaverGetSDLUIWindow();
+	UIView *root = uiWindow.rootViewController.view;
+	if (!root)
+		root = uiWindow;
+	if (!root)
+		return;
+	root.translatesAutoresizingMaskIntoConstraints = YES;
+	root.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+	if (root.superview)
+		root.frame = root.superview.bounds;
+	fprintf(stderr, "[pocketshaver] no Metal view yet; sized SDL container %p to %.0fx%.0f\n",
+		root, root.bounds.size.width, root.bounds.size.height);
+}
+
+extern "C" void MetalCompositorRefreshPresentRect(void)
+{
+	if (![NSThread isMainThread])
+		return;
+	UIView *view = s_window_content_view;
+	if (!view || !view.superview)
+		return;
+	CGRect vb = view.bounds;
+	if (vb.size.width <= 0.0 || vb.size.height <= 0.0)
+		return;
+	CGRect inWindow = [view convertRect:vb toView:nil];
+	int x = (int)(inWindow.origin.x + 0.5);
+	int y = (int)(inWindow.origin.y + 0.5);
+	int w = (int)(inWindow.size.width + 0.5);
+	int h = (int)(inWindow.size.height + 0.5);
+	if (x < 0) x = 0;
+	if (y < 0) y = 0;
+	atomic_store_explicit(&s_present_rect_origin,
+		((uint64_t)(uint32_t)x << 32) | (uint32_t)y, memory_order_relaxed);
+	atomic_store_explicit(&s_present_rect_size,
+		((uint64_t)(uint32_t)w << 32) | (uint32_t)h, memory_order_relaxed);
+}
+
+extern "C" void MetalCompositorGetPresentRect(int *out_x, int *out_y,
+                                              int *out_w, int *out_h)
+{
+	uint64_t o = atomic_load_explicit(&s_present_rect_origin, memory_order_relaxed);
+	uint64_t s = atomic_load_explicit(&s_present_rect_size, memory_order_relaxed);
+	if (out_x) *out_x = (int)(uint32_t)(o >> 32);
+	if (out_y) *out_y = (int)(uint32_t)(o & 0xffffffffu);
+	if (out_w) *out_w = (int)(uint32_t)(s >> 32);
+	if (out_h) *out_h = (int)(uint32_t)(s & 0xffffffffu);
+}
+
+extern "C" double MetalCompositorWindowedContentInsetTop(void)
+{
+#if TARGET_OS_MACCATALYST
+	if (!s_window_content_view || !s_window_content_view.superview)
+		return 0.0;
+	return (double)s_window_content_view.superview.safeAreaInsets.top;
+#else
+	return 0.0;
+#endif
+}
+
+extern "C" void MetalCompositorReapplyWindowPinning(void)
+{
+#if TARGET_OS_MACCATALYST
+	void (^apply)(void) = ^{
+		PocketShaverPinContentView();
+		PocketShaverApplyLetterboxColor();
+		MetalCompositorRefreshPresentRect();
+	};
+	if ([NSThread isMainThread])
+		apply();
+	else
+		dispatch_async(dispatch_get_main_queue(), apply);
 #endif
 }

@@ -9,7 +9,9 @@
  *  (at your option) any later version.
  *
  *  Replaces SDL's rendering pipeline on iOS with a Metal compositor.
- *  Creates a UIView + CAMetalLayer covering the full iOS window, wraps
+ *  Host window layout (UIWindow lookup, view insert, Catalyst pinning,
+ *  letterbox colour, present-rect cache) lives in utils_ios.mm. This file
+ *  only owns the CAMetalLayer-backed view and Metal presentation. Wraps
  *  the emulator's framebuffer as a zero-copy shared MTLBuffer, and
  *  renders a fullscreen triangle every frame to present the 2D desktop.
  *
@@ -34,9 +36,6 @@
 #import <QuartzCore/CAMetalLayer.h>
 #import <UIKit/UIKit.h>
 
-#include <SDL2/SDL.h>
-#include <SDL2/SDL_syswm.h>
-
 #include "atomic.h"
 
 #include "sysdeps.h"
@@ -54,6 +53,7 @@
 #include "prefs.h"
 #include "MiscellaneousSettingsObjCCppHeader.h"
 #include "PerformanceCounterObjCCppHeader.h"
+#include "utils_ios.h"
 
 // ---------------------------------------------------------------------------
 // Logging macros
@@ -83,12 +83,6 @@ static constexpr bool compositor_logging_enabled = false;
 #endif
 
 // ---------------------------------------------------------------------------
-// SDL window — declared in video_sdl2.cpp
-// ---------------------------------------------------------------------------
-
-extern SDL_Window *sdl_window;
-
-// ---------------------------------------------------------------------------
 // CompositorMetalView — UIView backed by CAMetalLayer
 // ---------------------------------------------------------------------------
 
@@ -101,25 +95,9 @@ extern SDL_Window *sdl_window;
 }
 @end
 
-// ---------------------------------------------------------------------------
-// GetSDLUIWindow — retrieve UIWindow from SDL (shared pattern across engines)
-// ---------------------------------------------------------------------------
-
 static UIWindow *GetSDLUIWindow(void)
 {
-    if (!sdl_window) return nil;
-
-    SDL_SysWMinfo wmInfo;
-    SDL_VERSION(&wmInfo.version);
-    if (!SDL_GetWindowWMInfo(sdl_window, &wmInfo)) {
-        COMPOSITOR_ERR("GetSDLUIWindow: SDL_GetWindowWMInfo failed: %s", SDL_GetError());
-        return nil;
-    }
-    if (wmInfo.subsystem != SDL_SYSWM_UIKIT) {
-        COMPOSITOR_ERR("GetSDLUIWindow: not UIKit subsystem (%d)", wmInfo.subsystem);
-        return nil;
-    }
-    return wmInfo.info.uikit.window;
+    return (__bridge UIWindow *)PocketShaverGetSDLUIWindow();
 }
 
 // ---------------------------------------------------------------------------
@@ -137,66 +115,6 @@ static id<MTLSamplerState>          compositor_sampler  = nil;
 
 // Lifecycle flag for Metal compositor state.
 static bool                         compositor_initialized = false;
-
-// ---------------------------------------------------------------------------
-// Present-rect cache — authoritative source for the absolute-cursor map in
-// video_sdl2.cpp's handle_mouse_event / VideoMapWindowPointToGuestAndMove.
-//
-// The cursor map must map the finger/pointer into the SAME rectangle the
-// compositor draws the guest image into: compositor_view's bounds. On Mac
-// Catalyst the view is pinned to its superview's FULL bounds
-// (MetalCompositorPinViewToWindow), so this rect is the whole window and does
-// not shift when the menu bar shows/hides on an unfocus/refocus. Reading
-// uiWindow.bounds (or, worse, SDL_GetWindowSize — transposed/stale off the main
-// thread on Catalyst) is avoided so the cursor map and the drawn image never
-// disagree.
-//
-// We publish the view rect in WINDOW coordinates (the space SDL mouse events
-// use). video_sdl2 applies the aspect-FILL map within it using the guest dims
-// (matching the layer's kCAGravityResizeAspectFill), clamping at the cropped
-// edges. Read on the main thread (Refresh, pumped from on_sdl_event_generated),
-// published into two atomics the redraw thread reads (Get); x:y and w:h packed
-// so neither pair tears.
-// ---------------------------------------------------------------------------
-
-static atomic_uint64 s_present_rect_origin = 0;   // (x << 32) | y, window points
-static atomic_uint64 s_present_rect_size   = 0;   // (w << 32) | h, window points
-
-extern "C" void MetalCompositorRefreshPresentRect(void)
-{
-    // UIKit reads (-bounds, -convertRect:) are main-thread only. Off-thread
-    // callers are no-ops rather than reintroducing an unsafe read; the last
-    // main-thread value stays cached.
-    if (![NSThread isMainThread]) return;
-    CompositorMetalView *view = compositor_view;
-    if (!view || !view.superview) return;
-    CGRect vb = view.bounds;
-    if (vb.size.width <= 0.0 || vb.size.height <= 0.0) return;
-    // Express the drawn area in the window's base coordinate system so any
-    // safe-area inset (Catalyst) is folded into the origin.
-    CGRect inWindow = [view convertRect:vb toView:nil];
-    int x = (int)(inWindow.origin.x + 0.5);
-    int y = (int)(inWindow.origin.y + 0.5);
-    int w = (int)(inWindow.size.width  + 0.5);
-    int h = (int)(inWindow.size.height + 0.5);
-    if (x < 0) x = 0;
-    if (y < 0) y = 0;
-    atomic_store_explicit(&s_present_rect_origin,
-        ((uint64_t)(uint32_t)x << 32) | (uint32_t)y, memory_order_relaxed);
-    atomic_store_explicit(&s_present_rect_size,
-        ((uint64_t)(uint32_t)w << 32) | (uint32_t)h, memory_order_relaxed);
-}
-
-extern "C" void MetalCompositorGetPresentRect(int *out_x, int *out_y,
-                                              int *out_w, int *out_h)
-{
-    uint64_t o = atomic_load_explicit(&s_present_rect_origin, memory_order_relaxed);
-    uint64_t s = atomic_load_explicit(&s_present_rect_size,   memory_order_relaxed);
-    if (out_x) *out_x = (int)(uint32_t)(o >> 32);
-    if (out_y) *out_y = (int)(uint32_t)(o & 0xffffffffu);
-    if (out_w) *out_w = (int)(uint32_t)(s >> 32);
-    if (out_h) *out_h = (int)(uint32_t)(s & 0xffffffffu);
-}
 
 // Double-buffered palette. Two 256x4-byte MTLBuffers allocated directly from
 // the device. Writers on the current main==emul thread apply complete/partial
@@ -702,95 +620,6 @@ static void compositor_vbl_callback(void *ctx, void *drawable, double target_ts)
 }
 
 // ---------------------------------------------------------------------------
-// MetalCompositorPinViewToWindow (Mac Catalyst) — size the compositor view to its
-// superview's FULL bounds via Auto Layout (deliberately NOT the safe area): the guest image
-// fills the whole window edge-to-edge, overscanning the Mac menu-bar / camera-housing strip
-// and the rounded screen corners, so there is no black border. Combined with the layer's
-// aspect-fill gravity, the overscan is cropped at those edges. On Catalyst the view runs with
-// translatesAutoresizingMaskIntoConstraints = NO, so it has NO size unless pinned. A mode
-// switch that re-homes the view into a fresh SDL rootViewController.view drops the previous
-// pin (it referenced the old superview), collapsing the view to 0x0 — a black desktop. Re-pin
-// on every re-home. Storing the constraints lets us deactivate the stale set first, so
-// re-pinning against an unchanged superview cannot stack duplicates. (iOS/iPad use the
-// autoresizing mask and are unaffected.)
-// ---------------------------------------------------------------------------
-#if TARGET_OS_MACCATALYST
-static NSArray<NSLayoutConstraint *> *s_compositor_pin_constraints = nil;
-
-// Defined in PreferencesViewControllerObjC.mm — true iff the app's NSWindow is full screen.
-extern "C" bool catalyst_is_window_fullscreen(void);
-
-static void MetalCompositorPinViewToWindow(void)
-{
-    if (!compositor_view || !compositor_view.superview) return;
-    if (s_compositor_pin_constraints) {
-        [NSLayoutConstraint deactivateConstraints:s_compositor_pin_constraints];
-        s_compositor_pin_constraints = nil;
-    }
-    compositor_view.translatesAutoresizingMaskIntoConstraints = NO;
-    UIView *superview = compositor_view.superview;
-    // Full screen fills the whole window edge-to-edge (top = window top, overscanning the
-    // notch). Windowed keeps the title bar: pin the TOP to the safe-area guide, whose top
-    // inset is the title-bar height in a windowed Mac window (sides/bottom have no inset in
-    // either mode, so they pin to the window edges). Re-pinned on full-screen changes via
-    // MetalCompositorReapplyWindowPinning.
-    BOOL fullscreen = catalyst_is_window_fullscreen();
-    NSLayoutYAxisAnchor *topAnchor = fullscreen ? superview.topAnchor
-                                                 : superview.safeAreaLayoutGuide.topAnchor;
-    NSArray<NSLayoutConstraint *> *pins = @[
-        [compositor_view.topAnchor      constraintEqualToAnchor:topAnchor],
-        [compositor_view.leadingAnchor  constraintEqualToAnchor:superview.leadingAnchor],
-        [compositor_view.trailingAnchor constraintEqualToAnchor:superview.trailingAnchor],
-        [compositor_view.bottomAnchor   constraintEqualToAnchor:superview.bottomAnchor],
-    ];
-    [NSLayoutConstraint activateConstraints:pins];
-    s_compositor_pin_constraints = pins;
-}
-
-// Letterbox bars: black in full screen (standard), a window-style grey when windowed (adapts
-// to light/dark) so a resized window looks native. The guest always aspect-fits, so bars show
-// whenever the drawable aspect doesn't match the guest.
-static void MetalCompositorApplyLetterboxColor(void)
-{
-    if (!compositor_view) return;
-    if (catalyst_is_window_fullscreen()) {
-        compositor_view.backgroundColor = [UIColor blackColor];
-    } else {
-        compositor_view.backgroundColor = [UIColor colorWithDynamicProvider:^UIColor *(UITraitCollection *traits) {
-            return traits.userInterfaceStyle == UIUserInterfaceStyleDark
-                ? [UIColor colorWithWhite:0.16 alpha:1.0]
-                : [UIColor colorWithWhite:0.93 alpha:1.0];
-        }];
-    }
-}
-
-// The windowed compositor view is pinned below the title bar, so its drawable top inset (the
-// safe-area top of its superview) is what the window auto-resize must add back to keep the
-// guest edge-to-edge. Reported in points; 0 if unavailable / not yet laid out.
-extern "C" double MetalCompositorWindowedContentInsetTop(void)
-{
-    if (!compositor_view || !compositor_view.superview) return 0.0;
-    return (double)compositor_view.superview.safeAreaInsets.top;
-}
-
-// Re-apply window-dependent layout after a windowed<->full-screen change: the pin (title bar
-// appears/disappears, notch inset changes) AND the letterbox colour. Main-thread only (UIKit
-// layout); hops there if called off-main.
-extern "C" void MetalCompositorReapplyWindowPinning(void)
-{
-    if ([NSThread isMainThread]) {
-        MetalCompositorPinViewToWindow();
-        MetalCompositorApplyLetterboxColor();
-    } else {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            MetalCompositorPinViewToWindow();
-            MetalCompositorApplyLetterboxColor();
-        });
-    }
-}
-#endif
-
-// ---------------------------------------------------------------------------
 // MetalCompositorInit
 // ---------------------------------------------------------------------------
 
@@ -840,18 +669,8 @@ int MetalCompositorInit(int width, int height, int depth, int row_bytes,
     // --- CompositorMetalView covering full window ---
     compositor_view = [[CompositorMetalView alloc] initWithFrame:uiWindow.bounds];
     compositor_view.opaque = YES;
-#if TARGET_OS_MACCATALYST
-    MetalCompositorApplyLetterboxColor();   // black in full screen, window-grey when windowed
-#else
     compositor_view.backgroundColor = [UIColor blackColor];
-#endif
     compositor_view.userInteractionEnabled = NO;  // let touches pass to SDL
-    // Track the parent's size. On Mac (UISupportsTrueScreenSizeOnMac /
-    // UILaunchToFullScreenByDefaultOnMac) the window resizes to the true screen
-    // size AFTER this one-time init frame, so without this the CAMetalLayer
-    // would composite into the stale launch rect. No-op on iOS where the window
-    // never resizes. translatesAutoresizingMaskIntoConstraints stays YES (no
-    // constraints target this view), so the mask is honored.
     compositor_view.autoresizingMask =
         UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
 
@@ -1119,33 +938,7 @@ int MetalCompositorInit(int width, int height, int depth, int row_bytes,
     }
 
     compositor_initialized = true;
-    // Insert the compositor as the BOTTOM-most child of the SDL container view
-    // (rootViewController.view) rather than on top of the window. The gamepad /
-    // input overlay is embedded as a later sibling inside that same container,
-    // so index 0 keeps the opaque compositor beneath it (the overlay draws)
-    // regardless of creation order, and the compositor inherits the keyboard /
-    // drag screen-offset transform applied to the SDL container. Touch is
-    // unaffected (compositor_view.userInteractionEnabled is NO). See the
-    // matching re-home in MetalCompositorResize, which runs on mode switches.
-    {
-        UIView *sdlContainer = uiWindow.rootViewController.view;
-        if (sdlContainer) {
-            [sdlContainer insertSubview:compositor_view atIndex:0];
-        } else {
-            // No rootViewController yet — keep it at the window, but at the
-            // bottom so it still never covers the overlay.
-            [uiWindow insertSubview:compositor_view atIndex:0];
-        }
-#if TARGET_OS_MACCATALYST
-        // Now that the compositor is in a view hierarchy (a common ancestor
-        // exists), pin it to its superview's FULL bounds so the guest desktop fills the
-        // whole window edge-to-edge (overscanning the Mac menu bar / camera housing and the
-        // rounded corners; the aspect-fill gravity crops the overscan). MUST run post-insert:
-        // cross-view constraints require a shared hierarchy. The matching re-pin
-        // in MetalCompositorResize keeps this alive across mode-switch re-homes.
-        MetalCompositorPinViewToWindow();
-#endif
-    }
+    PocketShaverInstallWindowContentView((__bridge void *)compositor_view);
 
     // Subscribe to DMC FIRST:
     // compositor registered first → reverse-order enter makes compositor LAST
@@ -1432,22 +1225,8 @@ int MetalCompositorResize(int width, int height, int depth, int row_bytes,
     // orphaned (black screen) — so re-assert it as the bottom-most child of the
     // current SDL container on every resize. Idempotent: a no-op when already
     // correctly parented.
-    if (compositor_view) {
-        UIWindow *resizeWindow = GetSDLUIWindow();
-        UIView *sdlContainer = resizeWindow.rootViewController.view;
-        if (sdlContainer && compositor_view.superview != sdlContainer) {
-            [sdlContainer insertSubview:compositor_view atIndex:0];
-        }
-#if TARGET_OS_MACCATALYST
-        // Re-homing drops the Init-time full-window pin (it referenced the previous
-        // superview) while translatesAutoresizingMaskIntoConstraints is NO, so the
-        // view would otherwise collapse to 0x0 — a black desktop after a mode
-        // switch. Re-pin to the current superview's full bounds. Idempotent: the
-        // helper deactivates any prior pin first, so an unchanged superview is a
-        // no-op in effect.
-        MetalCompositorPinViewToWindow();
-#endif
-    }
+    if (compositor_view)
+        PocketShaverRehomeWindowContentView();
 
     // Capture old dimensions/depth for diagnostic log
     int old_width = compositor_pixel_width;
@@ -1596,6 +1375,7 @@ void MetalCompositorShutdown(void)
                    compositor_view, compositor_layer, compositor_depth);
 
     if (compositor_view) {
+        PocketShaverInstallWindowContentView(NULL);
         [compositor_view removeFromSuperview];
         compositor_view = nil;
     }

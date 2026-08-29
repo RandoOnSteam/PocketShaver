@@ -146,9 +146,11 @@ extern "C" {
 /*
  * Initialize the Metal compositor for 2D framebuffer presentation.
  *
- * Creates a CompositorMetalView (UIView + CAMetalLayer) covering the full
- * iOS window, wraps the framebuffer as a zero-copy shared MTLBuffer with
- * a MTLTexture view, and builds the render pipeline for the specified depth.
+ * Creates a CAMetalLayer-backed view and registers it with the MacOSX
+ * platform window helpers (utils_ios) so Catalyst pinning/letterbox/present-
+ * rect live outside gfxaccel. Wraps the framebuffer as a zero-copy shared
+ * MTLBuffer with a MTLTexture view, and builds the render pipeline for the
+ * specified depth.
  *
  * Parameters:
  *   width       - framebuffer width in pixels

@@ -139,6 +139,9 @@ extern VidLocals *private_data;	// Pointer to driver local variables (there is o
 extern bool VideoInit(void);
 extern void VideoExit(void);
 extern void VideoVBL(void);
+#if defined(ENABLE_GFXACCEL)
+extern void VideoFallbackVBL(void);
+#endif
 extern void VideoInstallAccel(void);
 // Unwind guest-facing gfxaccel registration on a guest soft reboot so the
 // accRun/VideoInstallAccel retry path reinstalls into the fresh guest.

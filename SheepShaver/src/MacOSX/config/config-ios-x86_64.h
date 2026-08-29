@@ -497,9 +497,14 @@
 
 /* Define to enble SDL support. */
 #define USE_SDL 1
+/* Metal (PocketShaver.xcodeproj / -DGFXACCEL_BACKEND=metal) is SDL2 +
+ * video_sdl2.cpp. SDL-GPU is SDL3 + video_sdl3.cpp. Command-line
+ * -DUSE_SDL2=1 / -DGFXACCEL_USE_METAL=1 must win over these defaults. */
+#if !defined(USE_SDL2) && !defined(GFXACCEL_USE_METAL)
 #define USE_SDL3 1
 #define GFXACCEL_USE_SDLGPU
 #define GFXACCEL_USE_OPENGL
+#endif
 
 /* Define to enable SDL audio support */
 #define USE_SDL_AUDIO 1

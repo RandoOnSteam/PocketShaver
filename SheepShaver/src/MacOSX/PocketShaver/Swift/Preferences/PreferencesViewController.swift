@@ -373,12 +373,29 @@ public class PreferencesViewController: UIViewController {
 	public static func presentStartup() -> PreferencesViewController {
 		let vc = PreferencesViewController(mode: .startup)
 
-		prefsWindow.windowLevel = .normal
-		prefsWindow.makeKeyAndVisible()
+		// SDL3 already owns the scene's first UIWindow. Replacing that window's
+		// rootViewController crashes Catalyst (UITextEffectsWindow
+		// isTrackingKeyboard). Attach prefs to a new scene-backed window instead
+		// of UIWindow(frame:), which is not connected to the UIWindowScene and
+		// shows up blank.
+		if let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first {
+			let window = UIWindow(windowScene: scene)
+			window.frame = scene.coordinateSpace.bounds
+			prefsWindow = window
+		}
 
+		prefsWindow.windowLevel = .alert
 		prefsWindow.rootViewController = vc
+		prefsWindow.makeKeyAndVisible()
+		prefsWindow.isHidden = false
 
 		return vc
+	}
+
+	@objc
+	public static func prepareSkippedStartup() {
+		PreferencesManager.shared.writePreferences()
+		DiskManager.shared.reportWillBoot()
 	}
 
 	@objc
