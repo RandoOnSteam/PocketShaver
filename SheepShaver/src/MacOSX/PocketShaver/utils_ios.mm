@@ -35,6 +35,23 @@
 #include <sys/sysctl.h>
 #include <Metal/Metal.h>
 
+#if !defined(GFXACCEL_USE_SDLGPU)
+void VideoPresentFallback(void) {}
+#endif
+
+extern "C" void PocketShaverRunOnMainSync(void (*fn)(void *), void *arg)
+{
+	if (!fn)
+		return;
+	if ([NSThread isMainThread]) {
+		fn(arg);
+		return;
+	}
+	dispatch_sync(dispatch_get_main_queue(), ^{
+		fn(arg);
+	});
+}
+
 // This is used from video_sdl.cpp.
 void NSAutoReleasePool_wrap(void (*fn)(void))
 {
@@ -237,6 +254,79 @@ bool MetalIsAvailable() {
 }
 
 extern SDL_Window *sdl_window;
+static UIImageView *s_cpu_frame_view;
+
+void PocketShaverPresentCPUFrame(const void *pixels, int w, int h, int pitch)
+{
+	if (!pixels || w <= 0 || h <= 0 || pitch < w * 4)
+		return;
+	if (![NSThread isMainThread]) {
+		struct {
+			const void *pixels;
+			int w, h, pitch;
+		} job = { pixels, w, h, pitch };
+		PocketShaverRunOnMainSync([](void *p) {
+			auto *j = static_cast<decltype(job) *>(p);
+			PocketShaverPresentCPUFrame(j->pixels, j->w, j->h, j->pitch);
+		}, &job);
+		return;
+	}
+	const uint8_t *p0 = (const uint8_t *)pixels;
+	static int s_logged_size;
+	if (s_logged_size != (w << 16 | h)) {
+		s_logged_size = w << 16 | h;
+		fprintf(stderr, "[video] CPU frame %dx%d pitch=%d px0=%02x%02x%02x%02x\n",
+			w, h, pitch, p0[0], p0[1], p0[2], p0[3]);
+	}
+	CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+	CGContextRef ctx = CGBitmapContextCreate(
+		(void *)pixels, w, h, 8, pitch, cs,
+		kCGImageAlphaNoneSkipFirst | kCGBitmapByteOrder32Little);
+	CGImageRef img = ctx ? CGBitmapContextCreateImage(ctx) : NULL;
+	if (ctx)
+		CGContextRelease(ctx);
+	if (cs)
+		CGColorSpaceRelease(cs);
+	if (!img)
+		return;
+	UIWindow *uiWindow = (__bridge UIWindow *)PocketShaverGetSDLUIWindow();
+	UIView *root = uiWindow.rootViewController.view;
+	if (!root)
+		root = uiWindow;
+	if (!s_cpu_frame_view) {
+		s_cpu_frame_view = [[UIImageView alloc] initWithFrame:CGRectZero];
+		s_cpu_frame_view.contentMode = UIViewContentModeScaleAspectFit;
+		s_cpu_frame_view.clipsToBounds = YES;
+		s_cpu_frame_view.opaque = YES;
+		s_cpu_frame_view.backgroundColor = [UIColor blackColor];
+		s_cpu_frame_view.userInteractionEnabled = NO;
+	}
+	if (root && s_cpu_frame_view.superview != root) {
+		[s_cpu_frame_view removeFromSuperview];
+		s_cpu_frame_view.frame = root.bounds;
+		s_cpu_frame_view.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+		[root addSubview:s_cpu_frame_view];
+		fprintf(stderr, "[video] CPU fallback view %p on %p bounds=%.0fx%.0f\n",
+			s_cpu_frame_view, root, root.bounds.size.width, root.bounds.size.height);
+	}
+	if (s_cpu_frame_view.superview)
+		[s_cpu_frame_view.superview bringSubviewToFront:s_cpu_frame_view];
+	s_cpu_frame_view.layer.contents = (__bridge id)img;
+	CGImageRelease(img);
+}
+
+void PocketShaverPresentCPUSurface(void *sdl_surface)
+{
+	SDL_Surface *src = (SDL_Surface *)sdl_surface;
+	if (!src)
+		return;
+	SDL_Surface *conv = SDL_ConvertSurface(src, SDL_PIXELFORMAT_XRGB8888);
+	if (!conv)
+		return;
+	if (conv->pixels && conv->pitch >= conv->w * 4)
+		PocketShaverPresentCPUFrame(conv->pixels, conv->w, conv->h, conv->pitch);
+	SDL_DestroySurface(conv);
+}
 #if TARGET_OS_MACCATALYST
 extern "C" bool catalyst_is_window_fullscreen(void);
 #endif

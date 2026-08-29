@@ -64,6 +64,10 @@ bool MetalIsAvailable();
 #ifdef __cplusplus
 extern "C" {
 #endif
+void PocketShaverRunOnMainSync(void (*fn)(void *), void *arg);
+void PocketShaverPresentCPUSurface(void *sdl_surface);
+void PocketShaverPresentCPUFrame(const void *pixels, int w, int h, int pitch);
+void VideoPresentFallback(void);
 /* Native UIWindow backing the SDL window (UIWindow *), or NULL. */
 void *PocketShaverGetSDLUIWindow(void);
 /* Register the UIView that fills the host window (Metal overlay or SDL's

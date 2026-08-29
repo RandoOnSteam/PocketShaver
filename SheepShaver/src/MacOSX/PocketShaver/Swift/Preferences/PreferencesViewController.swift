@@ -394,6 +394,7 @@ public class PreferencesViewController: UIViewController {
 
 	@objc
 	public static func prepareSkippedStartup() {
+		MiscellaneousSettings.current.loadJitFromCorePrefs()
 		PreferencesManager.shared.writePreferences()
 		DiskManager.shared.reportWillBoot()
 	}

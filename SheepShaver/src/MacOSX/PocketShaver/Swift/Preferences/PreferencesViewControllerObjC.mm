@@ -36,6 +36,17 @@ static int s_last_guest_h = 0;
 // emulator interrupt path and each iteration of the startup prefs loop.
 extern "C" void catalyst_pump_appkit_events(void) {
 #if TARGET_OS_MACCATALYST
+	if (![NSThread isMainThread]) {
+		static volatile int queued;
+		if (queued)
+			return;
+		queued = 1;
+		dispatch_async(dispatch_get_main_queue(), ^{
+			queued = 0;
+			catalyst_pump_appkit_events();
+		});
+		return;
+	}
 	Class NSApplicationClass = NSClassFromString(@"NSApplication");
 	if (!NSApplicationClass) return;
 	id app = ((id (*)(Class, SEL))objc_msgSend)(NSApplicationClass, sel_registerName("sharedApplication"));
@@ -271,6 +282,12 @@ void objc_resize_catalyst_window_for_guest(int guest_w, int guest_h) {
 __weak __typeof(PreferencesViewController) *vc;
 
 void objc_displayPreferencesStartup(void) {
+	if (![NSThread isMainThread]) {
+		dispatch_sync(dispatch_get_main_queue(), ^{
+			objc_displayPreferencesStartup();
+		});
+		return;
+	}
 	@autoreleasepool {
 #if TARGET_OS_MACCATALYST
 		if (objc_findBool(@"skiposxstartup")) {

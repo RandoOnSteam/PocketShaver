@@ -848,11 +848,28 @@ static SDL_Surface *init_sdl_video(int width, int height, int depth, Uint32 flag
 			(int)(window_width*m),
 			window_height,
 			  (int)(window_height*m), m));
+#if TARGET_OS_MACCATALYST
+		struct {
+			int w, h;
+			Uint32 flags;
+			SDL_Window *win;
+		} job = { (int)(m * window_width), (int)(m * window_height), window_flags, NULL };
+		PocketShaverRunOnMainSync([](void *ud) {
+			auto *j = static_cast<decltype(job) *>(ud);
+			j->win = SDL_CreateWindow("", j->w, j->h, j->flags);
+		}, &job);
+		sdl_window = job.win;
+		if (sdl_window)
+			PocketShaverRunOnMainSync([](void *) {
+				PocketShaverAdoptSDLWindowContentView();
+			}, NULL);
+#else
 		sdl_window = SDL_CreateWindow(
 			"",
 			(int)(m * window_width),
 			(int)(m * window_height),
 			window_flags);
+#endif
 		if (!sdl_window) {
 			shutdown_sdl_video();
 			return NULL;
@@ -1080,6 +1097,80 @@ static int present_sdl_video()
     // Indicate success to the caller!
     return 0;
 }
+
+#if defined(GFXACCEL_USE_SDLGPU)
+static int present_sdl_video_windowsurface_impl()
+{
+	if (!sdl_window || !guest_surface)
+		return -1;
+	SDL_Surface *src = host_surface ? host_surface : guest_surface;
+	if (!src)
+		return -1;
+	LOCK_PALETTE;
+	SDL_LockMutex(sdl_update_video_mutex);
+	if (host_surface != guest_surface && host_surface != NULL && guest_surface != NULL) {
+		SDL_Rect destRect = { 0, 0, host_surface->w, host_surface->h };
+		if (!SDL_BlitSurface(guest_surface, NULL, host_surface, &destRect)) {
+			SDL_UnlockMutex(sdl_update_video_mutex);
+			UNLOCK_PALETTE;
+			return -1;
+		}
+	}
+	UNLOCK_PALETTE;
+	static int windowsurface_ok = -1;
+	SDL_Surface *ws = NULL;
+	if (windowsurface_ok != 0) {
+		ws = SDL_GetWindowSurface(sdl_window);
+		if (!ws) {
+			if (windowsurface_ok < 0)
+				fprintf(stderr, "[video] SDL_GetWindowSurface failed: %s\n", SDL_GetError());
+			windowsurface_ok = 0;
+		} else
+			windowsurface_ok = 1;
+	}
+	if (!ws) {
+		SDL_UnlockMutex(sdl_update_video_mutex);
+#if TARGET_OS_IPHONE
+		PocketShaverPresentCPUSurface(src);
+		return 0;
+#else
+		return -1;
+#endif
+	}
+	if (!SDL_BlitSurfaceScaled(src, NULL, ws, NULL, SDL_SCALEMODE_LINEAR)) {
+		SDL_UnlockMutex(sdl_update_video_mutex);
+		return -1;
+	}
+	sdl_update_video_rect.x = 0;
+	sdl_update_video_rect.y = 0;
+	sdl_update_video_rect.w = 0;
+	sdl_update_video_rect.h = 0;
+	SDL_UnlockMutex(sdl_update_video_mutex);
+	if (!SDL_UpdateWindowSurface(sdl_window))
+		return -1;
+	return 0;
+}
+
+static int present_sdl_video_windowsurface()
+{
+#if TARGET_OS_MACCATALYST
+	int rc = -1;
+	PocketShaverRunOnMainSync([](void *p) {
+		*static_cast<int *>(p) = present_sdl_video_windowsurface_impl();
+	}, &rc);
+	return rc;
+#else
+	return present_sdl_video_windowsurface_impl();
+#endif
+}
+
+extern "C" void VideoPresentFallback(void)
+{
+	if (MetalCompositorIsInitialized())
+		return;
+	present_sdl_video_windowsurface();
+}
+#endif
 
 void update_sdl_video(SDL_Surface *s, int numrects, SDL_Rect *rects)
 {
@@ -2018,14 +2109,15 @@ void VideoVBL(void)
 		NQDMetalFlush();
 	if (MetalCompositorIsInitialized())
 		MetalCompositorPresent();
-#if defined(GFXACCEL_USE_SDLGPU)
 	else {
-		present_sdl_video();
-	}
+#if defined(GFXACCEL_USE_SDLGPU)
+		if (fallback_vbl_active)
+			vbl_source_sdl_tick(0.0);
+		present_sdl_video_windowsurface();
 #else
-	else
 		present_sdl_video();
 #endif
+	}
 #else
 	present_sdl_video();
 #endif

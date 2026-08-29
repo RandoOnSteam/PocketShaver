@@ -434,11 +434,10 @@ static int vm_acquire_fixed_internal(void * addr, size_t size, int options)
 
 void *vm_acquire(size_t size, int options) {
 #ifdef MEM_BULK
-	//fprintf(stderr, "vm_acquire:       addr=%08lx size=%08lx\n", mapAddr, size);
 	void *addr = (void *)(mapAddr + VMBaseDiff);
-	mapAddr += (size + ALLOC_UNIT - 1) / ALLOC_UNIT * ALLOC_UNIT;
 	if (vm_protect(addr, size, VM_PAGE_DEFAULT) != 0)
 		return VM_MAP_FAILED;
+	mapAddr += (size + ALLOC_UNIT - 1) / ALLOC_UNIT * ALLOC_UNIT;
 	return addr;
 #else
 	return vm_acquire_internal(size, options);
@@ -448,12 +447,11 @@ void *vm_acquire(size_t size, int options) {
 int vm_acquire_fixed(void *addr, size_t size, int options) {
 #ifdef MEM_BULK
 	vm_uintptr_t addr_mac = (vm_uintptr_t)addr - VMBaseDiff;
-	//fprintf(stderr, "vm_acquire_fixed: addr=%08lx size=%08lx\n", addr_mac, size);
 	assert(addr_mac >= mapAddr);
-	mapAddr = addr_mac + (size + ALLOC_UNIT - 1) / ALLOC_UNIT * ALLOC_UNIT;
 	if (vm_protect(addr, size, VM_PAGE_DEFAULT) != 0)
 		return -1;
-	return 0; // success
+	mapAddr = addr_mac + (size + ALLOC_UNIT - 1) / ALLOC_UNIT * ALLOC_UNIT;
+	return 0;
 #else
 	return vm_acquire_fixed_internal(addr, size, options);
 #endif

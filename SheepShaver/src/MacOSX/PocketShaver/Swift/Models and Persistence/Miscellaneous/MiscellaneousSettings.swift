@@ -172,12 +172,11 @@ class MiscellaneousSettings: Codable {
 		ignoreIllegalInstructions = false
 		altivecEnabled = true
 		ramInMb = 512
+		jitCompilerEnabled = false
 		#if targetEnvironment(macCatalyst)
-		jitCompilerEnabled = true
 		clipboardSharing = .automatic
 		reportClipboardSharingActivity = false
 		#else
-		jitCompilerEnabled = false
 		clipboardSharing = .manual
 		reportClipboardSharingActivity = true
 		#endif
@@ -206,6 +205,7 @@ class MiscellaneousSettings: Codable {
 
 		settings.migrateGammaRampDefaultIfNeeded()
 		settings.updateCachedResponses()
+		settings.loadJitFromCorePrefs()
 		return settings
 	}()
 
@@ -394,6 +394,11 @@ class MiscellaneousSettings: Codable {
 		self.altivecEnabled = altivecEnabled
 
 		saveAsCurrent()
+	}
+
+	@MainActor
+	func loadJitFromCorePrefs() {
+		jitCompilerEnabled = objc_findBool("jit")
 	}
 
 	@MainActor
