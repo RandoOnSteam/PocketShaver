@@ -297,7 +297,7 @@ extern "C" int32_t DSpAltBuffer_DisposeHandler(uint32_t altBuffer)
  * mapping as the back buffer (dsp_metal_renderer.mm DSpPixelFormatForDepthBits):
  * 8 -> R8Uint (indexed, CLUT unpack), 16 -> R16Uint (xRGB1555), 32 ->
  * BGRA8Unorm. Anything else is normalized to 32 at New time. */
-inline uint32_t DSpAltBytesPerPixel(uint32_t depth)
+uint32_t DSpAltBytesPerPixel(uint32_t depth)
 {
 	switch (depth) {
 		case 8:  return 1u;

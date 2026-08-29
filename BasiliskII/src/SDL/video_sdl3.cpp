@@ -213,8 +213,12 @@ static void (*video_refresh)(void);
 // Prototypes
 static int redraw_func(void *arg);
 static int present_sdl_video();
+static void handle_events(void);
 static bool SDLCALL on_sdl_event_generated(void *userdata, SDL_Event *event);
 static bool is_fullscreen(SDL_Window *);
+#if TARGET_OS_IPHONE
+extern "C" void VideoMapWindowPointToGuestAndMove(double winX, double winY);
+#endif
 
 // From sys_unix.cpp
 extern void SysMountFirstFloppy(void);
@@ -799,6 +803,25 @@ static float get_display_scale()
 	return scale > 0.0f ? scale : 1.0f;
 }
 
+#if TARGET_OS_MACCATALYST
+struct SDLWindowCreateJob {
+	int w, h;
+	Uint32 flags;
+	SDL_Window *win;
+};
+
+static void CreateSDLWindowOnMain(void *ud)
+{
+	SDLWindowCreateJob *job = (SDLWindowCreateJob *)ud;
+	job->win = SDL_CreateWindow("", job->w, job->h, job->flags);
+}
+
+static void AdoptSDLWindowOnMain(void *)
+{
+	PocketShaverAdoptSDLWindowContentView();
+}
+#endif
+
 static SDL_Surface *init_sdl_video(int width, int height, int depth, Uint32 flags, int pitch)
 {
     if (guest_surface) {
@@ -849,20 +872,12 @@ static SDL_Surface *init_sdl_video(int width, int height, int depth, Uint32 flag
 			window_height,
 			  (int)(window_height*m), m));
 #if TARGET_OS_MACCATALYST
-		struct {
-			int w, h;
-			Uint32 flags;
-			SDL_Window *win;
-		} job = { (int)(m * window_width), (int)(m * window_height), window_flags, NULL };
-		PocketShaverRunOnMainSync([](void *ud) {
-			auto *j = static_cast<decltype(job) *>(ud);
-			j->win = SDL_CreateWindow("", j->w, j->h, j->flags);
-		}, &job);
+		SDLWindowCreateJob job = { (int)(m * window_width),
+			(int)(m * window_height), window_flags, NULL };
+		PocketShaverRunOnMainSync(CreateSDLWindowOnMain, &job);
 		sdl_window = job.win;
 		if (sdl_window)
-			PocketShaverRunOnMainSync([](void *) {
-				PocketShaverAdoptSDLWindowContentView();
-			}, NULL);
+			PocketShaverRunOnMainSync(AdoptSDLWindowOnMain, NULL);
 #else
 		sdl_window = SDL_CreateWindow(
 			"",
@@ -1151,13 +1166,18 @@ static int present_sdl_video_windowsurface_impl()
 	return 0;
 }
 
+#if TARGET_OS_MACCATALYST
+static void PresentSDLVideoWindowSurfaceOnMain(void *p)
+{
+	*(int *)p = present_sdl_video_windowsurface_impl();
+}
+#endif
+
 static int present_sdl_video_windowsurface()
 {
 #if TARGET_OS_MACCATALYST
 	int rc = -1;
-	PocketShaverRunOnMainSync([](void *p) {
-		*static_cast<int *>(p) = present_sdl_video_windowsurface_impl();
-	}, &rc);
+	PocketShaverRunOnMainSync(PresentSDLVideoWindowSurfaceOnMain, &rc);
 	return rc;
 #else
 	return present_sdl_video_windowsurface_impl();
@@ -2111,8 +2131,11 @@ void VideoVBL(void)
 		MetalCompositorPresent();
 	else {
 #if defined(GFXACCEL_USE_SDLGPU)
-		if (fallback_vbl_active)
+		if (fallback_vbl_active) {
+			SDL_PumpEvents();
+			handle_events();
 			vbl_source_sdl_tick(0.0);
+		}
 		present_sdl_video_windowsurface();
 #else
 		present_sdl_video();
@@ -2804,7 +2827,8 @@ static void handle_events(void)
 					drv->mouse_moved(event.motion.xrel, event.motion.yrel);
 				} else {
 #if TARGET_OS_MACCATALYST
-					(void)event;
+					if (fallback_vbl_active)
+						VideoMapWindowPointToGuestAndMove(event.motion.x, event.motion.y);
 #elif TARGET_OS_IPHONE
 					SDL_ConvertEventToRenderCoordinates(sdl_renderer, &event);
 					drv->mouse_moved(event.motion.x, event.motion.y);
@@ -3480,6 +3504,11 @@ extern "C" void VideoMapWindowPointToGuestAndMove(double winX, double winY)
 	MetalCompositorRefreshPresentRect();
 	int rx = 0, ry = 0, rw = 0, rh = 0;
 	MetalCompositorGetPresentRect(&rx, &ry, &rw, &rh);
+	if (rw <= 0 || rh <= 0) {
+		SDL_GetWindowSize(sdl_window, &rw, &rh);
+		rx = 0;
+		ry = 0;
+	}
 	if (rw <= 0 || rh <= 0)
 		return;
 	float mag = std::min((float)rw / drv->VIDEO_MODE_X,

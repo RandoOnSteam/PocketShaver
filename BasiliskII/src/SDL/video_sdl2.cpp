@@ -883,11 +883,8 @@ static SDL_Surface *init_sdl_video(int width, int height, int depth, Uint32 flag
 	}
 
 	if (!sdl_renderer) {
-#if TARGET_OS_IPHONE
-		const char *render_driver = NULL;
-#else
+#if !TARGET_OS_IPHONE
 		const char *render_driver = PrefsFindString("sdlrender");
-#endif
 		if (render_driver) {
 			SDL_SetHint(SDL_HINT_RENDER_DRIVER, render_driver);
 		}
@@ -918,6 +915,7 @@ static SDL_Surface *init_sdl_video(int width, int height, int depth, Uint32 flag
 		memset(&info, 0, sizeof(info));
 		SDL_GetRendererInfo(sdl_renderer, &info);
 		printf("Using SDL_Renderer driver: %s\n", (info.name ? info.name : "(null)"));
+#endif
 	}
 
     if (!sdl_update_video_mutex) {
@@ -1326,21 +1324,21 @@ void driver_base::init()
 				        metal_rc, fb_width, fb_height, VIDEO_MODE_DEPTH,
 				        VIDEO_MODE_ROW_BYTES, pitch);
 				MetalCompositorShutdown();
-				return;
-			}
-			// metal_compositor subscribes
-			// to DMC FIRST during MetalCompositorInit above; gfxaccel_resources
-			// subscribes SECOND here. LIFO on_mode_enter dispatch fires
-			// gfxaccel_resources.on_mode_enter FIRST (fans out to engines to
-			// attach their resources) and metal_compositor.on_mode_enter LAST,
-			// so the compositor sees attached engine resources on its first
-			// present after a mode switch. Init is a behavioral no-op when
-			// no engines are registered yet.
-			int32_t gfxres_err = gfxaccel_resources_init();
-			if (gfxres_err != 0) {
-				fprintf(stderr, "[gfxaccel_resources] init FAILED (err=%d) - "
-				                "proceeding with compositor-only framebuffer "
-				                "(fallback)\n", (int)gfxres_err);
+			} else {
+				// metal_compositor subscribes
+				// to DMC FIRST during MetalCompositorInit above; gfxaccel_resources
+				// subscribes SECOND here. LIFO on_mode_enter dispatch fires
+				// gfxaccel_resources.on_mode_enter FIRST (fans out to engines to
+				// attach their resources) and metal_compositor.on_mode_enter LAST,
+				// so the compositor sees attached engine resources on its first
+				// present after a mode switch. Init is a behavioral no-op when
+				// no engines are registered yet.
+				int32_t gfxres_err = gfxaccel_resources_init();
+				if (gfxres_err != 0) {
+					fprintf(stderr, "[gfxaccel_resources] init FAILED (err=%d) - "
+					                "proceeding with compositor-only framebuffer "
+					                "(fallback)\n", (int)gfxres_err);
+				}
 			}
 		}
 #if TARGET_OS_IPHONE
@@ -2183,7 +2181,12 @@ void VideoVBL(void)
 	// so all 2D drawing is visible in the framebuffer texture.
 	if (nqd_metal_available)
 		NQDMetalFlush();
-	MetalCompositorPresent();
+	if (MetalCompositorIsInitialized())
+		MetalCompositorPresent();
+#if TARGET_OS_IPHONE
+	else
+		PocketShaverPresentCPUSurface(host_surface ? host_surface : guest_surface);
+#endif
 #else
 	present_sdl_video();
 #endif

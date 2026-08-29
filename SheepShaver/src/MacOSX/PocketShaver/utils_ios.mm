@@ -254,21 +254,37 @@ bool MetalIsAvailable() {
 }
 
 extern SDL_Window *sdl_window;
+#if TARGET_OS_MACCATALYST
+extern "C" bool catalyst_is_window_fullscreen(void);
+#endif
 static UIImageView *s_cpu_frame_view;
+static atomic_uint64 s_present_rect_origin = 0;
+static atomic_uint64 s_present_rect_size = 0;
 
-void PocketShaverPresentCPUFrame(const void *pixels, int w, int h, int pitch)
+struct CPUFrameJob {
+	const void *pixels;
+	int w, h, pitch;
+	CGBitmapInfo bitmapInfo;
+};
+
+static void PocketShaverPresentCPUFrameWithInfo(const void *pixels, int w, int h, int pitch,
+	CGBitmapInfo bitmapInfo);
+
+static void PresentCPUFrameOnMain(void *p)
+{
+	CPUFrameJob *job = (CPUFrameJob *)p;
+	PocketShaverPresentCPUFrameWithInfo(job->pixels, job->w, job->h, job->pitch,
+		job->bitmapInfo);
+}
+
+static void PocketShaverPresentCPUFrameWithInfo(const void *pixels, int w, int h, int pitch,
+	CGBitmapInfo bitmapInfo)
 {
 	if (!pixels || w <= 0 || h <= 0 || pitch < w * 4)
 		return;
 	if (![NSThread isMainThread]) {
-		struct {
-			const void *pixels;
-			int w, h, pitch;
-		} job = { pixels, w, h, pitch };
-		PocketShaverRunOnMainSync([](void *p) {
-			auto *j = static_cast<decltype(job) *>(p);
-			PocketShaverPresentCPUFrame(j->pixels, j->w, j->h, j->pitch);
-		}, &job);
+		CPUFrameJob job = { pixels, w, h, pitch, bitmapInfo };
+		PocketShaverRunOnMainSync(PresentCPUFrameOnMain, &job);
 		return;
 	}
 	const uint8_t *p0 = (const uint8_t *)pixels;
@@ -281,7 +297,7 @@ void PocketShaverPresentCPUFrame(const void *pixels, int w, int h, int pitch)
 	CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
 	CGContextRef ctx = CGBitmapContextCreate(
 		(void *)pixels, w, h, 8, pitch, cs,
-		kCGImageAlphaNoneSkipFirst | kCGBitmapByteOrder32Little);
+		bitmapInfo);
 	CGImageRef img = ctx ? CGBitmapContextCreateImage(ctx) : NULL;
 	if (ctx)
 		CGContextRelease(ctx);
@@ -303,11 +319,25 @@ void PocketShaverPresentCPUFrame(const void *pixels, int w, int h, int pitch)
 	}
 	if (root && s_cpu_frame_view.superview != root) {
 		[s_cpu_frame_view removeFromSuperview];
-		s_cpu_frame_view.frame = root.bounds;
 		s_cpu_frame_view.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
 		[root addSubview:s_cpu_frame_view];
 		fprintf(stderr, "[video] CPU fallback view %p on %p bounds=%.0fx%.0f\n",
 			s_cpu_frame_view, root, root.bounds.size.width, root.bounds.size.height);
+	}
+	if (s_cpu_frame_view.superview) {
+		CGRect frame = root.bounds;
+#if TARGET_OS_MACCATALYST
+		if (!catalyst_is_window_fullscreen())
+			frame = UIEdgeInsetsInsetRect(frame, root.safeAreaInsets);
+#endif
+		s_cpu_frame_view.frame = frame;
+		CGRect inWindow = [s_cpu_frame_view convertRect:s_cpu_frame_view.bounds toView:nil];
+		atomic_store_explicit(&s_present_rect_origin,
+			((uint64_t)(uint32_t)lround(inWindow.origin.x) << 32) |
+			(uint32_t)lround(inWindow.origin.y), memory_order_relaxed);
+		atomic_store_explicit(&s_present_rect_size,
+			((uint64_t)(uint32_t)lround(inWindow.size.width) << 32) |
+			(uint32_t)lround(inWindow.size.height), memory_order_relaxed);
 	}
 	if (s_cpu_frame_view.superview)
 		[s_cpu_frame_view.superview bringSubviewToFront:s_cpu_frame_view];
@@ -315,28 +345,55 @@ void PocketShaverPresentCPUFrame(const void *pixels, int w, int h, int pitch)
 	CGImageRelease(img);
 }
 
+void PocketShaverPresentCPUFrame(const void *pixels, int w, int h, int pitch)
+{
+	PocketShaverPresentCPUFrameWithInfo(pixels, w, h, pitch,
+		kCGImageAlphaNoneSkipFirst | kCGBitmapByteOrder32Little);
+}
+
 void PocketShaverPresentCPUSurface(void *sdl_surface)
 {
+#if USE_SDL3
 	SDL_Surface *src = (SDL_Surface *)sdl_surface;
 	if (!src)
 		return;
+	const SDL_PixelFormatDetails *format = SDL_GetPixelFormatDetails(src->format);
+	if (format && format->bits_per_pixel == 32 &&
+		format->Rmask == 0xff000000 && format->Gmask == 0x00ff0000 &&
+		format->Bmask == 0x0000ff00) {
+		PocketShaverPresentCPUFrameWithInfo(src->pixels, src->w, src->h, src->pitch,
+			kCGImageAlphaNoneSkipFirst | kCGBitmapByteOrder32Big);
+		return;
+	}
 	SDL_Surface *conv = SDL_ConvertSurface(src, SDL_PIXELFORMAT_XRGB8888);
 	if (!conv)
 		return;
 	if (conv->pixels && conv->pitch >= conv->w * 4)
 		PocketShaverPresentCPUFrame(conv->pixels, conv->w, conv->h, conv->pitch);
 	SDL_DestroySurface(conv);
-}
-#if TARGET_OS_MACCATALYST
-extern "C" bool catalyst_is_window_fullscreen(void);
+#else
+	SDL_Surface *src = (SDL_Surface *)sdl_surface;
+	if (!src)
+		return;
+	if (src->format && src->format->BitsPerPixel == 32 &&
+		src->format->Rmask == 0xff000000 && src->format->Gmask == 0x00ff0000 &&
+		src->format->Bmask == 0x0000ff00) {
+		PocketShaverPresentCPUFrameWithInfo(src->pixels, src->w, src->h, src->pitch,
+			kCGImageAlphaNoneSkipFirst | kCGBitmapByteOrder32Big);
+		return;
+	}
+	SDL_Surface *conv = SDL_ConvertSurfaceFormat(src, SDL_PIXELFORMAT_XRGB8888, 0);
+	if (!conv)
+		return;
+	if (conv->pixels && conv->pitch >= conv->w * 4)
+		PocketShaverPresentCPUFrame(conv->pixels, conv->w, conv->h, conv->pitch);
+	SDL_FreeSurface(conv);
 #endif
-
+}
 static UIView *s_window_content_view = nil;
 #if TARGET_OS_MACCATALYST
 static NSArray<NSLayoutConstraint *> *s_window_pin_constraints = nil;
 #endif
-static atomic_uint64 s_present_rect_origin = 0;
-static atomic_uint64 s_present_rect_size = 0;
 
 void *PocketShaverGetSDLUIWindow(void)
 {
