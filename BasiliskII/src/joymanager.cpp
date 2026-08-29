@@ -28,9 +28,7 @@
 #include "macos_util.h"
 #include "cpu_emulation.h"
 #include "xlowmem.h"
-#ifndef MAIN_H /* OSX doesn't have M68kRegisters in main.h */
-struct M68kRegisters { uint32 d[8], a[8]; };
-#endif
+
 #ifdef USE_SDL
 #include "my_sdl.h"
 #endif
@@ -38,7 +36,9 @@ struct M68kRegisters { uint32 d[8], a[8]; };
 #define JOYMANAGER_TRACE 0
 #define DEBUG 0
 #include "debug.h"
-
+#ifndef MAIN_H /* OSX doesn't have M68kRegisters in main.h */
+struct M68kRegisters { uint32 d[8], a[8]; };
+#endif
 enum {
 	JOYMANAGER_MAX_DEVICES = 8,
 	JOYMANAGER_MAX_AXES = 8,
