@@ -48,6 +48,7 @@ class PreferencesAdvancedViewController: PreferencesTableViewController {
 		//uiOptions
 		case uiOptionsHoverJustAbove
 		case uiOptionsAlwaysBootInLandscapeMode
+		case uiOptionsSkipStartupScreen
 		case uiOptionsReportIpAddressAssignment
 		case uiOptionsReportClipboardSharingActivity
 		case uiOptionsKeysJoystickDeadZone
@@ -266,6 +267,13 @@ class PreferencesAdvancedViewController: PreferencesTableViewController {
 				) { [weak self] isOn in
 					self?.model.alwaysLandscapeMode = isOn
 				}
+			case .uiOptionsSkipStartupScreen:
+				return PreferencesEnabledSettingCell(
+					title: "Skip startup screen",
+					isOn: model.skipStartupScreen
+				) { [weak self] isOn in
+					self?.model.skipStartupScreen = isOn
+				}
 			case .uiOptionsReportIpAddressAssignment:
 				return PreferencesEnabledSettingCell(
 					title: "Report IP address assignment",
@@ -471,6 +479,9 @@ class PreferencesAdvancedViewController: PreferencesTableViewController {
 			if model.shouldDisplayAlwaysLandscapeModeOption {
 				snapshot.appendItems([.uiOptionsAlwaysBootInLandscapeMode])
 			}
+		}
+		if UIDevice.deviceType == .mac {
+			snapshot.appendItems([.uiOptionsSkipStartupScreen])
 		}
 		snapshot.appendItems([.uiOptionsReportIpAddressAssignment])
 		snapshot.appendItems([.uiOptionsReportClipboardSharingActivity])

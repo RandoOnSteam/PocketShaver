@@ -14,7 +14,7 @@
 
 #include <cstdint>
 #include <vector>
-#include <unordered_map>
+#include <map>
 
 /*
  *  OpenGL sub-opcode constants
@@ -782,12 +782,31 @@ struct GLTextureObject {
     int      depth;          // for 3D textures (GL_TEXTURE_3D_EXT)
     uint32_t source_format;
     uint32_t source_type;
+    /* True when the internalformat the guest asked for in glTexImage2D has NO
+     * alpha channel (GL_RGB, GL_LUMINANCE, the numeric 1/2/3 component-count
+     * forms, ...). GL guarantees such a texture samples alpha = 1.0 regardless
+     * of what the supplied pixel data contained, so the BGRA upload has its
+     * alpha forced opaque. Without this, uploading RGBA-typed pixels into an
+     * RGB-requested texture (which Quake 3 does) leaked the source buffer's
+     * alpha bytes into a texture that must be fully opaque. */
+    bool     internal_format_opaque;
     uint32_t min_filter;     // GLenum: GL_NEAREST, GL_LINEAR, etc.
     uint32_t mag_filter;     // GLenum
 	    uint32_t wrap_s;         // GLenum: GL_REPEAT, GL_CLAMP, etc.
 		    uint32_t wrap_t;         // GLenum
 			    int      env_mode;       // GL_MODULATE, GL_DECAL, GL_BLEND, GL_REPLACE
 			    bool     has_mipmaps;
+			    /* Sampler state last PUSHED to the host GL object for this
+			     * texture. Sampler state is per texture object, so it cannot be
+			     * tracked in a single global "current" slot: binding B then
+			     * rebinding A must re-push A's filters. Mirrors what was last
+			     * sent for THIS object; sampler_applied=false forces a re-push
+			     * (set on upload, which resets the host filters). */
+			    bool     sampler_applied;
+			    uint32_t applied_min;
+			    uint32_t applied_mag;
+			    uint32_t applied_wrap_s;
+			    uint32_t applied_wrap_t;
 			    bool     legacy_ushort_palette_index_chain; // level-0 duplicated-byte indexed palette applies to mips
 				    bool     legacy_ushort_bgr332_chain; // level-0 duplicated-byte BGR332 fallback may apply to duplicated mips
 			    bool     legacy_ushort_index_gray_chain; // level-0 duplicated-byte index fallback applies to mips
@@ -816,6 +835,14 @@ struct GLDisplayList {
     uint32_t name;
     std::vector<GLCommand> commands;
 };
+
+/*
+ *  Name-keyed object tables. std::map rather than a hash table: the tables
+ *  hold tens of entries, lookup is by a 32-bit GL name, and the ordered
+ *  container needs no hash functor.
+ */
+typedef std::map<uint32_t, GLTextureObject> GLTextureObjectMap;
+typedef std::map<uint32_t, GLDisplayList>   GLDisplayListMap;
 
 
 /*
@@ -854,6 +881,7 @@ struct GLMaterial {
 struct GLTextureUnit {
     uint32_t bound_texture_1d;   // name of bound GL_TEXTURE_1D
     uint32_t bound_texture_2d;   // name of bound GL_TEXTURE_2D
+    GLTextureObject *bound_object_2d; // bound_texture_2d texture_objects entry
     uint32_t bound_texture_3d;   // name of bound GL_TEXTURE_3D_EXT
     bool     enabled_1d;
     bool     enabled_2d;
@@ -1133,13 +1161,13 @@ struct GLContext {
     int      client_active_texture;    // for client state
 
     // ---- Texture objects ----
-    std::unordered_map<uint32_t, GLTextureObject> texture_objects;
+    GLTextureObjectMap texture_objects;
     uint32_t next_texture_name;
 
     // ---- Enable/disable caps ----
     bool     depth_test;
     bool     blend;
-    bool     color_sum;                // GL_COLOR_SUM (EXT_secondary_color) — add secondary color after texturing
+    bool     color_sum;                // GL_COLOR_SUM (EXT_secondary_color) - add secondary color after texturing
     bool     cull_face_enabled;
     uint32_t cull_face_mode;           // GL_FRONT, GL_BACK, GL_FRONT_AND_BACK
     uint32_t front_face;               // GL_CCW or GL_CW
@@ -1215,15 +1243,15 @@ struct GLContext {
     GLVertexArrayPointer prepared_texcoord_array[4];
 
     // ---- Display lists ----
-    std::unordered_map<uint32_t, GLDisplayList> display_lists;
+    GLDisplayListMap display_lists;
     uint32_t next_list_name;
     bool     in_display_list;
     uint32_t current_list_name;
     uint32_t current_list_mode;        // GL_COMPILE or GL_COMPILE_AND_EXECUTE
     uint32_t list_base;
 
-    // ---- Metal state ----
-    void    *metal;                    // opaque Metal resources pointer
+    // ---- Renderer backend state ----
+    void    *metal;                    // opaque Metal or desktop-GL context state
 
     // ---- Pixel store ----
     GLPixelStore pixel_store;
@@ -1412,6 +1440,10 @@ extern uint32_t GLDispatchARC(uint32_t r3, uint32_t r4, uint32_t r5, uint32_t r6
 // Install library hooks to intercept GL/AGL/GLU/GLUT function lookups
 extern void GLInstallHooks();
 
+// Clear the GL install latches for a guest soft reboot so GLInstallHooks
+// re-patches the freshly reloaded GL/AGL/GLU libraries (see GfxAccelResetForReboot).
+extern void GLResetForReboot(void);
+
 // TVECT array indexed by sub-opcode (for stub-patching path)
 extern uint32_t gl_method_tvects[];
 
@@ -1429,7 +1461,7 @@ extern uint32_t gl_scratch_addr;
 extern uint32_t gl_dt_flag_addr;
 
 // Logging control (os_log-backed; gated by gl_logging_enabled + ACCEL_LOG_VERBOSE)
-#include "accel_logging.h"
+#include "gfx_log.h"
 #if ACCEL_LOGGING_ENABLED
 #ifdef __APPLE__
 #include <os/log.h>
@@ -1443,13 +1475,13 @@ extern bool gl_logging_enabled;
 #define GL_METAL_LOG(fmt, ...)  do { if (gl_logging_enabled) os_log(gl_metal_log, fmt, ##__VA_ARGS__); } while (0)
 #define GL_METAL_VLOG(fmt, ...) do { if (gl_logging_enabled && ACCEL_LOG_VERBOSE) os_log(gl_metal_log, fmt, ##__VA_ARGS__); } while (0)
 #else
-#define GL_LOG(fmt, ...)        do { if (gl_logging_enabled) printf("GL: " fmt "\n", ##__VA_ARGS__); } while (0)
-#define GL_VLOG(fmt, ...)       do { if (gl_logging_enabled && ACCEL_LOG_VERBOSE) printf("GL: " fmt "\n", ##__VA_ARGS__); } while (0)
-#define GL_METAL_LOG(fmt, ...)  do { if (gl_logging_enabled) printf("GL_METAL: " fmt "\n", ##__VA_ARGS__); } while (0)
-#define GL_METAL_VLOG(fmt, ...) do { if (gl_logging_enabled && ACCEL_LOG_VERBOSE) printf("GL_METAL: " fmt "\n", ##__VA_ARGS__); } while (0)
+#define GL_LOG(...)        do { if (gl_logging_enabled) GFX_DEBUG_EMIT("GL: ", __VA_ARGS__); } while (0)
+#define GL_VLOG(...)       do { if (gl_logging_enabled && ACCEL_LOG_VERBOSE) GFX_DEBUG_EMIT("GL: ", __VA_ARGS__); } while (0)
+#define GL_METAL_LOG(...)  do { if (gl_logging_enabled) GFX_DEBUG_EMIT("GL_METAL: ", __VA_ARGS__); } while (0)
+#define GL_METAL_VLOG(...) do { if (gl_logging_enabled && ACCEL_LOG_VERBOSE) GFX_DEBUG_EMIT("GL_METAL: ", __VA_ARGS__); } while (0)
 #endif
 #else /* !ACCEL_LOGGING_ENABLED */
-static constexpr bool gl_logging_enabled = false;
+const bool gl_logging_enabled = false;
 #define GL_LOG(fmt, ...)        do {} while (0)
 #define GL_VLOG(fmt, ...)       do {} while (0)
 #define GL_METAL_LOG(fmt, ...)  do {} while (0)
@@ -1459,15 +1491,19 @@ static constexpr bool gl_logging_enabled = false;
 // Function signature table for FPR extraction
 extern GLFuncSignature gl_func_signatures[];
 
-// Metal renderer functions (implemented in gl_metal_renderer.mm)
+// GPU backend renderer functions (Metal: gl_metal_renderer.mm; OpenGL: gl/gl_ffp_renderer.cpp)
 extern void GLMetalInit(GLContext *ctx);
 extern void GLMetalBeginFrame(GLContext *ctx);
 extern void GLMetalClear(GLContext *ctx, uint32_t mask);
 extern void GLMetalEndFrame(GLContext *ctx);
 extern void GLMetalFlushImmediateMode(GLContext *ctx);
 extern void GLMetalRelease(GLContext *ctx);
+/* Primary upload shape used by gl_state.cpp / gl_engine.cpp (BGRA8 host bytes). */
 extern void GLMetalUploadTexture(GLContext *ctx, GLTextureObject *texObj, int level,
-                                 int width, int height, int format, int type, const void *pixels);
+                                 int width, int height, const uint8_t *data, int dataLen);
+extern void GLMetalUploadSubTexture(GLContext *ctx, GLTextureObject *texObj, int level,
+                                    int xoff, int yoff, int w, int h,
+                                    const uint8_t *data, int bytesPerRow);
 extern void GLMetalUpload3DTexture(GLContext *ctx, GLTextureObject *texObj, int level,
                                    int width, int height, int depth,
                                    const uint8_t *data, int dataLen);

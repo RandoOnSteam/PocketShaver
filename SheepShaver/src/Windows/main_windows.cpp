@@ -43,6 +43,9 @@
 #include "user_strings.h"
 #include "vm_alloc.h"
 #include "sigsegv.h"
+#include "macio_escc.h"
+#include "usbhid.h"
+#include "usbuim.h"
 #include "util_windows.h"
 //#include "kernel_windows.h"
 
@@ -56,6 +59,10 @@
 #if !SDL_VERSION_ATLEAST(3, 0, 0)
 #define SDL_EVENT_KEY_UP	SDL_KEYUP
 #define SDL_EVENT_KEY_DOWN	SDL_KEYDOWN
+#define SDL_InitFAILURE -1
+#else
+#include <SDL_main.h>
+#define SDL_InitFAILURE false
 #endif
 
 // Constants
@@ -307,7 +314,7 @@ int main(int argc, char **argv)
 	sdl_flags |= SDL_INIT_AUDIO;
 #endif
 	assert(sdl_flags != 0);
-	if (SDL_Init(sdl_flags) == -1) {
+	if (SDL_Init(sdl_flags) == SDL_InitFAILURE) {
 		char str[256];
 		sprintf(str, "Could not initialize SDL: %s.\n", SDL_GetError());
 		ErrorAlert(str);
@@ -380,7 +387,10 @@ int main(int argc, char **argv)
 		ErrorAlert(str);
 		goto quit;
 	}
-
+#ifdef ENABLE_USB
+	MacIOESCCInstall();
+	USBHIDInstall();
+#endif /* ENABLE_USB */
 	// Load Mac ROM
 	rom_path = PrefsFindString("rom");
 	rom_fh = CreateFile(rom_path && *rom_path ? rom_path : ROM_FILE_NAME,
@@ -402,7 +412,7 @@ int main(int argc, char **argv)
 	rom_tmp = new uint8[ROM_SIZE];
 	ReadFile(rom_fh, (void *)rom_tmp, ROM_SIZE, &actual, NULL);
 	CloseHandle(rom_fh);
-	
+
 	// Decode Mac ROM
 	if (!DecodeROM(rom_tmp, actual)) {
 		if (rom_size != 4*1024*1024) {
@@ -414,7 +424,7 @@ int main(int argc, char **argv)
 		}
 	}
 	delete[] rom_tmp;
-	
+
 	// Initialize native timers
 	timer_init();
 
@@ -423,8 +433,14 @@ int main(int argc, char **argv)
 		goto quit;
 	D(bug("Initialization complete\n"));
 
-	// Write protect ROM
-	vm_protect(ROMBaseHost, ROM_AREA_SIZE, VM_PAGE_READ);
+	// Write protect ROM if not in MSVC's debugger
+#if defined(_WIN64) /* IsDebuggerPresent is always in Win64; Win32 dynload*/
+	if (IsDebuggerPresent())
+		vm_protect(ROMBaseHost, ROM_AREA_SIZE, VM_PAGE_READ | VM_PAGE_WRITE);
+	else
+#endif
+		vm_protect(ROMBaseHost, ROM_AREA_SIZE, VM_PAGE_READ);
+
 
 	// Start 60Hz thread
 	tick_thread_cancel = false;
@@ -457,9 +473,6 @@ quit:
 
 static void Quit(void)
 {
-	// Exit PowerPC emulation
-	exit_emul_ppc();
-
 	// Stop 60Hz thread
 	if (tick_thread_active) {
 		tick_thread_cancel = true;
@@ -471,6 +484,9 @@ static void Quit(void)
 		nvram_thread_cancel = true;
 		wait_thread(nvram_thread);
 	}
+
+	// Exit PowerPC emulation
+	exit_emul_ppc();
 
 	// Deinitialize everything
 	ExitAll();
@@ -654,7 +670,7 @@ static void nvram_watchdog(void)
 	}
 }
 
-static DWORD nvram_func(void *arg)
+static DWORD WINAPI nvram_func(void *arg)
 {
 	while (!nvram_thread_cancel) {
 		for (int i=0; i<60 && !nvram_thread_cancel; i++)
@@ -670,7 +686,7 @@ static DWORD nvram_func(void *arg)
  */
 
 bool tick_inhibit;
-static DWORD tick_func(void *arg)
+static DWORD WINAPI tick_func(void *arg)
 {
 	int tick_counter = 0;
 	uint64 start = GetTicks_usec();
@@ -694,12 +710,12 @@ static DWORD tick_func(void *arg)
 			tick_counter = 0;
 			WriteMacInt32(0x20c, TimerDateTime());
 		}
-
-		// Trigger 60Hz interrupt
-		if (ReadMacInt32(XLM_IRQ_NEST) == 0) {
-			SetInterruptFlag(INTFLAG_VIA);
-			TriggerInterrupt();
-		}
+		SetInterruptFlag(INTFLAG_VIA);
+		TriggerInterrupt();
+		USBUIMSampleGuest();
+#if EMULATED_PPC
+		PPCExceptionStallSample();
+#endif
 	}
 
 	uint64 end = GetTicks_usec();

@@ -76,7 +76,7 @@ void LoadPrefs(const char *vmdir)
 	if (UserPrefsPath.empty()) {
 		int pwd_len = GetCurrentDirectory(0, NULL);
 		prefs_path.resize(pwd_len);
-		pwd_len = GetCurrentDirectory(pwd_len, &prefs_path.front());
+		pwd_len = GetCurrentDirectory(pwd_len, &prefs_path[0]);
 		prefs_path[pwd_len] = TEXT('\\');
 		prefs_path += PREFS_FILE_NAME;
 	} else

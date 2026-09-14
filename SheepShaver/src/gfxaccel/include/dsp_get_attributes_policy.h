@@ -26,7 +26,7 @@ static inline uint32_t DSpDepthMaskForDepth(uint32_t depth)
 static inline void DSpNormalizeGetAttributesForState(DSpContextAttributes *attr,
                                                      uint32_t state)
 {
-	if (attr == nullptr) return;
+	if (attr == NULL) return;
 	if (state != (uint32_t)kDSpContextState_Active) return;
 
 	const uint32_t display_depth =

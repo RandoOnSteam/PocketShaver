@@ -22,16 +22,35 @@
  */
 
 #include <UIKit/UIKit.h>
+#import <QuartzCore/CAMetalLayer.h>
 #include "sysdeps.h"
 #include "my_sdl.h"
 #include "utils_ios.h"
+#include "atomic.h"
 
-#if SDL_VERSION_ATLEAST(2,0,0)
+#if USE_SDL2
 #include <SDL2/SDL_syswm.h>
 #endif
 
 #include <sys/sysctl.h>
 #include <Metal/Metal.h>
+
+#if !defined(GFXACCEL_USE_SDLGPU)
+void VideoPresentFallback(void) {}
+#endif
+
+extern "C" void PocketShaverRunOnMainSync(void (*fn)(void *), void *arg)
+{
+	if (!fn)
+		return;
+	if ([NSThread isMainThread]) {
+		fn(arg);
+		return;
+	}
+	dispatch_sync(dispatch_get_main_queue(), ^{
+		fn(arg);
+	});
+}
 
 // This is used from video_sdl.cpp.
 void NSAutoReleasePool_wrap(void (*fn)(void))
@@ -231,5 +250,376 @@ bool MetalIsAvailable() {
 	bool r = dev != nil;
 	[dev release];
 	return r;
+#endif
+}
+
+extern SDL_Window *sdl_window;
+#if TARGET_OS_MACCATALYST
+extern "C" bool catalyst_is_window_fullscreen(void);
+#endif
+static UIImageView *s_cpu_frame_view;
+static atomic_uint64 s_present_rect_origin = 0;
+static atomic_uint64 s_present_rect_size = 0;
+
+struct CPUFrameJob {
+	const void *pixels;
+	int w, h, pitch;
+	CGBitmapInfo bitmapInfo;
+};
+
+static void PocketShaverPresentCPUFrameWithInfo(const void *pixels, int w, int h, int pitch,
+	CGBitmapInfo bitmapInfo);
+
+static void PresentCPUFrameOnMain(void *p)
+{
+	CPUFrameJob *job = (CPUFrameJob *)p;
+	PocketShaverPresentCPUFrameWithInfo(job->pixels, job->w, job->h, job->pitch,
+		job->bitmapInfo);
+}
+
+static void PocketShaverPresentCPUFrameWithInfo(const void *pixels, int w, int h, int pitch,
+	CGBitmapInfo bitmapInfo)
+{
+	if (!pixels || w <= 0 || h <= 0 || pitch < w * 4)
+		return;
+	if (![NSThread isMainThread]) {
+		CPUFrameJob job = { pixels, w, h, pitch, bitmapInfo };
+		PocketShaverRunOnMainSync(PresentCPUFrameOnMain, &job);
+		return;
+	}
+	const uint8_t *p0 = (const uint8_t *)pixels;
+	static int s_logged_size;
+	if (s_logged_size != (w << 16 | h)) {
+		s_logged_size = w << 16 | h;
+		fprintf(stderr, "[video] CPU frame %dx%d pitch=%d px0=%02x%02x%02x%02x\n",
+			w, h, pitch, p0[0], p0[1], p0[2], p0[3]);
+	}
+	CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+	CGContextRef ctx = CGBitmapContextCreate(
+		(void *)pixels, w, h, 8, pitch, cs,
+		bitmapInfo);
+	CGImageRef img = ctx ? CGBitmapContextCreateImage(ctx) : NULL;
+	if (ctx)
+		CGContextRelease(ctx);
+	if (cs)
+		CGColorSpaceRelease(cs);
+	if (!img)
+		return;
+	UIWindow *uiWindow = (__bridge UIWindow *)PocketShaverGetSDLUIWindow();
+	UIView *root = uiWindow.rootViewController.view;
+	if (!root)
+		root = uiWindow;
+	if (!s_cpu_frame_view) {
+		s_cpu_frame_view = [[UIImageView alloc] initWithFrame:CGRectZero];
+		s_cpu_frame_view.contentMode = UIViewContentModeScaleAspectFit;
+		s_cpu_frame_view.clipsToBounds = YES;
+		s_cpu_frame_view.opaque = YES;
+		s_cpu_frame_view.backgroundColor = [UIColor blackColor];
+		s_cpu_frame_view.userInteractionEnabled = NO;
+	}
+	if (root && s_cpu_frame_view.superview != root) {
+		[s_cpu_frame_view removeFromSuperview];
+		s_cpu_frame_view.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+		[root addSubview:s_cpu_frame_view];
+		fprintf(stderr, "[video] CPU fallback view %p on %p bounds=%.0fx%.0f\n",
+			s_cpu_frame_view, root, root.bounds.size.width, root.bounds.size.height);
+	}
+	if (s_cpu_frame_view.superview) {
+		CGRect frame = root.bounds;
+#if TARGET_OS_MACCATALYST
+		if (!catalyst_is_window_fullscreen())
+			frame = UIEdgeInsetsInsetRect(frame, root.safeAreaInsets);
+#endif
+		s_cpu_frame_view.frame = frame;
+		CGRect inWindow = [s_cpu_frame_view convertRect:s_cpu_frame_view.bounds toView:nil];
+		atomic_store_explicit(&s_present_rect_origin,
+			((uint64_t)(uint32_t)lround(inWindow.origin.x) << 32) |
+			(uint32_t)lround(inWindow.origin.y), memory_order_relaxed);
+		atomic_store_explicit(&s_present_rect_size,
+			((uint64_t)(uint32_t)lround(inWindow.size.width) << 32) |
+			(uint32_t)lround(inWindow.size.height), memory_order_relaxed);
+	}
+	if (s_cpu_frame_view.superview)
+		[s_cpu_frame_view.superview bringSubviewToFront:s_cpu_frame_view];
+	s_cpu_frame_view.layer.contents = (__bridge id)img;
+	CGImageRelease(img);
+}
+
+void PocketShaverPresentCPUFrame(const void *pixels, int w, int h, int pitch)
+{
+	PocketShaverPresentCPUFrameWithInfo(pixels, w, h, pitch,
+		kCGImageAlphaNoneSkipFirst | kCGBitmapByteOrder32Little);
+}
+
+void PocketShaverPresentCPUSurface(void *sdl_surface)
+{
+#if USE_SDL3
+	SDL_Surface *src = (SDL_Surface *)sdl_surface;
+	if (!src)
+		return;
+	const SDL_PixelFormatDetails *format = SDL_GetPixelFormatDetails(src->format);
+	if (format && format->bits_per_pixel == 32 &&
+		format->Rmask == 0xff000000 && format->Gmask == 0x00ff0000 &&
+		format->Bmask == 0x0000ff00) {
+		PocketShaverPresentCPUFrameWithInfo(src->pixels, src->w, src->h, src->pitch,
+			kCGImageAlphaNoneSkipFirst | kCGBitmapByteOrder32Big);
+		return;
+	}
+	SDL_Surface *conv = SDL_ConvertSurface(src, SDL_PIXELFORMAT_XRGB8888);
+	if (!conv)
+		return;
+	if (conv->pixels && conv->pitch >= conv->w * 4)
+		PocketShaverPresentCPUFrame(conv->pixels, conv->w, conv->h, conv->pitch);
+	SDL_DestroySurface(conv);
+#else
+	SDL_Surface *src = (SDL_Surface *)sdl_surface;
+	if (!src)
+		return;
+	if (src->format && src->format->BitsPerPixel == 32 &&
+		src->format->Rmask == 0xff000000 && src->format->Gmask == 0x00ff0000 &&
+		src->format->Bmask == 0x0000ff00) {
+		PocketShaverPresentCPUFrameWithInfo(src->pixels, src->w, src->h, src->pitch,
+			kCGImageAlphaNoneSkipFirst | kCGBitmapByteOrder32Big);
+		return;
+	}
+	SDL_Surface *conv = SDL_ConvertSurfaceFormat(src, SDL_PIXELFORMAT_XRGB8888, 0);
+	if (!conv)
+		return;
+	if (conv->pixels && conv->pitch >= conv->w * 4)
+		PocketShaverPresentCPUFrame(conv->pixels, conv->w, conv->h, conv->pitch);
+	SDL_FreeSurface(conv);
+#endif
+}
+static UIView *s_window_content_view = nil;
+#if TARGET_OS_MACCATALYST
+static NSArray<NSLayoutConstraint *> *s_window_pin_constraints = nil;
+#endif
+
+void *PocketShaverGetSDLUIWindow(void)
+{
+	if (!sdl_window)
+		return NULL;
+#if USE_SDL3
+	SDL_PropertiesID props = SDL_GetWindowProperties(sdl_window);
+	return SDL_GetPointerProperty(props, SDL_PROP_WINDOW_UIKIT_WINDOW_POINTER, NULL);
+#elif USE_SDL2
+	SDL_SysWMinfo wmInfo;
+	SDL_VERSION(&wmInfo.version);
+	if (!SDL_GetWindowWMInfo(sdl_window, &wmInfo))
+		return NULL;
+	if (wmInfo.subsystem != SDL_SYSWM_UIKIT)
+		return NULL;
+	return (__bridge void *)wmInfo.info.uikit.window;
+#else
+	return NULL;
+#endif
+}
+
+#if TARGET_OS_MACCATALYST
+static void PocketShaverPinContentView(void)
+{
+	UIView *view = s_window_content_view;
+	if (!view || !view.superview)
+		return;
+	if (s_window_pin_constraints) {
+		[NSLayoutConstraint deactivateConstraints:s_window_pin_constraints];
+		s_window_pin_constraints = nil;
+	}
+	view.translatesAutoresizingMaskIntoConstraints = NO;
+	UIView *superview = view.superview;
+	BOOL fullscreen = catalyst_is_window_fullscreen();
+	NSLayoutYAxisAnchor *topAnchor = fullscreen ? superview.topAnchor
+	                                             : superview.safeAreaLayoutGuide.topAnchor;
+	NSArray<NSLayoutConstraint *> *pins = @[
+		[view.topAnchor constraintEqualToAnchor:topAnchor],
+		[view.leadingAnchor constraintEqualToAnchor:superview.leadingAnchor],
+		[view.trailingAnchor constraintEqualToAnchor:superview.trailingAnchor],
+		[view.bottomAnchor constraintEqualToAnchor:superview.bottomAnchor],
+	];
+	[NSLayoutConstraint activateConstraints:pins];
+	s_window_pin_constraints = pins;
+}
+
+static void PocketShaverApplyLetterboxColor(void)
+{
+	UIView *view = s_window_content_view;
+	if (!view)
+		return;
+	if (catalyst_is_window_fullscreen()) {
+		view.backgroundColor = [UIColor blackColor];
+	} else {
+		view.backgroundColor = [UIColor colorWithDynamicProvider:^UIColor *(UITraitCollection *traits) {
+			return traits.userInterfaceStyle == UIUserInterfaceStyleDark
+				? [UIColor colorWithWhite:0.16 alpha:1.0]
+				: [UIColor colorWithWhite:0.93 alpha:1.0];
+		}];
+	}
+}
+#endif
+
+static UIView *PocketShaverFindMetalView(UIView *root)
+{
+	if (!root)
+		return nil;
+	if ([root.layer isKindOfClass:[CAMetalLayer class]])
+		return root;
+	for (UIView *child in root.subviews) {
+		UIView *found = PocketShaverFindMetalView(child);
+		if (found)
+			return found;
+	}
+	return nil;
+}
+
+static UIView *PocketShaverSDLMetalView(void)
+{
+	UIWindow *uiWindow = (__bridge UIWindow *)PocketShaverGetSDLUIWindow();
+	if (!uiWindow)
+		return nil;
+	UIView *root = uiWindow.rootViewController.view;
+#if USE_SDL3
+	if (sdl_window) {
+		SDL_PropertiesID props = SDL_GetWindowProperties(sdl_window);
+		NSInteger tag = (NSInteger)SDL_GetNumberProperty(props,
+			SDL_PROP_WINDOW_UIKIT_METAL_VIEW_TAG_NUMBER, 0);
+		if (tag != 0 && root) {
+			UIView *tagged = [root viewWithTag:tag];
+			if (tagged)
+				return tagged;
+		}
+	}
+#endif
+	return PocketShaverFindMetalView(root);
+}
+
+static void PocketShaverInsertContentView(UIView *view)
+{
+	if (!view)
+		return;
+	UIWindow *uiWindow = (__bridge UIWindow *)PocketShaverGetSDLUIWindow();
+	UIView *sdlContainer = uiWindow.rootViewController.view;
+	if (sdlContainer && view != sdlContainer && view.superview != sdlContainer)
+		[sdlContainer insertSubview:view atIndex:0];
+	else if (!view.superview && uiWindow)
+		[uiWindow insertSubview:view atIndex:0];
+}
+
+void PocketShaverInstallWindowContentView(void *uiview)
+{
+	UIView *view = (__bridge UIView *)uiview;
+#if TARGET_OS_MACCATALYST
+	if (s_window_pin_constraints) {
+		[NSLayoutConstraint deactivateConstraints:s_window_pin_constraints];
+		s_window_pin_constraints = nil;
+	}
+#endif
+	s_window_content_view = view;
+	if (!view)
+		return;
+	PocketShaverInsertContentView(view);
+#if TARGET_OS_MACCATALYST
+	PocketShaverPinContentView();
+	PocketShaverApplyLetterboxColor();
+#else
+	view.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+	if (view.superview)
+		view.frame = view.superview.bounds;
+#endif
+	MetalCompositorRefreshPresentRect();
+}
+
+void PocketShaverRehomeWindowContentView(void)
+{
+	if (!s_window_content_view)
+		return;
+	PocketShaverInsertContentView(s_window_content_view);
+#if TARGET_OS_MACCATALYST
+	PocketShaverPinContentView();
+#endif
+	MetalCompositorRefreshPresentRect();
+}
+
+void PocketShaverAdoptSDLWindowContentView(void)
+{
+	UIView *metal = PocketShaverSDLMetalView();
+	if (metal) {
+		fprintf(stderr, "[pocketshaver] pinning SDL Metal view %p bounds=%.0fx%.0f\n",
+			metal, metal.bounds.size.width, metal.bounds.size.height);
+		PocketShaverInstallWindowContentView((__bridge void *)metal);
+		return;
+	}
+	/* Do not Auto Layout-pin SDL's container: that collapses the Metal
+	 * drawable on Catalyst. Size the container with the autoresizing mask. */
+	UIWindow *uiWindow = (__bridge UIWindow *)PocketShaverGetSDLUIWindow();
+	UIView *root = uiWindow.rootViewController.view;
+	if (!root)
+		root = uiWindow;
+	if (!root)
+		return;
+	root.translatesAutoresizingMaskIntoConstraints = YES;
+	root.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+	if (root.superview)
+		root.frame = root.superview.bounds;
+	fprintf(stderr, "[pocketshaver] no Metal view yet; sized SDL container %p to %.0fx%.0f\n",
+		root, root.bounds.size.width, root.bounds.size.height);
+}
+
+extern "C" void MetalCompositorRefreshPresentRect(void)
+{
+	if (![NSThread isMainThread])
+		return;
+	UIView *view = s_window_content_view;
+	if (!view || !view.superview)
+		return;
+	CGRect vb = view.bounds;
+	if (vb.size.width <= 0.0 || vb.size.height <= 0.0)
+		return;
+	CGRect inWindow = [view convertRect:vb toView:nil];
+	int x = (int)(inWindow.origin.x + 0.5);
+	int y = (int)(inWindow.origin.y + 0.5);
+	int w = (int)(inWindow.size.width + 0.5);
+	int h = (int)(inWindow.size.height + 0.5);
+	if (x < 0) x = 0;
+	if (y < 0) y = 0;
+	atomic_store_explicit(&s_present_rect_origin,
+		((uint64_t)(uint32_t)x << 32) | (uint32_t)y, memory_order_relaxed);
+	atomic_store_explicit(&s_present_rect_size,
+		((uint64_t)(uint32_t)w << 32) | (uint32_t)h, memory_order_relaxed);
+}
+
+extern "C" void MetalCompositorGetPresentRect(int *out_x, int *out_y,
+                                              int *out_w, int *out_h)
+{
+	uint64_t o = atomic_load_explicit(&s_present_rect_origin, memory_order_relaxed);
+	uint64_t s = atomic_load_explicit(&s_present_rect_size, memory_order_relaxed);
+	if (out_x) *out_x = (int)(uint32_t)(o >> 32);
+	if (out_y) *out_y = (int)(uint32_t)(o & 0xffffffffu);
+	if (out_w) *out_w = (int)(uint32_t)(s >> 32);
+	if (out_h) *out_h = (int)(uint32_t)(s & 0xffffffffu);
+}
+
+extern "C" double MetalCompositorWindowedContentInsetTop(void)
+{
+#if TARGET_OS_MACCATALYST
+	if (!s_window_content_view || !s_window_content_view.superview)
+		return 0.0;
+	return (double)s_window_content_view.superview.safeAreaInsets.top;
+#else
+	return 0.0;
+#endif
+}
+
+extern "C" void MetalCompositorReapplyWindowPinning(void)
+{
+#if TARGET_OS_MACCATALYST
+	void (^apply)(void) = ^{
+		PocketShaverPinContentView();
+		PocketShaverApplyLetterboxColor();
+		MetalCompositorRefreshPresentRect();
+	};
+	if ([NSThread isMainThread])
+		apply();
+	else
+		dispatch_async(dispatch_get_main_queue(), apply);
 #endif
 }

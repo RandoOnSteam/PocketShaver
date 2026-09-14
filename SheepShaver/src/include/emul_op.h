@@ -51,6 +51,7 @@ enum {	// Selectors for EMUL_OP opcodes
 	OP_EXTFS_COMM, OP_EXTFS_HFS, OP_IDLE_TIME, OP_IDLE_TIME_2,
 	OP_DISPOSE_NIFT_GUARD,
 	OP_GESTALT_VM,			// _Gestalt ($A1AD) head-patch: report VM present to selected apps
+	OP_JOY_OPEN, OP_JOY_CONTROL, OP_JOY_STATUS, OP_JOY_CLOSE, OP_JOY_INTPOLL,
 	OP_MAX
 };
 const uint16 M68K_EMUL_RETURN = 0xfe40;	// Extended opcodes
@@ -111,7 +112,20 @@ const uint16 M68K_EMUL_OP_IDLE_TIME = M68K_EMUL_BREAK + OP_IDLE_TIME;
 const uint16 M68K_EMUL_OP_IDLE_TIME_2 = M68K_EMUL_BREAK + OP_IDLE_TIME_2;
 const uint16 M68K_EMUL_OP_DISPOSE_NIFT_GUARD = M68K_EMUL_BREAK + OP_DISPOSE_NIFT_GUARD;
 const uint16 M68K_EMUL_OP_GESTALT_VM = M68K_EMUL_BREAK + OP_GESTALT_VM;
+const uint16 M68K_EMUL_OP_JOY_OPEN = M68K_EMUL_BREAK + OP_JOY_OPEN;
+const uint16 M68K_EMUL_OP_JOY_CONTROL = M68K_EMUL_BREAK + OP_JOY_CONTROL;
+const uint16 M68K_EMUL_OP_JOY_STATUS = M68K_EMUL_BREAK + OP_JOY_STATUS;
+const uint16 M68K_EMUL_OP_JOY_CLOSE = M68K_EMUL_BREAK + OP_JOY_CLOSE;
+const uint16 M68K_EMUL_OP_JOY_INTPOLL = M68K_EMUL_BREAK + OP_JOY_INTPOLL;
 
 extern "C" void EmulOp(M68kRegisters *r, uint32 pc, int selector);
+
+// Emulation-thread telemetry for the 68K OP_IRQ service path.
+struct InterruptServiceDiagnostics {
+	uint64 op_irq_entries;
+	uint64 via_services;
+};
+
+extern void GetInterruptServiceDiagnostics(InterruptServiceDiagnostics &d);
 
 #endif

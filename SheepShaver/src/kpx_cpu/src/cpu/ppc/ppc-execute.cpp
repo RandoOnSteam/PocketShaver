@@ -23,8 +23,7 @@
 #include <stdio.h>
 #include <math.h>
 #include <time.h>
-#include <string.h>
-#ifdef __MINGW64__
+#if defined(__MINGW64__) || defined(_MSC_VER) || defined(__GLIBC__) || defined(__APPLE__)
 #include <fenv.h>
 #endif
 #include "cpu/vm.hpp"
@@ -34,6 +33,13 @@
 #include "cpu/ppc/ppc-operations.hpp"
 #include "cpu/ppc/ppc-execute.hpp"
 #include "cpu/ppc/ppc-stfiwx.hpp"
+#ifdef SHEEPSHAVER
+#include "ppc-report.h"
+#else
+#define PPC_REPORT_BAD_EA 0
+#endif
+
+static inline uint64 get_tb_ticks(void);
 
 #ifndef SHEEPSHAVER
 #include "basic-kernel.hpp"
@@ -43,9 +49,10 @@
 #include "main.h"
 #include "prefs.h"
 #include "cpu_emulation.h"
+#include "timer.h"
 #endif
 
-#ifdef TARGET_OS_IPHONE
+#if TARGET_OS_IPHONE
 #import "FatalErrorAlertViewControllerObjCCppHeader.h"
 #import "MiscellaneousSettingsObjCCppHeader.h"
 #endif
@@ -57,6 +64,8 @@
 
 #define DEBUG 0
 #include "debug.h"
+
+#include "gfx_log.h"
 
 /**
  *	Illegal & NOP instructions
@@ -95,8 +104,28 @@ void powerpc_cpu::execute_illegal(uint32 opcode)
 	}
 #endif
 
-	fprintf(stderr, "Illegal instruction at %08x, opcode = %08x\n", pc(), opcode);
+	gfx_log_emit("[crash] ", "Illegal instruction at %08x, opcode = %08x\n", pc(), opcode);
+	execute_fault_report(opcode);
+}
 
+// Context dump + "ignore or abort" policy, shared by execute_illegal() and by
+// execute_trap_taken() (a taken trap is a fault we cannot deliver, but it is
+// not an illegal opcode, so it prints its own headline).
+#ifdef SHEEPSHAVER
+extern bool PPCGuestAddressValid(uint32 addr, uint32 len);
+#endif
+
+static inline bool fault_guest_addr_ok(uint32 addr, uint32 len)
+{
+#ifdef SHEEPSHAVER
+	return PPCGuestAddressValid(addr, len);
+#else
+	return addr <= 0xffffffffu - len;
+#endif
+}
+
+void powerpc_cpu::execute_fault_report(uint32 opcode)
+{
 #ifdef SHEEPSHAVER
 	// Dump the locked-'nift' monitor table on the first fault -- host-side
 	// reads only, context-safe.
@@ -105,47 +134,57 @@ void powerpc_cpu::execute_illegal(uint32 opcode)
 #endif
 
 	// Backtrace: walk PPC stack frames to show call chain
-	fprintf(stderr, "  PPC Backtrace (stack frame walk):\n");
+	gfx_log_emit("[crash] ", "  PPC Backtrace (stack frame walk):\n");
 	{
 		uint32 sp = gpr(1);
 		uint32 ret_lr = lr();
-		fprintf(stderr, "    frame 0: PC=0x%08x LR=0x%08x SP=0x%08x\n", pc(), ret_lr, sp);
-		for (int frame = 1; frame < 12 && sp != 0 && sp < 0x50000000; frame++) {
+		gfx_log_emit("[crash] ", "    frame 0: PC=0x%08x LR=0x%08x SP=0x%08x\n", pc(), ret_lr, sp);
+		for (int frame = 1; frame < 12 && sp != 0 && sp < 0x50000000 &&
+			 fault_guest_addr_ok(sp, 4); frame++) {
 			uint32 prev_sp = vm_read_memory_4(sp);  // backchain pointer
 			if (prev_sp == 0 || prev_sp <= sp || prev_sp >= 0x50000000) break;
+			if (!fault_guest_addr_ok(prev_sp + 8, 4)) break;
 			uint32 saved_lr = vm_read_memory_4(prev_sp + 8);  // saved LR in caller's frame
 			uint32 call_instr = 0;
-			if (saved_lr >= 4 && saved_lr < 0x50000000)
+			if (saved_lr >= 4 && saved_lr < 0x50000000 &&
+				fault_guest_addr_ok(saved_lr - 4, 4))
 				call_instr = vm_read_memory_4(saved_lr - 4);
-			fprintf(stderr, "    frame %d: saved_LR=0x%08x SP=0x%08x call_instr=0x%08x\n",
+			gfx_log_emit("[crash] ", "    frame %d: saved_LR=0x%08x SP=0x%08x call_instr=0x%08x\n",
 					frame, saved_lr, prev_sp, call_instr);
 			sp = prev_sp;
 		}
 	}
 
 	// Dump PPC register state for crash analysis
-	fprintf(stderr, "  LR=0x%08x CTR=0x%08x CR=0x%08x XER=0x%08x\n",
+	gfx_log_emit("[crash] ", "  LR=0x%08x CTR=0x%08x CR=0x%08x XER=0x%08x\n",
 			lr(), ctr(), cr().get(), xer().get());
-	fprintf(stderr, "  R0=0x%08x R1(SP)=0x%08x R2(TOC)=0x%08x R3=0x%08x\n",
+	gfx_log_emit("[crash] ", "  R0=0x%08x R1(SP)=0x%08x R2(TOC)=0x%08x R3=0x%08x\n",
 			gpr(0), gpr(1), gpr(2), gpr(3));
-	fprintf(stderr, "  R4=0x%08x R5=0x%08x R6=0x%08x R7=0x%08x\n",
+	gfx_log_emit("[crash] ", "  R4=0x%08x R5=0x%08x R6=0x%08x R7=0x%08x\n",
 			gpr(4), gpr(5), gpr(6), gpr(7));
-	fprintf(stderr, "  R8=0x%08x R9=0x%08x R10=0x%08x R11=0x%08x\n",
+	gfx_log_emit("[crash] ", "  R8=0x%08x R9=0x%08x R10=0x%08x R11=0x%08x\n",
 			gpr(8), gpr(9), gpr(10), gpr(11));
-	fprintf(stderr, "  R12=0x%08x R13=0x%08x\n", gpr(12), gpr(13));
+	gfx_log_emit("[crash] ", "  R12=0x%08x R13=0x%08x\n", gpr(12), gpr(13));
 	// Dump instructions around the crash address
-	fprintf(stderr, "  Instructions around PC:\n");
+	gfx_log_emit("[crash] ", "  Instructions around PC:\n");
 	for (int di = -4; di <= 4; di++) {
 		uint32 addr = pc() + di * 4;
-		uint32 instr = vm_read_memory_4(addr);
-		fprintf(stderr, "    [0x%08x] %08x%s\n", addr, instr, di == 0 ? " <-- CRASH" : "");
+		if (fault_guest_addr_ok(addr, 4))
+			gfx_log_emit("[crash] ", "    [0x%08x] %08x%s\n", addr,
+				vm_read_memory_4(addr), di == 0 ? " <-- CRASH" : "");
+		else
+			gfx_log_emit("[crash] ", "    [0x%08x] <unmapped>%s\n", addr,
+				di == 0 ? " <-- CRASH" : "");
 	}
 	// Dump a few words at LR to help understand call chain
-	fprintf(stderr, "  Instructions at LR 0x%08x:\n", lr());
+	gfx_log_emit("[crash] ", "  Instructions at LR 0x%08x:\n", lr());
 	for (int di = -2; di <= 2; di++) {
 		uint32 addr = lr() + di * 4;
-		uint32 instr = vm_read_memory_4(addr);
-		fprintf(stderr, "    [0x%08x] %08x\n", addr, instr);
+		if (fault_guest_addr_ok(addr, 4))
+			gfx_log_emit("[crash] ", "    [0x%08x] %08x\n", addr,
+				vm_read_memory_4(addr));
+		else
+			gfx_log_emit("[crash] ", "    [0x%08x] <unmapped>\n", addr);
 	}
 
 	// Cross-TOC import calls reach here through a TVector held in r12
@@ -154,11 +193,12 @@ void powerpc_cpu::execute_illegal(uint32 opcode)
 	// container header ('Joy!') so the dead fragment can be identified.
 	{
 		uint32 tv = gpr(12);
-		if (tv >= 0x1000 && tv < 0x50000000) {
-			fprintf(stderr, "  TVector neighborhood (r12=0x%08x):\n", tv);
+		if (tv >= 0x1000 && tv < 0x50000000 &&
+			fault_guest_addr_ok(tv - 8, 8 * 4)) {
+			gfx_log_emit("[crash] ", "  TVector neighborhood (r12=0x%08x):\n", tv);
 			for (int di = -2; di <= 5; di++) {
 				uint32 addr = tv + di * 4;
-				fprintf(stderr, "    [0x%08x] %08x%s\n", addr, vm_read_memory_4(addr),
+				gfx_log_emit("[crash] ", "    [0x%08x] %08x%s\n", addr, vm_read_memory_4(addr),
 						di == 0 ? " <-- code ptr" : (di == 1 ? " <-- TOC" : ""));
 			}
 		}
@@ -166,22 +206,27 @@ void powerpc_cpu::execute_illegal(uint32 opcode)
 			uint32 base = pc() & ~0xfffu;
 			bool found = false;
 			for (int pages = 0; pages < 8192 && base >= 0x1000; pages++, base -= 0x1000) {
+				if (!fault_guest_addr_ok(base, 4))
+					break;
 				if (vm_read_memory_4(base) == 0x4a6f7921) {	// 'Joy!'
-					fprintf(stderr, "  PEF container candidate at 0x%08x (pc offset +0x%x):\n",
+					gfx_log_emit("[crash] ", "  PEF container candidate at 0x%08x (pc offset +0x%x):\n",
 							base, pc() - base);
-					for (int di = 0; di < 8; di++)
-						fprintf(stderr, "    [0x%08x] %08x\n", base + di * 4,
-								vm_read_memory_4(base + di * 4));
+					for (int di = 0; di < 8; di++) {
+						const uint32 addr = base + di * 4;
+						if (fault_guest_addr_ok(addr, 4))
+							gfx_log_emit("[crash] ", "    [0x%08x] %08x\n", addr,
+								vm_read_memory_4(addr));
+					}
 					found = true;
 					break;
 				}
 			}
 			if (!found)
-				fprintf(stderr, "  no 'Joy!' PEF header within 32 MiB below pc\n");
+				gfx_log_emit("[crash] ", "  no 'Joy!' PEF header within 32 MiB below pc\n");
 		}
 	}
 
-#ifdef TARGET_OS_IPHONE
+#if TARGET_OS_IPHONE
 	if (objc_getIgnoreIllegalInstructions()) {
 		increment_pc(4);
 		return;
@@ -243,7 +288,7 @@ struct op_carry {
 template<>
 struct op_carry<op_add> {
 	static inline bool apply(uint32 a, uint32 b, uint32 c) {
-		// TODO: use 32-bit arithmetics
+		// TODO: use 32-bit arithmetic
 		uint64 carry = (uint64)a + (uint64)b + (uint64)c;
 		return (carry >> 32) != 0;
 	}
@@ -266,14 +311,14 @@ struct op_overflow<op_neg> {
 template<>
 struct op_overflow<op_add> {
 	static inline bool apply(uint32 a, uint32 b, uint32 c) {
-		// TODO: use 32-bit arithmetics
+		// TODO: use 32-bit arithmetic
 		int64 overflow = (int64)(int32)a + (int64)(int32)b + (int64)(int32)c;
 		return (((uint64)overflow) >> 63) ^ (((uint32)overflow) >> 31);
 	}
 };
 
 /**
- *	Perform an addition/substraction
+ *	Perform an addition/subtraction
  *
  *		RA		Input operand register, possibly 0
  *		RB		Input operand either register or immediate
@@ -605,7 +650,7 @@ void powerpc_cpu::record_fpscr(int exceptions)
 }
 
 /**
- *	Floating-point arithmetics
+ *	Floating-point arithmetic
  *
  *		FP		Floating Point type
  *		OP		Operation to perform
@@ -656,7 +701,7 @@ void powerpc_cpu::execute_fp_arith(uint32 opcode)
 		if (!FPSCR_VE_field::test(fpscr()))
 			fp_classify(d);
 	}
-	
+
 	// Set CR1 (FX, FEX, VX, VOX) if instruction has Rc set
 	if (Rc::test(opcode))
 		record_cr1();
@@ -697,6 +742,44 @@ DEFINE_MEMORY_HELPER(1);
 DEFINE_MEMORY_HELPER(2);
 DEFINE_MEMORY_HELPER(4);
 
+#ifdef SHEEPSHAVER
+static const uint32 PPC_68K_KDATA = (uint32)KERNEL_DATA_BASE;
+static const uint32 PPC_68K_EMUL_R31 = (uint32)(KERNEL_DATA_BASE + 0x1000);
+extern uint32 ppc_recover_68k_sp(uint32 a7);
+#endif
+
+#if PPC_REPORT_BAD_EA
+#if PPC_REPORT_EVERY_ACCESS
+#define PPC_EA_SUSPECT(ea__)							\
+	((ea__) >= 0x30000000u						\
+		&& (((0xff88u >> ((ea__) >> 28)) & 1)			\
+			|| ((ea__) - 0x41000000u) < 0x0f000000u))
+
+#define PPC_CHECK_EA(ea_, is_load_)						\
+	do {									\
+		const uint32 ea__ = (ea_);						\
+		if (PPC_EA_SUSPECT(ea__))						\
+			ppc_report_bad_ea(pc(), ea__, (is_load_));			\
+	} while (0)
+
+#define PPC_CHECK_EA_STORE(ea_)							\
+	do {									\
+		const uint32 ea__ = (ea_);						\
+		if (ea__ - 0x100u >= 0x2fffff00u) {				\
+			if (ea__ < 0x100u)						\
+				ppc_report_vector_store(pc(), ea__);			\
+			else if (PPC_EA_SUSPECT(ea__))				\
+				ppc_report_bad_ea(pc(), ea__, 0);				\
+		}									\
+	} while (0)
+#endif
+#endif
+
+#if !PPC_REPORT_EVERY_ACCESS
+#define PPC_CHECK_EA(ea_, is_load_) do { } while (0)
+#define PPC_CHECK_EA_STORE(ea_) do { } while (0)
+#endif
+
 template< class OP, class RA, class RB, bool LD, int SZ, bool UP, bool RX >
 void powerpc_cpu::execute_loadstore(uint32 opcode)
 {
@@ -705,11 +788,60 @@ void powerpc_cpu::execute_loadstore(uint32 opcode)
 	const uint32 ea = a + b;
 
 	if (LD)
-		operand_RD::set(this, opcode, OP::apply(memory_helper<SZ, RX>::load(ea)));
-	else {
-		const uint32 store_value = operand_RS::get(this, opcode);
-		memory_helper<SZ, RX>::store(ea, store_value);
+		PPC_CHECK_EA(ea, 1);
+	else
+		PPC_CHECK_EA_STORE(ea);
+	/* 68k opcode fetch: r1 is the 68k a7, repaired before the opcode runs. */
+	if (LD && SZ == 2 && UP) {
+#ifdef SHEEPSHAVER
+		if (gpr(1) - PPC_68K_KDATA < 0x8000u && gpr(31) == PPC_68K_EMUL_R31)
+			gpr(1) = ppc_recover_68k_sp(gpr(1));
+#endif
+#if PPC_REPORT_BAD_EA
+		const uint32 npc = gpr(24);
+
+		if (npc - ppc_68k_last_pc > 16 && gpr(31) == PPC_68K_EMUL_R31) {
+			const uint32 op = gpr(27) & 0xffff;
+			const uint32 a7 = gpr(1);
+			const uint32 key = ppc_68k_last_pc ^ (npc << 1);
+			const uint32 h = (key ^ (key >> 13))
+				& (PPC_68K_BRANCH_HASH - 1);
+			const uint32 slot = ppc_68k_branch_map[h];
+
+			/* The key beside the slot is what confirms the bucket. */
+			if (slot != 0 && ppc_68k_branches[slot - 1].key == key) {
+				ppc_68k_branches[slot - 1].hits++;
+			} else {
+				const int k = (ppc_68k_branch_pos + 1)
+					& (PPC_68K_BRANCHES - 1);
+				struct ppc_68k_branch *e = &ppc_68k_branches[k];
+
+				e->key = key;
+				e->from = ppc_68k_last_pc;
+				e->to = npc;
+				e->op = op;
+				e->hits = 1;
+				ppc_68k_branch_map[h] = (uint16)(k + 1);
+				ppc_68k_branch_pos = k;
+			}
+			/* Superset of ppc_report_68k_transfer()'s rules; it classifies. */
+			if ((npc & 1) != 0
+					|| (npc >= 0x30000000u
+						&& (npc - 0x40000000u) >= 0x01000000u)
+					|| (op - 0xfe02u) <= 5u
+					|| a7 - PPC_68K_KDATA < 0x8000u)
+				ppc_report_68k_transfer(pc(), ppc_68k_last_pc, npc,
+					op, a7);
+		}
+		ppc_68k_last_pc = npc;
+#endif
 	}
+
+
+	if (LD)
+		operand_RD::set(this, opcode, OP::apply(memory_helper<SZ, RX>::load(ea)));
+	else
+		memory_helper<SZ, RX>::store(ea, operand_RS::get(this, opcode));
 
 	if (UP)
 		RA::set(this, opcode, ea);
@@ -723,6 +855,8 @@ void powerpc_cpu::execute_loadstore_multiple(uint32 opcode)
 	const uint32 a = RA::get(this, opcode);
 	const uint32 d = DP::get(this, opcode);
 	uint32 ea = a + d;
+
+	PPC_CHECK_EA(ea, LD);
 /*
 	// FIXME: generate exception if ea is not word-aligned
 	if ((ea & 3) != 0) {
@@ -739,10 +873,8 @@ void powerpc_cpu::execute_loadstore_multiple(uint32 opcode)
 	while (r <= 31) {
 		if (LD)
 			gpr(r) = vm_read_memory_4(ea);
-		else {
-			const uint32 store_value = gpr(r);
-			vm_write_memory_4(ea, store_value);
-		}
+		else
+			vm_write_memory_4(ea, gpr(r));
 		r++;
 		ea += 4;
 	}
@@ -768,6 +900,7 @@ void powerpc_cpu::execute_fp_loadstore(uint32 opcode)
 	const uint32 ea = a + b;
 	uint64 v;
 
+	PPC_CHECK_EA(ea, LD);
 	if (LD) {
 		if (DB)
 			v = vm_read_memory_8(ea);
@@ -779,10 +912,8 @@ void powerpc_cpu::execute_fp_loadstore(uint32 opcode)
 		v = operand_fp_dw_RS::get(this, opcode);
 		if (DB)
 			vm_write_memory_8(ea, v);
-		else {
-			const uint32 store_value = fp_store_single_convert(v);
-			vm_write_memory_4(ea, store_value);
-		}
+		else
+			vm_write_memory_4(ea, fp_store_single_convert(v));
 	}
 
 	if (UP)
@@ -791,6 +922,10 @@ void powerpc_cpu::execute_fp_loadstore(uint32 opcode)
 	increment_pc(4);
 }
 
+// Store Floating-Point as Integer Word Indexed (stfiwx): store the low 32 bits
+// of FPR(RS) to EA = (RA|0) + RB, with no conversion.  Not a template like the
+// other FP load/stores because it stores the raw low word, not a converted
+// single/double.
 void powerpc_cpu::execute_stfiwx(uint32 opcode)
 {
 	const uint32 a = operand_RA_or_0::get(this, opcode);
@@ -816,6 +951,8 @@ void powerpc_cpu::execute_load_string(uint32 opcode)
 	uint32 ea = RA::get(this, opcode);
 	if (!IM)
 		ea += operand_RB::get(this, opcode);
+
+	PPC_CHECK_EA(ea, 1);
 
 	int nb = NB::get(this, opcode);
 	if (IM && nb == 0)
@@ -867,6 +1004,8 @@ void powerpc_cpu::execute_store_string(uint32 opcode)
 	if (!IM)
 		ea += operand_RB::get(this, opcode);
 
+	PPC_CHECK_EA(ea, 0);
+
 	int nb = NB::get(this, opcode);
 	if (IM && nb == 0)
 		nb = 32;
@@ -874,8 +1013,7 @@ void powerpc_cpu::execute_store_string(uint32 opcode)
 	int rs = rS_field::extract(opcode);
 	int sh = 24;
 	for (int i = 0; i < nb; i++) {
-		const uint32 store_value = (gpr(rs) >> sh) & 0xff;
-		vm_write_memory_1(ea + i, store_value);
+		vm_write_memory_1(ea + i, gpr(rs) >> sh);
 		sh -= 8;
 		if (sh < 0) {
 			sh = 24;
@@ -912,17 +1050,16 @@ void powerpc_cpu::execute_stwcx(uint32 opcode)
 	const uint32 ea = RA::get(this, opcode) + operand_RB::get(this, opcode);
 	cr().clear(0);
 	if (regs().reserve_valid) {
-			if (regs().reserve_addr == ea /* physical_addr(EA) */
+		if (regs().reserve_addr == ea /* physical_addr(EA) */
 #if KPX_MAX_CPUS != 1
-				/* HACK: if another processor wrote to the reserved block,
-				   nothing happens, i.e. we should operate as if reserve == 0 */
-				&& regs().reserve_data == vm_read_memory_4(ea)
+			/* HACK: if another processor wrote to the reserved block,
+			   nothing happens, i.e. we should operate as if reserve == 0 */
+			&& regs().reserve_data == vm_read_memory_4(ea)
 #endif
-				) {
-				const uint32 store_value = operand_RS::get(this, opcode);
-				vm_write_memory_4(ea, store_value);
-				cr().set(0, standalone_CR_EQ_field::mask());
-			}
+			) {
+			vm_write_memory_4(ea, operand_RS::get(this, opcode));
+			cr().set(0, standalone_CR_EQ_field::mask());
+		}
 		regs().reserve_valid = 0;
 	}
 	cr().set_so(0, xer().get_so());
@@ -1144,6 +1281,76 @@ void powerpc_cpu::execute_syscall(uint32 opcode)
 }
 
 /**
+ *		Trap instructions
+ **/
+
+// The TO field (bits 6..10, same position as rS) selects which comparison
+// results raise the trap.  TO[0] is the most significant bit, so:
+//   0x10 signed less than, 0x08 signed greater than, 0x04 equal,
+//   0x02 unsigned less than, 0x01 unsigned greater than.
+static inline bool trap_condition(uint32 to, uint32 a, uint32 b)
+{
+	return (((to & 0x10) && (int32)a <  (int32)b) ||
+			((to & 0x08) && (int32)a >  (int32)b) ||
+			((to & 0x04) && a == b) ||
+			((to & 0x02) && a <  b) ||
+			((to & 0x01) && a >  b));
+}
+
+void powerpc_cpu::execute_trap(uint32 opcode)
+{
+	if (trap_condition(rS_field::extract(opcode),
+					   operand_RA::get(this, opcode),
+					   operand_RB::get(this, opcode)))
+		execute_trap_taken(opcode);
+	else
+		increment_pc(4);
+}
+
+void powerpc_cpu::execute_trap_imm(uint32 opcode)
+{
+	if (trap_condition(rS_field::extract(opcode),
+					   operand_RA::get(this, opcode),
+					   operand_SIMM::get(this, opcode)))
+		execute_trap_taken(opcode);
+	else
+		increment_pc(4);
+}
+
+void powerpc_cpu::execute_trap_taken(uint32 opcode)
+{
+	// A taken trap raises a program exception, which the nanokernel hands to
+	// the handler chain a process joined with InstallExceptionHandler() or
+	// InstallSystemExceptionHandler().  That is how the CodeWarrior debugger
+	// nub (MetroNub) implements PowerPC breakpoints: it writes tw 20,r0,r0
+	// (0x7e800008) over the first instruction of a routine and waits for the
+	// exception, and it is also how Debugger()/DebugStr() reach MacsBug.
+	//
+	// SheepShaver does not leave SPRG3 armed globally because its nanokernel
+	// entry is adapted for the emulator. The glue supplies SRR0/SRR1/SPRG3 and
+	// transfers control to the ROM's program-exception vector, which performs
+	// the normal nanokernel context handoff and handler dispatch.
+	const char *why = "not built for SheepShaver";
+#ifdef SHEEPSHAVER
+	{
+		extern const char *DeliverTrapException(uint32 opcode);
+		why = DeliverTrapException(opcode);
+		if (why == NULL)
+			return;		// handed to the guest; it resumes us when it is done
+	}
+#endif
+
+	// Nobody claimed it.  Resuming past the trap is not an alternative: the
+	// instruction a breakpoint overwrote (usually the prologue's mflr r0)
+	// never runs, so the routine stores a stale r0 as its return address and
+	// comes back to the same breakpoint forever.  Report and stop.
+	gfx_log_emit("[crash] ", "Trap taken at %08x, opcode = %08x%s -- not delivered: %s\n",
+			pc(), opcode,
+			opcode == 0x7e800008 ? " (debugger breakpoint)" : "", why);
+	execute_fault_report(opcode);
+}
+
+/**
  *		Instructions dealing with system registers
  **/
 
@@ -1296,8 +1503,388 @@ void powerpc_cpu::execute_mffs(uint32 opcode)
 
 void powerpc_cpu::execute_mfmsr(uint32 opcode)
 {
-	operand_RD::set(this, opcode, 0xf072);
+	operand_RD::set(this, opcode, msr());
 	increment_pc(4);
+}
+
+void powerpc_cpu::execute_mtmsr(uint32 opcode)
+{
+	msr() = operand_RS::get(this, opcode);
+	increment_pc(4);
+	if (decrementer_pending && (msr() & 0x00008000) != 0)
+		spcflags().set(SPCFLAG_CPU_DECREMENTER);
+}
+
+void powerpc_cpu::execute_mfsr(uint32 opcode)
+{
+	operand_RD::set(this, opcode, sr(SR_field::extract(opcode)));
+	increment_pc(4);
+}
+
+void powerpc_cpu::execute_mfsrin(uint32 opcode)
+{
+	const uint32 index = operand_RB::get(this, opcode) >> 28;
+	operand_RD::set(this, opcode, sr(index));
+	increment_pc(4);
+}
+
+void powerpc_cpu::execute_mtsr(uint32 opcode)
+{
+	sr(SR_field::extract(opcode)) = operand_RS::get(this, opcode);
+	increment_pc(4);
+}
+
+void powerpc_cpu::execute_mtsrin(uint32 opcode)
+{
+	const uint32 index = operand_RB::get(this, opcode) >> 28;
+	sr(index) = operand_RS::get(this, opcode);
+	increment_pc(4);
+}
+
+void powerpc_cpu::return_from_exception(uint32 saved_pc, uint32 saved_msr)
+{
+	// rfi restores only the architecturally defined SRR1 fields.
+	static const uint32 rfi_msr_mask = 0x87c0ffff;
+	msr() = (msr() & ~rfi_msr_mask) | (saved_msr & rfi_msr_mask);
+	pc() = saved_pc & ~3u;
+}
+
+void powerpc_cpu::execute_rfi(uint32 opcode)
+{
+	return_from_exception(srr0(), srr1());
+	service_decrementer();
+}
+
+static const uint32 PPC_MSR_EE = 0x00008000;
+
+#ifdef SHEEPSHAVER
+
+/*
+ *  Decrementer deadline timer - host mutex, condition and thread
+ *
+ *  There is exactly one waiter (the timer thread) and one signaller (the CPU
+ *  thread), which is what lets the Win32 side stand an auto-reset event in
+ *  for a condition variable: a SetEvent issued between the waiter's unlock
+ *  and its wait stays latched in the event, so no wake-up is lost. The
+ *  POSIX side uses a real condition variable and keeps microsecond timeouts;
+ *  Win32 waits in whole milliseconds. Either way the loop re-tests the
+ *  deadline on every wake, so a coarse or spurious wake-up only costs one
+ *  more trip around it.
+ */
+
+#if defined(_WIN32)
+
+#include <windows.h>
+
+struct powerpc_decrementer_timer {
+	CRITICAL_SECTION mutex;
+	HANDLE           wakeup;      // auto-reset event
+	HANDLE           thread;
+};
+
+static DWORD WINAPI decrementer_timer_entry(LPVOID cpu)
+{
+	((powerpc_cpu *)cpu)->decrementer_timer_loop();
+	return 0;
+}
+
+static powerpc_decrementer_timer *decrementer_timer_create(void)
+{
+	powerpc_decrementer_timer *t = new powerpc_decrementer_timer;
+	InitializeCriticalSection(&t->mutex);
+	t->wakeup = CreateEvent(NULL, FALSE, FALSE, NULL);
+	t->thread = NULL;
+	return t;
+}
+
+static void decrementer_timer_spawn(powerpc_decrementer_timer *t,
+									powerpc_cpu *cpu)
+{
+	t->thread = CreateThread(NULL, 0, decrementer_timer_entry, cpu, 0, NULL);
+}
+
+static void decrementer_timer_join(powerpc_decrementer_timer *t)
+{
+	WaitForSingleObject(t->thread, INFINITE);
+	CloseHandle(t->thread);
+	CloseHandle(t->wakeup);
+	DeleteCriticalSection(&t->mutex);
+	delete t;
+}
+
+static void decrementer_timer_lock(powerpc_decrementer_timer *t)
+	{ EnterCriticalSection(&t->mutex); }
+static void decrementer_timer_unlock(powerpc_decrementer_timer *t)
+	{ LeaveCriticalSection(&t->mutex); }
+static void decrementer_timer_signal(powerpc_decrementer_timer *t)
+	{ SetEvent(t->wakeup); }
+
+// Called with the mutex held; returns with it held.
+static void decrementer_timer_wait(powerpc_decrementer_timer *t, uint64 usec)
+{
+	DWORD msec = INFINITE;
+	if (usec != ~(uint64)0) {
+		uint64 ms = (usec + 999) / 1000;
+		msec = ms > 0 ? (DWORD)ms : 1;
+	}
+	LeaveCriticalSection(&t->mutex);
+	WaitForSingleObject(t->wakeup, msec);
+	EnterCriticalSection(&t->mutex);
+}
+
+#else
+
+#include <pthread.h>
+#include <time.h>
+#ifdef HAVE_SYS_TIME_H
+#include <sys/time.h>
+#endif
+
+struct powerpc_decrementer_timer {
+	pthread_mutex_t mutex;
+	pthread_cond_t  cond;
+	pthread_t       thread;
+};
+
+static void *decrementer_timer_entry(void *cpu)
+{
+	((powerpc_cpu *)cpu)->decrementer_timer_loop();
+	return NULL;
+}
+
+static powerpc_decrementer_timer *decrementer_timer_create(void)
+{
+	powerpc_decrementer_timer *t = new powerpc_decrementer_timer;
+	pthread_mutex_init(&t->mutex, NULL);
+	pthread_cond_init(&t->cond, NULL);
+	return t;
+}
+
+static void decrementer_timer_spawn(powerpc_decrementer_timer *t,
+									powerpc_cpu *cpu)
+{
+	pthread_create(&t->thread, NULL, decrementer_timer_entry, cpu);
+}
+
+static void decrementer_timer_join(powerpc_decrementer_timer *t)
+{
+	pthread_join(t->thread, NULL);
+	pthread_cond_destroy(&t->cond);
+	pthread_mutex_destroy(&t->mutex);
+	delete t;
+}
+
+static void decrementer_timer_lock(powerpc_decrementer_timer *t)
+	{ pthread_mutex_lock(&t->mutex); }
+static void decrementer_timer_unlock(powerpc_decrementer_timer *t)
+	{ pthread_mutex_unlock(&t->mutex); }
+static void decrementer_timer_signal(powerpc_decrementer_timer *t)
+	{ pthread_cond_signal(&t->cond); }
+
+// Called with the mutex held; returns with it held.
+static void decrementer_timer_wait(powerpc_decrementer_timer *t, uint64 usec)
+{
+	if (usec == ~(uint64)0) {
+		pthread_cond_wait(&t->cond, &t->mutex);
+		return;
+	}
+
+	// pthread_cond_timedwait takes an absolute CLOCK_REALTIME point.
+	struct timespec ts;
+#if defined(CLOCK_REALTIME)
+	clock_gettime(CLOCK_REALTIME, &ts);
+#else
+	struct timeval tv;
+	gettimeofday(&tv, NULL);
+	ts.tv_sec = tv.tv_sec;
+	ts.tv_nsec = (long)tv.tv_usec * 1000;
+#endif
+	ts.tv_sec += (time_t)(usec / 1000000);
+	ts.tv_nsec += (long)((usec % 1000000) * 1000);
+	if (ts.tv_nsec >= 1000000000L) {
+		ts.tv_sec += 1;
+		ts.tv_nsec -= 1000000000L;
+	}
+	pthread_cond_timedwait(&t->cond, &t->mutex, &ts);
+}
+
+#endif /* per-platform decrementer timer primitives */
+
+void powerpc_cpu::start_decrementer_timer()
+{
+	if (decrementer_timer)
+		return;
+	// Publish the primitives before the thread that waits on them exists.
+	decrementer_timer = decrementer_timer_create();
+	decrementer_timer_spawn(decrementer_timer, this);
+}
+
+void powerpc_cpu::stop_decrementer_timer()
+{
+	if (!decrementer_timer)
+		return;
+	decrementer_timer_lock(decrementer_timer);
+	decrementer_timer_stop = true;
+	decrementer_timer_unlock(decrementer_timer);
+	decrementer_timer_signal(decrementer_timer);
+	decrementer_timer_join(decrementer_timer);
+	decrementer_timer = NULL;
+}
+
+void powerpc_cpu::schedule_decrementer_timer(uint64 deadline)
+{
+	start_decrementer_timer();
+	decrementer_timer_lock(decrementer_timer);
+	// The timer only has to be woken when the edge it is already waiting for
+	// moves closer. A later deadline (no_deadline included) is picked up when
+	// the current wait expires and the loop re-reads it, so the common case -
+	// the nanokernel rewriting DEC on every quantum - costs no kernel wake at
+	// all. This path runs over a million times a session.
+	const bool wake = deadline < decrementer_timer_deadline;
+	decrementer_timer_deadline = deadline;
+	decrementer_timer_unlock(decrementer_timer);
+	if (wake)
+		decrementer_timer_signal(decrementer_timer);
+}
+
+void powerpc_cpu::decrementer_timer_loop()
+{
+	const uint64 no_deadline = ~(uint64)0;
+	powerpc_decrementer_timer *timer = decrementer_timer;
+	decrementer_timer_lock(timer);
+	while (!decrementer_timer_stop) {
+		const uint64 deadline = decrementer_timer_deadline;
+		if (deadline == no_deadline) {
+			// Predicate loop around the bare wait: the wait may return
+			// spuriously, which is what the predicate overload absorbed.
+			while (!decrementer_timer_stop &&
+				   decrementer_timer_deadline == no_deadline)
+				decrementer_timer_wait(timer, no_deadline);
+			continue;
+		}
+
+		const uint64 now = get_tb_ticks();
+		if (now >= deadline) {
+			// Consume this publication before waking the CPU. read_decrementer()
+			// advances the wrapping counter and a subsequent DEC write or
+			// successful delivery publishes the next edge.
+			decrementer_timer_deadline = no_deadline;
+			decrementer_timer_unlock(timer);
+			spcflags().set(SPCFLAG_CPU_DECREMENTER);
+			idle_resume();
+			decrementer_timer_lock(timer);
+			continue;
+		}
+
+		const uint64 frequency = TimebaseSpeed > 0
+			? (uint64)TimebaseSpeed : 1;
+		const uint64 delta = deadline - now;
+		const uint64 whole_seconds = delta / frequency;
+		const uint64 remainder = delta % frequency;
+		uint64 usec = whole_seconds * 1000000;
+		usec += (remainder * 1000000 + frequency - 1) / frequency;
+		if (usec == 0)
+			usec = 1;
+		decrementer_timer_wait(timer, usec);
+	}
+	decrementer_timer_unlock(timer);
+}
+#endif
+
+uint32 powerpc_cpu::read_decrementer()
+{
+	if (!decrementer_initialized)
+		return decrementer_base;
+
+	const uint64 now = get_tb_ticks();
+	if (!decrementer_pending && now >= decrementer_next_underflow) {
+		decrementer_pending = true;
+		spcflags().set(SPCFLAG_CPU_DECREMENTER);
+#ifdef SHEEPSHAVER
+		schedule_decrementer_timer(~(uint64)0);
+#endif
+
+		// DEC is a wrapping 32-bit counter. Keep the following edge correct
+		// even if the host was suspended for more than one complete period.
+		const uint64 period = (uint64)1 << 32;
+		const uint64 periods = (now - decrementer_next_underflow) / period + 1;
+		if (periods <= (~(uint64)0 - decrementer_next_underflow) / period)
+			decrementer_next_underflow += periods * period;
+		else
+			decrementer_next_underflow = ~(uint64)0;
+	}
+	return decrementer_base - (uint32)(now - decrementer_base_ticks);
+}
+
+void powerpc_cpu::write_decrementer(uint32 value)
+{
+	const uint32 old_value = read_decrementer();
+	const uint64 now = get_tb_ticks();
+	decrementer_last_write = value;
+	if (value < decrementer_minimum_write)
+		decrementer_minimum_write = value;
+	if (value > decrementer_maximum_write)
+		decrementer_maximum_write = value;
+	decrementer_write_count++;
+
+	decrementer_base = value;
+	decrementer_base_ticks = now;
+	decrementer_next_underflow = now + (uint64)value + 1;
+	decrementer_initialized = true;
+
+	// 6xx/7xx DEC is edge-triggered. A write which crosses from a
+	// non-negative value to a negative one asserts the same exception
+	// condition as natural completion of the countdown. The nanokernel uses
+	// exactly this sequence when restoring an already-expired task quantum.
+	if ((int32)old_value >= 0 && (int32)value < 0)
+		decrementer_pending = true;
+	if (decrementer_pending)
+		spcflags().set(SPCFLAG_CPU_DECREMENTER);
+#ifdef SHEEPSHAVER
+	schedule_decrementer_timer(decrementer_pending
+		? ~(uint64)0 : decrementer_next_underflow);
+#endif
+}
+
+bool powerpc_cpu::decrementer_exception()
+{
+	return false;
+}
+
+bool powerpc_cpu::service_decrementer()
+{
+	(void)read_decrementer();
+	if (execute_depth > 1)
+		return false;
+	if (!decrementer_pending || (msr() & PPC_MSR_EE) == 0)
+		return false;
+
+	// 6xx/7xx processors clear the edge-triggered request on delivery. If the
+	// embedding cannot enter its vector yet (during early boot), retain it.
+	decrementer_pending = false;
+	spcflags().clear(SPCFLAG_CPU_DECREMENTER);
+	if (decrementer_exception()) {
+		decrementer_delivery_count++;
+#ifdef SHEEPSHAVER
+		schedule_decrementer_timer(decrementer_next_underflow);
+#endif
+		return true;
+	}
+	decrementer_pending = true;
+	return false;
+}
+
+void powerpc_cpu::get_decrementer_diagnostics(decrementer_diagnostics_t &d)
+{
+	d.current = read_decrementer();
+	d.last_write = decrementer_last_write;
+	d.minimum_write = decrementer_write_count != 0
+		? decrementer_minimum_write : 0;
+	d.maximum_write = decrementer_write_count != 0
+		? decrementer_maximum_write : 0;
+	d.write_count = decrementer_write_count;
+	d.delivery_count = decrementer_delivery_count;
+	d.pending = decrementer_pending;
 }
 
 template< class SPR >
@@ -1309,6 +1896,13 @@ void powerpc_cpu::execute_mfspr(uint32 opcode)
 	case powerpc_registers::SPR_XER:	d = xer().get();break;
 	case powerpc_registers::SPR_LR:		d = lr();		break;
 	case powerpc_registers::SPR_CTR:	d = ctr();		break;
+	case powerpc_registers::SPR_DEC:	d = read_decrementer(); break;
+	case powerpc_registers::SPR_SRR0:	d = srr0();		break;
+	case powerpc_registers::SPR_SRR1:	d = srr1();		break;
+	case powerpc_registers::SPR_SPRG0:	d = sprg(0);		break;
+	case powerpc_registers::SPR_SPRG1:	d = sprg(1);		break;
+	case powerpc_registers::SPR_SPRG2:	d = sprg(2);		break;
+	case powerpc_registers::SPR_SPRG3:	d = sprg(3);		break;
 	case powerpc_registers::SPR_VRSAVE:	d = vrsave();	break;
 #ifdef SHEEPSHAVER
 	case powerpc_registers::SPR_SDR1:	d = 0xdead001f;	break;
@@ -1336,6 +1930,13 @@ void powerpc_cpu::execute_mtspr(uint32 opcode)
 	case powerpc_registers::SPR_XER:	xer().set(s);	break;
 	case powerpc_registers::SPR_LR:		lr() = s;		break;
 	case powerpc_registers::SPR_CTR:	ctr() = s;		break;
+	case powerpc_registers::SPR_DEC:	write_decrementer(s); break;
+	case powerpc_registers::SPR_SRR0:	srr0() = s;		break;
+	case powerpc_registers::SPR_SRR1:	srr1() = s;		break;
+	case powerpc_registers::SPR_SPRG0:	sprg(0) = s;	break;
+	case powerpc_registers::SPR_SPRG1:	sprg(1) = s;	break;
+	case powerpc_registers::SPR_SPRG2:	sprg(2) = s;	break;
+	case powerpc_registers::SPR_SPRG3:	sprg(3) = s;	break;
 	case powerpc_registers::SPR_VRSAVE:	vrsave() = s;	break;
 #ifndef SHEEPSHAVER
 	default: execute_illegal(opcode);
@@ -1871,7 +2472,7 @@ void powerpc_cpu::execute_vector_sum(uint32 opcode)
 	typename VB::type const & vB = VB::const_ref(this, opcode);
 	typename VD::type & vD = VD::ref(this, opcode);
 	typename VD::element_type d;
-	
+
 	switch (SZ) {
 	case 1: // vsum
 		d = VB::get_element(vB, 3);

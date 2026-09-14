@@ -22,9 +22,12 @@
 #include "thunks.h"
 #include "emul_op.h"
 #include "cpu_emulation.h"
+#if (defined(ENABLE_GFXACCEL) && defined(SHEEPSHAVER)) || TARGET_OS_IPHONE
 #include "rave_engine.h"
 #include "gl_engine.h"
 #include "dsp_engine.h"
+#include "glide_engine.h"
+#endif
 #include "xlowmem.h"
 
 // Native function declarations
@@ -102,7 +105,7 @@ uint32 NativeOpcode(int selector)
   	case NATIVE_R_GET_RESOURCE:
 	case NATIVE_GET_NAMED_RESOURCE:
 	case NATIVE_GET_1_NAMED_RESOURCE:
-  	case NATIVE_MAKE_EXECUTABLE:
+	case NATIVE_MAKE_EXECUTABLE:
 		opcode = POWERPC_NATIVE_OP(1, selector);
 		break;
 	case NATIVE_RAVE_DISPATCH:
@@ -111,9 +114,53 @@ uint32 NativeOpcode(int selector)
 	case NATIVE_OPENGL_DISPATCH:
 		opcode = POWERPC_NATIVE_OP(0, selector);
 		break;
+	case NATIVE_EXCEPTION_STEP:
+		// The handler supplies the exact next PC after executing one guest
+		// instruction, so the normal FN=0 pc += 4 does not apply.
+		opcode = POWERPC_NATIVE_OP(0, selector);
+		break;
 	case NATIVE_DSP_DISPATCH:
 		opcode = POWERPC_NATIVE_OP(0, selector);
 		break;
+	case NATIVE_GLIDE_DISPATCH:
+		opcode = POWERPC_NATIVE_OP(0, selector);
+		break;
+	case NATIVE_USB_UIM_DISPATCH:
+		// FN=0: reached through the generic [opcode; blr] thunk like the other
+		// dispatch selectors. The UIM stub bctr's here with LR still pointing
+		// at its caller, so the blr returns straight to the USB Family.
+		opcode = POWERPC_NATIVE_OP(0, selector);
+		break;
+	case NATIVE_USB_PUBLISH_NODE:
+		opcode = POWERPC_NATIVE_OP(0, selector);
+		break;
+	case NATIVE_USB_UIM_POLL:
+	case NATIVE_USB_UIM_COMPLETE:
+		opcode = POWERPC_NATIVE_OP(0, selector);
+		break;
+	case NATIVE_USB_EXPORT_HOOK:
+		// FN=1: patches the first instruction of a library export.
+		opcode = POWERPC_NATIVE_OP(1, selector);
+		break;
+	case NATIVE_USB_EXPERT_NOTIFY:
+		opcode = POWERPC_NATIVE_OP(0, selector);
+		break;
+#if defined(ENABLE_NATIVE_CINEPAK_PATCH) \
+		&& ENABLE_NATIVE_CINEPAK_PATCH
+	case NATIVE_CINEPAK_DISPATCH:
+		// FN=0: executed from the generic [opcode; blr] thunk, so fall
+		// through to the blr like the other dispatch selectors.
+		opcode = POWERPC_NATIVE_OP(0, selector);
+		break;
+	case NATIVE_OPENDEFAULTCOMPONENT_CINEPAK_HOOK:
+	case NATIVE_FINDNEXTCOMPONENT_CINEPAK_HOOK:
+		// FN=1: these patch the FIRST INSTRUCTION of an InterfaceLib export
+		// (like NATIVE_MICROSECONDS); the handler is the whole function and
+		// execute_sheep returns via pc = lr. FN=0 here would fall through
+		// into the original function body after the hook ran.
+		opcode = POWERPC_NATIVE_OP(1, selector);
+		break;
+#endif /* ENABLE_NATIVE_CINEPAK_PATCH */
 	default:
 		abort();
 	}
@@ -286,6 +333,7 @@ bool ThunksInit(void)
 		native_op[i].tvect = base;
 		native_op[i].func  = base + 8;
 	}
+#if (defined(ENABLE_GFXACCEL) && defined(SHEEPSHAVER)) || TARGET_OS_IPHONE
 	// Initialize RAVE method TVECTs (must be after SheepMem is available)
 	RaveThunksInit();
 
@@ -295,6 +343,11 @@ bool ThunksInit(void)
 	// Initialize DSp thunks. Allocates real TVECTs for the
 	// public DSp entry points via SheepMem::Reserve, matching RAVE.
 	DSpThunksInit();
+
+	#if !defined(TARGET_OS_IPHONE) || !TARGET_OS_IPHONE
+		GlideThunksInit();
+	#endif
+#endif
 
 #if POWERPC_GET_RESOURCE_THUNKS
 	generate_powerpc_thunks();

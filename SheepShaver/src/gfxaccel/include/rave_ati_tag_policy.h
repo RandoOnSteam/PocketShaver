@@ -16,8 +16,8 @@
 
 #define RAVE_ATI_TAG_COUNT 43  /* kATITriCache(0) through kATIMeshAsStrip(42) */
 
-static constexpr uint32_t kRaveATIPrivateTagBase = 1000u;
-static constexpr uint32_t kRaveATIRage128RendererID = 0x00021000u;
+static const uint32_t kRaveATIPrivateTagBase = 1000u;
+static const uint32_t kRaveATIRage128RendererID = 0x00021000u;
 
 /*
  * Unreal Tournament's first-time renderer picker creates a tiny RAVE context,
@@ -25,12 +25,12 @@ static constexpr uint32_t kRaveATIRage128RendererID = 0x00021000u;
  * disabled; match the Rage 128 renderer family that we advertise through RAVE
  * and AGL so the game takes its Rage 128 renderer path.
  */
-static constexpr uint32_t kRaveATIUnrealTournamentProbeTag = 1011u;
-static constexpr uint32_t kRaveATIUnrealTournamentProbeIndex =
+static const uint32_t kRaveATIUnrealTournamentProbeTag = 1011u;
+static const uint32_t kRaveATIUnrealTournamentProbeIndex =
 	kRaveATIUnrealTournamentProbeTag - kRaveATIPrivateTagBase;
 
-static constexpr uint32_t kRaveATIRaveExtFuncsTag = 1021u;
-static constexpr uint32_t kRaveATIRaveExtFuncsIndex =
+static const uint32_t kRaveATIRaveExtFuncsTag = 1021u;
+static const uint32_t kRaveATIRaveExtFuncsIndex =
 	kRaveATIRaveExtFuncsTag - kRaveATIPrivateTagBase;
 /*
  * The real ATI table has at least 5 entries: Myth II (render_rave.c) calls
@@ -41,16 +41,16 @@ static constexpr uint32_t kRaveATIRaveExtFuncsIndex =
  * titles index further, but only ever write 5 slots into a caller-provided
  * struct because 5 is the largest size proven by a real client.
  */
-static constexpr uint32_t kRaveATIRaveExtFuncsEntryCount = 8u;
-static constexpr uint32_t kRaveATIRaveExtFuncsKnownSlotCount = 5u;
-static constexpr uint32_t kRaveATIRaveExtFuncsSlotClearDrawBuffer = 0u;
-static constexpr uint32_t kRaveATIRaveExtFuncsSlotClearZBuffer = 1u;
-static constexpr uint32_t kRaveATIRaveExtFuncsSlotTextureUpdate = 2u;
-static constexpr uint32_t kRaveATIRaveExtFuncsSlotBindCodeBook = 3u;
-static constexpr uint32_t kRaveATIRaveExtFuncsSlotGetDrawBuffer = 4u;
+static const uint32_t kRaveATIRaveExtFuncsEntryCount = 8u;
+static const uint32_t kRaveATIRaveExtFuncsKnownSlotCount = 5u;
+static const uint32_t kRaveATIRaveExtFuncsSlotClearDrawBuffer = 0u;
+static const uint32_t kRaveATIRaveExtFuncsSlotClearZBuffer = 1u;
+static const uint32_t kRaveATIRaveExtFuncsSlotTextureUpdate = 2u;
+static const uint32_t kRaveATIRaveExtFuncsSlotBindCodeBook = 3u;
+static const uint32_t kRaveATIRaveExtFuncsSlotGetDrawBuffer = 4u;
 
-static constexpr uint32_t kRaveATIDepthWriteEnableTag = 1022u;
-static constexpr uint32_t kRaveATIDepthWriteEnableIndex =
+static const uint32_t kRaveATIDepthWriteEnableTag = 1022u;
+static const uint32_t kRaveATIDepthWriteEnableIndex =
 	kRaveATIDepthWriteEnableTag - kRaveATIPrivateTagBase;
 
 static inline uint32_t RaveATIDefaultIntTagValue(uint32_t tag)

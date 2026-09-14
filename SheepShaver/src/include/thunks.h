@@ -73,13 +73,33 @@ enum {
   NATIVE_GET_1_NAMED_RESOURCE,
   NATIVE_RAVE_DISPATCH,
   NATIVE_OPENGL_DISPATCH,
+  NATIVE_EXCEPTION_STEP,    /* performs one instruction, then raises trace */
   NATIVE_DSP_DISPATCH,     /* fourth engine */
+  NATIVE_GLIDE_DISPATCH,   /* 3dfx Glide 2.x / 3.x */
+  NATIVE_USB_UIM_DISPATCH, /* USB UIM plugin table; slot number arrives in r11 */
+  NATIVE_USB_PUBLISH_NODE, /* Name Registry calls, so it must run in PPC mode */
+  NATIVE_USB_UIM_POLL,     /* the Expert's idle work and node publishing */
+  NATIVE_USB_UIM_COMPLETE, /* hands finished transfers back to the family */
+  NATIVE_USB_EXPORT_HOOK,  /* sits on a watched library export */
+  NATIVE_USB_EXPERT_NOTIFY, /* sits in front of the USB Expert's notification
+                               routine; the only call the family makes into
+                               the Expert, so the only place to watch it */
+  #if defined(ENABLE_NATIVE_CINEPAK_PATCH) \
+			&& ENABLE_NATIVE_CINEPAK_PATCH
+	NATIVE_CINEPAK_DISPATCH, /* QuickTime Cinepak ('cvid') 
+								decompressor component */
+    NATIVE_OPENDEFAULTCOMPONENT_CINEPAK_HOOK, /* JIT-register native Cinepak 
+		when someone asks for an image decompressor */
+    NATIVE_FINDNEXTCOMPONENT_CINEPAK_HOOK, /* Same trigger on FindNextComponent 
+		(the path QuickTime's ICM actually uses) */
+  #endif /* ENABLE_NATIVE_CINEPAK_PATCH */
   NATIVE_OP_MAX
 };
 
-// Ensure we don't exceed the 6-bit NATIVE_OP field (bits 20-25)
-static_assert(NATIVE_OP_MAX <= 64, "Too many NATIVE_OP entries; max is 64 (6-bit field)");
-
+// Ensure we don't exceed the 6-bit NATIVE_OP field (bits 20-25). A negative
+// array bound is the pre-C11/C++11 compile-time assertion; the typedef is
+// never instantiated.
+typedef char native_op_max_fits_in_six_bits[(NATIVE_OP_MAX <= 64) ? 1 : -1];
 // Initialize the thunks system
 extern bool ThunksInit(void);
 
@@ -129,12 +149,24 @@ protected:
 	static uintptr base;
 	static uintptr data;
 	static uintptr proc;
+#if (defined(ENABLE_GFXACCEL) && defined(SHEEPSHAVER)) || TARGET_OS_IPHONE
+	// 512 KB was enough pre-gfxaccel. OpenGL thunks alone install ~1500+ TVECTs
+	// plus a 64 KiB defer ring (gl_thunks.cpp / gl_defer.h). On Windows that
+	// crowded the 256 KiB proc/data halves and produced guest SIGSEGVs during
+	// ROM boot (PC landing in the SheepMem data region near 0x5107ffc8).
+	// 4 MiB matches the footprint PocketShaver needs with full GL+RAVE+DSp.
+	static const uint32 size = 0x400000; // 4 MB
+#else
 	static const uint32 size = 0x80000; // 512 KB
+#endif
 public:
 	static bool Init(void);
 	static void Exit(void);
 	static uint32 PageSize();
 	static uint32 ZeroPage();
+	static uint32 Base();
+	static uint32 Size();
+	static bool Contains(uint32 addr);
 	static uint32 Reserve(uint32 size);
 	static void Release(uint32 size);
 	static uint32 ReserveProc(uint32 size);
@@ -155,6 +187,21 @@ inline uint32 SheepMem::PageSize()
 inline uint32 SheepMem::ZeroPage()
 {
   return zero_page;
+}
+
+inline uint32 SheepMem::Base()
+{
+	return (uint32)base;
+}
+
+inline uint32 SheepMem::Size()
+{
+	return size;
+}
+
+inline bool SheepMem::Contains(uint32 addr)
+{
+	return addr >= (uint32)base && (addr - (uint32)base) < size;
 }
 
 inline uint32 SheepMem::Reserve(uint32 size)

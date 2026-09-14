@@ -210,8 +210,18 @@ uint64 GetTicks_usec(void)
 	return clock();
 }
 
-void HandleInterrupt(powerpc_registers *)
+bool HandleInterrupt(powerpc_registers *)
 {
+	return true;
+}
+
+void idle_resume(void)
+{
+}
+
+bool PPCGuestAddressValid(uint32, uint32)
+{
+	return true;
 }
 
 #if PPC_ENABLE_JIT && PPC_REENTRANT_JIT

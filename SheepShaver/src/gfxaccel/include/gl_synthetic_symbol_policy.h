@@ -20,7 +20,7 @@
 static inline bool GLPascalStringEqualsLiteral(const char *actual,
                                                const char *literal)
 {
-	if (actual == nullptr || literal == nullptr) return false;
+	if (actual == NULL || literal == NULL) return false;
 	const uint8_t len = (uint8_t)literal[0];
 	if ((uint8_t)actual[0] != len) return false;
 	for (uint8_t i = 0; i <= len; i++) {
@@ -33,7 +33,7 @@ static inline bool GLSyntheticFindLibSymbolSubOpcode(const char *lib,
                                                      const char *sym,
                                                      uint16_t *out_sub_opcode)
 {
-	if (out_sub_opcode != nullptr) *out_sub_opcode = 0;
+	if (out_sub_opcode != NULL) *out_sub_opcode = 0;
 	if (!GLPascalStringEqualsLiteral(lib, "\015OpenGLLibrary")) return false;
 
 	struct GLSyntheticSymbolEntry {
@@ -106,7 +106,7 @@ static inline bool GLSyntheticFindLibSymbolSubOpcode(const char *lib,
 	for (size_t i = 0; i < sizeof(symbols) / sizeof(symbols[0]); i++) {
 		if (!GLPascalStringEqualsLiteral(sym, symbols[i].pascal_sym))
 			continue;
-		if (out_sub_opcode != nullptr)
+		if (out_sub_opcode != NULL)
 			*out_sub_opcode = symbols[i].sub_opcode;
 		return true;
 	}

@@ -19,7 +19,6 @@
  */
 
 #include <stdio.h>
-
 #include "sysdeps.h"
 #include "main.h"
 #include "version.h"
@@ -37,6 +36,9 @@
 #include "audio.h"
 #include "ether.h"
 #include "serial.h"
+#include "joymanager.h"
+#include "usbhid.h"
+#include "usbuim.h"
 #include "clip.h"
 #include "extfs.h"
 #include "macos_util.h"
@@ -56,6 +58,36 @@ void PlayStartupSound();
 
 // TVector of MakeExecutable
 static uint32 MakeExecutableTvec;
+
+// Passive idle telemetry used by the PPC exception diagnostics. This measures
+// host time spent in the normal idle_wait() path; it never changes guest time,
+// skips a wait, or changes how the emulator is resumed.
+uint64 IdleWaitUsec = 0;
+unsigned long IdleWaitCount = 0;
+
+// Both counters live entirely on the emulation thread: OP_IRQ calls EmulOp(),
+// and the exception diagnostics which sample them run from that same thread.
+// The host tick thread communicates only through the existing atomic
+// InterruptFlags/TriggerInterrupt path.
+static uint64 op_irq_entry_count = 0;
+static uint64 via_service_count = 0;
+
+void GetInterruptServiceDiagnostics(InterruptServiceDiagnostics &d)
+{
+	d.op_irq_entries = op_irq_entry_count;
+	d.via_services = via_service_count;
+}
+
+static void IdleWaitMeasured(void)
+{
+#if EMULATED_PPC
+	PPCExceptionIdleDiagnostic();
+#endif
+	const uint64 started = GetTicks_usec();
+	idle_wait();
+	IdleWaitUsec += GetTicks_usec() - started;
+	IdleWaitCount++;
+}
 
 
 /*
@@ -211,7 +243,23 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 		case OP_SOUNDIN_CLOSE:
 			r->d[0] = SoundInClose(r->a[0], r->a[1]);
 			break;
-
+#ifdef ENABLE_JOYMANAGER
+		case OP_JOY_OPEN:
+			r->d[0] = JoyManagerOpen(r->a[0], r->a[1]);
+			break;
+		case OP_JOY_CONTROL:
+			r->d[0] = JoyManagerControl(r->a[0], r->a[1]);
+			break;
+		case OP_JOY_STATUS:
+			r->d[0] = JoyManagerStatus(r->a[0], r->a[1]);
+			break;
+		case OP_JOY_CLOSE:
+			r->d[0] = JoyManagerClose(r->a[0], r->a[1]);
+			break;
+		case OP_JOY_INTPOLL:
+			JoyManagerIntPoll();
+			break;
+#endif /* ENABLE_JOYMANAGER */
 		case OP_ADBOP:				// ADBOp() replacement
 			ADBOp(r->d[0], Mac2HostAddr(ReadMacInt32(r->a[0])));
 			break;
@@ -286,12 +334,18 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 		case OP_RESET:				// Early in MacOS reset
 			D(bug("*** RESET ***\n"));
 			tick_inhibit = true;
+		#ifdef ENABLE_JOYMANAGER
+			JoyManagerReset();
+		#endif /* ENABLE_JOYMANAGER */
 			CDROMRemount(); // for System 7.x
 			TimerReset();
 			MacOSUtilReset();
 			EtherResetCachedAllocation();
 			ether_reset();
 			AudioReset();
+#if (defined(ENABLE_GFXACCEL) && defined(SHEEPSHAVER)) || TARGET_OS_IPHONE
+			GfxAccelResetForReboot();
+#endif
 #ifdef USE_SDL_AUDIO
 			PlayStartupSound();
 #endif
@@ -303,13 +357,15 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 				WriteMacInt32(KernelDataAddr + 0x17c4, DR_CACHE_SIZE);
 				WriteMacInt32(KernelDataAddr + 0x1b04, DR_CACHE_BASE);
 				WriteMacInt32(KernelDataAddr + 0x1b00, DR_EMULATOR_BASE);
-				memcpy((void *)DR_EMULATOR_BASE, (void *)(ROMBase + 0x370000), DR_EMULATOR_SIZE);
+				memcpy((void *)DR_EMULATOR_BASE, 
+					(void *)(uintptr_t)(ROMBase + 0x370000), DR_EMULATOR_SIZE);
 				MakeExecutable(0, DR_EMULATOR_BASE, DR_EMULATOR_SIZE);
 			}
 			tick_inhibit = false;
 			break;
 
 		case OP_IRQ:			// Level 1 interrupt
+			op_irq_entry_count++;
 			WriteMacInt16(ReadMacInt32(KernelDataAddr + 0x67c), 0);	// Clear interrupt
 			r->d[0] = 0;
 			if (HasMacStarted()) {
@@ -319,11 +375,19 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 				}
 				if (InterruptFlags & INTFLAG_VIA) {
 					ClearInterruptFlag(INTFLAG_VIA);
+					via_service_count++;
 #if !PRECISE_TIMING
 					TimerInterrupt();
 #endif
 					ExecuteNative(NATIVE_VIDEO_VBL);
-
+#ifdef ENABLE_JOYMANAGER
+					JoyManagerVBL();
+#endif
+					ADBVBL();
+#ifdef ENABLE_USB
+					USBHIDVBL();
+					USBUIMVBL();
+#endif /* ENABLE_USB */
 					DrainPendingResourceLocks();	// DII fix: lock queued sound-component PEF handles (safe VBL context)
 
 					static int tick_counter = 0;
@@ -528,19 +592,24 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 			break;
 
 		case OP_IDLE_TIME:
+#ifdef ENABLE_USB
+			USBNodePublishDeferred();
+#endif /* ENABLE_USB */
 			// Sleep if no events pending
 			if (ReadMacInt32(0x14c) == 0)
-				idle_wait();
+				IdleWaitMeasured();
 			r->a[0] = ReadMacInt32(0x2b6);
 			break;
 
 		case OP_IDLE_TIME_2:
+#ifdef ENABLE_USB
+			USBNodePublishDeferred();
+#endif /* ENABLE_USB */
 			// Sleep if no events pending
 			if (ReadMacInt32(0x14c) == 0)
-				idle_wait();
+				IdleWaitMeasured();
 			r->d[0] = (uint32)-2;
 			break;
-
 		default:
 			printf("FATAL: EMUL_OP called with bogus selector %08x\n", selector);
 			QuitEmulator();

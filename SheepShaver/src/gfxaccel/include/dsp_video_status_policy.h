@@ -18,31 +18,31 @@ static inline bool DSpVideoStatusForSnapshot(const DMCModeSnapshot *snap,
                                              uint16 *apple_mode,
                                              uint32 *apple_id)
 {
-	if (snap == nullptr || modes == nullptr) return false;
+	if (snap == NULL || modes == NULL) return false;
 	if (snap->active_owner != (uint32_t)kDMCOwnerDSp) return false;
 	if (snap->width == 0 || snap->height == 0 || snap->depth == 0) return false;
 
 	const uint32 mode = (uint32)DepthModeForPixelDepth((int)snap->depth);
 	const uint32 preferred_id = DSpDisplayIDForMode(snap->width, snap->height);
-	const VideoInfo *fallback = nullptr;
+	const VideoInfo *fallback = NULL;
 	for (const VideoInfo *v = modes; v->viType != DIS_INVALID; v++) {
 		if ((uint32)v->viXsize != snap->width) continue;
 		if ((uint32)v->viYsize != snap->height) continue;
 		if (v->viAppleMode != mode) continue;
 
 		if (v->viAppleID != preferred_id) {
-			if (fallback == nullptr) fallback = v;
+			if (fallback == NULL) fallback = v;
 			continue;
 		}
 
-		if (apple_mode != nullptr) *apple_mode = (uint16)v->viAppleMode;
-		if (apple_id != nullptr) *apple_id = v->viAppleID;
+		if (apple_mode != NULL) *apple_mode = (uint16)v->viAppleMode;
+		if (apple_id != NULL) *apple_id = v->viAppleID;
 		return true;
 	}
 
-	if (fallback != nullptr) {
-		if (apple_mode != nullptr) *apple_mode = (uint16)fallback->viAppleMode;
-		if (apple_id != nullptr) *apple_id = fallback->viAppleID;
+	if (fallback != NULL) {
+		if (apple_mode != NULL) *apple_mode = (uint16)fallback->viAppleMode;
+		if (apple_id != NULL) *apple_id = fallback->viAppleID;
 		return true;
 	}
 

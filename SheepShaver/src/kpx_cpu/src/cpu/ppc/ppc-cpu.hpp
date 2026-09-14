@@ -34,6 +34,13 @@
 #endif
 #include "cpu/ppc/ppc-instructions.hpp"
 #include <vector>
+#ifdef SHEEPSHAVER
+/* Host mutex, condition and thread backing the decrementer deadline. The
+ * definition is per platform and lives in ppc-execute.cpp, so the Win32 and
+ * pthread headers stay out of every translation unit that only needs the
+ * register layout. */
+struct powerpc_decrementer_timer;
+#endif
 
 class powerpc_cpu
 #ifndef SHEEPSHAVER
@@ -94,9 +101,38 @@ protected:
 	uint32 lr() const			{ return regs().lr; }
 	uint32 & ctr()				{ return regs().ctr; }
 	uint32 ctr() const			{ return regs().ctr; }
+	uint32 & msr()				{ return system_registers.msr; }
+	uint32 msr() const			{ return system_registers.msr; }
+	uint32 & srr0()				{ return system_registers.srr0; }
+	uint32 srr0() const			{ return system_registers.srr0; }
+	uint32 & srr1()				{ return system_registers.srr1; }
+	uint32 srr1() const			{ return system_registers.srr1; }
+	uint32 & sprg(int i)			{ return system_registers.sprg[i]; }
+	uint32 sprg(int i) const	{ return system_registers.sprg[i]; }
+	uint32 & sr(int i)				{ return system_registers.sr[i]; }
+	uint32 sr(int i) const			{ return system_registers.sr[i]; }
 	uint32 & pc()				{ return regs().pc; }
 	uint32 pc() const			{ return regs().pc; }
 	void increment_pc(int o)	{ pc() += o; }
+	virtual void return_from_exception(uint32 saved_pc, uint32 saved_msr);
+
+	// 32-bit PowerPC decrementer. DEC advances from the same time-base clock
+	// as mftb, latches an edge-triggered interrupt on the 0 -> -1 transition,
+	// and delivers it when MSR[EE] permits asynchronous exceptions.
+	uint32 read_decrementer();
+	void write_decrementer(uint32 value);
+	bool service_decrementer();
+	virtual bool decrementer_exception();
+#ifdef SHEEPSHAVER
+	// Accept a pending level-sensitive external interrupt at the current
+	// architectural instruction boundary. Embedders which model real exception
+	// vectors override this; the base implementation retains the legacy
+	// register-copy callback for non-native execution modes.
+	virtual bool external_interrupt();
+#ifdef SHEEPSHAVER
+	virtual void watch_event_queue() { }
+#endif
+#endif
 
 	friend class pc_operand;
 	friend class lr_operand;
@@ -117,6 +153,17 @@ public:
 	powerpc_vr const & vr(int i) const { return regs().vr[i]; }
 
 protected:
+	struct decrementer_diagnostics_t {
+		uint32 current;
+		uint32 last_write;
+		uint32 minimum_write;
+		uint32 maximum_write;
+		uint64 write_count;
+		uint64 delivery_count;
+		bool pending;
+	};
+	void get_decrementer_diagnostics(decrementer_diagnostics_t &d);
+	int current_execute_depth() const { return execute_depth; }
 
 	// Condition codes management
 	void record_cr(int crfd, int32 value)
@@ -198,6 +245,23 @@ protected:
 		uint16			cflow;			// Mask of control flow information
 	};
 
+	// Instructions which can make an asynchronous DEC request deliverable must
+	// finish the current dispatch block.  This gives the JIT, decode cache and
+	// interpreter the same precise instruction boundary without penalizing the
+	// common mtlr/mtctr forms of mtspr.
+	static bool instruction_ends_dispatch_block(
+		const instr_info_t *ii, uint32 opcode)
+	{
+		if ((ii->cflow & CFLOW_END_BLOCK) != 0 || ii->mnemo == PPC_I(MTMSR))
+			return true;
+		if (ii->mnemo != PPC_I(MFSPR) && ii->mnemo != PPC_I(MTSPR))
+			return false;
+		const uint32 encoded_spr = SPR_field::extract(opcode);
+		const uint32 spr = ((encoded_spr & 0x1f) << 5) |
+			((encoded_spr >> 5) & 0x1f);
+		return spr == powerpc_registers::SPR_DEC;
+	}
+
 private:
 
 	// Compile time statistics
@@ -249,7 +313,19 @@ private:
 	// Current execute() nested level
 	int execute_depth;
 
+#ifdef SHEEPSHAVER
+	void start_decrementer_timer();
+	void stop_decrementer_timer();
+	void schedule_decrementer_timer(uint64 deadline);
+#endif
+
 public:
+
+#ifdef SHEEPSHAVER
+	// Body of the decrementer timer thread. Public only so the per-platform
+	// thread entry point in ppc-execute.cpp can call it.
+	void decrementer_timer_loop();
+#endif
 
 	// Initialization & finalization
 	void initialize();
@@ -390,6 +466,22 @@ private:
 		return &ii_table[ii_index_table[get_ii_index(opcode)]];
 	}
 
+protected:
+	// Execute exactly one instruction at pc through the interpreter, leaving
+	// pc wherever that instruction put it.  Single stepping a debugged program
+	// is the only caller: it must not go through the block engines, whose unit
+	// of work is a whole block.
+	void execute_one_instruction() {
+		const uint32 opcode = vm_read_memory_4(pc());
+		decode(opcode)->execute(this, opcode);
+	}
+
+	// Context dump and the ignore-or-abort policy for a fault the emulator
+	// cannot hand to the guest.  Callers supply their own headline first.
+	void report_fault(uint32 opcode) { execute_fault_report(opcode); }
+
+private:
+
 	// Block lookup table
 	typedef powerpc_block_info block_info;
 	block_cache< block_info, lazy_allocator > my_block_cache;
@@ -479,17 +571,27 @@ private:
 	template< class Rc >
 	void execute_mffs(uint32 opcode);
 	void execute_mfmsr(uint32 opcode);
+	void execute_mtmsr(uint32 opcode);
+	void execute_mfsr(uint32 opcode);
+	void execute_mfsrin(uint32 opcode);
 	template< class SPR >
 	void execute_mfspr(uint32 opcode);
 	template< class TBR >
 	void execute_mftbr(uint32 opcode);
 	template< class SPR >
 	void execute_mtspr(uint32 opcode);
+	void execute_mtsr(uint32 opcode);
+	void execute_mtsrin(uint32 opcode);
+	void execute_rfi(uint32 opcode);
 	template< class SH, class MA, class Rc >
 	void execute_rlwimi(uint32 opcode);
 	template< class OP, class RD, class RA, class SH, class SO, class CA, class Rc >
 	void execute_shift(uint32 opcode);
 	void execute_syscall(uint32 opcode);
+	void execute_fault_report(uint32 opcode);
+	void execute_trap(uint32 opcode);
+	void execute_trap_imm(uint32 opcode);
+	void execute_trap_taken(uint32 opcode);
 	template< bool OC >
 	void execute_fp_compare(uint32 opcode);
  	template< class RA, class RB, bool LD, bool DB, bool UP >
@@ -544,6 +646,43 @@ private:
 	execute_fn decode_addition(uint32 opcode);
 	template< class RA, class RS >
 	execute_fn decode_rlwinm(uint32 opcode);
+
+private:
+	// Keep all state added to the original Kheperix CPU layout at the absolute
+	// end of the object. Windows x86/x64 builds use checked-in dyngen templates
+	// containing fixed offsets for the legacy register file, block cache and
+	// code generator. Changing any of those offsets corrupts translated code.
+	struct system_registers_t {
+		uint32 msr;
+		uint32 srr0;
+		uint32 srr1;
+		uint32 sprg[4];
+		uint32 sr[16];
+	} system_registers;
+
+	// DEC is represented by a value/time-base anchor rather than being
+	// decremented per guest instruction. next_underflow is absolute in time-base
+	// ticks; pending remains latched until the exception is delivered.
+	uint32 decrementer_base;
+	uint64 decrementer_base_ticks;
+	uint64 decrementer_next_underflow;
+	bool decrementer_pending;
+	bool decrementer_initialized;
+#ifdef SHEEPSHAVER
+	// A host deadline wakes translated execution at the architectural DEC
+	// underflow. It avoids per-block time queries while retaining sub-VBL timer
+	// resolution for the nanokernel scheduler.
+	struct powerpc_decrementer_timer *decrementer_timer;
+	uint64 decrementer_timer_deadline;
+	bool decrementer_timer_stop;
+#endif
+	// CPU-thread-only aggregate diagnostics. Kept at the end for the same
+	// checked-in dyngen layout constraint as the architectural state above.
+	uint32 decrementer_last_write;
+	uint32 decrementer_minimum_write;
+	uint32 decrementer_maximum_write;
+	uint64 decrementer_write_count;
+	uint64 decrementer_delivery_count;
 };
 
 
@@ -559,7 +698,10 @@ inline void powerpc_cpu::trigger_interrupt()
 }
 
 #ifdef SHEEPSHAVER
-extern void HandleInterrupt(powerpc_registers *r);
+// Returns true once the asserted external-interrupt level has been accepted.
+// A false result leaves the CPU request pending for a later instruction
+// boundary (for example while the nanokernel has interrupts masked).
+extern bool HandleInterrupt(powerpc_registers *r);
 #endif
 
 #endif /* PPC_CPU_H */

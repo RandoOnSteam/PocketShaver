@@ -19,6 +19,7 @@
  */
 
 #include "sysdeps.h"
+#include "vec_data.h"
 #include "cpu_emulation.h"
 #include "macos_util.h"
 #include "gl_engine.h"
@@ -29,7 +30,7 @@
 #include "display_mode_controller.h"
 #include "gl_drawable_owner_policy.h"
 #include "gl_offscreen_policy.h"
-#include "accel_logging.h"
+#include "gfx_log.h"
 
 #include <cstring>
 #include <cstdio>
@@ -123,7 +124,7 @@
 #define GL_FILL               0x1B02
 
 // ---- AGL Extended Constants ----
-// Pixel format attributes (from agl.h) — AGL_NONE/AGL_RGBA/AGL_DOUBLEBUFFER/AGL_DEPTH_SIZE defined above
+// Pixel format attributes (from agl.h) - AGL_NONE/AGL_RGBA/AGL_DOUBLEBUFFER/AGL_DEPTH_SIZE defined above
 #define AGL_BUFFER_SIZE        2
 #define AGL_LEVEL              3   // verified vs agl.h: level in plane stacking (value attr)
 #define AGL_STEREO             6   // verified vs agl.h: stereo buffering (Boolean attr)
@@ -239,8 +240,8 @@ static uint32_t agl_device_handle = 0;
 
 #define GL_MAX_CONTEXTS 4
 
-static GLContext *gl_contexts[GL_MAX_CONTEXTS] = { nullptr };
-GLContext *gl_current_context = nullptr;
+static GLContext *gl_contexts[GL_MAX_CONTEXTS] = { NULL };
+GLContext *gl_current_context = NULL;
 
 // Mac-side handles (one per context slot)
 static uint32_t gl_context_mac_handles[GL_MAX_CONTEXTS] = { 0 };
@@ -489,8 +490,8 @@ static bool GLOtherDrawableBound(int except_idx)
 {
 	for (int i = 0; i < GL_MAX_CONTEXTS; ++i) {
 		if (i != except_idx &&
-		    gl_contexts[i] != nullptr &&
-		    agl_ctx_state[i].agl_drawable != 0) {
+			gl_contexts[i] != NULL &&
+			agl_ctx_state[i].agl_drawable != 0) {
 			return true;
 		}
 	}
@@ -500,7 +501,7 @@ static bool GLOtherDrawableBound(int except_idx)
 static void GLCaptureOwnerBeforeDrawableBind(int idx)
 {
 	if (!GLShouldSnapshotDrawableOwner(agl_ctx_state[idx].agl_drawable != 0,
-	                                   agl_ctx_state[idx].agl_owner_before_drawable_valid)) {
+									   agl_ctx_state[idx].agl_owner_before_drawable_valid)) {
 		return;
 	}
 
@@ -509,14 +510,14 @@ static void GLCaptureOwnerBeforeDrawableBind(int idx)
 	agl_ctx_state[idx].agl_owner_before_drawable = owner;
 	agl_ctx_state[idx].agl_owner_before_drawable_valid = true;
 	GL_LOG("aglSetDrawable: captured display owner %s before binding context %d",
-	       GLDMCOwnerName(owner), idx + 1);
+		   GLDMCOwnerName(owner), idx + 1);
 }
 
 static void GLFinishDrawableUnbind(int idx)
 {
 	uint32_t captured_owner = agl_ctx_state[idx].agl_owner_before_drawable_valid
-	                            ? agl_ctx_state[idx].agl_owner_before_drawable
-	                            : kDMCOwnerQuickDraw;
+								? agl_ctx_state[idx].agl_owner_before_drawable
+								: kDMCOwnerQuickDraw;
 	uint32_t restore_owner = GLRestorableDrawableOwner(captured_owner);
 	bool other_drawable = GLOtherDrawableBound(idx);
 
@@ -526,15 +527,22 @@ static void GLFinishDrawableUnbind(int idx)
 
 	if (other_drawable) {
 		GL_LOG("aglSetDrawable: deferred owner restore after context %d unbind; another GL drawable remains",
-		       idx + 1);
+			   idx + 1);
 		return;
 	}
 
 	(void)dmc_set_active_owner(restore_owner);
 	GL_LOG("aglSetDrawable: restored display owner %s after context %d unbind (captured %s)",
-	       GLDMCOwnerName(restore_owner), idx + 1, GLDMCOwnerName(captured_owner));
+		   GLDMCOwnerName(restore_owner), idx + 1, GLDMCOwnerName(captured_owner));
 }
 
+
+/* Matrix-stack identity fill - the initial value of every stack level. */
+static void setIdentity(float m[16])
+{
+	memset(m, 0, sizeof(float) * 16);
+	m[0] = m[5] = m[10] = m[15] = 1.0f;
+}
 
 /*
  *  GLContextNew - Allocate and initialize a GLContext with GL 1.2 defaults
@@ -544,18 +552,13 @@ static void GLFinishDrawableUnbind(int idx)
 static GLContext *GLContextNew(int width, int height)
 {
 	GLContext *ctx = new GLContext();
-	// Note: Do NOT memset here. GLContext contains std::unordered_map and
+	// Note: Do NOT memset here. GLContext contains std::map and
 	// std::vector members whose internal state would be destroyed by memset.
 	// Value-initialization via new GLContext() already zero-inits POD members,
 	// and the explicit assignments below set all fields to GL 1.2 defaults.
 
 	// ---- Matrix stacks ----
 	// Identity matrix for modelview[0], projection[0], texture[unit][0]
-	auto setIdentity = [](float m[16]) {
-		memset(m, 0, sizeof(float) * 16);
-		m[0] = m[5] = m[10] = m[15] = 1.0f;
-	};
-
 	setIdentity(ctx->modelview_stack[0]);
 	ctx->modelview_depth = 0;
 
@@ -643,6 +646,7 @@ static GLContext *GLContextNew(int width, int height)
 		GLTextureUnit &T = ctx->tex_units[u];
 		T.bound_texture_1d = 0;
 		T.bound_texture_2d = 0;
+		T.bound_object_2d = NULL;
 		T.enabled_1d = false;
 		T.enabled_2d = false;
 		T.env_mode = GL_MODULATE;
@@ -716,16 +720,21 @@ static GLContext *GLContextNew(int width, int height)
 	// ---- Depth ----
 	// GL spec depth defaults:
 	//   depth_test = disabled, depth_func = GL_LESS, depth_mask = true (write enabled)
-	//   These match the GL 1.2 spec §2.11.1 initial values.
+	//   These match the GL 1.2 spec ?2.11.1 initial values.
 	ctx->depth_func = GL_LESS;
 	ctx->depth_mask = true;  // depth writing enabled by default
 
 	// ---- Blend ----
 	// GL spec blend defaults:
 	//   blend = disabled, blend_src = GL_ONE, blend_dst = GL_ZERO
-	//   These match the GL 1.2 spec §4.1.7 initial values.
+	//   These match the GL 1.2 spec ?4.1.7 initial values.
 	ctx->blend_src = GL_ONE;
 	ctx->blend_dst = GL_ZERO;
+	ctx->blend_equation = 0x8006;  // GL_FUNC_ADD
+	ctx->blend_color[0] = 0.0f;
+	ctx->blend_color[1] = 0.0f;
+	ctx->blend_color[2] = 0.0f;
+	ctx->blend_color[3] = 0.0f;
 
 	// ---- Vertex arrays ----
 	// All zero-initialized (disabled, null pointers)
@@ -738,7 +747,7 @@ static GLContext *GLContextNew(int width, int height)
 	ctx->list_base = 0;
 
 	// ---- Metal state ----
-	ctx->metal = nullptr;
+	ctx->metal = NULL;
 
 	// ---- Pixel store ----
 	ctx->pixel_store.pack_alignment = 4;
@@ -863,11 +872,11 @@ uint32_t NativeAGLChoosePixelFormat(uint32_t gdevs, uint32_t ndev, uint32_t attr
 	// agl.h's per-attribute arity instead. Unknown attributes are treated as
 	// Boolean (the conservative choice: a stray value word is left in place
 	// rather than silently consumed, and the 64-iteration cap + the AGL_NONE
-	// terminator both still bound the walk — ASVS V5).
+	// terminator both still bound the walk - ASVS V5).
 	bool has_rgba = false, has_depth = false, has_double = false;
 	if (attribs != 0) {
 		uint32_t addr = attribs;
-		for (int i = 0; i < 64; i++) {  // safety limit — never advance past AGL_NONE
+		for (int i = 0; i < 64; i++) {  // safety limit - never advance past AGL_NONE
 			uint32_t attr = ReadMacInt32(addr);
 			if (attr == AGL_NONE) break;
 			GL_LOG("  attrib[%d] = %d", i, attr);
@@ -894,7 +903,7 @@ uint32_t NativeAGLChoosePixelFormat(uint32_t gdevs, uint32_t ndev, uint32_t attr
 				case AGL_RENDERER_ID:
 					takes_value = true;
 					break;
-				// Boolean attributes (no value word) — AGL_RGBA / AGL_DOUBLEBUFFER /
+				// Boolean attributes (no value word) - AGL_RGBA / AGL_DOUBLEBUFFER /
 				// AGL_STEREO / AGL_MINIMUM_POLICY / AGL_MAXIMUM_POLICY / etc. fall
 				// here (and so do unknown attrs, conservatively).
 				default:
@@ -955,7 +964,7 @@ uint32_t NativeAGLChoosePixelFormat(uint32_t gdevs, uint32_t ndev, uint32_t attr
 	WriteMacInt32(mac_handle, idx);
 
 	GL_LOG("aglChoosePixelFormat: allocated format %d (handle=0x%08x) rgba=%d depth=%d double=%d",
-	       idx, mac_handle, has_rgba, has_depth, has_double);
+		   idx, mac_handle, has_rgba, has_depth, has_double);
 
 	gl_agl_last_error = AGL_NO_ERROR;
 	return mac_handle;
@@ -972,7 +981,7 @@ uint32_t NativeAGLChoosePixelFormat(uint32_t gdevs, uint32_t ndev, uint32_t attr
  *  beyond core 1.1 (extension entry points). We fill the entire over-allocated
  *  table: every slot we don't map to a real GL function gets a per-slot
  *  diagnostic no-op TVECT (gl_dt_diag_tvects) so a direct read never returns
- *  uninitialized guest heap — which the game would call as a function
+ *  uninitialized guest heap - which the game would call as a function
  *  descriptor and crash on (Cro-Mag Rally: slot 339 -> illegal instruction).
  */
 static void GLPopulateDispatchTable(uint32_t mac_handle)
@@ -989,8 +998,8 @@ static void GLPopulateDispatchTable(uint32_t mac_handle)
 			// gl_dispatch_ext_slots[]). Unmapped slots fall through to the
 			// diagnostic no-op below so new ones still surface in the log.
 			for (size_t e = 0;
-			     e < sizeof(gl_dispatch_ext_slots) / sizeof(gl_dispatch_ext_slots[0]);
-			     e++) {
+				 e < sizeof(gl_dispatch_ext_slots) / sizeof(gl_dispatch_ext_slots[0]);
+				 e++) {
 				if (gl_dispatch_ext_slots[e].slot == i) {
 					uint16_t sub = gl_dispatch_ext_slots[e].sub_opcode;
 					if (sub < GL_MAX_SUBOPCODE)
@@ -1017,7 +1026,7 @@ uint32_t NativeAGLCreateContext(uint32_t pixelFormat, uint32_t shareContext)
 	// Find a free context slot
 	int slot = -1;
 	for (int i = 0; i < GL_MAX_CONTEXTS; i++) {
-		if (gl_contexts[i] == nullptr) {
+		if (gl_contexts[i] == NULL) {
 			slot = i;
 			break;
 		}
@@ -1040,7 +1049,7 @@ uint32_t NativeAGLCreateContext(uint32_t pixelFormat, uint32_t shareContext)
 	uint32_t mac_handle = Mac_sysalloc(GL_CTX_HANDLE_SIZE);
 	if (mac_handle == 0) {
 		delete ctx;
-		gl_contexts[slot] = nullptr;
+		gl_contexts[slot] = NULL;
 		GL_LOG("aglCreateContext: Mac_sysalloc failed");
 		gl_agl_last_error = AGL_BAD_ALLOC;
 		return 0;
@@ -1070,14 +1079,14 @@ uint32_t NativeAGLCreateContext(uint32_t pixelFormat, uint32_t shareContext)
 
 /*
  *  Helper: look up GLContext from Mac-side handle
- *  Returns context pointer and sets out_idx to 0-based index, or nullptr on error.
+ *  Returns context pointer and sets out_idx to 0-based index, or NULL on error.
  */
-static GLContext *GLContextFromHandle(uint32_t mac_handle, int *out_idx = nullptr)
+static GLContext *GLContextFromHandle(uint32_t mac_handle, int *out_idx = NULL)
 {
-	if (mac_handle == 0) return nullptr;
+	if (mac_handle == 0) return NULL;
 
 	uint32_t one_based = ReadMacInt32(mac_handle);
-	if (one_based == 0 || one_based > GL_MAX_CONTEXTS) return nullptr;
+	if (one_based == 0 || one_based > GL_MAX_CONTEXTS) return NULL;
 
 	int idx = one_based - 1;
 	if (out_idx) *out_idx = idx;
@@ -1085,23 +1094,23 @@ static GLContext *GLContextFromHandle(uint32_t mac_handle, int *out_idx = nullpt
 }
 
 extern "C" int GLContextGetOffscreenDrawable(GLContext *context,
-                                             uint32_t *outW,
-                                             uint32_t *outH,
-                                             uint32_t *outRowbytes,
-                                             uint32_t *outBaseaddr)
+											 uint32_t *outW,
+											 uint32_t *outH,
+											 uint32_t *outRowbytes,
+											 uint32_t *outBaseaddr)
 {
-	if (context == nullptr) return 0;
+	if (context == NULL) return 0;
 
 	for (int i = 0; i < GL_MAX_CONTEXTS; i++) {
 		if (gl_contexts[i] != context) continue;
 
 		const AGLContextState &state = agl_ctx_state[i];
 		if (!GLShouldReadbackOffscreenDrawable(
-		        state.agl_offscreen,
-		        state.agl_offscreen_width,
-		        state.agl_offscreen_height,
-		        state.agl_offscreen_rowbytes,
-		        state.agl_offscreen_baseaddr)) {
+				state.agl_offscreen,
+				state.agl_offscreen_width,
+				state.agl_offscreen_height,
+				state.agl_offscreen_rowbytes,
+				state.agl_offscreen_baseaddr)) {
 			return 0;
 		}
 
@@ -1126,7 +1135,7 @@ uint32_t NativeAGLSetCurrentContext(uint32_t ctx)
 	GL_LOG("aglSetCurrentContext: ctx=0x%08x", ctx);
 
 	if (ctx == 0) {
-		gl_current_context = nullptr;
+		gl_current_context = NULL;
 		gl_current_context_idx = -1;
 		GL_LOG("aglSetCurrentContext: unbound current context");
 		gl_agl_last_error = AGL_NO_ERROR;
@@ -1203,7 +1212,7 @@ uint32_t NativeAGLSetDrawable(uint32_t ctx, uint32_t drawable)
 	}
 
 	GL_LOG("aglSetDrawable: port rect=(%d,%d,%d,%d) -> %dx%d",
-	       port_top, port_left, port_bottom, port_right, width, height);
+		   port_top, port_left, port_bottom, port_right, width, height);
 
 	GLCaptureOwnerBeforeDrawableBind(idx);
 
@@ -1265,7 +1274,7 @@ uint32_t NativeAGLSwapBuffers(uint32_t ctx)
 	GLMetalEndFrame(context);
 
 	// gl_overlay_present emits a single kLayerSlotOverlay CompositeLayer via
-	// MetalCompositorSubmitFrame — the layer's presence IS the "active"
+	// MetalCompositorSubmitFrame - the layer's presence IS the "active"
 	// signal. SubmitFrame is cache-only in production; Step 3 restores real
 	// pacing. gl_overlay_present also declares GL as the active DMC owner
 	// internally (an idempotent early-return makes it a fast no-op when owner
@@ -1286,13 +1295,13 @@ uint32_t NativeAGLSwapBuffers(uint32_t ctx)
  *  Clean up GLContext, free resources, remove from table.
  *
  *  Destroy path cleanup:
- *  (1) GLMetalRelease: commits pending GPU work, releases Metal textures (CFRelease),
- *      clears pipeline/depth-stencil/sampler caches, deletes GLMetalState
+ *  (1) GLMetalRelease: completes pending backend work, releases host textures,
+ *      clears per-context backend caches, and deletes the backend state
  *  (2) Shared-overlay refcount release deleted; GL uses the per-engine
  *      overlay path.
  *  (3) Accum buffer: freed here (raw malloc'd by gl_accum_ensure_allocated)
- *  (4) delete context: releases std::unordered_map/std::vector members via dtors
- *      (texture_objects already cleared in GLMetalRelease, display_lists are CPU-only)
+ *  (4) delete context: releases std::map/std::vector members via dtors
+ *      (host texture handles were released above; display lists are CPU-only)
  */
 uint32_t NativeAGLDestroyContext(uint32_t ctx)
 {
@@ -1308,23 +1317,29 @@ uint32_t NativeAGLDestroyContext(uint32_t ctx)
 
 	// If this is the current context, unbind it
 	if (gl_current_context == context) {
-		gl_current_context = nullptr;
+		gl_current_context = NULL;
 		gl_current_context_idx = -1;
 	}
 
-	// Release Metal resources for this context (textures, caches, GPU sync)
+	// Release backend resources for this context (textures and host-state caches)
 	GLMetalRelease(context);
+
+	// The Metal backend empties texture_objects in there, so a unit's resolved
+	// GLTextureObject pointer must not outlive it. Kept on this side of the
+	// call so one line covers both backends.
+	for (int u = 0; u < 4; u++)
+		context->tex_units[u].bound_object_2d = NULL;
 
 	// Release the per-engine overlay texture on the last live context
 	// destruction. NativeAGLSetDrawable(ctx, 0) typically fires
 	// first and already unbound; if the caller destroyed the context
-	// without unbinding, gl_overlay_unbind is idempotent — no-op if no
+	// without unbinding, gl_overlay_unbind is idempotent - no-op if no
 	// overlay cached. Checking gl_current_context suffices as a
 	// lightweight "is any context still active" probe: if we just
 	// nulled it out above and no other contexts exist, we unbind.
 	bool any_remaining = false;
 	for (int i = 0; i < GL_MAX_CONTEXTS; ++i) {
-		if (gl_contexts[i] != nullptr && gl_contexts[i] != context) {
+		if (gl_contexts[i] != NULL && gl_contexts[i] != context) {
 			any_remaining = true;
 			break;
 		}
@@ -1339,12 +1354,12 @@ uint32_t NativeAGLDestroyContext(uint32_t ctx)
 	// Free accumulation buffer (raw malloc'd, not managed by ARC or C++ dtors)
 	if (context->accum_buffer) {
 		free(context->accum_buffer);
-		context->accum_buffer = nullptr;
+		context->accum_buffer = NULL;
 		context->accum_allocated = false;
 	}
 
 	delete context;
-	gl_contexts[idx] = nullptr;
+	gl_contexts[idx] = NULL;
 	gl_context_mac_handles[idx] = 0;
 
 	GL_LOG("aglDestroyContext: destroyed context %d", idx + 1);
@@ -1398,7 +1413,7 @@ uint32_t NativeAGLGetVersion(uint32_t majorPtr, uint32_t minorPtr)
  *  Reclaim the C++ pixel-format slot that owns this handle so a session that
  *  creates/destroys >4 pixel formats can reuse the fixed 4-slot table.
  *  We match the slot by mac_addr (the same lookup NativeAGLDescribePixelFormat
- *  uses) and mark it free with a mac_addr=0 sentinel — we NEVER blind-decrement
+ *  uses) and mark it free with a mac_addr=0 sentinel - we NEVER blind-decrement
  *  gl_pixel_format_count, because an out-of-order destroy would shift later
  *  slots and alias a still-live pixel format. The Mac_sysalloc
  *  memory stays leaked (it's a permanent bump allocator); only the C++ slot is
@@ -1447,7 +1462,7 @@ uint32_t NativeAGLDescribePixelFormat(uint32_t pix, uint32_t attrib, uint32_t va
 	}
 
 	// Look up pixel format by matching mac_addr
-	GLPixelFormatInfo *pf = nullptr;
+	GLPixelFormatInfo *pf = NULL;
 	for (int i = 0; i < gl_pixel_format_count; i++) {
 		if (gl_pixel_formats[i].mac_addr == pix) {
 			pf = &gl_pixel_formats[i];
@@ -1664,7 +1679,7 @@ uint32_t NativeAGLCopyContext(uint32_t src, uint32_t dst, uint32_t mask)
  *  NativeAGLUpdateContext(r3=ctx) - re-read the bound drawable geometry
  *
  *  An app calls aglUpdateContext after resizing/moving the window bound via
- *  aglSetDrawable. We validate the context (AGL_BAD_CONTEXT on a bad handle —
+ *  aglSetDrawable. We validate the context (AGL_BAD_CONTEXT on a bad handle -
  *  the old pure no-op silently succeeded on garbage), then re-read the bound
  *  drawable's portRect by REUSING the exact aglSetDrawable CGrafPort-vs-GrafPort
  *  offset logic and refresh the GL viewport. The bound drawable Mac address is
@@ -1684,7 +1699,7 @@ uint32_t NativeAGLUpdateContext(uint32_t ctx)
 
 	uint32_t drawable = agl_ctx_state[idx].agl_drawable;
 	if (drawable != 0) {
-		// Re-read port dimensions from the Mac GrafPort/CGrafPort — same
+		// Re-read port dimensions from the Mac GrafPort/CGrafPort - same
 		// CGrafPort-vs-GrafPort offset logic as NativeAGLSetDrawable (do NOT
 		// hand-roll a second parser).
 		uint16_t portVersion = ReadMacInt16(drawable + 6);
@@ -1706,7 +1721,7 @@ uint32_t NativeAGLUpdateContext(uint32_t ctx)
 		context->viewport[3] = height;
 
 		GL_LOG("aglUpdateContext: re-read port rect -> %dx%d for context %d",
-		       width, height, idx + 1);
+			   width, height, idx + 1);
 	}
 
 	gl_agl_last_error = AGL_NO_ERROR;
@@ -1724,10 +1739,10 @@ uint32_t NativeAGLUpdateContext(uint32_t ctx)
  *  still-unsupported fullscreen/font calls.
  */
 uint32_t NativeAGLSetOffScreen(uint32_t ctx, uint32_t width, uint32_t height,
-                                uint32_t rowbytes, uint32_t baseaddr)
+								uint32_t rowbytes, uint32_t baseaddr)
 {
 	GL_LOG("aglSetOffScreen: ctx=0x%08x %dx%d rowbytes=%u base=0x%08x",
-	       ctx, width, height, rowbytes, baseaddr);
+		   ctx, width, height, rowbytes, baseaddr);
 
 	int idx;
 	GLContext *context = GLContextFromHandle(ctx, &idx);
@@ -1773,7 +1788,7 @@ uint32_t NativeAGLSetOffScreen(uint32_t ctx, uint32_t width, uint32_t height,
 }
 
 uint32_t NativeAGLSetFullScreen(uint32_t ctx, uint32_t width, uint32_t height,
-                                 uint32_t freq, uint32_t device)
+								 uint32_t freq, uint32_t device)
 {
 	GL_LOG("aglSetFullScreen: ctx=0x%08x %dx%d@%d (known limitation: windowed only)", ctx, width, height, freq);
 	gl_agl_last_error = AGL_BAD_FULLSCREEN;
@@ -1839,7 +1854,7 @@ uint32_t NativeAGLConfigure(uint32_t pname, uint32_t param)
 		case AGL_FORMAT_CACHE_SIZE:
 		case AGL_CLEAR_FORMAT_CACHE:
 		case AGL_RETAIN_RENDERERS:
-			// Accept — these affect internal caching we don't implement
+			// Accept - these affect internal caching we don't implement
 			break;
 		default:
 			// Honest-error: an unknown pname is a real AGL_BAD_ENUM, not
@@ -1991,20 +2006,20 @@ uint32_t NativeAGLSetInteger(uint32_t ctx, uint32_t pname, uint32_t params)
 			for (int i = 0; i < 4; i++)
 				agl_ctx_state[idx].agl_buffer_rect[i] = (int32_t)ReadMacInt32(params + i * 4);
 			GL_LOG("aglSetInteger: buffer_rect=(%d,%d,%d,%d)",
-			       agl_ctx_state[idx].agl_buffer_rect[0], agl_ctx_state[idx].agl_buffer_rect[1],
-			       agl_ctx_state[idx].agl_buffer_rect[2], agl_ctx_state[idx].agl_buffer_rect[3]);
+				   agl_ctx_state[idx].agl_buffer_rect[0], agl_ctx_state[idx].agl_buffer_rect[1],
+				   agl_ctx_state[idx].agl_buffer_rect[2], agl_ctx_state[idx].agl_buffer_rect[3]);
 			break;
 		case AGL_SWAP_RECT:
 			for (int i = 0; i < 4; i++)
 				agl_ctx_state[idx].agl_swap_rect[i] = (int32_t)ReadMacInt32(params + i * 4);
 			GL_LOG("aglSetInteger: swap_rect=(%d,%d,%d,%d)",
-			       agl_ctx_state[idx].agl_swap_rect[0], agl_ctx_state[idx].agl_swap_rect[1],
-			       agl_ctx_state[idx].agl_swap_rect[2], agl_ctx_state[idx].agl_swap_rect[3]);
+				   agl_ctx_state[idx].agl_swap_rect[0], agl_ctx_state[idx].agl_swap_rect[1],
+				   agl_ctx_state[idx].agl_swap_rect[2], agl_ctx_state[idx].agl_swap_rect[3]);
 			break;
 		case AGL_COLORMAP_ENTRY:
 			// Known pname: colormap entry {index, r, g, b}. We don't track an
 			// AGL software colormap (the Metal compositor owns the palette), but
-			// it is a valid pname — accept it as a no-op rather than AGL_BAD_ENUM.
+			// it is a valid pname - accept it as a no-op rather than AGL_BAD_ENUM.
 			GL_LOG("aglSetInteger: AGL_COLORMAP_ENTRY accepted (no AGL colormap tracked)");
 			break;
 		default:
@@ -2066,14 +2081,14 @@ uint32_t NativeAGLGetInteger(uint32_t ctx, uint32_t pname, uint32_t params)
  *  function cannot populate the display-list glyphs. It previously returned
  *  GL_TRUE, leaving the caller with an empty (silently wrong) glyph list. It
  *  now returns GL_FALSE. There is NO AGL_BAD_FONT error in the AGL 1.2 spec, so
- *  none is invented — GL_FALSE alone is the documented Boolean failure.
+ *  none is invented - GL_FALSE alone is the documented Boolean failure.
  *  This is a deliberate known limitation.
  */
 uint32_t NativeAGLUseFont(uint32_t ctx, uint32_t fontID, uint32_t face,
-                           uint32_t size, uint32_t first, uint32_t count, uint32_t base)
+						   uint32_t size, uint32_t first, uint32_t count, uint32_t base)
 {
 	GL_LOG("aglUseFont: ctx=0x%08x fontID=%d face=%d size=%d first=%d count=%d base=%d (known limitation: no Font Manager access)",
-	       ctx, fontID, face, size, first, count, base);
+		   ctx, fontID, face, size, first, count, base);
 	return GL_FALSE;
 }
 
@@ -2278,21 +2293,21 @@ uint32_t NativeAGLDevicesOfPixelFormat(uint32_t pix, uint32_t ndevsPtr)
 //     handle back to the resource manager.
 //
 // The handlers must NOT call back into DMC (the resource manager fan-out
-// runs on the DMC writer's thread while holding the writer mutex —
+// runs on the DMC writer's thread while holding the writer mutex -
 // recursive subscribe/unsubscribe would deadlock).
 //
 // Cross the .cpp/.mm boundary via the small extern "C" probes declared in
 // gl_engine.h (gl_has_active_overlay / gl_get_overlay_dims /
 // gl_release_overlay_for_detach).
 static int32_t GLOnAttach(uint32_t /* engine_id */,
-                          const struct DMCModeSnapshot *incoming,
-                          void * /* ctx */)
+						  const struct DMCModeSnapshot *incoming,
+						  void * /* ctx */)
 {
-	/* If GL has no active overlay at attach time, skip pre-vending — the
+	/* If GL has no active overlay at attach time, skip pre-vending - the
 	 * next gl_overlay_bind (driven by an actual AGL drawable bind) will
 	 * vend lazily. Common case for non-GL workloads. */
 	if (!gl_has_active_overlay()) {
-		return 0;  /* kGfxAccelResNoErr — accept the transition */
+		return 0;  /* kGfxAccelResNoErr - accept the transition */
 	}
 	if (incoming == NULL) {
 		return 0;  /* defensive */
@@ -2303,21 +2318,21 @@ static int32_t GLOnAttach(uint32_t /* engine_id */,
 	 * after the mode switch. Vend format is
 	 * BGRA8Unorm (= MTLPixelFormatBGRA8Unorm = 80). */
 	void *tex0 = gfxaccel_resources_vend_overlay_texture_indexed(
-	                kGfxEngineGL,
-	                0,
-	                incoming->width,
-	                incoming->height,
-	                80 /* MTLPixelFormatBGRA8Unorm */);
+					kGfxEngineGL,
+					0,
+					incoming->width,
+					incoming->height,
+					80 /* MTLPixelFormatBGRA8Unorm */);
 	void *tex1 = gfxaccel_resources_vend_overlay_texture_indexed(
-	                kGfxEngineGL,
-	                1,
-	                incoming->width,
-	                incoming->height,
-	                80 /* MTLPixelFormatBGRA8Unorm */);
+					kGfxEngineGL,
+					1,
+					incoming->width,
+					incoming->height,
+					80 /* MTLPixelFormatBGRA8Unorm */);
 	if (tex0 == NULL || tex1 == NULL) {
 		if (tex0 != NULL) gfxaccel_resources_release_overlay_texture(kGfxEngineGL, tex0);
 		if (tex1 != NULL) gfxaccel_resources_release_overlay_texture(kGfxEngineGL, tex1);
-		/* Vend failed — reject the transition. The rollback path is safe
+		/* Vend failed - reject the transition. The rollback path is safe
 		 * under concurrent DMC readers. */
 		return -3009;  /* kDMCErrSubscriberRejected */
 	}
@@ -2325,10 +2340,10 @@ static int32_t GLOnAttach(uint32_t /* engine_id */,
 }
 
 static int32_t GLOnDetach(uint32_t /* engine_id */,
-                          const struct DMCModeSnapshot * /* outgoing */,
-                          void * /* ctx */)
+						  const struct DMCModeSnapshot * /* outgoing */,
+						  void * /* ctx */)
 {
-	/* Release the cached overlay (idempotent — no-op if GL has none).
+	/* Release the cached overlay (idempotent - no-op if GL has none).
 	 * The next gl_overlay_bind after the mode switch will re-vend at the
 	 * appropriate resolution. */
 	gl_release_overlay_for_detach();
@@ -2356,9 +2371,8 @@ static void GLRegisterResourceHandlers(void)
 
 // GL hook state
 static bool gl_hooks_installed = false;
+static bool glu_hooks_installed = false;
 static bool gl_hooks_in_progress = false;
-static int gl_hooks_attempts = 0;
-static const int GL_HOOKS_MAX_ATTEMPTS = 3;
 
 /*
  *  GLInstallHooks - Hook GL/AGL function lookups via FindLibSymbol
@@ -2377,8 +2391,7 @@ static const int GL_HOOKS_MAX_ATTEMPTS = 3;
  */
 void GLInstallHooks()
 {
-	if (gl_hooks_installed) return;
-	if (gl_hooks_attempts >= GL_HOOKS_MAX_ATTEMPTS) return;
+	if (gl_hooks_installed && glu_hooks_installed) return;
 	if (gl_hooks_in_progress) {
 		GL_LOG("GLInstallHooks: skipped (re-entrant call)");
 		return;
@@ -2390,7 +2403,7 @@ void GLInstallHooks()
 	// ---- Step 0: Register GL's attach/detach handlers with
 	// the gfxaccel_resources fan-out registry. Idempotent
 	// (gl_resource_handlers_registered guard); safe to call even if
-	// FindLibSymbol below fails and we retry — registration survives.
+	// FindLibSymbol below fails and we retry - registration survives.
 	// Mirrors RaveRegisterResourceHandlers at rave_engine.cpp.
 	GLRegisterResourceHandlers();
 
@@ -2952,7 +2965,7 @@ void GLInstallHooks()
 	int not_found_count = 0;
 
 	// Search AGL functions in OpenGLLibrary
-	for (int i = 0; i < num_agl; i++) {
+	for (int i = 0; !gl_hooks_installed && i < num_agl; i++) {
 		uint32_t tvect = FindLibSymbol(gl_lib, agl_symbols[i].pascal_sym);
 		if (tvect != 0) {
 			cached_tvects.push_back({ tvect, agl_symbols[i].sub_opcode, agl_symbols[i].name });
@@ -2967,7 +2980,7 @@ void GLInstallHooks()
 
 	// Search core GL functions in OpenGLLibrary
 	int gl_found = 0, gl_notfound = 0;
-	for (int i = 0; i < num_gl; i++) {
+	for (int i = 0; !gl_hooks_installed && i < num_gl; i++) {
 		uint32_t tvect = FindLibSymbol(gl_lib, gl_symbols[i].pascal_sym);
 		if (tvect != 0) {
 			cached_tvects.push_back({ tvect, gl_symbols[i].sub_opcode, gl_symbols[i].name });
@@ -2981,7 +2994,7 @@ void GLInstallHooks()
 	// Search GL/extension functions without expanding the core AGL context
 	// dispatch table.
 	int gl_extra_found = 0, gl_extra_notfound = 0;
-	for (int i = 0; i < num_gl_extra; i++) {
+	for (int i = 0; !gl_hooks_installed && i < num_gl_extra; i++) {
 		uint32_t tvect = FindLibSymbol(gl_lib, gl_extra_symbols[i].pascal_sym);
 		if (tvect != 0) {
 			cached_tvects.push_back({ tvect, gl_extra_symbols[i].sub_opcode, gl_extra_symbols[i].name });
@@ -2992,15 +3005,16 @@ void GLInstallHooks()
 		}
 	}
 	GL_LOG("GLInstallHooks: found %d extra GL functions, %d not found",
-	       gl_extra_found, gl_extra_notfound);
+		   gl_extra_found, gl_extra_notfound);
 
 	// Search GLU functions. They normally live in the separate OpenGLUtility
 	// library; some builds fold them into OpenGLLibrary, so try OpenGLUtility
 	// first and fall back to gl_lib. A found TVECT is patched by Step 2 exactly
 	// like the AGL/GL ones (its hook is gl_method_tvects[GLU sub-opcode], which
 	// GLThunksInit already allocates for the 700..753 GLU range).
+	const size_t glu_range_begin = cached_tvects.size();
 	int glu_found = 0, glu_notfound = 0;
-	for (int i = 0; i < num_glu; i++) {
+	for (int i = 0; !glu_hooks_installed && i < num_glu; i++) {
 		uint32_t tvect = FindLibSymbol(glu_lib, glu_symbols[i].pascal_sym);
 		if (tvect == 0)
 			tvect = FindLibSymbol(gl_lib, glu_symbols[i].pascal_sym);
@@ -3028,6 +3042,7 @@ void GLInstallHooks()
 
 	const uint32_t r11 = 11;
 	int patched_count = 0;
+	int glu_patched_count = 0;
 	int synthetic_count = 0;
 
 	for (size_t i = 0; i < cached_tvects.size(); i++) {
@@ -3047,7 +3062,7 @@ void GLInstallHooks()
 		if (orig_tvect == hook_tvect) {
 			synthetic_count++;
 			GL_LOG("  synthetic %s: TVECT 0x%08x is our own thunk, no patch needed",
-			       cached_tvects[i].name, orig_tvect);
+				   cached_tvects[i].name, orig_tvect);
 			continue;
 		}
 
@@ -3077,26 +3092,44 @@ void GLInstallHooks()
 #endif
 
 		patched_count++;
+		if (i >= glu_range_begin)
+			glu_patched_count++;
 		GL_LOG("  patched %s: orig_code=0x%08x -> hook_code=0x%08x",
-		       cached_tvects[i].name, orig_code, hook_code);
+			   cached_tvects[i].name, orig_code, hook_code);
 	}
 
-	GL_LOG("GLInstallHooks: patched %d real exports, %d synthetic (skipped)",
-	       patched_count, synthetic_count);
+	GL_LOG("GLInstallHooks: patched %d real exports (%d GLU), %d synthetic (skipped)",
+		   patched_count, glu_patched_count, synthetic_count);
 
-	if (patched_count > 0) {
+	gl_hooks_in_progress = false;
+
+	if (patched_count > glu_patched_count)
 		gl_hooks_installed = true;
-		gl_hooks_in_progress = false;
-	} else {
-		gl_hooks_in_progress = false;
-		gl_hooks_attempts++;
-		if (gl_hooks_attempts >= GL_HOOKS_MAX_ATTEMPTS)
-			GL_LOG("GLInstallHooks: OpenGL library not available after %d attempts, giving up", gl_hooks_attempts);
-		else
-			GL_LOG("GLInstallHooks: patched 0 functions, will retry on next accRun (attempt %d/%d)",
-			       gl_hooks_attempts, GL_HOOKS_MAX_ATTEMPTS);
-		return;
-	}
+	if (glu_patched_count > 0)
+		glu_hooks_installed = true;
+	if (!gl_hooks_installed)
+		GL_LOG("GLInstallHooks: OpenGLLibrary not resolved yet");
+	if (!glu_hooks_installed)
+		GL_LOG("GLInstallHooks: OpenGLUtility not resolved yet");
+}
+
+
+/*
+ *  GLResetForReboot - clear the GL install latches for a guest soft reboot.
+ *
+ *  A soft reboot reloads the GL/AGL/GLU CFM libraries fresh, so the entry-point
+ *  patches we wrote are gone with the old image. Clearing the latches lets the
+ *  accRun -> VideoInstallAccel -> GLInstallHooks retry path re-patch the fresh
+ *  exports. (GLInstallHooks does not save original bytes, so there is nothing
+ *  to restore in place; the fresh library is unpatched by definition.)
+ */
+void GLResetForReboot(void)
+{
+	GL_LOG("GLResetForReboot: hooksInstalled=%d gluInstalled=%d",
+		   gl_hooks_installed, glu_hooks_installed);
+	gl_hooks_installed   = false;
+	glu_hooks_installed  = false;
+	gl_hooks_in_progress = false;
 }
 
 
@@ -3216,7 +3249,7 @@ struct GLUTessVertex3 {
 	float x, y, z;
 	// Opaque guest `data` ptr from gluTessVertex.
 	// Stored verbatim as a raw uint32 Mac address and passed straight back to
-	// the guest GLU_TESS_VERTEX callback through the call_macos* trampoline —
+	// the guest GLU_TESS_VERTEX callback through the call_macos* trampoline -
 	// it is NEVER dereferenced natively (ASVS V5). 0 = none.
 	uint32_t data = 0;
 };
@@ -3401,12 +3434,12 @@ void NativeGLUPerspective(GLContext *ctx, double fovy, double aspect, double zNe
  *  Build view matrix: forward, side, up vectors, then translate.
  */
 void NativeGLULookAt(GLContext *ctx,
-                     double eyeX, double eyeY, double eyeZ,
-                     double centerX, double centerY, double centerZ,
-                     double upX, double upY, double upZ)
+					 double eyeX, double eyeY, double eyeZ,
+					 double centerX, double centerY, double centerZ,
+					 double upX, double upY, double upZ)
 {
 	GL_LOG("gluLookAt: eye(%f,%f,%f) center(%f,%f,%f) up(%f,%f,%f)",
-	       eyeX, eyeY, eyeZ, centerX, centerY, centerZ, upX, upY, upZ);
+		   eyeX, eyeY, eyeZ, centerX, centerY, centerZ, upX, upY, upZ);
 
 	if (!ctx) return;
 
@@ -3493,9 +3526,9 @@ void NativeGLUPickMatrix(GLContext *ctx, double x, double y, double deltaX, doub
  *  Returns 1 on success, 0 on failure.
  */
 uint32_t NativeGLUProject(GLContext *ctx,
-                          double objX, double objY, double objZ,
-                          uint32_t model_ptr, uint32_t proj_ptr, uint32_t viewport_ptr,
-                          uint32_t winX_ptr, uint32_t winY_ptr, uint32_t winZ_ptr)
+						  double objX, double objY, double objZ,
+						  uint32_t model_ptr, uint32_t proj_ptr, uint32_t viewport_ptr,
+						  uint32_t winX_ptr, uint32_t winY_ptr, uint32_t winZ_ptr)
 {
 	GL_LOG("gluProject: obj(%f,%f,%f)", objX, objY, objZ);
 	if (!model_ptr || !proj_ptr || !viewport_ptr) return 0;
@@ -3549,9 +3582,9 @@ uint32_t NativeGLUProject(GLContext *ctx,
  *  Returns 1 on success, 0 on failure (singular matrix).
  */
 uint32_t NativeGLUUnProject(GLContext *ctx,
-                            double winX, double winY, double winZ,
-                            uint32_t model_ptr, uint32_t proj_ptr, uint32_t viewport_ptr,
-                            uint32_t objX_ptr, uint32_t objY_ptr, uint32_t objZ_ptr)
+							double winX, double winY, double winZ,
+							uint32_t model_ptr, uint32_t proj_ptr, uint32_t viewport_ptr,
+							uint32_t objX_ptr, uint32_t objY_ptr, uint32_t objZ_ptr)
 {
 	GL_LOG("gluUnProject: win(%f,%f,%f)", winX, winY, winZ);
 	if (!model_ptr || !proj_ptr || !viewport_ptr) return 0;
@@ -3572,7 +3605,7 @@ uint32_t NativeGLUUnProject(GLContext *ctx,
 	for (int c = 0; c < 4; c++)
 		for (int r = 0; r < 4; r++)
 			combined[c*4+r] = proj[0*4+r]*model[c*4+0] + proj[1*4+r]*model[c*4+1] +
-			                  proj[2*4+r]*model[c*4+2] + proj[3*4+r]*model[c*4+3];
+							  proj[2*4+r]*model[c*4+2] + proj[3*4+r]*model[c*4+3];
 
 	// Invert the combined 4x4 matrix
 	double inv[16];
@@ -3638,28 +3671,28 @@ uint32_t NativeGLUUnProject(GLContext *ctx,
 
 // Forward declaration for GL texture upload (implemented below).
 extern void NativeGLTexImage2D_Direct(GLContext *ctx, uint32_t target, int32_t level,
-                                       int32_t internalFormat, int32_t width, int32_t height,
-                                       int32_t border, uint32_t format, uint32_t type,
-                                       const uint8_t *pixels, int32_t pixel_data_size);
+									   int32_t internalFormat, int32_t width, int32_t height,
+									   int32_t border, uint32_t format, uint32_t type,
+									   const uint8_t *pixels, int32_t pixel_data_size);
 
 // Forward declare the real Metal uploader (implemented in gl_metal_renderer.mm).
 // gl_engine.h carries a stale 8-arg prototype for this symbol; the actual definition
 // (gl_metal_renderer.mm:2136) and the gl_state.cpp:431 forward decl use this 7-arg shape
 // (data + dataLen). Declare the correct overload locally so NativeGLTexImage2D_Direct
-// binds to it — mirror gl_state.cpp:430-432.
+// binds to it - mirror gl_state.cpp:430-432.
 extern void GLMetalUploadTexture(GLContext *ctx, GLTextureObject *texObj, int level,
-                                  int width, int height, const uint8_t *data, int dataLen);
+								  int width, int height, const uint8_t *data, int dataLen);
 extern uint8_t *GLConvertMacPixelsToBGRA8(GLContext *ctx, uint32_t mac_pixels,
-                                          int width, int height,
-                                          uint32_t format, uint32_t type,
-                                          int *outLen);
+										  int width, int height,
+										  uint32_t format, uint32_t type,
+										  int *outLen);
 
 // Host-pixel -> Metal texture uploader for the mipmap path.
 //
 // This is the definition of the previously-only-declared NativeGLTexImage2D_Direct.
-// It mirrors NativeGLTexImage2D (gl_state.cpp:2515) — find the bound texture object,
+// It mirrors NativeGLTexImage2D (gl_state.cpp:2515) - find the bound texture object,
 // convert source pixels to BGRA8, and hand them to the level-aware GLMetalUploadTexture
-// (gl_metal_renderer.mm:2136) — but takes a HOST pointer (the box-filtered pyramid level
+// (gl_metal_renderer.mm:2136) - but takes a HOST pointer (the box-filtered pyramid level
 // buffers produced by NativeGLUBuild2DMipmaps) rather than a Mac address. It deliberately
 // supports only the 5 UNSIGNED_BYTE formats the box filter emits
 // (GL_RGBA / GL_RGB / GL_LUMINANCE / GL_LUMINANCE_ALPHA / GL_ALPHA); this is NOT a general
@@ -3667,16 +3700,16 @@ extern uint8_t *GLConvertMacPixelsToBGRA8(GLContext *ctx, uint32_t mac_pixels,
 //
 // Prior to this fix, both call sites in NativeGLUBuild2DMipmaps routed through a no-op
 // fallback that logged and discarded every computed level, so gluBuild2DMipmaps /
-// gluBuild1DMipmaps returned GL_NO_ERROR while uploading nothing — silent wrong output
+// gluBuild1DMipmaps returned GL_NO_ERROR while uploading nothing - silent wrong output
 // (untextured). Reproduced by GLP0RemediationTests.testMipmaps_uploadComputedLevels.
 void NativeGLTexImage2D_Direct(GLContext *ctx, uint32_t target, int32_t level,
-                                int32_t internalFormat, int32_t width, int32_t height,
-                                int32_t border, uint32_t format, uint32_t type,
-                                const uint8_t *pixels, int32_t pixel_data_size)
+								int32_t internalFormat, int32_t width, int32_t height,
+								int32_t border, uint32_t format, uint32_t type,
+								const uint8_t *pixels, int32_t pixel_data_size)
 {
 	(void)internalFormat; (void)border; (void)type; (void)pixel_data_size;
 
-	// Input validation (ASVS V5 — mirror gl_engine.cpp NativeGLUBuild2DMipmaps guards).
+	// Input validation (ASVS V5 - mirror gl_engine.cpp NativeGLUBuild2DMipmaps guards).
 	if (!ctx || pixels == 0 || width <= 0 || height <= 0) return;
 
 	// Find the currently bound texture object (mirror NativeGLTexImage2D, gl_state.cpp:2528).
@@ -3688,7 +3721,7 @@ void NativeGLTexImage2D_Direct(GLContext *ctx, uint32_t target, int32_t level,
 
 	if (texName == 0) return;
 
-	auto it = ctx->texture_objects.find(texName);
+	GLTextureObjectMap::iterator it = ctx->texture_objects.find(texName);
 	if (it == ctx->texture_objects.end()) return;
 
 	GLTextureObject &tex = it->second;
@@ -3756,12 +3789,12 @@ void NativeGLTexImage2D_Direct(GLContext *ctx, uint32_t target, int32_t level,
 }
 
 uint32_t NativeGLUBuild2DMipmaps(GLContext *ctx,
-                                  uint32_t target, int32_t internalFormat,
-                                  int32_t width, int32_t height,
-                                  uint32_t format, uint32_t type, uint32_t data_ptr)
+								  uint32_t target, int32_t internalFormat,
+								  int32_t width, int32_t height,
+								  uint32_t format, uint32_t type, uint32_t data_ptr)
 {
 	GL_LOG("gluBuild2DMipmaps: target=0x%x ifmt=%d %dx%d fmt=0x%x type=0x%x data=0x%08x",
-	       target, internalFormat, width, height, format, type, data_ptr);
+		   target, internalFormat, width, height, format, type, data_ptr);
 
 	if (!ctx || data_ptr == 0 || width <= 0 || height <= 0) return GLU_INVALID_VALUE;
 
@@ -3773,7 +3806,7 @@ uint32_t NativeGLUBuild2DMipmaps(GLContext *ctx,
 
 	if (texName == 0) return 0;
 
-	auto texIt = ctx->texture_objects.find(texName);
+	GLTextureObjectMap::iterator texIt = ctx->texture_objects.find(texName);
 	if (texIt == ctx->texture_objects.end()) return 0;
 	GLTextureObject &tex = texIt->second;
 	tex.has_mipmaps = true;
@@ -3793,7 +3826,7 @@ uint32_t NativeGLUBuild2DMipmaps(GLContext *ctx,
 	free(baseBGRA);
 
 	GLMetalUploadTexture(ctx, &tex, 0, width, height,
-	                     current.data(), (int)current.size());
+						 vec_data(current), (int)current.size());
 
 	// Generate mipmap chain by box filtering canonical BGRA8 upload pixels.
 	// This preserves legacy/packed source interpretation from the base
@@ -3824,9 +3857,9 @@ uint32_t NativeGLUBuild2DMipmaps(GLContext *ctx,
 		}
 
 		GLMetalUploadTexture(ctx, &tex, level, nw, nh,
-		                     next.data(), (int)next.size());
+							 vec_data(next), (int)next.size());
 
-		current = std::move(next);
+		current.swap(next);
 		w = nw;
 		h = nh;
 		level++;
@@ -3841,9 +3874,9 @@ uint32_t NativeGLUBuild2DMipmaps(GLContext *ctx,
  *  NativeGLUBuild1DMipmaps -- 1D variant
  */
 uint32_t NativeGLUBuild1DMipmaps(GLContext *ctx,
-                                  uint32_t target, int32_t internalFormat,
-                                  int32_t width,
-                                  uint32_t format, uint32_t type, uint32_t data_ptr)
+								  uint32_t target, int32_t internalFormat,
+								  int32_t width,
+								  uint32_t format, uint32_t type, uint32_t data_ptr)
 {
 	GL_LOG("gluBuild1DMipmaps: (delegates to 2D with height=1)");
 	return NativeGLUBuild2DMipmaps(ctx, target, internalFormat, width, 1, format, type, data_ptr);
@@ -3854,9 +3887,9 @@ uint32_t NativeGLUBuild1DMipmaps(GLContext *ctx,
  *  NativeGLUScaleImage -- scale image data using bilinear interpolation
  */
 uint32_t NativeGLUScaleImage(GLContext *ctx,
-                              uint32_t format,
-                              int32_t wIn, int32_t hIn, uint32_t typeIn, uint32_t dataIn,
-                              int32_t wOut, int32_t hOut, uint32_t typeOut, uint32_t dataOut)
+							  uint32_t format,
+							  int32_t wIn, int32_t hIn, uint32_t typeIn, uint32_t dataIn,
+							  int32_t wOut, int32_t hOut, uint32_t typeOut, uint32_t dataOut)
 {
 	GL_LOG("gluScaleImage: %dx%d -> %dx%d fmt=0x%x", wIn, hIn, wOut, hOut, format);
 
@@ -3899,7 +3932,7 @@ uint32_t NativeGLUScaleImage(GLContext *ctx,
 				float v11 = src[(y1 * wIn + x1) * bpp + c];
 
 				float v = v00 * (1 - fx) * (1 - fy) + v10 * fx * (1 - fy) +
-				          v01 * (1 - fx) * fy + v11 * fx * fy;
+						  v01 * (1 - fx) * fy + v11 * fx * fy;
 				int iv = (int)(v + 0.5f);
 				if (iv > 255) iv = 255;
 				if (iv < 0) iv = 0;
@@ -3952,11 +3985,11 @@ uint32_t NativeGLUNewQuadric()
 
 static GLUQuadricState *GLUQuadricFromHandle(uint32_t mac_handle)
 {
-	if (mac_handle == 0) return nullptr;
+	if (mac_handle == 0) return NULL;
 	uint32_t one_based = ReadMacInt32(mac_handle);
-	if (one_based == 0 || one_based > GLU_MAX_QUADRICS) return nullptr;
+	if (one_based == 0 || one_based > GLU_MAX_QUADRICS) return NULL;
 	int idx = one_based - 1;
-	if (!glu_quadrics[idx].in_use) return nullptr;
+	if (!glu_quadrics[idx].in_use) return NULL;
 	return &glu_quadrics[idx];
 }
 
@@ -4006,18 +4039,18 @@ void NativeGLUQuadricCallback(uint32_t quad_handle, uint32_t which, uint32_t cal
 
 // ---- GLU error callback fire helper (quadric) ----
 // Mirrors the RAVE FireNoticeMethod NULL-guard discipline
-// (rave_metal_renderer.mm): NEVER invoke a 0/garbage callback addr — jumping
+// (rave_metal_renderer.mm): NEVER invoke a 0/garbage callback addr - jumping
 // to a zero code address inside emulated PPC crashes. The call_macos1
 // trampoline (Unix/sysdeps.h) sets r2(TOC) from the 2-word TVECT; a raw C
 // cast is forbidden. Synchronous on the emul thread (GL single-threaded-by-
-// design; the quadric draw already runs there — DSp VBLProc precedent).
+// design; the quadric draw already runs there - DSp VBLProc precedent).
 // Return value ignored. The error code is the only arg (GLU error callbacks
 // are void(*)(GLenum)).
 static void FireQuadricError(GLUQuadricState *q, uint32_t error_code)
 {
 	if (!q) return;
 	const uint32_t cb = q->error_callback;  // snapshot to local (DSp defense-in-depth)
-	if (cb == 0) return;                     // RAVE NULL-guard — copy EXACTLY
+	if (cb == 0) return;                     // RAVE NULL-guard - copy EXACTLY
 	(void)call_macos1(cb, error_code);
 	GL_LOG("FireQuadricError: cb=0x%08x error=%u", cb, error_code);
 }
@@ -4046,11 +4079,11 @@ static inline int32_t ClampTessCount(int32_t v, const char *what)
  *  Standard sphere tessellation with triangle strips per stack.
  */
 void NativeGLUSphere(GLContext *ctx, uint32_t quad_handle,
-                     double radius, int32_t slices, int32_t stacks)
+					 double radius, int32_t slices, int32_t stacks)
 {
 	GL_LOG("gluSphere: radius=%f slices=%d stacks=%d", radius, slices, stacks);
 	if (!ctx || slices < 2 || stacks < 1) {
-		// Invalid tessellation params — fire the registered GLU_ERROR
+		// Invalid tessellation params - fire the registered GLU_ERROR
 		// callback (gluQuadricCallback) with GLU_INVALID_VALUE, NULL-guarded.
 		FireQuadricError(GLUQuadricFromHandle(quad_handle), GLU_INVALID_VALUE);
 		return;
@@ -4119,8 +4152,8 @@ void NativeGLUSphere(GLContext *ctx, uint32_t quad_handle,
  *  NativeGLUCylinder(quad, base, top, height, slices, stacks)
  */
 void NativeGLUCylinder(GLContext *ctx, uint32_t quad_handle,
-                       double base, double top, double height,
-                       int32_t slices, int32_t stacks)
+					   double base, double top, double height,
+					   int32_t slices, int32_t stacks)
 {
 	GL_LOG("gluCylinder: base=%f top=%f height=%f slices=%d stacks=%d", base, top, height, slices, stacks);
 	if (!ctx || slices < 2 || stacks < 1) return;
@@ -4182,7 +4215,7 @@ void NativeGLUCylinder(GLContext *ctx, uint32_t quad_handle,
  *  NativeGLUDisk(quad, inner, outer, slices, loops)
  */
 void NativeGLUDisk(GLContext *ctx, uint32_t quad_handle,
-                   double inner, double outer, int32_t slices, int32_t loops)
+				   double inner, double outer, int32_t slices, int32_t loops)
 {
 	GL_LOG("gluDisk: inner=%f outer=%f slices=%d loops=%d", inner, outer, slices, loops);
 	if (!ctx || slices < 2 || loops < 1) return;
@@ -4233,11 +4266,11 @@ void NativeGLUDisk(GLContext *ctx, uint32_t quad_handle,
  *  NativeGLUPartialDisk(quad, inner, outer, slices, loops, start, sweep)
  */
 void NativeGLUPartialDisk(GLContext *ctx, uint32_t quad_handle,
-                          double inner, double outer, int32_t slices, int32_t loops,
-                          double start, double sweep)
+						  double inner, double outer, int32_t slices, int32_t loops,
+						  double start, double sweep)
 {
 	GL_LOG("gluPartialDisk: inner=%f outer=%f slices=%d loops=%d start=%f sweep=%f",
-	       inner, outer, slices, loops, start, sweep);
+		   inner, outer, slices, loops, start, sweep);
 	if (!ctx || slices < 2 || loops < 1) return;
 	slices = ClampTessCount(slices, "slices");
 	loops  = ClampTessCount(loops, "loops");
@@ -4285,16 +4318,16 @@ void NativeGLUPartialDisk(GLContext *ctx, uint32_t quad_handle,
 
 
 // ===========================================================================
-//  GLU Tessellation — Real Implementation (ear-clipping triangulation)
+//  GLU Tessellation - Real Implementation (ear-clipping triangulation)
 // ===========================================================================
 
 static GLUTessState *GLUTessFromHandle(uint32_t mac_handle)
 {
-	if (mac_handle == 0) return nullptr;
+	if (mac_handle == 0) return NULL;
 	uint32_t one_based = ReadMacInt32(mac_handle);
-	if (one_based == 0 || one_based > GLU_MAX_TESS) return nullptr;
+	if (one_based == 0 || one_based > GLU_MAX_TESS) return NULL;
 	int idx = one_based - 1;
-	if (!glu_tess[idx].in_use) return nullptr;
+	if (!glu_tess[idx].in_use) return NULL;
 	return &glu_tess[idx];
 }
 
@@ -4449,7 +4482,7 @@ void NativeGLUTessEndContour(uint32_t tess)
 // (Unix/sysdeps.h). This MIRRORS the RAVE FireNoticeMethod discipline EXACTLY
 // (rave_metal_renderer.mm):
 //
-//   * NULL-guard the callback addr (`if (cb == 0) return;`) BEFORE call_macos —
+//   * NULL-guard the callback addr (`if (cb == 0) return;`) BEFORE call_macos -
 //     jumping to a 0/garbage code address inside emulated PPC crashes. This is
 //     the highest-severity threat here.
 //   * Read the addr from t->callbacks[which - GLU_TESS_BEGIN] (the same index
@@ -4461,22 +4494,22 @@ void NativeGLUTessEndContour(uint32_t tess)
 //       END    -> call_macos1(cb, 0)        // void(*)(void): r3 ignored by guest
 //       ERROR  -> call_macos1(cb, errorCode)
 //     (The END callback is void(*)(void); we marshal through call_macos1 with a
-//     dummy 0 arg — a no-arg PPC routine never reads r3, so the extra word is
+//     dummy 0 arg - a no-arg PPC routine never reads r3, so the extra word is
 //     harmless. The bare zero-arg call_macos symbol is not exported by the
 //     prebuilt libkpx_cpu_ios.a, so call_macos1 is the linked trampoline.)
 //   * Synchronous on the emul thread (GL single-threaded-by-design; tess
 //     EndPolygon already runs there). Return value (void)-cast and ignored.
 //
 // The opaque per-vertex `data` ptr passed for VERTEX is interpreted ONLY by the
-// guest callback — it is NEVER dereferenced natively (ASVS V5).
-// NOTE: GLU_TESS_COMBINE is DELIBERATELY never fired here — see the marker in
+// guest callback - it is NEVER dereferenced natively (ASVS V5).
+// NOTE: GLU_TESS_COMBINE is DELIBERATELY never fired here - see the marker in
 // NativeGLUTessEndPolygon (self-intersection engine absent).
 static void FireTessCallback(GLUTessState *t, uint32_t which, uint32_t arg)
 {
 	if (!t) return;
 	if (which < GLU_TESS_BEGIN || which > GLU_TESS_COMBINE_DATA) return;
 	const uint32_t cb = t->callbacks[which - GLU_TESS_BEGIN];  // snapshot to local
-	if (cb == 0) return;  // RAVE NULL-guard — copy EXACTLY
+	if (cb == 0) return;  // RAVE NULL-guard - copy EXACTLY
 	switch (which) {
 		case GLU_TESS_END:
 			(void)call_macos1(cb, 0);        // void(*)(void): guest ignores r3
@@ -4499,13 +4532,13 @@ static bool tess_has_emit_callbacks(const GLUTessState *t)
 {
 	if (!t) return false;
 	return t->callbacks[GLU_TESS_BEGIN  - GLU_TESS_BEGIN] != 0
-	    && t->callbacks[GLU_TESS_VERTEX - GLU_TESS_BEGIN] != 0
-	    && t->callbacks[GLU_TESS_END    - GLU_TESS_BEGIN] != 0;
+		&& t->callbacks[GLU_TESS_VERTEX - GLU_TESS_BEGIN] != 0
+		&& t->callbacks[GLU_TESS_END    - GLU_TESS_BEGIN] != 0;
 }
 
 // ---- Ear-clipping triangulation helpers ----
 
-// Cross product of 2D vectors (b-a) x (c-a) — returns z component
+// Cross product of 2D vectors (b-a) x (c-a) - returns z component
 static float ear_clip_cross_2d(float ax, float ay, float bx, float by, float cx, float cy)
 {
 	return (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
@@ -4513,7 +4546,7 @@ static float ear_clip_cross_2d(float ax, float ay, float bx, float by, float cx,
 
 // Test if point P is inside triangle ABC (2D, assumes CCW winding)
 static bool ear_clip_point_in_triangle(float px, float py,
-                                       float ax, float ay, float bx, float by, float cx, float cy)
+									   float ax, float ay, float bx, float by, float cx, float cy)
 {
 	float d1 = ear_clip_cross_2d(ax, ay, bx, by, px, py);
 	float d2 = ear_clip_cross_2d(bx, by, cx, cy, px, py);
@@ -4529,15 +4562,15 @@ static bool ear_clip_point_in_triangle(float px, float py,
 //
 // When `cb_tess` is non-null (the app registered the BEGIN/VERTEX/END
 // callback trio), the emit path fires those guest callbacks via the call_macos*
-// trampoline — BEGIN(GL_TRIANGLES) once, VERTEX(v.data) per emitted vertex,
-// END() once — instead of the immediate-mode NativeGLBegin/Vertex3f/End path.
+// trampoline - BEGIN(GL_TRIANGLES) once, VERTEX(v.data) per emitted vertex,
+// END() once - instead of the immediate-mode NativeGLBegin/Vertex3f/End path.
 // When `cb_tess` is null the original immediate-mode path is used UNCHANGED
 // (the fallback for the non-callback gluTessEndPolygon consumer).
 static void ear_clip_triangulate(GLContext *ctx, const std::vector<GLUTessVertex3> &verts,
-                                 float nx, float ny, float nz,
-                                 GLUTessState *cb_tess = nullptr)
+								 float nx, float ny, float nz,
+								 GLUTessState *cb_tess = NULL)
 {
-	const bool use_callbacks = (cb_tess != nullptr);
+	const bool use_callbacks = (cb_tess != NULL);
 	int n = (int)verts.size();
 	if (n < 3) {
 		GL_LOG("ear_clip_triangulate: degenerate polygon with %d vertices, no geometry emitted", n);
@@ -4565,7 +4598,7 @@ static void ear_clip_triangulate(GLContext *ctx, const std::vector<GLUTessVertex
 	std::vector<int> indices(n);
 	for (int i = 0; i < n; i++) indices[i] = i;
 
-	// Determine winding — if total signed area is negative, polygon is CW in projection
+	// Determine winding - if total signed area is negative, polygon is CW in projection
 	float area = 0.0f;
 	for (int i = 0; i < n; i++) {
 		int j = (i + 1) % n;
@@ -4606,7 +4639,7 @@ static void ear_clip_triangulate(GLContext *ctx, const std::vector<GLUTessVertex
 				if (k == prev || k == idx || k == next) continue;
 				int ik = indices[k];
 				if (ear_clip_point_in_triangle(u[ik], v[ik],
-				                               u[i0], v[i0], u[i1], v[i1], u[i2], v[i2])) {
+											   u[i0], v[i0], u[i1], v[i1], u[i2], v[i2])) {
 					is_ear = false;
 					break;
 				}
@@ -4648,11 +4681,21 @@ static void ear_clip_triangulate(GLContext *ctx, const std::vector<GLUTessVertex
 }
 
 // Bridge-edge merge: merge outer contour with inner contours (holes) into a single polygon
+// Project one vertex onto the plane that drops `drop_axis`.
+static void tess_get_uv(int drop_axis, const GLUTessVertex3 &v, float &u, float &vv)
+{
+	switch (drop_axis) {
+		case 0: u = v.y; vv = v.z; break;
+		case 1: u = v.x; vv = v.z; break;
+		case 2: u = v.x; vv = v.y; break;
+	}
+}
+
 // by finding bridge edges that connect each inner contour to the outer contour.
 static std::vector<GLUTessVertex3> tess_merge_contours(const std::vector<GLUTessContour> &contours,
-                                                        float nx, float ny, float nz)
+														float nx, float ny, float nz)
 {
-	if (contours.empty()) return {};
+	if (contours.empty()) return std::vector<GLUTessVertex3>();
 	if (contours.size() == 1) return contours[0].vertices;
 
 	// Determine dominant axis for 2D projection
@@ -4661,14 +4704,6 @@ static std::vector<GLUTessVertex3> tess_merge_contours(const std::vector<GLUTess
 	if (anx >= any && anx >= anz) drop_axis = 0;
 	else if (any >= anx && any >= anz) drop_axis = 1;
 	else drop_axis = 2;
-
-	auto get_uv = [drop_axis](const GLUTessVertex3 &v, float &u, float &vv) {
-		switch (drop_axis) {
-			case 0: u = v.y; vv = v.z; break;
-			case 1: u = v.x; vv = v.z; break;
-			case 2: u = v.x; vv = v.y; break;
-		}
-	};
 
 	// Start with the outer contour (contour 0)
 	std::vector<GLUTessVertex3> merged = contours[0].vertices;
@@ -4683,25 +4718,25 @@ static std::vector<GLUTessVertex3> tess_merge_contours(const std::vector<GLUTess
 		float inner_max_u = -1e30f;
 		for (int i = 0; i < (int)inner.size(); i++) {
 			float u, v;
-			get_uv(inner[i], u, v);
+			tess_get_uv(drop_axis, inner[i], u, v);
 			if (u > inner_max_u) { inner_max_u = u; inner_rightmost = i; }
 		}
 
 		// Find the closest vertex in the merged polygon to bridge to
 		float inner_u, inner_v;
-		get_uv(inner[inner_rightmost], inner_u, inner_v);
+		tess_get_uv(drop_axis, inner[inner_rightmost], inner_u, inner_v);
 
 		int best_outer = 0;
 		float best_dist = 1e30f;
 		for (int i = 0; i < (int)merged.size(); i++) {
 			float ou, ov;
-			get_uv(merged[i], ou, ov);
+			tess_get_uv(drop_axis, merged[i], ou, ov);
 			float dx = ou - inner_u, dy = ov - inner_v;
 			float dist = dx * dx + dy * dy;
 			if (dist < best_dist) { best_dist = dist; best_outer = i; }
 		}
 
-		// Insert bridge: outer[best_outer] → inner[inner_rightmost] → inner loop → inner[inner_rightmost] → outer[best_outer]
+		// Insert bridge: outer[best_outer] -> inner[inner_rightmost] -> inner loop -> inner[inner_rightmost] -> outer[best_outer]
 		std::vector<GLUTessVertex3> new_merged;
 		new_merged.reserve(merged.size() + inner.size() + 2);
 
@@ -4726,7 +4761,7 @@ static std::vector<GLUTessVertex3> tess_merge_contours(const std::vector<GLUTess
 			new_merged.push_back(merged[i]);
 		}
 
-		merged = std::move(new_merged);
+		merged.swap(new_merged);
 	}
 
 	return merged;
@@ -4756,7 +4791,8 @@ void NativeGLUTessEndPolygon(uint32_t tess)
 
 	// Count total vertices
 	int total_verts = 0;
-	for (const auto &c : t->contours) total_verts += (int)c.vertices.size();
+	for (size_t ci = 0; ci < t->contours.size(); ci++)
+		total_verts += (int)t->contours[ci].vertices.size();
 	if (total_verts < 3) {
 		GL_LOG("gluTessEndPolygon: degenerate polygon with %d total vertices, no geometry emitted", total_verts);
 		// Report the malformed-polygon error to the guest GLU_TESS_ERROR
@@ -4783,7 +4819,7 @@ void NativeGLUTessEndPolygon(uint32_t tess)
 		else { nx = 0; ny = 0; nz = 1.0f; } // fallback to Z-up
 	}
 
-	// Set polygon normal (immediate-mode path only — the callback path lets the
+	// Set polygon normal (immediate-mode path only - the callback path lets the
 	// guest set its own GL state).
 	if (!emit_via_callbacks) {
 		NativeGLNormal3f(gl_current_context, nx, ny, nz);
@@ -4802,7 +4838,7 @@ void NativeGLUTessEndPolygon(uint32_t tess)
 	// self-intersection-detection engine, so the COMBINE trigger (a
 	// synthesized intersection vertex needing a new app-allocated data ptr) is
 	// UNREACHABLE. Firing a never-triggered COMBINE and inventing an outData
-	// lifetime contract would be a half-truth — a silent stub producing wrong
+	// lifetime contract would be a half-truth - a silent stub producing wrong
 	// output. We therefore do NOT synthesize GLU_TESS_COMBINE; self-
 	// intersecting input is triangulated by the ear-clipper as-is (no new
 	// vertices). This is a documented known limitation; no canary app passes
@@ -4813,7 +4849,7 @@ void NativeGLUTessEndPolygon(uint32_t tess)
 	// registered, pass `t` so the emit path fires the guest callbacks via
 	// call_macos*; otherwise the immediate-mode fallback is used unchanged.
 	ear_clip_triangulate(gl_current_context, merged, nx, ny, nz,
-	                     emit_via_callbacks ? t : nullptr);
+						 emit_via_callbacks ? t : NULL);
 
 	// Clean up
 	t->contours.clear();
@@ -4845,16 +4881,16 @@ void NativeGLUNextContour(uint32_t tess, uint32_t type)
 
 
 // ===========================================================================
-//  GLU NURBS — Real Implementation (de Boor's algorithm)
+//  GLU NURBS - Real Implementation (de Boor's algorithm)
 // ===========================================================================
 
 static GLUNurbsState *GLUNurbsFromHandle(uint32_t mac_handle)
 {
-	if (mac_handle == 0) return nullptr;
+	if (mac_handle == 0) return NULL;
 	uint32_t one_based = ReadMacInt32(mac_handle);
-	if (one_based == 0 || one_based > GLU_MAX_NURBS) return nullptr;
+	if (one_based == 0 || one_based > GLU_MAX_NURBS) return NULL;
 	int idx = one_based - 1;
-	if (!glu_nurbs[idx].in_use) return nullptr;
+	if (!glu_nurbs[idx].in_use) return NULL;
 	return &glu_nurbs[idx];
 }
 
@@ -4988,7 +5024,7 @@ static void FireNurbsError(GLUNurbsState *ns, uint32_t error_code)
 {
 	if (!ns) return;
 	const uint32_t cb = ns->callbacks[GLU_ERROR - 100100];  // snapshot to local
-	if (cb == 0) return;                                     // RAVE NULL-guard — copy EXACTLY
+	if (cb == 0) return;                                     // RAVE NULL-guard - copy EXACTLY
 	(void)call_macos1(cb, error_code);
 	GL_LOG("FireNurbsError: cb=0x%08x error=%u", cb, error_code);
 }
@@ -5027,12 +5063,12 @@ void NativeGLUBeginSurface(uint32_t nurb)
 }
 
 void NativeGLUNurbsSurface(uint32_t nurb, int32_t sKnots, uint32_t sKnotsPtr,
-                           int32_t tKnots, uint32_t tKnotsPtr,
-                           int32_t sStride, int32_t tStride, uint32_t control,
-                           int32_t sOrder, int32_t tOrder, uint32_t type)
+						   int32_t tKnots, uint32_t tKnotsPtr,
+						   int32_t sStride, int32_t tStride, uint32_t control,
+						   int32_t sOrder, int32_t tOrder, uint32_t type)
 {
 	GL_LOG("gluNurbsSurface: nurb=0x%08x sKnots=%d tKnots=%d sStride=%d tStride=%d sOrder=%d tOrder=%d type=0x%x",
-	       nurb, sKnots, tKnots, sStride, tStride, sOrder, tOrder, type);
+		   nurb, sKnots, tKnots, sStride, tStride, sOrder, tOrder, type);
 	GLUNurbsState *ns = GLUNurbsFromHandle(nurb);
 	if (!ns || !ns->in_surface) return;
 
@@ -5064,7 +5100,7 @@ void NativeGLUNurbsSurface(uint32_t nurb, int32_t sKnots, uint32_t sKnotsPtr,
 	int dim = 3; // GL_MAP2_VERTEX_3
 	if (type == 0x0DB6 || type == 0x0DB8) dim = 4; // GL_MAP2_VERTEX_4 or with texture
 
-	// Read control points — sStride and tStride are in floats
+	// Read control points - sStride and tStride are in floats
 	// Total floats to read: we need s_cp * t_cp control points, each dim floats
 	// Layout: control[i * tStride + j * (dim)] for typical usage, but we use strides
 	int total_floats = s_cp * t_cp * dim;
@@ -5093,7 +5129,7 @@ void NativeGLUNurbsSurface(uint32_t nurb, int32_t sKnots, uint32_t sKnotsPtr,
 // t: parameter value
 // result: output point (dim floats)
 static void de_boor_evaluate(const float *knots, const float *control, int n, int order,
-                             int dim, float t, float *result)
+							 int dim, float t, float *result)
 {
 	int degree = order - 1;
 
@@ -5208,14 +5244,14 @@ void NativeGLUEndSurface(uint32_t nurb)
 					}
 				}
 				// Evaluate s-direction curve at u_param
-				de_boor_evaluate(ns->s_knots.data(), s_control.data(), s_cp, ns->s_order,
-				                 dim, u_param, &t_curve_control[tj * dim]);
+				de_boor_evaluate(vec_data(ns->s_knots), vec_data(s_control), s_cp, ns->s_order,
+								 dim, u_param, &t_curve_control[tj * dim]);
 			}
 
 			// Evaluate t-direction curve at v_param
 			float point[4];
-			de_boor_evaluate(ns->t_knots.data(), t_curve_control.data(), t_cp, ns->t_order,
-			                 dim, v_param, point);
+			de_boor_evaluate(vec_data(ns->t_knots), vec_data(t_curve_control), t_cp, ns->t_order,
+							 dim, v_param, point);
 
 			// Store result (project if dim==4)
 			int grid_idx = (vi * (u_steps + 1) + ui) * 3;
@@ -5265,8 +5301,8 @@ void NativeGLUEndSurface(uint32_t nurb)
 		strip_count++;
 	}
 
-	GL_LOG("gluEndSurface: emitted %d triangle strips (%d×%d grid, %d total vertices)",
-	       strip_count, u_steps, v_steps, (u_steps + 1) * v_steps * 2);
+	GL_LOG("gluEndSurface: emitted %d triangle strips (%dx%d grid, %d total vertices)",
+		   strip_count, u_steps, v_steps, (u_steps + 1) * v_steps * 2);
 }
 
 void NativeGLUBeginCurve(uint32_t nurb)
@@ -5281,10 +5317,10 @@ void NativeGLUBeginCurve(uint32_t nurb)
 }
 
 void NativeGLUNurbsCurve(uint32_t nurb, int32_t knotCount, uint32_t knots,
-                         int32_t stride, uint32_t control, int32_t order, uint32_t type)
+						 int32_t stride, uint32_t control, int32_t order, uint32_t type)
 {
 	GL_LOG("gluNurbsCurve: nurb=0x%08x knotCount=%d stride=%d order=%d type=0x%x",
-	       nurb, knotCount, stride, order, type);
+		   nurb, knotCount, stride, order, type);
 	GLUNurbsState *ns = GLUNurbsFromHandle(nurb);
 	if (!ns || !ns->in_curve) return;
 
@@ -5350,8 +5386,8 @@ void NativeGLUEndCurve(uint32_t nurb)
 	for (int i = 0; i <= steps; i++) {
 		float t = t_min + (t_max - t_min) * i / steps;
 		float point[4];
-		de_boor_evaluate(ns->curve_knots.data(), ns->curve_control.data(), n_cp, ns->curve_order,
-		                 dim, t, point);
+		de_boor_evaluate(vec_data(ns->curve_knots), vec_data(ns->curve_control), n_cp, ns->curve_order,
+						 dim, t, point);
 
 		if (dim == 4 && fabsf(point[3]) > 1e-10f) {
 			NativeGLVertex3f(ctx, point[0] / point[3], point[1] / point[3], point[2] / point[3]);
@@ -5367,28 +5403,28 @@ void NativeGLUEndCurve(uint32_t nurb)
 // ---- Trim curves: known limitation (extremely rare in classic Mac games) ----
 
 // GLU NURBS trim curves (gluBeginTrim/EndTrim/PwlCurve, sub-ops 703/715/737)
-// are out-of-scope (DELIBERATE) — extremely rare in classic Mac games,
+// are out-of-scope (DELIBERATE) - extremely rare in classic Mac games,
 // and canary apps drive their 3D through AGL/RAVE, not NURBS-trimmed surfaces.
 // Each handler keeps its honest "known limitation" marker so the gate test can
 // assert the limitation is documented, NOT silently half-supported. No behavior
 // change (the in_trim flag is tracked but trim geometry is not tessellated).
 void NativeGLUBeginTrim(uint32_t nurb)
 {
-	GL_LOG("gluBeginTrim: nurb=0x%08x — known limitation (NURBS trim curves out-of-scope, extremely rare; canary apps use AGL)", nurb);
+	GL_LOG("gluBeginTrim: nurb=0x%08x - known limitation (NURBS trim curves out-of-scope, extremely rare; canary apps use AGL)", nurb);
 	GLUNurbsState *ns = GLUNurbsFromHandle(nurb);
 	if (ns) ns->in_trim = true;
 }
 
 void NativeGLUEndTrim(uint32_t nurb)
 {
-	GL_LOG("gluEndTrim: nurb=0x%08x — known limitation (NURBS trim curves out-of-scope, extremely rare; canary apps use AGL)", nurb);
+	GL_LOG("gluEndTrim: nurb=0x%08x - known limitation (NURBS trim curves out-of-scope, extremely rare; canary apps use AGL)", nurb);
 	GLUNurbsState *ns = GLUNurbsFromHandle(nurb);
 	if (ns) ns->in_trim = false;
 }
 
 void NativeGLUPwlCurve(uint32_t nurb, int32_t count, uint32_t data, int32_t stride, uint32_t type)
 {
-	GL_LOG("gluPwlCurve: nurb=0x%08x count=%d — known limitation (piecewise-linear NURBS trim curves out-of-scope, extremely rare; canary apps use AGL)", nurb, count);
+	GL_LOG("gluPwlCurve: nurb=0x%08x count=%d - known limitation (piecewise-linear NURBS trim curves out-of-scope, extremely rare; canary apps use AGL)", nurb, count);
 	(void)data; (void)stride; (void)type;
 }
 
@@ -5415,7 +5451,7 @@ uint32_t NativeGLUErrorString(uint32_t error)
 		case GLU_INVALID_VALUE: msg = "invalid value"; break;
 		case GLU_OUT_OF_MEMORY: msg = "out of memory"; break;
 		// glu.h ErrorCode 100903/100904 (were falling through to the
-		// "unknown error" default — silent-wrong-output for a conformant app).
+		// "unknown error" default - silent-wrong-output for a conformant app).
 		case 100903: msg = "incompatible gl version"; break;  // GLU_INCOMPATIBLE_GL_VERSION
 		case 100904: msg = "invalid operation"; break;        // GLU_INVALID_OPERATION
 		// GL errors
@@ -5562,7 +5598,7 @@ void NativeGLUTInitWindowSize(int32_t width, int32_t height)
 
 
 // GLUT windowing stubs return GL_INVALID_OPERATION.
-// GLUT windowing is not supported inside the emulator — these functions
+// GLUT windowing is not supported inside the emulator - these functions
 // fail loudly so apps fall back to non-GLUT code paths.
 
 uint32_t NativeGLUTCreateWindow(uint32_t title_ptr)
@@ -5672,9 +5708,9 @@ void NativeGLUTWarpPointer(int32_t x, int32_t y) { GL_LOG("glutWarpPointer: %d,%
  *  NativeGLUTMainLoop()
  *
  *  The GLUT event/timer/mainloop program model is de-advertised (DELIBERATE).
- *  glutMainLoop MUST NOT BLOCK — it is non-blocking and the GLUT program model
+ *  glutMainLoop MUST NOT BLOCK - it is non-blocking and the GLUT program model
  *  is UNSUPPORTED: registered window callbacks (display / reshape / keyboard /
- *  mouse / motion / timer ...) are stored but NOT serviced — they never fire.
+ *  mouse / motion / timer ...) are stored but NOT serviced - they never fire.
  *  This is the HONEST behavior (no silent success): control returns to the
  *  emulator's PPC event loop, and a conformant GLUT app that expects its
  *  callbacks to be driven by glutMainLoop will observe they are not, rather
@@ -5684,7 +5720,7 @@ void NativeGLUTWarpPointer(int32_t x, int32_t y) { GL_LOG("glutWarpPointer: %d,%
  */
 void NativeGLUTMainLoop()
 {
-	GL_LOG("glutMainLoop: entering (non-blocking) — GLUT program model unsupported/de-advertised: callbacks/timers are NOT serviced; control returns to the emulator");
+	GL_LOG("glutMainLoop: entering (non-blocking) - GLUT program model unsupported/de-advertised: callbacks/timers are NOT serviced; control returns to the emulator");
 	glut_main_loop_active = true;
 	// Return control to emulator -- the PPC event loop continues normally.
 	// The stored GLUT callbacks/timers are NOT fired (program model de-advertised).
@@ -5714,14 +5750,14 @@ void NativeGLUTSwapBuffers()
 // ---- Callback registration ----
 // The GLUT window-callback registrars (glutDisplayFunc, glutReshapeFunc,
 // glutKeyboardFunc, glutMouseFunc, glutMotionFunc, ..., sub-ops 846-870) store
-// the guest callback address HONESTLY but the callback is NEVER fired — the
+// the guest callback address HONESTLY but the callback is NEVER fired - the
 // GLUT event/timer/mainloop program model is de-advertised (glutMainLoop is
 // non-blocking and does not service callbacks). The stores claim NOTHING
 // beyond "the address was recorded"; they do NOT imply the callback will be
 // driven. A conformant GLUT app that depends on these callbacks firing
 // observes they do not, rather than silently mis-running. Canary apps use AGL
 // directly, not the GLUT program model.
-void NativeGLUTDisplayFunc(uint32_t func) { GL_LOG("glutDisplayFunc: 0x%08x — stored, NOT serviced (GLUT program model de-advertised)", func); glut_display_func = func; }
+void NativeGLUTDisplayFunc(uint32_t func) { GL_LOG("glutDisplayFunc: 0x%08x - stored, NOT serviced (GLUT program model de-advertised)", func); glut_display_func = func; }
 void NativeGLUTReshapeFunc(uint32_t func) { GL_LOG("glutReshapeFunc: 0x%08x", func); glut_reshape_func = func; }
 void NativeGLUTKeyboardFunc(uint32_t func) { GL_LOG("glutKeyboardFunc: 0x%08x", func); glut_keyboard_func = func; }
 void NativeGLUTMouseFunc(uint32_t func) { GL_LOG("glutMouseFunc: 0x%08x", func); glut_mouse_func = func; }
@@ -5740,14 +5776,14 @@ void NativeGLUTSpecialUpFunc(uint32_t func) { GL_LOG("glutSpecialUpFunc: 0x%08x"
 void NativeGLUTJoystickFunc(uint32_t func, int32_t pollInterval) { GL_LOG("glutJoystickFunc: 0x%08x interval=%d", func, pollInterval); glut_joystick_func = func; (void)pollInterval; }
 
 // glutTimerFunc stores the timer record honestly but the timer is NEVER
-// serviced — the GLUT program model (glutMainLoop) is de-advertised, so the
+// serviced - the GLUT program model (glutMainLoop) is de-advertised, so the
 // registered callback does not fire. The record is kept for API completeness
 // (so glutGet/round-trips are consistent), NOT because the timer will ever
 // elapse. This is the same honest de-advertisement as the window-callback
 // registrars below (stored-never-fired).
 void NativeGLUTTimerFunc(uint32_t millis, uint32_t func, int32_t value)
 {
-	GL_LOG("glutTimerFunc: ms=%d func=0x%08x value=%d — stored but NOT serviced (GLUT program model de-advertised)", millis, func, value);
+	GL_LOG("glutTimerFunc: ms=%d func=0x%08x value=%d - stored but NOT serviced (GLUT program model de-advertised)", millis, func, value);
 	for (int i = 0; i < GLUT_MAX_TIMERS; i++) {
 		if (!glut_timers[i].active) {
 			glut_timers[i].active = true;
@@ -5770,7 +5806,7 @@ void NativeGLUTTabletMotionFunc(uint32_t func) { GL_LOG("glutTabletMotionFunc: k
 void NativeGLUTTabletButtonFunc(uint32_t func) { GL_LOG("glutTabletButtonFunc: known limitation"); (void)func; }
 
 
-// ---- Overlay stubs — GL_INVALID_OPERATION ----
+// ---- Overlay stubs - GL_INVALID_OPERATION ----
 void NativeGLUTEstablishOverlay()
 {
 	GL_LOG("glutEstablishOverlay: GL_INVALID_OPERATION (GLUT windowing not supported in emulator)");
@@ -5867,21 +5903,21 @@ int32_t NativeGLUTGet(uint32_t type)
 		case 503: return glut_init_height;   // GLUT_INIT_WINDOW_HEIGHT
 		case 504: return (int32_t)glut_display_mode; // GLUT_INIT_DISPLAY_MODE
 		// GLUT_ELAPSED_TIME is intentionally inert (0). The GLUT
-		// event/timer/mainloop program model is de-advertised — no real clock
+		// event/timer/mainloop program model is de-advertised - no real clock
 		// is serviced (wiring a tick source would contradict de-advertising
 		// the program model). This is a DOCUMENTED inert 0, NOT an
 		// undocumented frozen-clock lie: a conformant GLUT app reading a
 		// never-advancing clock detects the unsupported program model and
 		// branches, rather than silently mis-running. Canary apps use AGL,
 		// never the GLUT program model.
-		case 700: return 0;                  // GLUT_ELAPSED_TIME (milliseconds) — documented inert
+		case 700: return 0;                  // GLUT_ELAPSED_TIME (milliseconds) - documented inert
 		default:
 			// glutGet BLIND_SPOT: the accum / colormap / samples / stereo /
 			// cursor / format-id / screen-mm / menu enums fall here and return
 			// 0. Returning 0 == "capability absent" is HONEST so long as it is
 			// documented: this default logs the unhandled enum so the silent-0
 			// is documented capability-absence, not a silent lie.
-			GL_LOG("glutGet: unhandled glutGet enum %d — capability reported absent (0); GLUT program model de-advertised", type);
+			GL_LOG("glutGet: unhandled glutGet enum %d - capability reported absent (0); GLUT program model de-advertised", type);
 			return 0;
 	}
 }
@@ -5923,7 +5959,7 @@ int32_t NativeGLUTLayerGet(uint32_t type)
 // For now, advance the raster position by the character width.
 
 // glutBitmapCharacter (879) / glutStrokeCharacter (881) produce INVISIBLE
-// text — there is no embedded GLUT glyph data and no Font Manager wired, so
+// text - there is no embedded GLUT glyph data and no Font Manager wired, so
 // the character is not actually rasterized. This is a DELIBERATE known
 // limitation, not a silent stub producing wrong output: the raster position
 // still advances (so layout math stays consistent) but no glyph pixels are
@@ -6343,18 +6379,18 @@ void NativeGLUTWireIcosahedron(GLContext *ctx)
 	}
 }
 
-// Dodecahedron — 20 vertices, 12 pentagonal faces (golden ratio coordinates)
+// Dodecahedron - 20 vertices, 12 pentagonal faces (golden ratio coordinates)
 // dodecahedron vertex table: 8 cube corners + 12 golden ratio vertices
 void NativeGLUTSolidDodecahedron(GLContext *ctx)
 {
 	GL_LOG("glutSolidDodecahedron");  // dodecahedron solid rendering
 	if (!ctx) return;
 
-	// Golden ratio: phi = (1+sqrt(5))/2 ≈ 1.618034, inv_phi = 1/phi ≈ 0.618034
+	// Golden ratio: phi = (1+sqrt(5))/2 ~= 1.618034, inv_phi = 1/phi ~= 0.618034
 	static const float phi = 1.6180339887498949f;
 	static const float iphi = 0.6180339887498949f; // 1/phi
 
-	// 20 vertices: 8 cube vertices (±1,±1,±1) + 4 on each axis (0,±iphi,±phi), (±phi,0,±iphi), (±iphi,±phi,0)
+	// 20 vertices: 8 cube vertices (+/-1,+/-1,+/-1) + 4 on each axis (0,+/-iphi,+/-phi), (+/-phi,0,+/-iphi), (+/-iphi,+/-phi,0)
 	static const float dodec_v[20][3] = {
 		{ 1, 1, 1}, { 1, 1,-1}, { 1,-1, 1}, { 1,-1,-1},   // cube vertices
 		{-1, 1, 1}, {-1, 1,-1}, {-1,-1, 1}, {-1,-1,-1},
@@ -6432,8 +6468,8 @@ void NativeGLUTWireDodecahedron(GLContext *ctx)
 	}
 }
 
-// Utah Teapot — 32 Bézier patches (public domain Newell 1975 data)
-// 306 unique control points, 32 patches of 16 indices each (4×4 bicubic)
+// Utah Teapot - 32 B?zier patches (public domain Newell 1975 data)
+// 306 unique control points, 32 patches of 16 indices each (4x4 bicubic)
 static const float teapot_cp[306][3] = {
 	// Rim
 	{1.4f, 0.0f, 2.4f}, {1.4f, -0.784f, 2.4f}, {0.784f, -1.4f, 2.4f}, {0.0f, -1.4f, 2.4f},
@@ -6485,8 +6521,8 @@ static const float teapot_cp[306][3] = {
 	{1.5f, 0.0f, 0.15f}, {1.5f, -0.84f, 0.15f}, {0.84f, -1.5f, 0.15f}, {0.0f, -1.5f, 0.15f},
 };
 
-// 10 patches, each 16 control point indices (4×4 bicubic). The teapot uses 4-way
-// rotational symmetry — each patch is rendered 4 times with y/x coordinate reflection.
+// 10 patches, each 16 control point indices (4x4 bicubic). The teapot uses 4-way
+// rotational symmetry - each patch is rendered 4 times with y/x coordinate reflection.
 static const int teapot_patches[10][16] = {
 	// Rim
 	{0,1,2,3, 4,5,6,7, 8,9,10,11, 12,13,14,15},
@@ -6506,7 +6542,7 @@ static const int teapot_patches[10][16] = {
 	{136,137,138,139, 140,141,142,143, 144,145,146,147, 148,149,150,151},
 };
 
-// Evaluate bicubic Bézier patch at (u,v) using de Casteljau algorithm
+// Evaluate bicubic B?zier patch at (u,v) using de Casteljau algorithm
 static void teapot_eval(const float cp[16][3], float u, float v, float out[3], float normal[3])
 {
 	// Evaluate 4 curves along u, then interpolate along v
@@ -6585,7 +6621,7 @@ static void teapot_eval(const float cp[16][3], float u, float v, float out[3], f
 					t3[i][c] = (1-v2)*t3[i][c] + v2*t3[i+1][c];
 		for (int c = 0; c < 3; c++) dv[c] = sign * (t3[0][c] - out[c]) / eps;
 	}
-	// Normal = du × dv
+	// Normal = du x dv
 	normal[0] = du[1]*dv[2] - du[2]*dv[1];
 	normal[1] = du[2]*dv[0] - du[0]*dv[2];
 	normal[2] = du[0]*dv[1] - du[1]*dv[0];
@@ -6595,7 +6631,7 @@ static void teapot_eval(const float cp[16][3], float u, float v, float out[3], f
 }
 
 static void teapot_render_patch(GLContext *ctx, const int patch_idx[16], float scale,
-                                float sx, float sy, float sz, bool wire)
+								float sx, float sy, float sz, bool wire)
 {
 	const int N = 10; // subdivisions per patch edge
 	// Build local control point array with scale and reflection applied

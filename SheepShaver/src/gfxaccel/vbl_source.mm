@@ -23,7 +23,7 @@
  *  Threading: VBL callbacks fire on the UIKit main RunLoop, which is also
  *  the emul thread in the current iOS build. They can therefore re-enter
  *  gfxaccel at runloop pump points rather than racing in parallel. Tick and
- *  cadence counters remain C11 _Atomic for read-mostly/future-thread-split
+ *  cadence counters remain atomic for read-mostly/future-thread-split
  *  access; see gfxaccel_threading_policy.h.
  */
 
@@ -36,7 +36,7 @@
 
 #import "PerformanceCounterObjCCppHeader.h"
 
-#include <stdatomic.h>
+#include "atomic.h"
 #include <cstdio>
 #include <mach/kern_return.h>
 #include <mach/mach_time.h>
@@ -63,7 +63,7 @@ static int                 s_callback_depth = 0;
  * primary callback in every VBL tick path (CADisplayLink displayLinkFired:
  * AND the iOS 17+ metalDisplayLink:needsUpdate: delegate).
  *
- * Threading: No _Atomic is needed on the secondary-callback array.
+ * Threading: No atomic is needed on the secondary-callback array.
  * Registration happens at DSpInit time on the main==emul thread BEFORE any
  * VBL tick fires; deregistration at DSpShutdown; no in-flight mutations.
  * This matches the existing s_callback non-atomic pattern. */
@@ -118,15 +118,15 @@ extern "C" int vbl_source_in_callback_chain(void)
 	return s_callback_depth != 0;
 }
 
-// C11 _Atomic for read-mostly counters -- minimal threading exception;
+// atomic.h for read-mostly counters -- minimal threading exception;
 // no mutex needed. Written once per VBL callback on the main==emul thread;
 // read by the same thread today and by tests/future split code.
-static _Atomic uint64_t    s_tick_count   = 0;
-static _Atomic uint64_t    s_cadence_usec = GFX_FRAME_PACING_DEFAULT_USEC;
-static _Atomic uint64_t    s_cadence_abs  = 0;
-static _Atomic uint64_t    s_last_tick_abs = 0;
-static _Atomic uint64_t    s_engine_next_deadline_abs[kGfxFramePacingEngineCount];
-static _Atomic uint64_t    s_engine_seen_tick[kGfxFramePacingEngineCount];
+static atomic_uint64       s_tick_count   = 0;
+static atomic_uint64       s_cadence_usec = GFX_FRAME_PACING_DEFAULT_USEC;
+static atomic_uint64       s_cadence_abs  = 0;
+static atomic_uint64       s_last_tick_abs = 0;
+static atomic_uint64       s_engine_next_deadline_abs[kGfxFramePacingEngineCount];
+static atomic_uint64       s_engine_seen_tick[kGfxFramePacingEngineCount];
 
 static int                  s_initialized      = 0;
 static mach_timebase_info_data_t s_timebase     = {0, 0};

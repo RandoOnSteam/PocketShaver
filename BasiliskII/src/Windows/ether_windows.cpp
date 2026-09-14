@@ -25,6 +25,7 @@
 #include <process.h>
 #include <windowsx.h>
 #include <winioctl.h>
+#include <ws2tcpip.h>
 #include <ctype.h>
 
 #include "cpu_emulation.h"
@@ -109,7 +110,7 @@ const bool ether_driver_opened = true;  // Flag: Driver is open on MacOS side
                                         // calls.
                                         // B2 doesn't provide this
                                         // but also calls don't need it
-                           
+
 #endif
 
 // These are protected by queue_csection
@@ -269,17 +270,25 @@ bool ether_init(void)
 		slirp_add_redirs();
 	}
 
-	// Open ethernet device
-	decltype(tstr(std::declval<const char*>())) dev_name;
+	// Open ethernet device. The prefs string is selected first, then
+	// converted once into a buffer that outlives the uses below; dev_name
+	// stays NULL when no device was selected.
+	const char *dev_pref = NULL;
 	switch (net_if_type) {
 	case NET_IF_B2ETHER:
-		dev_name = tstr(PrefsFindString("etherguid"));
-		if (dev_name == NULL || strcmp(name, "b2ether") != 0)
-			dev_name = tstr(name);
+		dev_pref = PrefsFindString("etherguid");
+		if (dev_pref == NULL || strcmp(name, "b2ether") != 0)
+			dev_pref = name;
 		break;
 	case NET_IF_TAP:
-		dev_name = tstr(PrefsFindString("etherguid"));
+		dev_pref = PrefsFindString("etherguid");
 		break;
+	}
+	tstring dev_name_buf;
+	const TCHAR *dev_name = NULL;
+	if (dev_pref != NULL) {
+		dev_name_buf = to_tstring(dev_pref);
+		dev_name = dev_name_buf.c_str();
 	}
 	if (net_if_type == NET_IF_B2ETHER) {
 		if (dev_name == NULL) {
@@ -287,16 +296,16 @@ bool ether_init(void)
 			goto open_error;
 		}
 
-		fd = PacketOpenAdapter( dev_name.get(), ether_multi_mode );
+		fd = PacketOpenAdapter( dev_name, ether_multi_mode );
 		if (!fd) {
-			_sntprintf(buf, lengthof(buf), TEXT("Could not open ethernet adapter %s."), dev_name.get());
+			_sntprintf(buf, lengthof(buf), TEXT("Could not open ethernet adapter %s."), dev_name);
 			WarningAlert(buf);
 			goto open_error;
 		}
 
 		// Get Ethernet address
 		if(!PacketGetMAC(fd,ether_addr,ether_use_permanent)) {
-			_sntprintf(buf, lengthof(buf), TEXT("Could not get hardware address of device %s. Ethernet is not available."), dev_name.get());
+			_sntprintf(buf, lengthof(buf), TEXT("Could not get hardware address of device %s. Ethernet is not available."), dev_name);
 			WarningAlert(buf);
 			goto open_error;
 		}
@@ -321,9 +330,9 @@ bool ether_init(void)
 			goto open_error;
 		}
 
-		fd = tap_open_adapter(dev_name.get());
+		fd = tap_open_adapter(dev_name);
 		if (!fd) {
-			_sntprintf(buf, lengthof(buf), TEXT("Could not open ethernet adapter %s."), dev_name.get());
+			_sntprintf(buf, lengthof(buf), TEXT("Could not open ethernet adapter %s."), dev_name);
 			WarningAlert(buf);
 			goto open_error;
 		}
@@ -340,7 +349,7 @@ bool ether_init(void)
 		}
 
 		if (!tap_get_mac(fd, ether_addr)) {
-			_sntprintf(buf, lengthof(buf), TEXT("Could not get hardware address of device %s. Ethernet is not available."), dev_name.get());
+			_sntprintf(buf, lengthof(buf), TEXT("Could not get hardware address of device %s. Ethernet is not available."), dev_name);
 			WarningAlert(buf);
 			goto open_error;
 		}

@@ -80,7 +80,7 @@ static inline size_t DSpCountUserSelectableContexts(
     const DSpContextAttributes *modes, size_t count,
     const DSpContextAttributes &req)
 {
-	if (modes == nullptr) return 0;
+	if (modes == NULL) return 0;
 
 	size_t selectable = 0;
 	for (size_t i = 0; i < count; i++) {

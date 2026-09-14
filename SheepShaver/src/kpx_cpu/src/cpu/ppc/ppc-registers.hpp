@@ -217,7 +217,14 @@ struct powerpc_registers
 		SPR_XER		= 1,
 		SPR_LR		= 8,
 		SPR_CTR		= 9,
+		SPR_DEC		= 22,
+		SPR_SRR0	= 26,
+		SPR_SRR1	= 27,
 		SPR_SDR1	= 25,
+		SPR_SPRG0	= 272,
+		SPR_SPRG1	= 273,
+		SPR_SPRG2	= 274,
+		SPR_SPRG3	= 275,
 		SPR_PVR		= 287,
 		SPR_VRSAVE	= 256,
 	};
@@ -246,6 +253,9 @@ struct powerpc_registers
 	static uint32 reserve_addr;
 	static uint32 reserve_data;
 #endif
+	// Do not append system registers here. powerpc_cpu::_regs has a legacy size
+	// encoded into the checked-in x86/x64 dyngen templates; new architectural
+	// state belongs in the ABI-safe tail of powerpc_cpu.
 };
 
 #endif /* PPC_REGISTERS_H */

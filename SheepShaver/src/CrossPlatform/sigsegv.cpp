@@ -40,9 +40,8 @@
 #include <signal.h>
 #include <string.h>
 #include "sigsegv.h"
-
-#if TARGET_OS_IPHONE
-#import "config.h" 
+#ifdef SHEEPSHAVER
+#include "mmio.h"
 #endif
 
 #ifndef NO_STD_NAMESPACE
@@ -52,6 +51,18 @@ using std::list;
 // Return value type of a signal handler (standard type if not defined)
 #ifndef RETSIGTYPE
 #define RETSIGTYPE void
+#endif
+
+// With HAVE_MACH64_VM, we need the MIG-generated mach_exc_server() stub and
+// the mach_exception_raise*() user stubs.  These are normally generated from
+// /usr/include/mach/mach_exc.defs and are NOT part of libSystem on iOS.
+// Include the pre-generated C sources directly (they are pure C, but we are
+// already inside a .cpp translation unit, so wrap in extern "C").
+#ifdef HAVE_MACH64_VM
+extern "C" {
+#include "mach_excServer.c"
+#include "mach_excUser.c"
+}
 #endif
 
 // Size of an unsigned integer large enough to hold all bits of a pointer
@@ -129,7 +140,7 @@ static void powerpc_decode_instruction(instruction_t *instruction, unsigned int 
 	unsigned int rb = (opcode >> 11) & 0x1f;
 	unsigned int rd = (opcode >> 21) & 0x1f;
 	signed int imm = (signed short)(opcode & 0xffff);
-	
+
 	// Analyze opcode
 	transfer_type_t transfer_type = SIGSEGV_TRANSFER_UNKNOWN;
 	transfer_size_t transfer_size = SIZE_UNKNOWN;
@@ -167,7 +178,7 @@ static void powerpc_decode_instruction(instruction_t *instruction, unsigned int 
 			transfer_type = SIGSEGV_TRANSFER_STORE; transfer_size = SIZE_WORD; addr_mode = MODE_UX; break;
 		}
 		break;
-	
+
 	case 32:	// lwz
 		transfer_type = SIGSEGV_TRANSFER_LOAD; transfer_size = SIZE_LONG; addr_mode = MODE_NORM; break;
 	case 33:	// lwzu
@@ -209,7 +220,7 @@ static void powerpc_decode_instruction(instruction_t *instruction, unsigned int 
 		imm &= ~3;
 		break;
 	}
-	
+
 	// Calculate effective address
 	unsigned int addr = 0;
 	switch (addr_mode) {
@@ -230,7 +241,7 @@ static void powerpc_decode_instruction(instruction_t *instruction, unsigned int 
 	default:
 		break;
 	}
-        
+
 	// Commit decoded instruction
 	instruction->addr = addr;
 	instruction->addr_mode = addr_mode;
@@ -259,7 +270,7 @@ static void powerpc_decode_instruction(instruction_t *instruction, unsigned int 
 #define SIGSEGV_FAULT_ADDRESS			sip->si_addr
 #if (defined(sgi) || defined(__sgi))
 #include <ucontext.h>
-#define SIGSEGV_CONTEXT_REGS			(((ucontext_t*)scp)->uc_mcontext.gregs)
+#define SIGSEGV_CONTEXT_REGS			(((ucontext_t *)scp)->uc_mcontext.gregs)
 #define SIGSEGV_FAULT_INSTRUCTION		(unsigned long)SIGSEGV_CONTEXT_REGS[CTX_EPC]
 #if (defined(mips) || defined(__mips))
 #define SIGSEGV_REGISTER_FILE			&SIGSEGV_CONTEXT_REGS[CTX_EPC], &SIGSEGV_CONTEXT_REGS[CTX_R0]
@@ -287,7 +298,7 @@ static void powerpc_decode_instruction(instruction_t *instruction, unsigned int 
 #endif
 #if (defined(x86_64) || defined(__x86_64__))
 #include <sys/regset.h>
-#define SIGSEGV_CONTEXT_REGS            (((ucontext_t *)scp)->uc_mcontext.gregs)
+#define SIGSEGV_CONTEXT_REGS			(((ucontext_t *)scp)->uc_mcontext.gregs)
 #define SIGSEGV_FAULT_INSTRUCTION		SIGSEGV_CONTEXT_REGS[REG_RIP]
 #define SIGSEGV_REGISTER_FILE			(SIGSEGV_REGISTER_TYPE *)SIGSEGV_CONTEXT_REGS
 #define SIGSEGV_SKIP_INSTRUCTION		ix86_skip_instruction
@@ -681,18 +692,6 @@ extern kern_return_t mach_exception_raise_state_identity(mach_port_t, mach_port_
 	thread_state_t, mach_msg_type_number_t, thread_state_t, mach_msg_type_number_t *);
 }
 
-// With HAVE_MACH64_VM, we need the MIG-generated mach_exc_server() stub and
-// the mach_exception_raise*() user stubs.  These are normally generated from
-// /usr/include/mach/mach_exc.defs and are NOT part of libSystem on iOS.
-// Include the pre-generated C sources directly (they are pure C, but we are
-// already inside a .cpp translation unit, so wrap in extern "C").
-#ifdef HAVE_MACH64_VM
-extern "C" {
-#include "mach_excServer.c"
-#include "mach_excUser.c"
-}
-#endif
-
 // Could make this dynamic by looking for a result of MIG_ARRAY_TOO_LARGE
 #define HANDLER_COUNT 64
 
@@ -747,30 +746,12 @@ handleExceptions(void *priv)
 
 	msg = (mach_msg_header_t *)msgbuf;
 	reply = (mach_msg_header_t *)replybuf;
-	
-#if defined(DUMP_EXCEPTION_HEADERS)
-	static int sExceptionMessageCount = 0;
-#endif
+
 	for (;;) {
 		krc = mach_msg(msg, MACH_RCV_MSG, MSG_SIZE, MSG_SIZE,
 				_exceptionPort, 0, MACH_PORT_NULL);
 		MACH_CHECK_ERROR(mach_msg, krc);
-		
-#if defined(DUMP_EXCEPTION_HEADERS)
-		sExceptionMessageCount++;
-		printf ("%s macemu exception message count: %d\n", __PRETTY_FUNCTION__, sExceptionMessageCount);
 
-		printf ("    msgh_bits: 0x%X\n", msg->msgh_bits);
-		printf ("    msgh_size: %d\n", msg->msgh_size);
-		printf ("    msgh_remote_port: 0x%X\n", msg->msgh_remote_port);
-		printf ("    msgh_local_port: 0x%X\n", msg->msgh_local_port);
-		printf ("    msgh_voucher_port: 0x%X\n", msg->msgh_voucher_port);
-		printf ("    msgh_id: 0x%X\n", msg->msgh_id);
-		
-		for (int anOffset = sizeof(mach_msg_header_t); anOffset < msg->msgh_size; anOffset += 4) {
-			printf ("    0x%X\n", *(int*)(((uint8_t*)msg) + anOffset));
-		}
-#endif
 		if (!mach_exc_server(msg, reply)) {
 			fprintf(stderr, "exc_server hated the message\n");
 			exit(1);
@@ -1057,7 +1038,7 @@ static inline int ix86_step_over_modrm(unsigned char * p)
 	case 3: // register
 		return 0;
 	}
-	
+
 	// SIB Byte
 	if (rm == 4) {
 		if (mod == 0 && (p[1] & 7) == 5)
@@ -1069,17 +1050,20 @@ static inline int ix86_step_over_modrm(unsigned char * p)
 	return offset;
 }
 
-static bool ix86_skip_instruction(SIGSEGV_REGISTER_TYPE * regs)
+static bool ix86_skip_instruction(SIGSEGV_REGISTER_TYPE * regs,
+                                  sigsegv_uintptr_t dev_addr = 0)
 {
 	unsigned char * eip = (unsigned char *)regs[X86_REG_EIP];
 
 	if (eip == 0)
 		return false;
-#ifdef _WIN32
-	if (IsBadCodePtr((FARPROC)eip))
-		return false;
-#endif
-	
+	/* IsBadCodePtr is unreliable and causes
+		infinite debugger loops on modern Win64 */
+	#if defined(_WIN32) && !defined(_WIN64)
+		if (IsBadCodePtr((FARPROC)eip))
+			return false;
+	#endif
+
 	enum instruction_type_t {
 		i_MOV,
 		i_ADD
@@ -1088,7 +1072,7 @@ static bool ix86_skip_instruction(SIGSEGV_REGISTER_TYPE * regs)
 	transfer_type_t transfer_type = SIGSEGV_TRANSFER_UNKNOWN;
 	transfer_size_t transfer_size = SIZE_LONG;
 	instruction_type_t instruction_type = i_MOV;
-	
+
 	int reg = -1;
 	int len = 0;
 
@@ -1246,7 +1230,7 @@ static bool ix86_skip_instruction(SIGSEGV_REGISTER_TYPE * regs)
 		reg += 8;
 #endif
 
-	if (instruction_type == i_MOV && transfer_type == SIGSEGV_TRANSFER_LOAD && reg != -1) {
+	if (instruction_type == i_MOV && reg != -1) {
 		static const int x86_reg_map[] = {
 			X86_REG_EAX, X86_REG_ECX, X86_REG_EDX, X86_REG_EBX,
 			X86_REG_ESP, X86_REG_EBP, X86_REG_ESI, X86_REG_EDI,
@@ -1255,31 +1239,58 @@ static bool ix86_skip_instruction(SIGSEGV_REGISTER_TYPE * regs)
 			X86_REG_R12, X86_REG_R13, X86_REG_R14, X86_REG_R15,
 #endif
 		};
-		
-		if (reg < 0 || reg >= (sizeof(x86_reg_map)/sizeof(x86_reg_map[0]) - 1))
+		static const int transfer_bytes[] = { 0, 1, 2, 4, 8 };
+
+		if (reg < 0 || reg >= (int)(sizeof(x86_reg_map)/sizeof(x86_reg_map[0])))
 			return false;
 
-		// Set 0 to the relevant register part
-		// NOTE: this is only valid for MOV alike instructions
+		// The high-byte registers %ah..%bh are only reachable without a REX
+		// prefix, where they alias the first four slots shifted up a byte.
 		int rloc = x86_reg_map[reg];
-		switch (target_size) {
-		case SIZE_BYTE:
-			if (has_rex || reg < 4)
-				regs[rloc] = (regs[rloc] & ~0x00ffL);
-			else {
-				rloc = x86_reg_map[reg - 4];
-				regs[rloc] = (regs[rloc] & ~0xff00L);
-			}
-			break;
-		case SIZE_WORD:
-			regs[rloc] = (regs[rloc] & ~0xffffL);
-			break;
-		case SIZE_LONG:
-		case SIZE_QUAD: // zero-extension
-			regs[rloc] = 0;
-			break;
+		int shift = 0;
+		if (target_size == SIZE_BYTE && !has_rex && reg >= 4) {
+			rloc = x86_reg_map[reg - 4];
+			shift = 8;
 		}
+
+		if (transfer_type == SIGSEGV_TRANSFER_LOAD) {
+			// Without a device this delivers zero, which is what skipping a
+			// load has always meant here.
+			// NOTE: this is only valid for MOV alike instructions
+			SIGSEGV_REGISTER_TYPE value = 0;
+#ifdef SHEEPSHAVER
+			if (dev_addr)
+				value = MMIORead((void *)dev_addr, transfer_bytes[transfer_size]);
+#endif
+			switch (target_size) {
+			case SIZE_BYTE:
+				regs[rloc] = (regs[rloc] & ~(0xffL << shift))
+					| ((value & 0xffL) << shift);
+				break;
+			case SIZE_WORD:
+				regs[rloc] = (regs[rloc] & ~0xffffL) | (value & 0xffffL);
+				break;
+			case SIZE_LONG:
+			case SIZE_QUAD: // zero-extension
+				regs[rloc] = value;
+				break;
+			}
+		}
+#ifdef SHEEPSHAVER
+		else if (dev_addr)
+			MMIOWrite((void *)dev_addr, transfer_bytes[transfer_size],
+					  (uint32)(regs[rloc] >> shift));
+#endif
 	}
+#ifdef SHEEPSHAVER
+	else if (dev_addr) {
+		// A read-modify-write (ADD) against a device register, or a form the
+		// decoder could not pin to a register. The emulator's own guest
+		// accessors never emit either, so fail loudly rather than silently
+		// mis-model the access.
+		return false;
+	}
+#endif
 
 #if DEBUG
 	printf("%p: %s %s access", (void *)regs[X86_REG_EIP],
@@ -1288,7 +1299,7 @@ static bool ix86_skip_instruction(SIGSEGV_REGISTER_TYPE * regs)
 		   transfer_size == SIZE_LONG ? "long" :
 		   transfer_size == SIZE_QUAD ? "quad" : "unknown",
 		   transfer_type == SIGSEGV_TRANSFER_LOAD ? "read" : "write");
-	
+
 	if (reg != -1) {
 		static const char * x86_byte_reg_str_map[] = {
 			"al",   "cl",   "dl",   "bl",
@@ -1331,10 +1342,17 @@ static bool ix86_skip_instruction(SIGSEGV_REGISTER_TYPE * regs)
 	}
 	printf(", %d bytes instruction\n", len);
 #endif
-	
+
 	regs[X86_REG_EIP] += len;
 	return true;
 }
+
+#ifdef SHEEPSHAVER
+// Same decoder, but the transfer is performed against an emulated device
+// rather than discarded. Only defined where the decoder is: a port without
+// one simply has no device windows.
+#define SIGSEGV_EMULATE_TRANSFER(REGS, ADDR)	ix86_skip_instruction(REGS, ADDR)
+#endif
 #endif
 
 // Decode and skip IA-64 instruction
@@ -2126,7 +2144,7 @@ static bool powerpc_skip_instruction(unsigned long * nip_p, unsigned long * regs
 {
 	instruction_t instr;
 	powerpc_decode_instruction(&instr, *nip_p, regs);
-	
+
 	if (instr.transfer_type == SIGSEGV_TRANSFER_UNKNOWN) {
 		// Unknown machine code, let it crash. Then patch the decoder
 		return false;
@@ -2138,18 +2156,18 @@ static bool powerpc_skip_instruction(unsigned long * nip_p, unsigned long * regs
 		   instr.transfer_size == SIZE_WORD ? "word" :
 		   instr.transfer_size == SIZE_LONG ? "long" : "quad",
 		   instr.transfer_type == SIGSEGV_TRANSFER_LOAD ? "read" : "write");
-	
+
 	if (instr.addr_mode == MODE_U || instr.addr_mode == MODE_UX)
 		printf(" r%d (ra = %08x)\n", instr.ra, instr.addr);
 	if (instr.transfer_type == SIGSEGV_TRANSFER_LOAD)
 		printf(" r%d (rd = 0)\n", instr.rd);
 #endif
-	
+
 	if (instr.addr_mode == MODE_U || instr.addr_mode == MODE_UX)
 		regs[instr.ra] = instr.addr;
 	if (instr.transfer_type == SIGSEGV_TRANSFER_LOAD)
 		regs[instr.rd] = 0;
-	
+
 	*nip_p += 4;
 	return true;
 }
@@ -2498,7 +2516,7 @@ static bool arm_skip_instruction(unsigned long * regs)
 	  transfer_size = SIZE_LONG;
 	break;
   default:
-	// FIXME: support load/store mutliple?
+	// FIXME: support load/store multiple?
 	return false;
   }
 
@@ -2673,19 +2691,6 @@ static void mach_set_thread_state(sigsegv_info_t *SIP)
 }
 #endif
 
-#if TARGET_OS_IPHONE
-
-#ifdef MEM_BULK
-// MEM_BULK: VMBaseDiff is set at runtime in vm_alloc.cpp
-extern unsigned long VMBaseDiff;
-#elif defined(NATMEM_OFFSET)
-const uint64_t VMBaseDiff = NATMEM_OFFSET;
-#else
-const uint64_t VMBaseDiff = 0;
-#endif
-
-#endif
-
 // Return the address of the invalid memory reference
 sigsegv_address_t sigsegv_get_fault_address(sigsegv_info_t *SIP)
 {
@@ -2707,9 +2712,6 @@ sigsegv_address_t sigsegv_get_fault_address(sigsegv_info_t *SIP)
 			if (use_fast_path < 0)
 				use_fast_path = addr == SIP->addr;
 		}
-#if TARGET_OS_IPHONE && !defined(HAVE_MACH64_VM)
-		addr = VMBaseDiff + addr;
-#endif
 		SIP->addr = addr;
 	}
 #endif
@@ -2733,41 +2735,6 @@ sigsegv_address_t sigsegv_get_fault_instruction_address(sigsegv_info_t *SIP)
 	return SIP->pc;
 }
 
-#if defined(__APPLE__) && defined(__x86_64__)
-
-#ifdef CONFIGURE_TEST_SIGSEGV_RECOVERY
-#define EXTERN
-#else
-#define EXTERN extern
-#endif
-
-EXTERN uint8_t gZeroPage[0x3000], gKernelData[0x4000];
-EXTERN uint32_t RAMBase, ROMBase, ROMEnd;
-
-// 16 KB kernel-data window (struct in the upper 8 KB, nanokernel stack
-// slack in the lower 8 KB) — keep in sync with vm_do_get_real_address in
-// kpx_cpu/src/cpu/vm.hpp.
-template<typename T> T safeLoad(uint32_t a) {
-	if (a < 0x3000) return *(T *)&gZeroPage[a];
-	else if ((a & ~0x3fff) == 0x68ffc000 || (a & ~0x3fff) == 0x5fffc000) return *(T *)&gKernelData[a & 0x3fff];
-	else if (a >= RAMBase && a < ROMEnd) {
-#if TARGET_OS_IPHONE
-		return *(T *)(VMBaseDiff + a);
-#else
-		return *(T *)(uint64_t)a;
-#endif
-	}
-
-	return 0;
-}
-template<typename T> void safeStore(uint32_t a, T d) {
-	if (a < 0x3000) *(T *)&gZeroPage[a] = d;
-	else if ((a & ~0x3fff) == 0x68ffc000 || (a & ~0x3fff) == 0x5fffc000) *(T *)&gKernelData[a & 0x3fff] = d;
-	else if (a >= RAMBase && a < ROMBase) *(T *)(uint64_t)a = d;
-}
-
-#endif
-
 // This function handles the badaccess to memory.
 // It is called from the signal handler or the exception handler.
 static bool handle_badaccess(SIGSEGV_FAULT_HANDLER_ARGLIST_1)
@@ -2782,66 +2749,6 @@ static bool handle_badaccess(SIGSEGV_FAULT_HANDLER_ARGLIST_1)
 #endif
 	sigsegv_info_t * const SIP = &SI;
 
-#if defined(__APPLE__) && defined(__x86_64__)
-	if (!SIP->has_thr_state)
-		mach_get_thread_state(SIP);
-	x86_thread_state64_t *ts = &SIP->thr_state;
-	uint8_t *rip = (uint8_t *)ts->__rip;
-	switch (rip[0]) {
-		case 0xf:
-			if (rip[1] == 0xb7 && rip[2] == 0) {
-				ts->__rax = safeLoad<uint16_t>(ts->__rax);
-				ts->__rip += 3;
-				mach_set_thread_state(SIP);
-				return true;
-			}
-			break;
-		case 0x44:
-			if (rip[1] == 0xf && rip[2] == 0xb6 && rip[3] == 0x20) {
-				ts->__r12 = safeLoad<uint8_t>(ts->__rax);
-				ts->__rip += 4;
-				mach_set_thread_state(SIP);
-				return true;
-			}
-			break;
-		case 0x48:
-			if (rip[1] == 0xc7 && rip[2] == 0) {
-				safeStore<uint64_t>(ts->__rax, rip[3] | rip[4] << 8 | rip[5] << 16 | rip[6] << 24);
-				ts->__rip += 7;
-				mach_set_thread_state(SIP);
-				return true;
-			}
-			else if (rip[1] == 0xc7 && rip[2] == 0x40) {
-				safeStore<uint64_t>(ts->__rax + (signed char)rip[3], rip[4] | rip[5] << 8 | rip[6] << 16 | rip[7] << 24);
-				ts->__rip += 8;
-				mach_set_thread_state(SIP);
-				return true;
-			}
-			break;
-		case 0x89:
-			if (rip[1] == 2) {
-				safeStore<uint32_t>(ts->__rdx, ts->__rax);
-				ts->__rip += 2;
-				mach_set_thread_state(SIP);
-				return true;
-			}
-			else if (rip[1] == 0x10) {
-				safeStore<uint32_t>(ts->__rax, ts->__rdx);
-				ts->__rip += 2;
-				mach_set_thread_state(SIP);
-				return true;
-			}
-			break;
-		case 0x8b:
-			if (rip[1] == 0) {
-				ts->__rax = safeLoad<uint32_t>(ts->__rax);
-				ts->__rip += 2;
-				mach_set_thread_state(SIP);
-				return true;
-			}
-			break;
-	}
-#endif
 	// Call user's handler and reinstall the global handler, if required
 	switch (SIGSEGV_FAULT_HANDLER_INVOKE(SIP)) {
 	case SIGSEGV_RETURN_SUCCESS:
@@ -2867,6 +2774,34 @@ static bool handle_badaccess(SIGSEGV_FAULT_HANDLER_ARGLIST_1)
 		}
 		break;
 #endif
+
+#ifdef SIGSEGV_EMULATE_TRANSFER
+	case SIGSEGV_RETURN_DEVICE_ACCESS:
+		// The handler recognised the address as an emulated device window.
+		// Decode the faulting load or store and let the device perform it.
+#ifdef HAVE_MACH_EXCEPTIONS
+		if (!SIP->has_thr_state)
+			mach_get_thread_state(SIP);
+#endif
+		if (SIGSEGV_EMULATE_TRANSFER(SIGSEGV_REGISTER_FILE, (uintptr)SI.addr)) {
+#ifdef HAVE_MACH_EXCEPTIONS
+			mach_set_thread_state(SIP);
+#endif
+			return true;
+		}
+		// The decoder does not know this instruction form. Name it: without
+		// this the process just dies at the first unsupported device access
+		// with nothing to go on.
+		{
+			const unsigned char *p = (const unsigned char *)SI.pc;
+			fprintf(stderr, "[mmio] cannot emulate device access to %p from %p:"
+				" %02x %02x %02x %02x %02x %02x %02x %02x\n",
+				(void *)SI.addr, (void *)SI.pc,
+				p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7]);
+			fflush(stderr);
+		}
+		break;
+#endif
 	case SIGSEGV_RETURN_FAILURE:
 		// We can't do anything with the fault_address, dump state?
 		if (sigsegv_state_dumper != 0)
@@ -2881,10 +2816,10 @@ static bool handle_badaccess(SIGSEGV_FAULT_HANDLER_ARGLIST_1)
 /*
  * There are two mechanisms for handling a bad memory access,
  * Mach exceptions and UNIX signals. The implementation specific
- * code appears below. Its reponsibility is to call handle_badaccess
+ * code appears below. Its responsibility is to call handle_badaccess
  * which is the routine that handles the fault in an implementation
  * agnostic manner. The implementation specific code below is then
- * reponsible for checking whether handle_badaccess was able
+ * responsible for checking whether handle_badaccess was able
  * to handle the memory access error and perform any implementation
  * specific tasks necessary afterwards.
  */
@@ -2894,7 +2829,7 @@ static bool handle_badaccess(SIGSEGV_FAULT_HANDLER_ARGLIST_1)
  * We need to forward all exceptions that we do not handle.
  * This is important, there are many exceptions that may be
  * handled by other exception handlers. For example debuggers
- * use exceptions and the exception hander is in another
+ * use exceptions and the exception handler is in another
  * process in such a case. (Timothy J. Wood states in his
  * message to the list that he based this code on that from
  * gdb for Darwin.)
@@ -2923,7 +2858,7 @@ forward_exception(mach_port_t thread_port,
 	}
 
 	if (portIndex >= oldExceptionPorts->maskCount) {
-		fprintf(stderr, "No handler for exception_type = %d. Not fowarding\n", exception_type);
+		fprintf(stderr, "No handler for exception_type = %d. Not forwarding\n", exception_type);
 		return KERN_FAILURE;
 	}
 
@@ -3188,7 +3123,7 @@ static bool sigsegv_do_install_handler(sigsegv_fault_handler_t handler)
 	// We could have used EXCEPTION_STATE_IDENTITY instead of
 	// EXCEPTION_DEFAULT to get the thread state in the initial
 	// message, but it turns out that in the common case this is not
-	// neccessary. If we need it we can later ask for it from the
+	// necessary. If we need it we can later ask for it from the
 	// suspended thread.
 	//
 	// Even with THREAD_STATE_NONE, Darwin provides the program
@@ -3226,17 +3161,118 @@ static bool sigsegv_do_install_handler(sigsegv_fault_handler_t handler)
 #endif
 
 #ifdef HAVE_WIN32_EXCEPTIONS
+/*
+ * Shared ACCESS_VIOLATION recovery used by both the top-level filter and the
+ * vectored exception handler. Returns true if the fault was handled (instruction
+ * skipped / recovered) and execution should continue at the (possibly updated)
+ * context.
+ *
+ * IMPORTANT: SetUnhandledExceptionFilter is NOT invoked while a debugger is
+ * attached (MSDN). Under VS/cdb that meant ignoresegv never ran: the same
+ * guest unmapped load (e.g. vm_do_read_memory_4) re-faulted forever as
+ * first-chance/second-chance "exception thrown" loops. A Vectored Exception
+ * Handler still runs after first-chance continue and fixes that.
+ */
+#if defined(MEM_BULK_LAZY) && defined(__WIN32__)
+/*
+ * PocketShaver MEM_BULK parity, done lazily. On iOS the entire guest address
+ * space is one committed block, so a stray guest store lands in real memory
+ * and reads back later; here the equivalent range is backed on first touch.
+ * A fault whose address maps into the guest span and hits FREE host pages
+ * gets a fresh zero-filled 64KB granule committed in place and the faulting
+ * instruction re-runs (the access succeeds). Committed-but-protected pages
+ * (ROM, the zero page) and addresses outside the guest span fall through to
+ * the normal skip-instruction handler, so ignoresegv semantics are unchanged
+ * there. Like MEM_BULK, this does not distinguish guest from host code - a
+ * wild host pointer into the guest range is absorbed the same way.
+ */
+#ifndef NATMEM_OFFSET
+#error "MEM_BULK_LAZY requires NATMEM_OFFSET"
+#endif
+static bool win32_lazy_back_guest_page(uintptr_t fault_va)
+{
+	// Guest span [0, 0x70000000): covers RAM, the framebuffer aperture,
+	// ROM (0x40800000), SheepMem (0x51000000), kernel data and the DR cache
+	// (end 0x69080000), with headroom. Superset of PocketShaver's 1.5GB bulk.
+	static const uintptr_t kGuestSpanBytes = 0x70000000u;
+	const uintptr_t guest_addr = fault_va - (uintptr_t)NATMEM_OFFSET;
+	if (guest_addr >= kGuestSpanBytes)
+		return false;
+
+	MEMORY_BASIC_INFORMATION mbi;
+	if (VirtualQuery((LPCVOID)fault_va, &mbi, sizeof(mbi)) != sizeof(mbi))
+		return false;
+
+	void *backed = NULL;
+	if (mbi.State == MEM_FREE) {
+		SYSTEM_INFO si;
+		GetSystemInfo(&si);
+		const uintptr_t granule = si.dwAllocationGranularity;
+		const uintptr_t base = fault_va & ~(granule - 1);
+		backed = VirtualAlloc((LPVOID)base, granule,
+		                      MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+	}
+	else if (mbi.State == MEM_RESERVE) {
+		// Reserved-but-uncommitted hole (e.g. someone else's reservation in
+		// our range): commit just the faulting page.
+		const uintptr_t page = fault_va & ~(uintptr_t)0xFFF;
+		backed = VirtualAlloc((LPVOID)page, 0x1000, MEM_COMMIT, PAGE_READWRITE);
+	}
+	// mbi.State == MEM_COMMIT: protection fault - not ours to fix.
+	if (backed == NULL)
+		return false;
+
+	static long backed_count = 0;
+	const long n = ++backed_count;
+	if (n <= 16 || (n & 1023) == 0) {
+		fprintf(stderr, "[vm] lazy-backed guest memory at 0x%08lx "
+		        "(host %p, %ld granule(s) so far)\n",
+		        (unsigned long)guest_addr, (void *)fault_va, n);
+		fflush(stderr);
+	}
+	return true;
+}
+#endif /* MEM_BULK_LAZY */
+
+static bool win32_try_handle_access_violation(EXCEPTION_POINTERS *ExceptionInfo)
+{
+	if (sigsegv_fault_handler == NULL)
+		return false;
+	if (ExceptionInfo == NULL || ExceptionInfo->ExceptionRecord == NULL)
+		return false;
+	if (ExceptionInfo->ExceptionRecord->ExceptionCode != EXCEPTION_ACCESS_VIOLATION)
+		return false;
+	if (ExceptionInfo->ExceptionRecord->NumberParameters < 2)
+		return false;
+#if defined(MEM_BULK_LAZY) && defined(__WIN32__)
+	// ExceptionInformation[0]: 0 = read, 1 = write, 8 = DEP. Back data
+	// accesses only; instruction fetches from unmapped space stay fatal.
+	if (ExceptionInfo->ExceptionRecord->ExceptionInformation[0] != 8
+	    && win32_lazy_back_guest_page(
+	           (uintptr_t)ExceptionInfo->ExceptionRecord->ExceptionInformation[1]))
+		return true;
+#endif
+	return handle_badaccess(ExceptionInfo);
+}
+
 static LONG WINAPI main_exception_filter(EXCEPTION_POINTERS *ExceptionInfo)
 {
-	if (sigsegv_fault_handler != NULL
-		&& ExceptionInfo->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION
-		&& ExceptionInfo->ExceptionRecord->NumberParameters >= 2
-		&& handle_badaccess(ExceptionInfo))
+	if (win32_try_handle_access_violation(ExceptionInfo))
 		return EXCEPTION_CONTINUE_EXECUTION;
 
 	return EXCEPTION_CONTINUE_SEARCH;
 }
 
+#if defined(_WIN64)
+/* First-chance path that works with a debugger attached. */
+static LONG WINAPI main_vectored_exception_handler(EXCEPTION_POINTERS *ExceptionInfo)
+{
+	if (win32_try_handle_access_violation(ExceptionInfo))
+		return EXCEPTION_CONTINUE_EXECUTION;
+
+	return EXCEPTION_CONTINUE_SEARCH;
+}
+#endif /* #if defined(_WIN64) */
 #if defined __CYGWIN__ && defined __i386__
 /* In Cygwin programs, SetUnhandledExceptionFilter has no effect because Cygwin
    installs a global exception handler.  We have to dig deep in order to install
@@ -3294,11 +3330,37 @@ do_install_main_exception_filter ()
 }
 
 #else
-
+#if defined(_WIN64) /* vectored EH is Win2k+ */
+static PVOID win32_veh_handle = NULL;
+#endif
 static void
 do_install_main_exception_filter ()
 {
+  /* Keep the top-level filter for non-debug runs (and as a backstop). */
   SetUnhandledExceptionFilter ((LPTOP_LEVEL_EXCEPTION_FILTER) &main_exception_filter);
+  #if defined(_WIN64)
+  /*
+   * Vectored handler: required so ignoresegv/instruction-skip works under
+   * Visual Studio / cdb. Call with FirstHandler=TRUE so we run early among
+   * VEHs. Still only claims ACCESS_VIOLATIONs we can recover.
+   */
+  if (win32_veh_handle == NULL) {
+    win32_veh_handle = AddVectoredExceptionHandler(
+        1 /* FirstHandler */,
+        main_vectored_exception_handler);
+    if (win32_veh_handle == NULL) {
+      fprintf(stderr,
+              "[sigsegv] AddVectoredExceptionHandler failed (err=%lu); "
+              "ignoresegv will not work under a debugger\n",
+              (unsigned long)GetLastError());
+      fflush(stderr);
+    } else {
+      fprintf(stderr,
+              "[sigsegv] VEH installed (ignoresegv works with debugger attached)\n");
+      fflush(stderr);
+    }
+  }
+  #endif /* #if defined(_WIN64) */
 }
 #endif
 
@@ -3352,6 +3414,12 @@ void sigsegv_deinstall_handler(void)
 #endif
 #ifdef HAVE_WIN32_EXCEPTIONS
 	sigsegv_fault_handler = NULL;
+#if !(defined __CYGWIN__ && defined __i386__) && defined(_WIN64)
+	if (win32_veh_handle != NULL) {
+		RemoveVectoredExceptionHandler(win32_veh_handle);
+		win32_veh_handle = NULL;
+	}
+#endif
 #endif
 }
 
@@ -3517,11 +3585,11 @@ int main(void)
 	page_size = vm_get_page_size();
 	if ((page = (char *)vm_acquire(page_size)) == VM_MAP_FAILED)
 		return 2;
-	
+
 	memset((void *)page, 0, page_size);
 	if (vm_protect((char *)page, page_size, VM_PAGE_READ) < 0)
 		return 3;
-	
+
 	if (!sigsegv_install_handler(sigsegv_test_handler))
 		return 4;
 
@@ -3555,16 +3623,16 @@ int main(void)
 #ifdef HAVE_SIGSEGV_SKIP_INSTRUCTION
 	if (!sigsegv_install_handler(sigsegv_insn_handler))
 		return 6;
-	
+
 	if (vm_protect((char *)page, page_size, VM_PAGE_READ | VM_PAGE_WRITE) < 0)
 		return 7;
-	
+
 	for (int i = 0; i < page_size; i++)
 		page[i] = (i + 1) % page_size;
-	
+
 	if (vm_protect((char *)page, page_size, VM_PAGE_NOACCESS) < 0)
 		return 8;
-	
+
 #define TEST_SKIP_INSTRUCTION(TYPE) do {				\
 		const unsigned long TAG = 0x12345678 |			\
 		(sizeof(long) == 8 ? 0x9abcdef0UL << 31 : 0);	\
@@ -3573,7 +3641,7 @@ int main(void)
 		if (effect != TAG)								\
 			return 9;									\
 	} while (0)
-	
+
 #ifdef __GNUC__
 	b_region = &&L_b_region2;
 	e_region = &&L_e_region2;

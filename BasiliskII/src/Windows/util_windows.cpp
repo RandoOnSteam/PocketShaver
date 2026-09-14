@@ -32,51 +32,28 @@ using std::list;
 #include <string>
 using std::string;
 using std::wstring;
-typedef std::basic_string<TCHAR> tstring;
-
-std::unique_ptr<char[]> str(const wchar_t* s)
-{
-	auto length = WideCharToMultiByte(CP_ACP, 0, s, -1, nullptr, 0, nullptr, nullptr);
-	if (length == -1)
-		return nullptr;
-
-	std::unique_ptr<char[]> p(new char[length]);
-	WideCharToMultiByte(CP_ACP, 0, s, -1, p.get(), length, nullptr, nullptr);
-	return p;
-}
-
-std::unique_ptr<wchar_t[]> wstr(const char* s)
-{
-	auto length = MultiByteToWideChar(CP_ACP, 0, s, -1, nullptr, 0);
-	if (length == -1)
-		return nullptr;
-
-	std::unique_ptr<wchar_t[]> p(new wchar_t[length]);
-	MultiByteToWideChar(CP_ACP, 0, s, -1, p.get(), length);
-	return p;
-}
 
 string to_string(const wchar_t* s)
 {
-	auto wlen = wcslen(s);	// length without null terminator
-	auto len = WideCharToMultiByte(CP_ACP, 0, s, wlen, nullptr, 0, nullptr, nullptr);
-	if (len == -1)
+	int wlen = (int)wcslen(s);	// length without null terminator
+	int len = WideCharToMultiByte(CP_ACP, 0, s, wlen, NULL, 0, NULL, NULL);
+	if (len <= 0)
 		return string();
 
 	string str(len, '\0');
-	WideCharToMultiByte(CP_ACP, 0, s, wlen, &str.front(), len, nullptr, nullptr);
+	WideCharToMultiByte(CP_ACP, 0, s, wlen, &str[0], len, NULL, NULL);
 	return str;
 }
 
 wstring to_wstring(const char* s)
 {
-	auto len = strlen(s);	// length without null terminator
-	auto wlen = MultiByteToWideChar(CP_ACP, 0, s, len, nullptr, 0);
-	if (len == -1)
+	int len = (int)strlen(s);	// length without null terminator
+	int wlen = MultiByteToWideChar(CP_ACP, 0, s, len, NULL, 0);
+	if (wlen <= 0)
 		return wstring();
 
 	wstring str(wlen, L'\0');
-	MultiByteToWideChar(CP_ACP, 0, s, len, &str.front(), wlen);
+	MultiByteToWideChar(CP_ACP, 0, s, len, &str[0], wlen);
 	return str;
 }
 
@@ -94,10 +71,10 @@ size_t strlcpy(char* dst, const char* src, size_t size)
 
 size_t strlcpy(char* dst, const wchar_t* src, size_t size)
 {
-	size_t length = WideCharToMultiByte(CP_ACP, 0, src, -1, dst, size, nullptr, nullptr);
+	size_t length = WideCharToMultiByte(CP_ACP, 0, src, -1, dst, size, NULL, NULL);
 	if (size > 0) {
 		if (length == 0)
-			return strlcpy(dst, str(src).get(), size);
+			return strlcpy(dst, to_string(src).c_str(), size);
 		--length;
 	}
 	return length;
@@ -106,7 +83,7 @@ size_t strlcpy(char* dst, const wchar_t* src, size_t size)
 size_t strlcat(char* dst, const char* src, size_t size)
 {
 	char* end = static_cast<char*>(memchr(dst, '\0', size));
-	if (end == nullptr)
+	if (end == NULL)
 		return size;
 	size_t length = end - dst;
 	return length + strlcpy(end, src, size - length);
@@ -115,7 +92,7 @@ size_t strlcat(char* dst, const char* src, size_t size)
 size_t strlcat(char* dst, const wchar_t* src, size_t size)
 {
 	char* end = static_cast<char*>(memchr(dst, '\0', size));
-	if (end == nullptr)
+	if (end == NULL)
 		return size;
 	size_t length = end - dst;
 	return length + strlcpy(end, src, size - length);
@@ -138,7 +115,7 @@ size_t wcslcpy(wchar_t* dst, const char* src, size_t size)
 	size_t length = MultiByteToWideChar(CP_ACP, 0, src, -1, dst, size);
 	if (size > 0) {
 		if (length == 0)
-			return wcslcpy(dst, wstr(src).get(), size);
+			return wcslcpy(dst, to_wstring(src).c_str(), size);
 		--length;
 	}
 	return length;
@@ -147,7 +124,7 @@ size_t wcslcpy(wchar_t* dst, const char* src, size_t size)
 size_t wcslcat(wchar_t* dst, const wchar_t* src, size_t size)
 {
 	wchar_t* end = wmemchr(dst, L'\0', size);
-	if (end == nullptr)
+	if (end == NULL)
 		return size;
 	size_t length = end - dst;
 	return length + wcslcpy(end, src, size - length);
@@ -156,7 +133,7 @@ size_t wcslcat(wchar_t* dst, const wchar_t* src, size_t size)
 size_t wcslcat(wchar_t* dst, const char* src, size_t size)
 {
 	wchar_t* end = wmemchr(dst, L'\0', size);
-	if (end == nullptr)
+	if (end == NULL)
 		return size;
 	size_t length = end - dst;
 	return length + wcslcpy(end, src, size - length);

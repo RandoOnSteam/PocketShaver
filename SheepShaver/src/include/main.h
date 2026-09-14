@@ -30,6 +30,7 @@ extern uint32 PVR;				// Theoretical PVR
 extern int64 CPUClockSpeed;		// Processor clock speed (Hz)
 extern int64 BusClockSpeed;		// Bus clock speed (Hz)
 extern int64 TimebaseSpeed;		// Timebase clock speed (Hz)
+extern char* vde_sock;					// vde switch variable
 
 #ifdef __BEOS__
 extern system_info SysInfo;		// System information
@@ -79,14 +80,6 @@ extern void DisableInterrupt(void);							// Disable SIGUSR1 interrupt (can be n
 extern void EnableInterrupt(void);							// Enable SIGUSR1 interrupt (can be nested)
 
 // Array length
-#if __cplusplus >= 201103L || (_MSC_VER >= 1900 && defined __cplusplus)
-template <typename T, size_t size>
-constexpr size_t lengthof(T (& a)[size])
-{
-	return size;
-}
-#else
 #define lengthof(a) (sizeof(a) / sizeof(a[0]))
-#endif
 
 #endif

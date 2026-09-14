@@ -294,7 +294,7 @@ powerpc_cpu::compile_block(uint32 entry_point)
 	while (!done_compile) {
 		uint32 opcode = vm_read_memory_4(dpc += 4);
 		const instr_info_t *ii = decode(opcode);
-		if (ii->cflow & CFLOW_END_BLOCK)
+		if (instruction_ends_dispatch_block(ii, opcode))
 			done_compile = true;
 
 		// Assume we can compile this opcode
@@ -922,6 +922,14 @@ powerpc_cpu::compile_block(uint32 entry_point)
 				dg.gen_load_T0_VRSAVE();
 				break;
 #ifdef SHEEPSHAVER
+			case powerpc_registers::SPR_SRR0:
+			case powerpc_registers::SPR_SRR1:
+			case powerpc_registers::SPR_DEC:
+			case powerpc_registers::SPR_SPRG0:
+			case powerpc_registers::SPR_SPRG1:
+			case powerpc_registers::SPR_SPRG2:
+			case powerpc_registers::SPR_SPRG3:
+				goto do_generic;
 			case powerpc_registers::SPR_SDR1:
 				dg.gen_mov_32_T0_im(0xdead001f);
 				break;
@@ -957,7 +965,16 @@ powerpc_cpu::compile_block(uint32 entry_point)
 			case powerpc_registers::SPR_VRSAVE:
 				dg.gen_store_T0_VRSAVE();
 				break;
-#ifndef SHEEPSHAVER
+#ifdef SHEEPSHAVER
+			case powerpc_registers::SPR_SRR0:
+			case powerpc_registers::SPR_SRR1:
+			case powerpc_registers::SPR_DEC:
+			case powerpc_registers::SPR_SPRG0:
+			case powerpc_registers::SPR_SPRG1:
+			case powerpc_registers::SPR_SPRG2:
+			case powerpc_registers::SPR_SPRG3:
+				goto do_generic;
+#else
 			default: goto do_generic;
 #endif
 			}

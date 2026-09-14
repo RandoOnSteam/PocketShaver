@@ -32,6 +32,11 @@
 
 #include "main.h"
 
+//#define SHEEPSHAVER_LOG_TO_FILE
+#if defined(_WIN32) && defined(SHEEPSHAVER_LOG_TO_FILE)
+extern HANDLE gLogFile;
+#endif
+
 static inline void _cdecl vwinbug(const char *s, va_list vargs)
 {
 	char msg[1024], date[50], hours[50];
@@ -46,6 +51,20 @@ static inline void _cdecl vwinbug(const char *s, va_list vargs)
 	_vsnprintf( rest, lengthof(msg) - (rest - msg), s, vargs );
 
 	OutputDebugStringA(msg);
+#if defined(_WIN32) && defined(SHEEPSHAVER_LOG_TO_FILE)
+	static HANDLE gLogFile = NULL;
+	if(!gLogFile)
+		gLogFile = CreateFileA("sheepshaverlog.txt",
+						 GENERIC_WRITE,
+						 FILE_SHARE_READ | FILE_SHARE_WRITE,
+						 NULL,
+						 CREATE_ALWAYS,
+						 FILE_ATTRIBUTE_NORMAL,
+						 NULL
+						 );
+	DWORD written;
+	WriteFile(gLogFile, msg, strlen(msg), &written, NULL);
+#endif
 }
 static inline void _cdecl vwwinbug( const wchar_t *s, va_list vargs)
 {
@@ -62,7 +81,7 @@ static inline void _cdecl vwwinbug( const wchar_t *s, va_list vargs)
 
 	OutputDebugStringW(msg);
 }
-static inline void _cdecl winbug( const char *s, ...)
+static inline void _cdecl winbug(const char *s, ...)
 {
 	va_list vargs;
 	va_start(vargs, s);

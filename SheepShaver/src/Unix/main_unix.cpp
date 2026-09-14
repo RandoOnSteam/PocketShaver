@@ -112,6 +112,7 @@
 #include "user_strings.h"
 #include "vm_alloc.h"
 #include "sigsegv.h"
+#include "macio_escc.h"
 #include "sigregs.h"
 #include "rpc.h"
 #include "cpu/jit/jit-wx.hpp"
@@ -1086,7 +1087,7 @@ int main(int argc, char *argv[])
 #endif
 	
 	// Create area for Mac RAM
-#ifdef TARGET_OS_IPHONE
+#if TARGET_OS_IPHONE
 	if (!check_prefs())
 		goto quit;
 	
@@ -1195,6 +1196,7 @@ int main(int argc, char *argv[])
 		ErrorAlert(str);
 		goto quit;
 	}
+	MacIOESCCInstall();
 	
 	// Load Mac ROM
 	if (!load_mac_rom())
@@ -1637,12 +1639,8 @@ static void *tick_func(void *arg)
 			tick_counter = 0;
 			WriteMacInt32(0x20c, TimerDateTime());
 		}
-
-		// Trigger 60Hz interrupt
-		if (ReadMacInt32(XLM_IRQ_NEST) == 0) {
-			SetInterruptFlag(INTFLAG_VIA);
-			TriggerInterrupt();
-		}
+		SetInterruptFlag(INTFLAG_VIA);
+		TriggerInterrupt();
 	}
 
 #if DEBUG

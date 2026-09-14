@@ -94,6 +94,16 @@ class PreferencesAdvancedModel {
 	}
 
 	@MainActor
+	var skipStartupScreen: Bool {
+		get {
+			objc_findBool("skiposxstartup")
+		}
+		set {
+			objc_replaceBool("skiposxstartup", newValue)
+		}
+	}
+
+	@MainActor
 	var hoverJustAboveOffsetModifier: CGFloat {
 		get {
 			miscSettings.hoverJustAboveOffsetModifier

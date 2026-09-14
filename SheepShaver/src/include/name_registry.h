@@ -24,4 +24,16 @@
 extern void DoPatchNameRegistry(void);
 extern void PatchNameRegistry(void);
 
+// Called once per VBL. Publishes the USB controller node a few seconds after
+// the Mac is up; see PublishUSBNode() for why it cannot happen any earlier.
+extern void USBNodePublishDeferred(void);
+
+// The PPC-mode half of the above, reached through NATIVE_USB_PUBLISH_NODE: the
+// Name Registry calls it makes cannot run in 68k mode.
+extern void DoPublishUSBNode(void);
+
+// Arm USBNodePublishDeferred() again. A guest reset wipes the Name Registry
+// along with the rest of Mac OS, so the node has to go back in after it.
+extern void USBNodeResetPublish(void);
+
 #endif

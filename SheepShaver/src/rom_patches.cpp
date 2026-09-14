@@ -39,6 +39,7 @@
 #include "audio.h"
 #include "audio_defs.h"
 #include "serial.h"
+#include "joymanager.h"
 #include "macos_util.h"
 #include "thunks.h"
 
@@ -64,6 +65,13 @@ const uint32 ZERO_SCRAP_PATCH_SPACE = 0x2fcf80;
 const uint32 PUT_SCRAP_PATCH_SPACE = 0x2fcfc0;
 const uint32 GET_SCRAP_PATCH_SPACE = 0x2fd100;
 const uint32 ADDR_MAP_PATCH_SPACE = 0x2fd140;
+const uint32 CURSOR_LOG_SPACE = 0x2fd240;	// MoveTo trace ring + stub
+const uint32 CURSOR_LOG_SIZE = 0x180;
+
+// Set either to 0 to bisect the cursor patches; the wipe patch must stay on
+// for the stub below to be installed at all.
+#define CURSOR_WIPE_PATCH 1
+#define CURSOR_SYNC_PUBLISH 1
 
 // Global variables
 int ROMType;				// ROM type
@@ -504,6 +512,63 @@ static const uint8 cdrom_driver[] = {	// CD-ROM driver
 	0x4e, 0x75							//  rts
 };
 
+static const uint8 joy_manager_driver[] = {	// Replacement .JoyManager driver
+	// Driver header
+	JoyManagerDriverFlags >> 8, JoyManagerDriverFlags & 0xff, 0, 0, 0, 0, 0, 0,
+	0x00, 0x1e,							// Open() offset
+	0x00, 0x22,							// Prime() offset
+	0x00, 0x26,							// Control() offset
+	0x00, 0x2a,							// Status() offset
+	0x00, 0x2e,							// Close() offset
+	0x0b, 0x2e, 0x4a, 0x6f, 0x79, 0x4d,	// ".JoyManager"
+	0x61, 0x6e, 0x61, 0x67, 0x65, 0x72,
+
+	// Open()
+	M68K_EMUL_OP_JOY_OPEN >> 8, M68K_EMUL_OP_JOY_OPEN & 0xff,
+	0x4e, 0x75,							// rts
+
+	// Prime()
+	0x70, 0xed,							// moveq #readErr,d0
+	0x60, 0x0c,							// bra IOReturn
+
+	// Control()
+	M68K_EMUL_OP_JOY_CONTROL >> 8, M68K_EMUL_OP_JOY_CONTROL & 0xff,
+	0x60, 0x08,							// bra IOReturn
+
+	// Status()
+	M68K_EMUL_OP_JOY_STATUS >> 8, M68K_EMUL_OP_JOY_STATUS & 0xff,
+	0x60, 0x04,							// bra IOReturn
+
+	// Close()
+	M68K_EMUL_OP_JOY_CLOSE >> 8, M68K_EMUL_OP_JOY_CLOSE & 0xff,
+	0x4e, 0x75,							// rts
+
+	// IOReturn
+	0x32, 0x28, 0x00, 0x06,				// move.w 6(a0),d1
+	0x08, 0x01, 0x00, 0x09,				// btst #9,d1
+	0x67, 0x0c,							// beq 1
+	0x4a, 0x40,							// tst.w d0
+	0x6f, 0x02,							// ble 2
+	0x42, 0x40,							// clr.w d0
+	0x31, 0x40, 0x00, 0x10,				// 2: move.w d0,$10(a0)
+	0x4e, 0x75,							// rts
+	0x4a, 0x40,							// 1: tst.w d0
+	0x6f, 0x04,							// ble 3
+	0x42, 0x40,							// clr.w d0
+	0x4e, 0x75,							// rts
+	0x2f, 0x38, 0x08, 0xfc,				// 3: move.l $8fc,-(sp)
+	0x4e, 0x75,							// rts
+
+	// IntPoll: Pascal calling convention, two pointer arguments, no result.
+	M68K_EMUL_OP_JOY_INTPOLL >> 8, M68K_EMUL_OP_JOY_INTPOLL & 0xff,
+	0x20, 0x5f,							// movea.l (sp)+,a0	true return address
+	0x50, 0x8f,							// addq.l  #8,sp		drop both arguments
+	0x4e, 0xd0							// jmp     (a0)
+};
+
+// Offset of the IntPoll stub inside joy_manager_driver[]
+const uint32 JOY_INTPOLL_OFFSET = 0x56;
+
 static uint32 long_ptr;
 
 static void SetLongBase(uint32 addr)
@@ -657,7 +722,7 @@ static const uint8 adbop_patch[] = {	// Call ADBOp() completion procedure
 	0x4e, 0x91,				//	jsr		(a1)
 	0x70, 0x00,				//	moveq	#0,d0
 	0x60, 0x00, 0x00, 0x04,	//	bra		2
-	0x70, 0xff,				//1	moveq	#-1,d0
+	0x70, 0x00,				//1	moveq	#0,d0 - always return noErr
 	0x4c, 0xdf, 0x0f, 0x0e,	//2	movem.l	(sp)+,d1-d3/a0-a3
 	0x46, 0xdf,				//	move	(sp)+,sr
 	0x4e, 0x75				//	rts
@@ -927,9 +992,10 @@ static bool patch_nanokernel_boot(void)
 	lp = (uint32 *)(ROMBaseHost + base);
 	*lp = htonl(0x39c00000);		// li	r14,0
 
-	// Don't write to DEC
+	// The emulated CPU implements DEC. Preserve the nanokernel's initial
+	// quantum and follow the branch after the original mtdec instruction.
 	lp = (uint32 *)(ROMBaseHost + loc + 0x70);
-	*lp++ = htonl(POWERPC_NOP);
+	lp++;
 	loc = (ntohl(lp[0]) & 0xffff) + (uintptr)lp - (uintptr)ROMBaseHost;
 	D(bug("loc %08lx\n", loc));
 
@@ -1352,15 +1418,9 @@ static bool patch_nanokernel(void)
 	static const uint8 mdec_dat[] = {0x7f, 0xf6, 0x02, 0xa6, 0x2c, 0x08, 0x00, 0x00, 0x93, 0xe1, 0x06, 0x68, 0x7d, 0x16, 0x03, 0xa6};
 	if ((base = find_rom_data(0x310000, 0x314000, mdec_dat, sizeof(mdec_dat))) == 0) return false;
 	D(bug("mdec %08lx\n", base));
-	lp = (uint32 *)(ROMBaseHost + base);		// Don't modify DEC
-	lp[0] = htonl(0x3be00000);					// li	r31,0
-#if 1
-	lp[3] = htonl(POWERPC_NOP);
-	lp[4] = htonl(POWERPC_NOP);
-#else
-	lp[3] = htonl(0x39000040);					// li	r8,0x40
-	lp[4] = htonl(0x990600e4);					// stb	r8,0xe4(r6)
-#endif
+	// Preserve mfdec/mtdec and the expired-quantum helper. The CPU core now
+	// models the architectural register and its edge-triggered 0x900 exception,
+	// so each nanokernel context retains its actual remaining quantum.
 
 	static const uint8 restore_fpu_caller_dat[] = {0x81, 0x06, 0x00, 0xf4, 0x81, 0x46, 0x00, 0xfc, 0x7d, 0x09, 0x03, 0xa6, 0x40};
 	if ((base = find_rom_data(0x310000, 0x314000, restore_fpu_caller_dat, sizeof(restore_fpu_caller_dat))) == 0) return false;
@@ -1404,24 +1464,10 @@ static bool patch_nanokernel(void)
 	lp = (uint32 *)(ROMBaseHost + base + 4);
 	*lp = htonl((ntohl(*lp) & 0xffff) | 0x48000000);	// bgt -> b
 
-	// Patch trap return routine
+	// Leave the nanokernel's architectural return sequence intact
 	static const uint8 trap_return_dat[] = {0x80, 0xc1, 0x00, 0x18, 0x80, 0x21, 0x00, 0x04, 0x4c, 0x00, 0x00, 0x64};
 	if ((base = find_rom_data(0x312000, 0x320000, trap_return_dat, sizeof(trap_return_dat))) == 0) return false;
 	D(bug("trap_return %08lx\n", base + 8));
-	lp = (uint32 *)(ROMBaseHost + base + 8);	// Replace rfi
-	*lp = htonl(POWERPC_BCTR);
-
-	while (ntohl(*lp) != 0x7d5a03a6) lp--;
-	*lp++ = htonl(0x7d4903a6);					// mtctr	r10
-	*lp++ = htonl(0x7daff120);					// mtcr	r13
-	*lp = htonl(0x48000000 + ((0x318000 - ((uintptr)lp - (uintptr)ROMBaseHost)) & 0x03fffffc));	// b		ROMBase+0x318000
-	uint32 npc = (uintptr)(lp + 1) - (uintptr)ROMBaseHost;
-
-	lp = (uint32 *)(ROMBaseHost + 0x318000);
-	*lp++ = htonl(0x81400000 + XLM_IRQ_NEST);	// lwz	r10,XLM_IRQ_NEST
-	*lp++ = htonl(0x394affff);					// subi	r10,r10,1
-	*lp++ = htonl(0x91400000 + XLM_IRQ_NEST);	// stw	r10,XLM_IRQ_NEST
-	*lp = htonl(0x48000000 + ((npc - 0x31800c) & 0x03fffffc));	// b		ROMBase+0x312c2c
 
 	// Patch FEOA opcode, selector 0x0A (virtual->physical page index)
 	static const uint8 fe0a_0a_dat[] = {0x55, 0x23, 0xa3, 0x3e, 0x4b};
@@ -2194,6 +2240,8 @@ static bool patch_68k(void)
 	gen_aout_driver(ROMBase + sony_offset + 0x400);
 	gen_bin_driver( ROMBase + sony_offset + 0x500);
 	gen_bout_driver(ROMBase + sony_offset + 0x600);
+	memcpy((void *)(ROMBaseHost + sony_offset + 0x700),
+		joy_manager_driver, sizeof(joy_manager_driver));
 
 	// Copy icons to ROM
 	SonyDiskIconAddr = ROMBase + sony_offset + 0x800;
@@ -2375,6 +2423,79 @@ static bool patch_68k(void)
 		thing = find_rom_resource(FOURCC('t','h','n','g'), 4711, true);
 	}
 
+	// Stop the cursor task throwing away pending mouse movement whenever
+	// something repositions the pointer, by turning its beq into a bra.
+	static const uint8 cursor_wipe_data[] = {0x28, 0x6a, 0x00, 0x04, 0x4a, 0x2c, 0x00, 0x14, 0x67, 0x1e, 0x42, 0xaa, 0x00, 0x70};
+	uint32 wipe_base = 0;
+#if CURSOR_WIPE_PATCH
+	wipe_base = find_rom_data(0xc000, 0x10000, cursor_wipe_data, sizeof(cursor_wipe_data));
+#endif
+	if (wipe_base != 0) {
+		D(bug("cursor_wipe %08lx\n", (unsigned long)wipe_base));
+		wp = (uint16 *)(ROMBaseHost + wipe_base + 8);
+		*wp = htons(0x601e);			// bra.b (was beq.b: skip the accumulator wipe)
+	}
+
+	// Record every CursorDeviceMoveTo call and its caller in a ring buffer.
+	static const uint8 cursor_dispatch_data[] = {0xd0, 0x40, 0x41, 0xfa, 0x00, 0x08, 0xd0, 0xf0, 0x00, 0x00, 0x4e, 0xd0};
+	static const uint8 cursor_moveto_data[] = {0x24, 0x6e, 0x00, 0x10, 0x22, 0x6a, 0x00, 0x04, 0x70, 0x00, 0x20, 0x2e};
+	uint32 disp = find_rom_data(0xc000, 0x10000, cursor_dispatch_data, sizeof(cursor_dispatch_data));
+	uint32 mvto = find_rom_data(0xc000, 0x10000, cursor_moveto_data, sizeof(cursor_moveto_data));
+	if (disp != 0 && mvto != 0
+			&& wipe_base != 0
+			&& check_rom_patch_space(CURSOR_LOG_SPACE, CURSOR_LOG_SIZE)) {
+		uint32 table = disp + 12;		// selector offset table
+		uint32 stub = CURSOR_LOG_SPACE + 0x110;
+
+		D(bug("cursor_movelog buf %08lx stub %08lx handler %08lx",
+			(unsigned long)CURSOR_LOG_SPACE, (unsigned long)stub,
+			(unsigned long)mvto));
+		memset(ROMBaseHost + CURSOR_LOG_SPACE, 0, 0x110);
+		wp = (uint16 *)(ROMBaseHost + stub);
+		*wp++ = htons(0x2f00);				// move.l d0,-(a7)
+		*wp++ = htons(0x2f08);				// move.l a0,-(a7)
+		*wp++ = htons(0x41f9);				// lea buf,a0
+		*wp++ = htons((ROMBase + CURSOR_LOG_SPACE) >> 16);
+		*wp++ = htons((ROMBase + CURSOR_LOG_SPACE) & 0xffff);
+		*wp++ = htons(0x3028); *wp++ = htons(0x0002);	// move.w 2(a0),d0
+		*wp++ = htons(0x5240);				// addq.w #1,d0
+		*wp++ = htons(0x3140); *wp++ = htons(0x0002);	// move.w d0,2(a0)
+		*wp++ = htons(0x0240); *wp++ = htons(0x001f);	// andi.w #31,d0
+		*wp++ = htons(0xe748);				// lsl.w #3,d0
+		*wp++ = htons(0x41f0); *wp++ = htons(0x0008);	// lea 8(a0,d0.w),a0
+		*wp++ = htons(0x30ae); *wp++ = htons(0x000a);	// move.w $a(a6),(a0)  v
+		*wp++ = htons(0x316e); *wp++ = htons(0x000e);	// move.w $e(a6),2(a0)
+		*wp++ = htons(0x0002);
+		*wp++ = htons(0x216e); *wp++ = htons(0x0004);	// move.l $4(a6),4(a0)
+		*wp++ = htons(0x0004);
+		*wp++ = htons(0x205f);				// movea.l (a7)+,a0
+		*wp++ = htons(0x201f);				// move.l (a7)+,d0
+#if CURSOR_SYNC_PUBLISH
+		// Write Mouse before the real handler runs, but only when the guest
+		// has hidden the pointer, because doing it with the pointer visible
+		// stops the ROM redrawing and pinning the cursor (4080df6e).
+		*wp++ = htons(0x4a78); *wp++ = htons(0x08d0);	// tst.w CrsrState
+		*wp++ = htons(0x6c0c);				// bge.b +12 (visible: skip)
+		*wp++ = htons(0x31ee); *wp++ = htons(0x000a); *wp++ = htons(0x0830);
+		*wp++ = htons(0x31ee); *wp++ = htons(0x000e); *wp++ = htons(0x0832);
+		*wp++ = htons(0x4ef9);				// jmp handler
+		*wp++ = htons((ROMBase + mvto) >> 16);
+		*wp = htons((ROMBase + mvto) & 0xffff);
+#else
+		*wp++ = htons(0x4ef9);				// jmp handler
+		*wp++ = htons((ROMBase + mvto) >> 16);
+		*wp = htons((ROMBase + mvto) & 0xffff);
+#endif
+		// The selector table holds 16-bit offsets, so point it at the wipe
+		// branch the patch above made unreachable and jump on from there.
+		wp = (uint16 *)(ROMBaseHost + wipe_base + 10);
+		*wp++ = htons(0x4ef9);				// jmp stub
+		*wp++ = htons((ROMBase + stub) >> 16);
+		*wp = htons((ROMBase + stub) & 0xffff);
+		wp = (uint16 *)(ROMBaseHost + table + 2);	// selector 1 = MoveTo
+		*wp = htons((uint16)(wipe_base + 10 - table));
+	}
+
 	// Patch component code
 	D(bug("Patching sifters in ROM\n"));
 	for (int i=0; i<num_sifters; i++) {
@@ -2474,6 +2595,86 @@ void InstallDrivers(void)
 		r.a[0] = pb;
 		Execute68kTrap(0xa000, &r);		// Open()
 	}
+
+#ifdef ENABLE_JOYMANAGER
+	// Install the SDL-backed .JoyManager driver
+	if (!PrefsFindBool("nojoystick") && JoyManagerPrepare()) {
+		int16 joy_ref_num;
+		uint32 unit_table;
+		uint32 joy_storage;
+		uint32 joy_handle;
+		int unit_count;
+		int unit;
+
+		joy_ref_num = 0;
+		unit_table = ReadMacInt32(0x011c);
+		unit_count = (int16)ReadMacInt16(0x01d2);
+		for (unit = unit_count - 1; unit >= 0; unit--) {
+			if (ReadMacInt32(unit_table + unit * 4) == 0) {
+				joy_ref_num = (int16)(-1 - unit);
+				break;
+			}
+		}
+
+		if (joy_ref_num != 0) {
+			r.d[0] = JoyManagerGuestStorageSize();
+			Execute68kTrap(0xa71e, &r);		// NewPtrSysClear()
+			joy_storage = r.a[0];
+			if (JoyManagerSetGuestStorage(joy_storage,
+					JoyManagerGuestStorageSize())) {
+				r.a[0] = ROMBase + sony_offset + 0x700;
+				r.d[0] = (uint32)(int32)joy_ref_num;
+				Execute68kTrap(0xa43d, &r);	// DrvrInstallRsrvMem()
+				joy_handle = ReadMacInt32(unit_table + ~joy_ref_num * 4);
+				if ((int16)r.d[0] == noErr && joy_handle != 0) {
+					r.a[0] = joy_handle;
+					Execute68kTrap(0xa029, &r);	// HLock()
+					dce = ReadMacInt32(r.a[0]);
+					WriteMacInt32(dce + dCtlDriver,
+						ROMBase + sony_offset + 0x700);
+					WriteMacInt16(dce + dCtlFlags, JoyManagerDriverFlags);
+
+					SheepString joymanager_str("\013.JoyManager");
+					WriteMacInt32(pb + ioNamePtr, joymanager_str.addr());
+					r.a[0] = pb;
+					Execute68kTrap(0xa000, &r);	// Open()
+
+					// InputSprocket calls this driver synchronously from a Time
+					// Manager task. When the driver is busy the Device Manager
+					// queues that request, and at interrupt level the ROM can only
+					// complete it through the IntPoll chain (IntPollGlobals at
+					// ExpandMem+$24c, reached from the IOWait vector at $6dc).
+					// Such a request never completes without the chain and the
+					// wait spins with the 68k interrupt level pinned at 1.
+					JoyManagerSetDCE(dce);
+					uint32 expand_mem = ReadMacInt32(0x2b6);
+					uint32 int_poll = expand_mem
+						? ReadMacInt32(expand_mem + 0x24c) : 0;
+					if (int_poll) {
+						r.d[0] = 12;				// qLink, qType, proc
+						Execute68kTrap(0xa71e, &r);	// NewPtrSysClear()
+						uint32 elem = r.a[0];
+						if (elem) {
+							WriteMacInt32(elem + 8, ROMBase + sony_offset +
+								0x700 + JOY_INTPOLL_OFFSET);
+							r.a[0] = elem;
+							r.a[1] = int_poll + 2;	// its QHdr
+							Execute68kTrap(0xa96f, &r);	// Enqueue()
+						}
+					} else
+						printf("WARNING: no IntPollGlobals; .JoyManager cannot "
+							"complete interrupt-time requests\n");
+				} else {
+					JoyManagerReset();
+				}
+			} else {
+				JoyManagerReset();
+			}
+		} else {
+			JoyManagerReset();
+		}
+	}
+#endif /* ENABLE_JOYMANAGER */
 
 	// Install serial drivers
 	r.a[0] = ROMBase + sony_offset + 0x300;

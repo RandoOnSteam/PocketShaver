@@ -53,6 +53,7 @@
  */
 
 #include "sysdeps.h"
+#include "vec_data.h"
 
 #include <X11/Xlib.h>
 #include <X11/Xatom.h>
@@ -220,7 +221,7 @@ static bool read_property(Display *dpy, Window win,
 		offset += length / (32 / *format);
 		length *= format_inc * (*format / 8);
 
-		memcpy(buffer.data() + buffer_offset, data, length);
+		memcpy(vec_data(buffer) + buffer_offset, data, length);
 		buffer_offset += length;
 		XFree(data);
 	}
@@ -414,7 +415,7 @@ static void do_getscrap(void **handle, uint32 type, int32 offset)
 		read_property(x_display,
 					  event.xselection.requestor, event.xselection.property,
 					  true, data, 0, 0, 0, false)) {
-		Time timestamp = ((long *)data.data())[0];
+		Time timestamp = ((long *)vec_data(data))[0];
 		if (timestamp <= last_timestamp)
 			return;
 	}
@@ -436,7 +437,7 @@ static void do_getscrap(void **handle, uint32 type, int32 offset)
 	Atom format = None;
 #if GETSCRAP_REQUESTS_TARGETS
 	int n_atoms = data.size() / sizeof(long);
-	long *atoms = (long *)data.data();
+	long *atoms = (long *)vec_data(data);
 	for (int i = 0; i < n_atoms; i++) {
 		Atom target = atoms[i];
 		D(bug("  target %08x (%s)\n", target, XGetAtomName(x_display, target)));
@@ -591,7 +592,7 @@ static bool handle_selection_STRING(XSelectionRequestEvent *req)
 	// Send the string, it's already encoded as ISO-8859-1
 	XChangeProperty(x_display, req->requestor, req->property,
 					XA_STRING, 8,
-					PropModeReplace, (uint8 *)clip_data.data.data(), clip_data.data.size());
+					PropModeReplace, (uint8 *)vec_data(clip_data.data), clip_data.data.size());
 
 	return true;
 }
@@ -611,7 +612,7 @@ static bool handle_selection_MULTIPLE(XSelectionRequestEvent *req)
 		return false;
 
 	struct AtomPair { long target; long property; };
-	AtomPair *atom_pairs = (AtomPair *)data.data();
+	AtomPair *atom_pairs = (AtomPair *)vec_data(data);
 	int n_atom_pairs = data.size() / sizeof(AtomPair);
 
 	bool handled = true;

@@ -27,6 +27,10 @@
 #include "xlowmem.h"
 #include "emul_op.h"
 #include "macos_util.h"
+#include "usbhid.h"
+#include "usbuim.h"
+#include "name_registry.h"
+#include "macio_escc.h"
 #include "thunks.h"
 #include "prefs.h"
 #if TARGET_OS_IPHONE
@@ -111,6 +115,12 @@ static uint32 FindSyntheticLibSymbol(const char *lib_str, const char *sym_str)
 
 void MacOSUtilReset(void)
 {
+#ifdef ENABLE_USB
+	USBHIDReset();
+	USBUIMReset();
+	USBNodeResetPublish();
+	MacIOESCCReset();
+#endif /* ENABLE_USB */
 	cu_tvect = 0;
 	gsl_tvect = 0;
 	fs_tvect = 0;
