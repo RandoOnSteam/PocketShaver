@@ -2215,6 +2215,27 @@ static bool patch_68k(void)
 	*wp++ = htons(0x4ed1);							// jmp    (a1)
 	*wp = htons(M68K_RTS);							// rts   [spoof: A1 points here -> return A0/D0]
 
+	// Install printing hooks
+	if (check_rom_patch_space(PRINT_PATCH_SPACE, PRINT_PATCH_SIZE)) {
+		static const uint16 print_glue[] = {
+			0x7000, M68K_EMUL_OP_PRGLUE, 0x4a80, 0x6602, M68K_RTS,
+			0x2f00, 0x558f,
+			0x206f, 0x0002, 0x2f28, 0x00aa, 0x486f, 0x0004, 0xa991,
+			0x7004, M68K_EMUL_OP_PRGLUE, 0x4a40, 0x67ea, M68K_RTS
+		};
+		static const uint16 print_callbacks[] = {
+			0x7001, M68K_EMUL_OP_PRGLUE, M68K_RTS,
+			0x7002, M68K_EMUL_OP_PRGLUE, M68K_RTS,
+			0x7003, M68K_EMUL_OP_PRGLUE, M68K_RTS
+		};
+		wp = (uint16 *)(ROMBaseHost + PRGLUE_PATCH_SPACE);
+		for (int i = 0; i < (int)(sizeof(print_glue) / sizeof(print_glue[0])); i++)
+			*wp++ = htons(print_glue[i]);
+		wp = (uint16 *)(ROMBaseHost + PRSTLITEM_PATCH_SPACE);
+		for (int i = 0; i < (int)(sizeof(print_callbacks) / sizeof(print_callbacks[0])); i++)
+			*wp++ = htons(print_callbacks[i]);
+	}
+
 	// Replace .Sony driver
 	sony_offset = find_rom_resource(FOURCC('D','R','V','R'), 4);
 	if (ROMType == ROMTYPE_ZANZIBAR || ROMType == ROMTYPE_NEWWORLD)

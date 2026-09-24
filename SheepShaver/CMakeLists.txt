@@ -139,6 +139,9 @@ set(SS_CORE
 	"${SS_SRC}/thunks.cpp"
 	"${SS_SRC}/serial.cpp"
 	"${SS_SRC}/user_strings.cpp"
+	"${SS_SRC}/printing.cpp"
+	"${B2_SRC}/pictpdf.c"
+	"${B2_SRC}/pdfgen.c"
 	${SS_SHARED}
 	${SS_XPLAT}
 	${SS_SDL}

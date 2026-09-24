@@ -52,6 +52,7 @@ enum {	// Selectors for EMUL_OP opcodes
 	OP_DISPOSE_NIFT_GUARD,
 	OP_GESTALT_VM,			// _Gestalt ($A1AD) head-patch: report VM present to selected apps
 	OP_JOY_OPEN, OP_JOY_CONTROL, OP_JOY_STATUS, OP_JOY_CLOSE, OP_JOY_INTPOLL,
+	OP_PRGLUE,
 	OP_MAX
 };
 const uint16 M68K_EMUL_RETURN = 0xfe40;	// Extended opcodes
@@ -117,6 +118,7 @@ const uint16 M68K_EMUL_OP_JOY_CONTROL = M68K_EMUL_BREAK + OP_JOY_CONTROL;
 const uint16 M68K_EMUL_OP_JOY_STATUS = M68K_EMUL_BREAK + OP_JOY_STATUS;
 const uint16 M68K_EMUL_OP_JOY_CLOSE = M68K_EMUL_BREAK + OP_JOY_CLOSE;
 const uint16 M68K_EMUL_OP_JOY_INTPOLL = M68K_EMUL_BREAK + OP_JOY_INTPOLL;
+const uint16 M68K_EMUL_OP_PRGLUE = M68K_EMUL_BREAK + OP_PRGLUE;
 
 extern "C" void EmulOp(M68kRegisters *r, uint32 pc, int selector);
 

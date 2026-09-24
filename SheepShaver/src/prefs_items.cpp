@@ -33,6 +33,7 @@ prefs_desc common_prefs_items[] = {
 	{"floppy", TYPE_STRING, true,       "device/file name of Mac floppy drive"},
 	{"cdrom", TYPE_STRING, true,        "device/file names of Mac CD-ROM drive"},
 	{"extfs", TYPE_STRING, false,       "root path of ExtFS"},
+	{"printpath", TYPE_STRING, false,   "directory for printed PDF files"},
 	{"scsi0", TYPE_STRING, false,       "SCSI target for Mac SCSI ID 0"},
 	{"scsi1", TYPE_STRING, false,       "SCSI target for Mac SCSI ID 1"},
 	{"scsi2", TYPE_STRING, false,       "SCSI target for Mac SCSI ID 2"},

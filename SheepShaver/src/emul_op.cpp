@@ -38,6 +38,7 @@
 #include "serial.h"
 #include "joymanager.h"
 #include "usbhid.h"
+#include "printing.h"
 #include "usbuim.h"
 #include "clip.h"
 #include "extfs.h"
@@ -389,6 +390,7 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 					USBUIMVBL();
 #endif /* ENABLE_USB */
 					DrainPendingResourceLocks();	// DII fix: lock queued sound-component PEF handles (safe VBL context)
+					PrintInstall();
 
 					static int tick_counter = 0;
 					if (++tick_counter >= 60) {
@@ -581,6 +583,10 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 			} else {
 				r->a[1] = GestaltHookOrig();	// chain to stock _Gestalt (only A1 touched)
 			}
+			break;
+
+		case OP_PRGLUE:
+			PrintGlue(r);
 			break;
 
 		case OP_EXTFS_COMM:			// External file system routines

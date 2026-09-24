@@ -62,4 +62,11 @@ const uint32 DISPOSE_NIFT_PATCH_SPACE = 0x2fcf10;	// 68k thunk (10 bytes), after
 // _Gestalt is entered uncorrupted.
 const uint32 GESTALT_VM_PATCH_SPACE = 0x2fcf20;		// 68k thunk (6 bytes; rts at +4)
 
+const uint32 PRINT_PATCH_SPACE = 0x2fd000;
+const uint32 PRINT_PATCH_SIZE = 0x100;
+const uint32 PRGLUE_PATCH_SPACE = PRINT_PATCH_SPACE;
+const uint32 PRSTLITEM_PATCH_SPACE = PRINT_PATCH_SPACE + 0x40;
+const uint32 PRJOBITEM_PATCH_SPACE = PRINT_PATCH_SPACE + 0x46;
+const uint32 PRFILTER_PATCH_SPACE = PRINT_PATCH_SPACE + 0x4c;
+
 #endif
