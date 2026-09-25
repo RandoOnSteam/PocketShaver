@@ -173,7 +173,7 @@ pc64le|mips|mips64|sparc|sparc64|ia64)")
 	if(ENABLE_VOSF)
 		set(ENABLE_VOSF 1)
 	endif()
-	if(ENABLE_BINCUE AND NOT USE_SDL1)
+	if(ENABLE_BINCUE)
 		set(BINCUE 1)
 	endif()
 
@@ -656,7 +656,7 @@ function(macemu_apply_common EMULATOR_EXECUTABLE)
 		)
 	endif()
 
-	if(ENABLE_BINCUE AND NOT USE_SDL1)
+	if(ENABLE_BINCUE)
 		target_compile_definitions(${EMULATOR_EXECUTABLE} PRIVATE BINCUE)
 	endif()
 

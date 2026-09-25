@@ -259,6 +259,9 @@ void AudioInit(void)
 void close_audio(void)
 {
 #ifdef USE_SDL1
+#if defined(BINCUE)
+	CloseAudio_bincue();
+#endif
 	SDL_CloseAudio();
 	free(audio_mix_buf);
 	audio_mix_buf = NULL;
@@ -443,6 +446,9 @@ static void stream_func(void *arg, uint8 *stream, int stream_len)
 			}
 		}
 	}
+#if defined(BINCUE)
+	MixAudio_bincue(stream, stream_len);
+#endif
 #else
 #if QD3D_AUDIO_LOGGING_ENABLED
 	static int prior_source_count = 0;

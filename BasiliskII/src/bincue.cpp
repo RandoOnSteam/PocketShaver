@@ -180,6 +180,10 @@ typedef struct CDPlayer {
 #if defined(USE_SDL_AUDIO) && !defined(USE_SDL1)
 	SDL_AudioStream *stream;
 #endif
+#if defined(USE_SDL_AUDIO) && defined(USE_SDL1)
+	uint32 resampleposition;
+	int16 previousframe[2];
+#endif
 } CDPlayer;
 
 // Minute,Second,Frame data type
@@ -204,10 +208,6 @@ struct OutputSettings {
 
 static bool have_current_output_settings = false;
 static OutputSettings current_output_settings;
-
-// Audio System Variables
-
-static uint8 silence_byte;
 
 // CD Player state; multiple players supported through list
 
@@ -593,7 +593,7 @@ static bool LoadCueSheet(const char *cuefile, CueSheet *cs)
 	return false;
 }
 
-#if defined(USE_SDL_AUDIO) && !defined(USE_SDL1)
+#ifdef USE_SDL_AUDIO
 	static void OpenPlayerStream(CDPlayer * player);
 	static void ClosePlayerStream(CDPlayer * player);
 #endif
@@ -646,7 +646,7 @@ void *open_bincue(const char *name)
 		if (player->audiofh < 0)
 			player->audio_enabled = false;
 
-#if defined(USE_SDL_AUDIO) && !defined(USE_SDL1)
+#ifdef USE_SDL_AUDIO
 		OpenPlayerStream(player);
 #endif
 
@@ -674,7 +674,7 @@ void close_bincue(void *fh)
 
 		players.remove(player);
 
-#if defined(USE_SDL_AUDIO) && !defined(USE_SDL1)
+#ifdef USE_SDL_AUDIO
 		ClosePlayerStream(player);
 #endif
 		if (player->audiofh >= 0)
@@ -1107,7 +1107,7 @@ static uint8 *fill_buffer(int stream_len, CDPlayer* player)
 		}
 	}
 
-	memset(buf, silence_byte, stream_len);
+	memset(buf, 0, stream_len);
 
 	if (player->audiostatus == CDROM_AUDIO_PLAY) {
 		int remaining_silence = player->silence - player->audioposition;
@@ -1212,7 +1212,7 @@ static uint8 *fill_buffer(int stream_len, CDPlayer* player)
 		} while (player->scanning && offset < stream_len);
 
 		while (offset < stream_len) {
-			buf[offset++] = silence_byte;
+			buf[offset++] = 0;
 			if (available-- > 0){
 				player->audioposition++;
 			}
@@ -1222,12 +1222,13 @@ static uint8 *fill_buffer(int stream_len, CDPlayer* player)
 }
 
 
-#if defined(USE_SDL_AUDIO) && !defined(USE_SDL1)
+#ifdef USE_SDL_AUDIO
 
 bool HaveAudioToMix_bincue() {
 	return currently_playing != NULL;
 }
 
+#ifndef USE_SDL1
 void MixAudio_bincue(uint8 *stream, int dest_stream_len)
 {
 	if (!dest_stream_len) return;
@@ -1320,6 +1321,116 @@ static void ClosePlayerStream(CDPlayer * player)
 		SDL_DestroyAudioStream(player->stream);
 	player->stream = NULL;
 }
+#else /* SDL1 ----------------------------------------------- */
+#define BINCUE_SOURCE_RATE 44100
+#define BINCUE_MIX_FRAMES 1024
+#define BINCUE_MAX_STEP 4
+
+static inline uint8 *WriteCDSample(uint8 *destination, int sample, int format)
+{
+	if (format == AUDIO_U8) {
+		*destination = (uint8)((sample >> 8) + 128);
+		return destination + 1;
+	}
+	if (format == AUDIO_S16MSB) {
+		destination[0] = (uint8)(sample >> 8);
+		destination[1] = (uint8)sample;
+		return destination + 2;
+	}
+	destination[0] = (uint8)sample;
+	destination[1] = (uint8)(sample >> 8);
+	return destination + 2;
+}
+
+static void ResampleCDAudio(CDPlayer *player, const uint8 *source, int sourceframes,
+	uint8 *destination, int destinationframes, uint32 step, const OutputSettings &output)
+{
+	int16 frames[(BINCUE_MIX_FRAMES * BINCUE_MAX_STEP + 2) * 2];
+	uint32 position = player->resampleposition;
+	const int samplecount = sourceframes * 2;
+
+	frames[0] = player->previousframe[0];
+	frames[1] = player->previousframe[1];
+	if (player->cs->big_endian_audio) {
+		for (int index = 0; index < samplecount; index++)
+			frames[index + 2] = (int16)((source[index * 2] << 8) | source[index * 2 + 1]);
+	} else {
+		for (int index = 0; index < samplecount; index++)
+			frames[index + 2] = (int16)((source[index * 2 + 1] << 8) | source[index * 2]);
+	}
+	for (int index = 0; index < destinationframes; index++) {
+		const int16 *first = frames + (position >> 16) * 2;
+		const int weight = (int)((position & 0xffff) >> 1);
+		const int left = first[0] + (((first[2] - first[0]) * weight) >> 15);
+		const int right = first[1] + (((first[3] - first[1]) * weight) >> 15);
+		position += step;
+		if (output.channels == 1)
+			destination = WriteCDSample(destination, (left + right) >> 1, output.format);
+		else {
+			destination = WriteCDSample(destination, left, output.format);
+			destination = WriteCDSample(destination, right, output.format);
+		}
+	}
+	player->previousframe[0] = frames[samplecount];
+	player->previousframe[1] = frames[samplecount + 1];
+	player->resampleposition = position - ((uint32)sourceframes << 16);
+}
+
+void MixAudio_bincue(uint8 *stream, int dest_stream_len)
+{
+	uint8 mixbuffer[BINCUE_MIX_FRAMES * 4];
+	CDPlayer *player;
+	int framebytes;
+	int remaining;
+	int volume;
+	uint32 step;
+
+	if (currently_playing == NULL)
+		return;
+	LOCK_PLAYER;
+	player = currently_playing;
+	const OutputSettings &output = current_output_settings;
+	framebytes = output.channels;
+	if (output.format != AUDIO_U8)
+		framebytes *= 2;
+	step = (uint32)(((uint64)BINCUE_SOURCE_RATE << 16) / output.freq);
+	volume = player->volume_mono;
+	if (player->scanning)
+		volume = volume * 3 / 5;
+	remaining = dest_stream_len / framebytes;
+	while (player->audiostatus == CDROM_AUDIO_PLAY && remaining > 0) {
+		int frames = remaining;
+		int sourceframes;
+		uint8 *source;
+		if (frames > BINCUE_MIX_FRAMES)
+			frames = BINCUE_MIX_FRAMES;
+		sourceframes = (int)((player->resampleposition + (uint32)frames * step) >> 16);
+		source = fill_buffer(sourceframes * 4, player);
+		if (source == NULL)
+			break;
+		ResampleCDAudio(player, source, sourceframes, mixbuffer, frames, step, output);
+		SDL_MixAudio(stream, mixbuffer, frames * framebytes, volume);
+		stream += frames * framebytes;
+		remaining -= frames;
+	}
+	UNLOCK_PLAYER;
+}
+
+static void OpenPlayerStream(CDPlayer * player)
+{
+	player->resampleposition = 0;
+	player->previousframe[0] = 0;
+	player->previousframe[1] = 0;
+	if (player->audiofh < 0 || !have_current_output_settings)
+		return;
+	player->volume_left = player->volume_right = player->volume_mono = current_output_settings.default_cd_player_volume;
+	player->audio_enabled = true;
+}
+
+static void ClosePlayerStream(CDPlayer * player)
+{
+}
+#endif /* End SDL1 */
 
 void OpenAudio_bincue(int freq, int format, int channels, uint8 silence, int volume)
 {
@@ -1338,9 +1449,6 @@ void OpenAudio_bincue(int freq, int format, int channels, uint8 silence, int vol
 		current_output_settings.freq, current_output_settings.format,
 		current_output_settings.channels, current_output_settings.default_cd_player_volume));
 #endif
-	// setup silence at init
-	silence_byte = silence;
-
 	// init players for these settings
 	for (std::list<CDPlayer*>::iterator it = players.begin(); it != players.end(); ++it)
 	{
