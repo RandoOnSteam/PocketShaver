@@ -564,7 +564,7 @@ void *Sys_open(const char *path_name, bool read_only, bool is_cdrom)
 		HANDLE h = CreateFile(
 			name,
 			read_only ? GENERIC_READ : GENERIC_READ | GENERIC_WRITE,
-			0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+			FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 
 		if (h == INVALID_HANDLE_VALUE && !read_only) {
 			// Read-write failed, try read-only
@@ -572,7 +572,7 @@ void *Sys_open(const char *path_name, bool read_only, bool is_cdrom)
 			h = CreateFile(
 				name,
 				GENERIC_READ,
-				0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+				FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 		}
 
 		if (h != INVALID_HANDLE_VALUE) {

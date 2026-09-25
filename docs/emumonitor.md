@@ -41,10 +41,12 @@ Guest coordinates are Mac framebuffer pixels.
 
 | Command | Effect |
 | --- | --- |
-| `ping` | Identify the monitor and port |
+| `ping` | Identify the monitor, port, and emulator process id |
 | `help` | Return the command list |
 | `status` | Return guest width, height, and bit depth, plus the host window size |
 | `extfs` | Return the host folder shown in the guest as the extfs volume |
+| `disks` | Return the extfs volume name and the absolute path of every `disk` preference |
+| `quit` | Inject the hotkey + Esc combination, the emulator's emergency quit, which exits without asking the guest |
 | `shot PATH` | Save the guest framebuffer, read straight from guest memory so it also works with gfxaccel; `.png` paths are saved as PNG, anything else as BMP |
 | `mouse X Y` | Send an absolute or relative ADB mouse movement, following the active mouse mode |
 | `mousedown BUTTON` | Press ADB mouse button 0, 1, or 2 |
@@ -92,4 +94,40 @@ Remote sources are fetched with `scp` first.
 Retro68 writes the MacBinary file as `NAME.bin` next to the `.APPL`.
 If the Finder already has the folder open, close and reopen the window to see a new file.
 Quit the program in the guest before deploying it again, because an open file cannot be replaced.
+
+## Quitting the emulator
+
+```text
+emumonitor quit
+emumonitor quit 10000
+```
+
+The native client's `quit` gets the emulator's process id with `ping`, sends the monitor `quit`, and waits up to the timeout (5000 ms by default) for the process to exit.
+If it is still running, or the monitor stops answering, the client ends it with `TerminateProcess` on Windows or `SIGKILL` elsewhere.
+If the monitor does not answer `ping` within 2 seconds, the emulator is treated as hung: the client finds the process that owns the monitor's listening port and kills it right away. On Windows it loads `GetExtendedTcpTable` (XP SP2 and later) or `AllocateAndGetTcpExTableFromStack` (XP) from `iphlpapi.dll` at run time; older Windows has neither, so there only the monitor `quit` and the timed kill of a known pid are available. On Linux `/proc/net/tcp` and each process's socket descriptors, and on macOS `libproc`.
+It prints `"method":"quit"` or `"method":"kill"` to show which one worked.
+A killed emulator does not flush its disk images, so the guest may check its disks on the next boot.
+With a remote `--host` only the monitor `quit` is sent, since the process cannot be ended from another machine.
+
+## Reading guest files
+
+The native client can also search and read the guest's disks from the host:
+
+```text
+emumonitor find pdcmac
+emumonitor find "*.c" "bvol:PDCursesMod:mac"
+emumonitor cat "bvol:PDCursesMod:mac:pdcmac.h"
+emumonitor fetch "MacOS9:System Folder:Finder" Finder.bin
+```
+
+All three ask the running emulator with `disks`, which returns the extfs volume name and the absolute path of every `disk` preference.
+They then read the HFS and HFS+ disk images directly, including images with an Apple partition map, embedded HFS+ wrappers, and DiskCopy 4.2 headers, plus the extfs folder.
+Nothing runs in the emulator, so it is not slowed down; on Windows the emulator opens disk images with read sharing so the client can read them while they are mounted.
+
+- `find PATTERN [VOLUME:FOLDER]` matches file and folder names case-insensitively. `*` and `?` are wildcards; a pattern without them matches anywhere in the name. Each match is printed as a full Mac path, and files add the type, creator, data fork size, and resource fork size, separated by tabs. Folders end in `:`. The exit code is 1 when nothing matches.
+- `cat VOLUME:PATH` prints the data fork as text, turning carriage returns into line feeds and MacRoman into UTF-8.
+- `fetch VOLUME:PATH [FILE.bin]` saves both forks and the Finder info as a MacBinary II file, the same format `deploy` reads. Without a file name it writes `NAME.bin` in the current folder.
+
+Paths use `:` between names and start with the volume name, as the Finder shows it.
+The guest caches disk writes, so a file saved moments ago can read as stale or partly written until Mac OS flushes the volume.
 

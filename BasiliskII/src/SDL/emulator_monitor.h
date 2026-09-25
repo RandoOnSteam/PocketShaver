@@ -25,6 +25,7 @@
 #include "atomic.h"
 #include "adb.h"
 #include "prefs.h"
+#include "user_strings.h"
 #include <vector>
 
 #ifdef _WIN32
@@ -57,6 +58,7 @@
 #define EMULATOR_MONITOR_HOSTMOUSEUP 12
 #define EMULATOR_MONITOR_HOTKEYFULLSCREEN 13
 #define EMULATOR_MONITOR_HOTKEYGRAB 14
+#define EMULATOR_MONITOR_HOTKEYQUIT 15
 #define EMULATOR_MONITOR_PORT 19840
 #define EMULATOR_MONITOR_PRESS_MS 60
 #define EMULATOR_MONITOR_SETTLE_MS 50
@@ -106,6 +108,7 @@ public:
 		  cancelrequested(0), eventtype((Uint32)-1), windowsocketsready(false),
 		  hostmousex(0), hostmousey(0), hostbuttons(0)
 	{
+		extfsname[0] = 0;
 	}
 
 	~EmulatorMonitor()
@@ -116,7 +119,13 @@ public:
 	bool Start()
 	{
 		struct sockaddr_in address;
+		const char *volumename;
 		int enabled;
+
+		volumename = GetString(STR_EXTFS_VOLUME_NAME);
+		if (volumename == NULL)
+			volumename = "";
+		snprintf(extfsname, sizeof(extfsname), "%s", volumename);
 
 #if SDL_VERSION_ATLEAST(2, 0, 0)
 		eventtype = SDL_RegisterEvents(1);
@@ -261,6 +270,13 @@ public:
 				PushHotkey(view, SDLK_F5, 0, request);
 #endif
 				break;
+			case EMULATOR_MONITOR_HOTKEYQUIT:
+#if SDL_VERSION_ATLEAST(2, 0, 0)
+				PushHotkey(view, SDLK_ESCAPE, SDL_SCANCODE_ESCAPE, request);
+#else
+				PushHotkey(view, SDLK_ESCAPE, 0, request);
+#endif
+				break;
 			default:
 				SetError(request, "unknown operation");
 				break;
@@ -308,7 +324,7 @@ private:
 	void Serve(EmulatorMonitorSocket clientsocket)
 	{
 		char command[1024];
-		char response[1024];
+		char response[4096];
 		int received;
 		int sendflags;
 		int used;
@@ -348,24 +364,33 @@ private:
 		const char *text;
 
 		if (strcmp(command, "ping") == 0) {
+#ifdef _WIN32
+			unsigned long processid = (unsigned long)GetCurrentProcessId();
+#else
+			unsigned long processid = (unsigned long)getpid();
+#endif
 #ifdef SHEEPSHAVER
 			snprintf(response, responsesize,
-				"{\"ok\":true,\"monitor\":\"PocketShaver\",\"port\":%d}",
-				EMULATOR_MONITOR_PORT);
+				"{\"ok\":true,\"monitor\":\"PocketShaver\",\"port\":%d,\"pid\":%lu}",
+				EMULATOR_MONITOR_PORT, processid);
 #else
 			snprintf(response, responsesize,
-				"{\"ok\":true,\"monitor\":\"BasiliskII\",\"port\":%d}",
-				EMULATOR_MONITOR_PORT);
+				"{\"ok\":true,\"monitor\":\"BasiliskII\",\"port\":%d,\"pid\":%lu}",
+				EMULATOR_MONITOR_PORT, processid);
 #endif
 			return;
 		}
 		if (strcmp(command, "help") == 0) {
 			snprintf(response, responsesize,
-				"{\"ok\":true,\"commands\":[\"ping\",\"status\",\"extfs\",\"shot PATH\",\"mouse X Y\",\"mousedown BUTTON\",\"mouseup BUTTON\",\"click X Y [BUTTON]\",\"dblclick X Y [BUTTON]\",\"drag X1 Y1 X2 Y2 [BUTTON [HOLDMS]]\",\"hold X Y MS [BUTTON]\",\"key down CODE\",\"key up CODE\",\"key tap CODE\",\"type TEXT\",\"power\",\"host shot PATH\",\"host mouse X Y\",\"host mousedown BUTTON\",\"host mouseup BUTTON\",\"host click X Y [BUTTON]\",\"hotkey fullscreen\",\"hotkey grab\"]}");
+				"{\"ok\":true,\"commands\":[\"ping\",\"status\",\"extfs\",\"disks\",\"shot PATH\",\"mouse X Y\",\"mousedown BUTTON\",\"mouseup BUTTON\",\"click X Y [BUTTON]\",\"dblclick X Y [BUTTON]\",\"drag X1 Y1 X2 Y2 [BUTTON [HOLDMS]]\",\"hold X Y MS [BUTTON]\",\"key down CODE\",\"key up CODE\",\"key tap CODE\",\"type TEXT\",\"power\",\"host shot PATH\",\"host mouse X Y\",\"host mousedown BUTTON\",\"host mouseup BUTTON\",\"host click X Y [BUTTON]\",\"hotkey fullscreen\",\"hotkey grab\",\"quit\"]}");
 			return;
 		}
 		if (strcmp(command, "extfs") == 0) {
 			WriteExtFSRoot(response, responsesize);
+			return;
+		}
+		if (strcmp(command, "disks") == 0) {
+			WriteDisks(extfsname, response, responsesize);
 			return;
 		}
 		if (strcmp(command, "status") == 0) {
@@ -409,6 +434,10 @@ private:
 		}
 		if (strcmp(command, "hotkey fullscreen") == 0) {
 			Dispatch(EMULATOR_MONITOR_HOTKEYFULLSCREEN, 0, 0, NULL, response, responsesize);
+			return;
+		}
+		if (strcmp(command, "quit") == 0) {
+			Dispatch(EMULATOR_MONITOR_HOTKEYQUIT, 0, 0, NULL, response, responsesize);
 			return;
 		}
 		if (strcmp(command, "hotkey grab") == 0) {
@@ -1229,6 +1258,37 @@ private:
 		snprintf(response, responsesize, "{\"ok\":true,\"path\":\"%s\"}", escaped);
 	}
 
+	static void WriteDisks(const char *volumename, char *response, size_t responsesize)
+	{
+		char escaped[1024];
+		char fullpath[1024];
+		const char *diskpath;
+		size_t used;
+		int index;
+
+		Escape(volumename, escaped, sizeof(escaped));
+		used = (size_t)snprintf(response, responsesize,
+			"{\"ok\":true,\"extfsname\":\"%s\",\"disks\":[", escaped);
+		for (index = 0; (diskpath = PrefsFindString("disk", index)) != NULL; index++) {
+			if (diskpath[0] == '*')
+				diskpath++;
+#ifdef _WIN32
+			if (_fullpath(fullpath, diskpath, sizeof(fullpath)) == NULL)
+#else
+			if (realpath(diskpath, fullpath) == NULL)
+#endif
+				snprintf(fullpath, sizeof(fullpath), "%s", diskpath);
+			Escape(fullpath, escaped, sizeof(escaped));
+			if (used + strlen(escaped) + 8 >= responsesize)
+				break;
+			if (index > 0)
+				response[used++] = ',';
+			used += (size_t)snprintf(response + used, responsesize - used,
+				"\"%s\"", escaped);
+		}
+		snprintf(response + used, responsesize - used, "]}");
+	}
+
 	static void WriteError(char *response, size_t responsesize, const char *message)
 	{
 		char escaped[512];
@@ -1286,6 +1346,7 @@ private:
 	int hostmousex;
 	int hostmousey;
 	int hostbuttons;
+	char extfsname[256];
 };
 
 #endif
