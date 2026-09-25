@@ -68,6 +68,16 @@
 #include "video_defs.h"
 #include "video_blit.h"
 #include "vm_alloc.h"
+#if defined(ENABLE_GFXACCEL) && defined(SHEEPSHAVER)
+#define SDL1_GFXACCEL 1
+#include "metal_compositor.h"
+#include "display_mode_controller.h"
+#include "gfxaccel_resources.h"
+#include "nqd_accel.h"
+#endif
+#include "SDL_syswm.h"
+
+void video_get_host_window_size(int *width, int *height);
 
 #define DEBUG 0
 #include "debug.h"
@@ -207,8 +217,33 @@ extern void SysMountFirstFloppy(void);
  *  Framebuffer allocation routines
  */
 
+#ifdef SDL1_GFXACCEL
+#define FRAMEBUFFER_APERTURE_SIZE (80 * 1024 * 1024)
+
+static void *FramebufferAperture(bool allocate)
+{
+	static void *aperture = VM_MAP_FAILED;
+	if (allocate && aperture == VM_MAP_FAILED)
+		aperture = vm_acquire(FRAMEBUFFER_APERTURE_SIZE, VM_MAP_DEFAULT | VM_MAP_32BIT);
+	return aperture;
+}
+#endif
+
+static bool HostPresentationSuspended(void)
+{
+#ifdef SDL1_GFXACCEL
+	return MetalCompositorIsInitialized() != 0;
+#else
+	return false;
+#endif
+}
+
 static void *vm_acquire_framebuffer(uint32 size)
 {
+#ifdef SDL1_GFXACCEL
+	if (size <= FRAMEBUFFER_APERTURE_SIZE && FramebufferAperture(true) != VM_MAP_FAILED)
+		return FramebufferAperture(false);
+#endif
 	// always try to reallocate framebuffer at the same address
 	static void *fb = VM_MAP_FAILED;
 	if (fb != VM_MAP_FAILED) {
@@ -226,6 +261,10 @@ static void *vm_acquire_framebuffer(uint32 size)
 
 static inline void vm_release_framebuffer(void *fb, uint32 size)
 {
+#ifdef SDL1_GFXACCEL
+	if (fb == FramebufferAperture(false))
+		return;
+#endif
 	vm_release(fb, size);
 }
 
@@ -279,10 +318,21 @@ static LRESULT CALLBACK windows_message_handler(HWND hwnd, UINT msg, WPARAM wPar
 		}
 		return 0;
 
-	default:
-		if (sdl_window_proc)
-			return CallWindowProc(sdl_window_proc, hwnd, msg, wParam, lParam);
+	case WM_ERASEBKGND:
+		if (HostPresentationSuspended())
+			return 1;
+		break;
+
+	case WM_PAINT:
+		if (HostPresentationSuspended()) {
+			ValidateRect(hwnd, NULL);
+			return 0;
+		}
+		break;
 	}
+
+	if (sdl_window_proc)
+		return CallWindowProc(sdl_window_proc, hwnd, msg, wParam, lParam);
 
 	return DefWindowProc(hwnd, msg, wParam, lParam);
 }
@@ -710,6 +760,10 @@ public:
 	void ungrab_mouse(void);
 
 	void SetupScaling(void);
+#ifdef SDL1_GFXACCEL
+	void InitGfxAccel(void);
+	void UploadStartupPalette(void);
+#endif
 	void PresentScaled(int left, int top, int width, int height, SDL_Rect *destination);
 	void HostToGuest(int &x, int &y);
 	void GuestToHost(int &x, int &y);
@@ -753,6 +807,8 @@ static driver_base *drv = NULL;	// Pointer to currently used driver object
 void update_sdl_video(SDL_Surface *screen, Sint32 x, Sint32 y, Sint32 w, Sint32 h)
 {
 	SDL_Rect destination;
+	if (HostPresentationSuspended())
+		return;
 	if (!drv->scaling) {
 		SDL_UpdateRect(screen, x, y, w, h);
 		return;
@@ -766,6 +822,8 @@ void update_sdl_video(SDL_Surface *screen, Sint32 x, Sint32 y, Sint32 w, Sint32 
 void update_sdl_video(SDL_Surface *screen, int numrects, SDL_Rect *rects)
 {
 	SDL_Rect *destinations;
+	if (HostPresentationSuspended())
+		return;
 	if (!drv->scaling) {
 		SDL_UpdateRects(screen, numrects, rects);
 		return;
@@ -901,7 +959,8 @@ void driver_base::SetupScaling(void)
 	BuildScaleMap(columnfirst, columnsecond, columnweight, guestwidth, viewwidth, nearestscaling);
 	BuildScaleMap(rowfirst, rowsecond, rowweight, guestheight, viewheight, nearestscaling);
 	SDL_FillRect(hostsurface, NULL, SDL_MapRGB(hostsurface->format, 0, 0, 0));
-	SDL_UpdateRect(hostsurface, 0, 0, 0, 0);
+	if (!HostPresentationSuspended())
+		SDL_UpdateRect(hostsurface, 0, 0, 0, 0);
 }
 
 void driver_base::PresentScaled(int left, int top, int width, int height, SDL_Rect *destination)
@@ -1023,6 +1082,83 @@ SDL_Cursor *driver_base::CreateMagnifiedCursor(bool usehotspot)
 }
 #endif
 
+#ifdef SDL1_GFXACCEL
+static void DMCModeDescFromVModesIndex(int index, DMCModeDesc *description)
+{
+	description->width = (uint32_t)VModes[index].viXsize;
+	description->height = (uint32_t)VModes[index].viYsize;
+	switch ((int)VModes[index].viAppleMode) {
+	case VIDEO_DEPTH_1BIT:
+		description->depth = 1;
+		break;
+	case VIDEO_DEPTH_2BIT:
+		description->depth = 2;
+		break;
+	case VIDEO_DEPTH_4BIT:
+		description->depth = 4;
+		break;
+	case VIDEO_DEPTH_16BIT:
+		description->depth = 16;
+		break;
+	case VIDEO_DEPTH_32BIT:
+		description->depth = 32;
+		break;
+	default:
+		description->depth = 8;
+		break;
+	}
+	description->row_bytes = (uint32_t)VModes[index].viRowBytes;
+	description->pitch = description->row_bytes;
+	description->vbl_usec = 0;
+	description->screen_base_mac = 0;
+	description->screen_base_host = NULL;
+}
+
+void driver_base::InitGfxAccel(void)
+{
+	int pitch = VIDEO_MODE_X;
+	int result;
+	if (VIDEO_MODE_DEPTH == VIDEO_DEPTH_16BIT)
+		pitch <<= 1;
+	else if (VIDEO_MODE_DEPTH == VIDEO_DEPTH_32BIT)
+		pitch <<= 2;
+	if (dmc_current_snapshot() == NULL) {
+		DMCModeDesc initial;
+		DMCModeDescFromVModesIndex(cur_mode, &initial);
+		initial.screen_base_mac = screen_base;
+		if (screen_base != 0)
+			initial.screen_base_host = Mac2HostAddr(screen_base);
+		result = dmc_create(&initial);
+		if (result != kDMCNoErr)
+			fprintf(stderr, "[DMC] dmc_create FAILED (err=%d)\n", result);
+	}
+	if (MetalCompositorIsInitialized()) {
+		result = MetalCompositorResize(VIDEO_MODE_X, VIDEO_MODE_Y, VIDEO_MODE_DEPTH,
+			VIDEO_MODE_ROW_BYTES, pitch, the_buffer, the_buffer_size);
+		if (result != 0)
+			fprintf(stderr, "[metal_compositor] resize FAILED (err=%d)\n", result);
+		return;
+	}
+	result = MetalCompositorInit(VIDEO_MODE_X, VIDEO_MODE_Y, VIDEO_MODE_DEPTH,
+		VIDEO_MODE_ROW_BYTES, pitch, the_buffer, the_buffer_size);
+	if (result != 0) {
+		fprintf(stderr, "[metal_compositor] init FAILED (err=%d)\n", result);
+		MetalCompositorShutdown();
+		return;
+	}
+	result = gfxaccel_resources_init();
+	if (result != 0)
+		fprintf(stderr, "[gfxaccel_resources] init FAILED (err=%d)\n", result);
+}
+
+void driver_base::UploadStartupPalette(void)
+{
+	uint8 blackandwhite[6] = {255, 255, 255, 0, 0, 0};
+	MetalCompositorUpdatePalette(blackandwhite, 2);
+	dmc_record_palette_change();
+}
+#endif
+
 void driver_base::init()
 {
 	set_video_mode(display_type == DISPLAY_SCREEN ? SDL_FULLSCREEN : 0);
@@ -1064,8 +1200,15 @@ void driver_base::init()
 
 	// Set frame buffer base
 	set_mac_frame_buffer(monitor, VIDEO_MODE_DEPTH);
+#ifdef SDL1_GFXACCEL
+	memset(the_buffer, 0, the_buffer_size);
+	InitGfxAccel();
+#endif
 
 	adapt_to_video_mode();
+#ifdef SDL1_GFXACCEL
+	UploadStartupPalette();
+#endif
 #ifdef SHEEPSHAVER
 	if (PrefsFindBool("init_grab") && !video_can_change_cursor())
 		grab_mouse();
@@ -1486,8 +1629,14 @@ bool VideoInit(bool classic)
 			for (int i = 0; video_modes[i].w != 0; i++) {
 				const int w = video_modes[i].w;
 				const int h = video_modes[i].h;
+#ifdef SDL1_GFXACCEL
+				if (i > 0 && ((w == default_width && h == default_height) ||
+				              w > sdl_display_width() || h > sdl_display_height()))
+					continue;
+#else
 				if (i > 0 && (w >= default_width || h >= default_height))
 					continue;
+#endif
 				for (int d = VIDEO_DEPTH_1BIT; d <= default_depth; d++)
 					add_mode(display_type, w, h, video_modes[i].resolution_id, TrivialBytesPerRow(w, (video_depth)d), d);
 			}
@@ -1612,6 +1761,12 @@ void SDL_monitor_desc::video_close(void)
 
 void VideoExit(void)
 {
+#ifdef SDL1_GFXACCEL
+	if (nqd_metal_available)
+		NQDMetalCleanup();
+	gfxaccel_resources_shutdown();
+	MetalCompositorShutdown();
+#endif
 	// Close displays
 	vector<monitor_desc *>::iterator i, end = VideoMonitors.end();
 	for (i = VideoMonitors.begin(); i != end; ++i) {
@@ -1722,6 +1877,13 @@ void VideoVBL(void)
 	    mouse_grabbed_window_name_status = mouse_grabbed;
 	}
 
+#ifdef SDL1_GFXACCEL
+	if (nqd_metal_available)
+		NQDMetalFlush();
+	if (MetalCompositorIsInitialized())
+		MetalCompositorPresent();
+#endif
+
 	// Temporarily give up frame buffer lock (this is the point where
 	// we are suspended when the user presses Ctrl-Tab)
 	UNLOCK_FRAME_BUFFER;
@@ -1782,6 +1944,10 @@ void SDL_monitor_desc::set_palette(uint8 *pal, int num_in)
 {
 	const VIDEO_MODE &mode = get_current_mode();
 
+#ifdef SDL1_GFXACCEL
+	MetalCompositorUpdatePalette(pal, num_in);
+	dmc_record_palette_change();
+#endif
 	if ((int)VIDEO_MODE_DEPTH > VIDEO_DEPTH_8BIT) {
 		set_gamma(pal, num_in);
 		return;
@@ -1887,38 +2053,82 @@ void SDL_monitor_desc::ApplyGammaRamp(void)
  */
 
 #ifdef SHEEPSHAVER
+static void ResumeAfterModeSwitch(void)
+{
+	thread_stop_req = false;
+	EnableInterrupt();
+	video_screen_publish_cm_resume();
+}
+
+static int16 SwitchToModeIndex(int modeindex)
+{
+	const int previousmode = cur_mode;
+#ifdef SDL1_GFXACCEL
+	DMCModeDesc requestedmode;
+	DMCModeDesc boundmode;
+#endif
+	video_screen_publish_cm_suspend();
+	DisableInterrupt();
+	thread_stop_ack = false;
+	thread_stop_req = true;
+	while (!thread_stop_ack) ;
+#ifdef SDL1_GFXACCEL
+	DMCModeDescFromVModesIndex(modeindex, &requestedmode);
+	if (dmc_prepare_mode_switch(&requestedmode) != kDMCNoErr) {
+		ResumeAfterModeSwitch();
+		return paramErr;
+	}
+#endif
+	cur_mode = modeindex;
+	VideoMonitors[0]->switch_to_current_mode();
+#ifdef SDL1_GFXACCEL
+	DMCModeDescFromVModesIndex(cur_mode, &boundmode);
+	boundmode.screen_base_mac = screen_base;
+	if (screen_base != 0)
+		boundmode.screen_base_host = Mac2HostAddr(screen_base);
+	if (boundmode.screen_base_host == NULL) {
+		cur_mode = previousmode;
+		VideoMonitors[0]->switch_to_current_mode();
+		dmc_cancel_prepared_mode_switch();
+		ResumeAfterModeSwitch();
+		return paramErr;
+	}
+	if (dmc_request_mode_switch(&boundmode) != kDMCNoErr) {
+		cur_mode = previousmode;
+		VideoMonitors[0]->switch_to_current_mode();
+		ResumeAfterModeSwitch();
+		return paramErr;
+	}
+#endif
+	(void)previousmode;
+	ResumeAfterModeSwitch();
+	return noErr;
+}
+
 int16 video_mode_change(VidLocals *csSave, uint32 ParamPtr)
 {
-	/* return if no mode change */
+	uint16 requestedmode = ReadMacInt16(ParamPtr + csMode);
+	uint32 absolutemode = video_abs_depth_from_rel(requestedmode);
+	if (absolutemode != 0)
+		requestedmode = (uint16)absolutemode;
+
 	if ((csSave->saveData == ReadMacInt32(ParamPtr + csData)) &&
-	    (csSave->saveMode == ReadMacInt16(ParamPtr + csMode))) return noErr;
+	    (csSave->saveMode == requestedmode))
+		return noErr;
 
-	/* first find video mode in table */
-	for (int i=0; VModes[i].viType != DIS_INVALID; i++) {
-		if ((ReadMacInt16(ParamPtr + csMode) == VModes[i].viAppleMode) &&
-		    (ReadMacInt32(ParamPtr + csData) == VModes[i].viAppleID)) {
-			csSave->saveMode = ReadMacInt16(ParamPtr + csMode);
-			csSave->saveData = ReadMacInt32(ParamPtr + csData);
-			csSave->savePage = ReadMacInt16(ParamPtr + csPage);
-
-			// Disable interrupts and pause redraw thread
-			DisableInterrupt();
-			thread_stop_ack = false;
-			thread_stop_req = true;
-			while (!thread_stop_ack) ;
-
-			cur_mode = i;
-			monitor_desc *monitor = VideoMonitors[0];
-			monitor->switch_to_current_mode();
-
+	for (int i = 0; VModes[i].viType != DIS_INVALID; i++) {
+		if (requestedmode == VModes[i].viAppleMode &&
+		    ReadMacInt32(ParamPtr + csData) == VModes[i].viAppleID) {
+			if (i != cur_mode) {
+				int16 result = SwitchToModeIndex(i);
+				if (result != noErr)
+					return result;
+			}
 			WriteMacInt32(ParamPtr + csBaseAddr, screen_base);
-			csSave->saveBaseAddr=screen_base;
-			csSave->saveData=VModes[cur_mode].viAppleID;/* First mode ... */
-			csSave->saveMode=VModes[cur_mode].viAppleMode;
-
-			// Enable interrupts and resume redraw thread
-			thread_stop_req = false;
-			EnableInterrupt();
+			csSave->saveBaseAddr = screen_base;
+			csSave->saveData = VModes[i].viAppleID;
+			csSave->saveMode = VModes[i].viAppleMode;
+			csSave->savePage = ReadMacInt16(ParamPtr + csPage);
 			return noErr;
 		}
 	}
@@ -2239,7 +2449,10 @@ static void handle_events(void)
 					EmulatorMonitorView monitorview;
 					monitorview.guestsurface = drv->s;
 					monitorview.hostsurface = drv->hostsurface;
+					if (HostPresentationSuspended())
+						monitorview.hostsurface = NULL;
 					monitorview.window = NULL;
+					video_get_host_window_size(&monitorview.hostwidth, &monitorview.hostheight);
 					monitorview.width = drv->VIDEO_MODE_X;
 					monitorview.height = drv->VIDEO_MODE_Y;
 					monitorview.depth = 1 << (drv->VIDEO_MODE_DEPTH & 0x0f);
@@ -2389,6 +2602,8 @@ static void handle_events(void)
 // Static display update (fixed frame rate, but incremental)
 static void update_display_static(driver_base *drv)
 {
+	if (HostPresentationSuspended())
+		return;
 	// Incremental update code
 	int wide = 0, high = 0;
 	uint32 x1, x2, y1, y2;
@@ -2538,6 +2753,8 @@ static void update_display_static(driver_base *drv)
 // XXX use NQD bounding boxes to help detect dirty areas?
 static void update_display_static_bbox(driver_base *drv)
 {
+	if (HostPresentationSuspended())
+		return;
 	const VIDEO_MODE &mode = drv->mode;
 
 	// Allocate bounding boxes for SDL_UpdateRects()
@@ -2810,6 +3027,31 @@ void video_set_dirty_area(int x, int y, int w, int h)
 	// XXX handle dirty bounding boxes for non-VOSF modes
 }
 #endif
+
+void *video_get_native_window(void)
+{
+	SDL_SysWMinfo windowinfo;
+	SDL_VERSION(&windowinfo.version);
+	if (SDL_GetWMInfo(&windowinfo) <= 0)
+		return NULL;
+#if defined(WIN32)
+	return (void *)windowinfo.window;
+#elif defined(SDL_VIDEO_DRIVER_X11)
+	return (void *)(uintptr)windowinfo.info.x11.window;
+#else
+	return NULL;
+#endif
+}
+
+void video_get_host_window_size(int *width, int *height)
+{
+	*width = 0;
+	*height = 0;
+	if (drv != NULL && drv->hostsurface != NULL) {
+		*width = drv->hostsurface->w;
+		*height = drv->hostsurface->h;
+	}
+}
 
 #ifdef SHEEPSHAVER
 void video_set_gamma(int n_colors)

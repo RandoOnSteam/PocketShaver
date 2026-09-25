@@ -2838,6 +2838,10 @@ static void handle_events(void)
 					monitorview.guestsurface = guest_surface;
 					monitorview.hostsurface = NULL;
 					monitorview.window = sdl_window;
+					monitorview.hostwidth = 0;
+					monitorview.hostheight = 0;
+					if (sdl_window != NULL)
+						SDL_GetWindowSize(sdl_window, &monitorview.hostwidth, &monitorview.hostheight);
 					monitorview.width = drv->VIDEO_MODE_X;
 					monitorview.height = drv->VIDEO_MODE_Y;
 					monitorview.depth = 1 << (drv->VIDEO_MODE_DEPTH & 0x0f);

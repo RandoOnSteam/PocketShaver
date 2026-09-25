@@ -54,6 +54,14 @@
 #define COMPOSITOR_LOG(...) GFX_DEBUG_EMIT("[compositor] ", __VA_ARGS__)
 #define COMPOSITOR_ERR(...) GFX_DEBUG_EMIT("[compositor ERROR] ", __VA_ARGS__)
 
+#if defined(USE_SDL1)
+#include "glcontext.h"
+extern void *video_get_native_window(void);
+extern void video_get_host_window_size(int *width, int *height);
+#define GL_HOST_WINDOW video_get_native_window()
+static GLCONTEXT s_gl_ctx;
+static bool s_gl_ctx_created = false;
+#else
 #if SDL_MAJOR_VERSION >= 3
 	#undef SDL_GL_DeleteContext
 	#undef SDL_GL_GetDrawableSize
@@ -63,10 +71,11 @@
 #else
 	#define SDL_GL_MakeCurrentFAILURE -1
 #endif
-
 extern SDL_Window *sdl_window;
-SDL_Window *gl_device_sdl_window = NULL;
+#define GL_HOST_WINDOW ((void *)sdl_window)
 static SDL_GLContext s_gl_ctx = NULL;
+#endif
+static void *s_gl_device_window = NULL;
 static bool s_ready = false;
 /* Opaque sentinels so code that null-checks SharedMetalDevice() still works. */
 static char s_device_sentinel = 1;
@@ -107,19 +116,91 @@ static uint64_t s_screen_submit_count = 0;
 static uint64_t s_present_count = 0;
 #endif
 
-bool GLCompositorDeviceInit(void)
-{ /* Should ONLY be called by MetalCompositorInit or otherwise
-	the backing variables will not be recreated correctly and it will
-	white screen */
-	QD3D_INIT_LOG("GLCompositorDeviceInit: ready=%d context=%p window=%p",
-				  s_ready, s_gl_ctx, (void *)sdl_window);
+#if defined(USE_SDL1)
+static bool HostGLHasContext(void)
+{
+	return s_gl_ctx_created;
+}
 
-	if (!sdl_window) {
-		QD3D_INIT_LOG("GLCompositorDeviceInit: FAILED because SDL window is null");
-		fprintf(stderr, "[gfxaccel-gl] GLCompositorDeviceInit: sdl_window is NULL\n");
-		return false;
-	}
+static bool HostGLCreateContext(void *window)
+{
+	GLPIXELATTRIBUTES pixelattributes;
+	GLCONTEXTATTRIBUTES contextattributes;
+	GLPixelAttributes_Create(&pixelattributes);
+	GLPixelAttributes_PlatformDefaults(&pixelattributes);
+	GLPixelAttributes_RGBA(&pixelattributes);
+	GLPixelAttributes_DoubleBuffer(&pixelattributes);
+	GLPixelAttributes_Depth(&pixelattributes, 24);
+	GLPixelAttributes_Stencil(&pixelattributes, 8);
+	GLPixelAttributes_EndList(&pixelattributes);
+	GLContextAttributes_Create(&contextattributes);
+	GLContextAttributes_PlatformDefaults(&contextattributes);
+	GLContextAttributes_MajorVersion(&contextattributes, 2);
+	GLContextAttributes_MinorVersion(&contextattributes, 1);
+	GLContextAttributes_CompatibilityProfile(&contextattributes);
+	GLContextAttributes_EndList(&contextattributes);
+	memset(&s_gl_ctx, 0, sizeof(s_gl_ctx));
+	s_gl_ctx_created = GLContext_CreateWithWindow(&s_gl_ctx,
+		(GLWINDOWHANDLE)window, &contextattributes, &pixelattributes) != 0;
+	return s_gl_ctx_created;
+}
 
+static bool HostGLMakeCurrent(void)
+{
+	return GLContext_SetCurrent(&s_gl_ctx) != 0;
+}
+
+static bool HostGLIsCurrent(void)
+{
+	return GLContext_GetCurrent(&s_gl_ctx) == s_gl_ctx.mhContext;
+}
+
+static void HostGLDestroyContext(void)
+{
+	GLContext_SetCurrentHandle(&s_gl_ctx, NULL);
+	GLContext_Destroy(&s_gl_ctx);
+	s_gl_ctx_created = false;
+}
+
+static void HostGLSetSwapInterval(int interval)
+{
+	GLContext_SetSwapInterval(&s_gl_ctx, interval);
+}
+
+static void HostGLSwap(void)
+{
+	GLContext_SwapBuffers(&s_gl_ctx);
+}
+
+static void HostGLDrawableSize(int *width, int *height)
+{
+	video_get_host_window_size(width, height);
+}
+
+static void HostGLWindowSize(int *width, int *height)
+{
+	video_get_host_window_size(width, height);
+}
+
+static const char *HostGLError(void)
+{
+	return "glcontext";
+}
+
+void *GfxGLGetProcAddress(const char *name)
+{
+	if (!s_gl_ctx_created)
+		return NULL;
+	return (void *)GLContext_GetProc(&s_gl_ctx, name);
+}
+#else
+static bool HostGLHasContext(void)
+{
+	return s_gl_ctx != NULL;
+}
+
+static bool HostGLCreateContext(void *window)
+{
 	/* Prefer a compatibility profile so Mac GL 1.2 FFP maps cleanly. */
 	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
 	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 1);
@@ -129,31 +210,102 @@ bool GLCompositorDeviceInit(void)
 #if defined(SDL_GL_CONTEXT_PROFILE_MASK)
 	SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_COMPATIBILITY);
 #endif
+	s_gl_ctx = SDL_GL_CreateContext((SDL_Window *)window);
+	return s_gl_ctx != NULL;
+}
 
-	if (s_gl_ctx) {
-		SDL_GL_DeleteContext(s_gl_ctx);
-		s_gl_ctx = NULL;
+static bool HostGLMakeCurrent(void)
+{
+	return SDL_GL_MakeCurrent((SDL_Window *)s_gl_device_window, s_gl_ctx)
+		!= SDL_GL_MakeCurrentFAILURE;
+}
+
+static bool HostGLIsCurrent(void)
+{
+	return SDL_GL_GetCurrentContext() == s_gl_ctx;
+}
+
+static void HostGLDestroyContext(void)
+{
+	if (s_gl_device_window)
+		SDL_GL_MakeCurrent((SDL_Window *)s_gl_device_window, NULL);
+	SDL_GL_DeleteContext(s_gl_ctx);
+	s_gl_ctx = NULL;
+}
+
+static void HostGLSetSwapInterval(int interval)
+{
+	SDL_GL_SetSwapInterval(interval);
+}
+
+static void HostGLSwap(void)
+{
+	SDL_GL_SwapWindow((SDL_Window *)s_gl_device_window);
+}
+
+static void HostGLDrawableSize(int *width, int *height)
+{
+	*width = 0;
+	*height = 0;
+	if (sdl_window)
+		SDL_GL_GetDrawableSize(sdl_window, width, height);
+}
+
+static void HostGLWindowSize(int *width, int *height)
+{
+	*width = 0;
+	*height = 0;
+	if (sdl_window)
+		SDL_GetWindowSize(sdl_window, width, height);
+}
+
+static const char *HostGLError(void)
+{
+	return SDL_GetError();
+}
+
+void *GfxGLGetProcAddress(const char *name)
+{
+	return (void *)SDL_GL_GetProcAddress(name);
+}
+#endif
+
+bool GLCompositorDeviceInit(void)
+{ /* Should ONLY be called by MetalCompositorInit or otherwise
+	the backing variables will not be recreated correctly and it will
+	white screen */
+	void *window = GL_HOST_WINDOW;
+	QD3D_INIT_LOG("GLCompositorDeviceInit: ready=%d context=%d window=%p",
+				  s_ready, HostGLHasContext(), window);
+
+	if (!window) {
+		QD3D_INIT_LOG("GLCompositorDeviceInit: FAILED because host window is null");
+		fprintf(stderr, "[gfxaccel-gl] GLCompositorDeviceInit: host window is NULL\n");
+		return false;
 	}
 
-	s_gl_ctx = SDL_GL_CreateContext(sdl_window);
-	if (!s_gl_ctx) {
-		QD3D_INIT_LOG("GLCompositorDeviceInit: SDL_GL_CreateContext FAILED: %s", SDL_GetError());
-		fprintf(stderr, "[gfxaccel-gl] SDL_GL_CreateContext failed: %s\n", SDL_GetError());
+	if (HostGLHasContext())
+		HostGLDestroyContext();
+
+	s_gl_device_window = window;
+	if (!HostGLCreateContext(window)) {
+		QD3D_INIT_LOG("GLCompositorDeviceInit: context creation FAILED: %s", HostGLError());
+		fprintf(stderr, "[gfxaccel-gl] GL context creation failed: %s\n", HostGLError());
+		s_gl_device_window = NULL;
 		s_ready = false;
 		return false;
 	}
 
-	if (SDL_GL_MakeCurrent(sdl_window, s_gl_ctx)
-			== SDL_GL_MakeCurrentFAILURE) {
-		QD3D_INIT_LOG("GLCompositorDeviceInit: SDL_GL_MakeCurrent FAILED: %s", SDL_GetError());
-		fprintf(stderr, "[gfxaccel-gl] SDL_GL_MakeCurrent failed: %s\n", SDL_GetError());
-		SDL_GL_DeleteContext(s_gl_ctx);
-		s_gl_ctx = NULL;
+	if (!HostGLMakeCurrent()) {
+		QD3D_INIT_LOG("GLCompositorDeviceInit: MakeCurrent FAILED: %s", HostGLError());
+		fprintf(stderr, "[gfxaccel-gl] MakeCurrent failed: %s\n", HostGLError());
+		HostGLDestroyContext();
+		s_gl_device_window = NULL;
 		s_ready = false;
 		return false;
 	}
 
-	SDL_GL_SetSwapInterval(0);
+	HostGLSetSwapInterval(0);
 
 	const char *vendor = (const char *)glGetString(GL_VENDOR);
 	const char *renderer = (const char *)glGetString(GL_RENDERER);
@@ -163,46 +315,42 @@ bool GLCompositorDeviceInit(void)
 			renderer ? renderer : "?",
 			version ? version : "?");
 
-	gl_device_sdl_window = sdl_window;
 	s_ready = true;
-	QD3D_INIT_LOG("GLCompositorDeviceInit: SUCCESS context=%p vendor='%s' renderer='%s' version='%s'",
-				  s_gl_ctx, vendor ? vendor : "?", renderer ? renderer : "?",
+	QD3D_INIT_LOG("GLCompositorDeviceInit: SUCCESS vendor='%s' renderer='%s' version='%s'",
+				  vendor ? vendor : "?", renderer ? renderer : "?",
 				  version ? version : "?");
 	return true;
 }
 
 void GLCompositorDeviceShutdown(void)
 {
-	if (s_gl_ctx) {
-		if (gl_device_sdl_window)
-			SDL_GL_MakeCurrent(gl_device_sdl_window, NULL);
-		SDL_GL_DeleteContext(s_gl_ctx);
-		s_gl_ctx = NULL;
-	}
+	if (HostGLHasContext())
+		HostGLDestroyContext();
+	s_gl_device_window = NULL;
 	s_ready = false;
 }
 
 bool GLCompositorDeviceIsReady(void)
 {
-	return s_ready && s_gl_ctx != NULL;
+	return s_ready && HostGLHasContext();
 }
 
 void GLCompositorDeviceSwap(void)
 {
 	assert(s_ready);
-	assert(s_gl_ctx != NULL);
-	assert(gl_device_sdl_window != NULL);
-	SDL_GL_SwapWindow(gl_device_sdl_window);
+	assert(HostGLHasContext());
+	assert(s_gl_device_window != NULL);
+	HostGLSwap();
 }
 
 void GLCompositorDeviceGetDrawableSize(int *out_w, int *out_h)
 {
 	assert(s_ready);
-	assert(s_gl_ctx != NULL);
-	assert(gl_device_sdl_window != NULL);
+	assert(HostGLHasContext());
+	assert(s_gl_device_window != NULL);
 	assert(out_w != NULL);
 	assert(out_h != NULL);
-	SDL_GL_GetDrawableSize(gl_device_sdl_window, out_w, out_h);
+	HostGLDrawableSize(out_w, out_h);
 }
 #if defined(__APPLE__) && defined(TARGET_OS_IPHONE)
 extern bool objc_getIsLinearGammaEnabled(void);
@@ -940,15 +1088,12 @@ void *SharedMetalDevice(void)
 	 * Teardown callbacks can legitimately arrive after the SDL GL context was
 	 * deleted, so asserting here made it impossible for callers to discard
 	 * stale object names safely in debug builds. */
-	if (!s_ready || !s_gl_ctx || !gl_device_sdl_window ||
-		gl_device_sdl_window != sdl_window)
+	if (!s_ready || !HostGLHasContext() || !s_gl_device_window ||
+		s_gl_device_window != GL_HOST_WINDOW)
 		return NULL;
-	if (SDL_GL_GetCurrentContext() != s_gl_ctx) {
-		if (SDL_GL_MakeCurrent(gl_device_sdl_window, s_gl_ctx)
-				== SDL_GL_MakeCurrentFAILURE) {
-			QD3D_INIT_LOG("SDL_GL_MakeCurrent failed: %s", SDL_GetError());
-			return NULL;
-		}
+	if (!HostGLIsCurrent() && !HostGLMakeCurrent()) {
+		QD3D_INIT_LOG("MakeCurrent failed: %s", HostGLError());
+		return NULL;
 	}
 	return (void *)&s_device_sentinel;
 }
@@ -1124,10 +1269,8 @@ void MetalCompositorPresent_(bool presentvbltick = true)
 
 	int dw = 0, dh = 0;
 	GLCompositorDeviceGetDrawableSize(&dw, &dh);
-	if (dw <= 0 || dh <= 0) {
-		if (sdl_window)
-			SDL_GetWindowSize(sdl_window, &dw, &dh);
-	}
+	if (dw <= 0 || dh <= 0)
+		HostGLWindowSize(&dw, &dh);
 	if (dw <= 0) dw = compositor_pixel_width;
 	if (dh <= 0) dh = compositor_pixel_height;
 
@@ -1159,8 +1302,7 @@ void MetalCompositorPresent_(bool presentvbltick = true)
 
 	/* Cache present rect in window coords for host cursor / input helpers. */
 	int window_w = 0, window_h = 0;
-	if (sdl_window)
-		SDL_GetWindowSize(sdl_window, &window_w, &window_h);
+	HostGLWindowSize(&window_w, &window_h);
 	if (window_w <= 0) window_w = compositor_pixel_width;
 	if (window_h <= 0) window_h = compositor_pixel_height;
 	const int window_x = dw > 0
@@ -1202,8 +1344,8 @@ void MetalCompositorShutdown(void)
 
 int MetalCompositorResize(int width, int height, int depth, int row_bytes,
 						  int pitch, void *buffer, uint32_t buffer_size)
-{ /* gl_device_sdl_window change == w/h/flags changed; recreate everything */
-	if (!s_init || gl_device_sdl_window != sdl_window)
+{ /* host window change == w/h/flags changed; recreate everything */
+	if (!s_init || s_gl_device_window != GL_HOST_WINDOW)
 		return MetalCompositorInit(width, height, depth,
 			row_bytes, pitch, buffer, buffer_size);
 	if (!SharedMetalDevice())
@@ -1417,11 +1559,9 @@ void MetalCompositorUpdateGammaLUT(const uint8_t *lut)
 void MetalCompositorRefreshPresentRect(void)
 {
 	int window_w = 0, window_h = 0;
-	if (sdl_window)
-		SDL_GetWindowSize(sdl_window, &window_w, &window_h);
+	HostGLWindowSize(&window_w, &window_h);
 	int drawable_w = 0, drawable_h = 0;
-	if (sdl_window)
-		SDL_GL_GetDrawableSize(sdl_window, &drawable_w, &drawable_h);
+	HostGLDrawableSize(&drawable_w, &drawable_h);
 	int x = 0, y = 0, w = drawable_w, h = drawable_h;
 	if (!video_get_framebuffer_drawable_rect(&x, &y, &w, &h)) {
 		x = y = 0;

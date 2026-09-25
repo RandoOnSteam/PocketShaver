@@ -307,12 +307,12 @@ endif()
 if(NOT DEFINED ENABLE_GFXACCEL)
 	option(ENABLE_GFXACCEL "SheepShaver graphics accel (NQD/RAVE/GL/DSp)" ON)
 endif()
-if(USE_SDL1)
-	set(ENABLE_GFXACCEL OFF CACHE BOOL
-		"SheepShaver graphics accel (NQD/RAVE/GL/DSp)" FORCE)
-endif()
 if(NOT DEFINED GFXACCEL_BACKEND)
 	set(GFXACCEL_BACKEND "auto" CACHE STRING "gfxaccel GPU backend (auto|opengl|metal|sdlgpu)")
+endif()
+if(USE_SDL1)
+	set(GFXACCEL_BACKEND "opengl" CACHE STRING
+		"gfxaccel GPU backend (auto|opengl|metal|sdlgpu)" FORCE)
 endif()
 set_property(CACHE GFXACCEL_BACKEND PROPERTY STRINGS auto opengl metal sdlgpu)
 
@@ -492,6 +492,9 @@ if(ENABLE_GFXACCEL)
 		"${SS_GFXACCEL_DIR}/gl/dsp_gl_renderer.cpp"
 		"${SS_GFXACCEL_DIR}/gl/glide_gl_renderer.cpp"
 	)
+	if(USE_SDL1)
+		list(APPEND SS_GFXACCEL "${SS_GFXACCEL_DIR}/gl/glcontext.c")
+	endif()
 	if(WIN32)
 		list(APPEND SS_GFXACCEL_LIBS opengl32)
 	elseif(APPLE)

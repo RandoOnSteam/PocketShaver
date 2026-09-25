@@ -2757,9 +2757,9 @@ int32_t NativeAccessZBufferEnd(uint32_t drawContextAddr, uint32_t /*dirtyRectAdd
 	static bool tried = false;
 	if (!tried) {
 		tried = true;
-		pWinPos = (PFNGLWINDOWPOS2IPROC)SDL_GL_GetProcAddress("glWindowPos2i");
+		pWinPos = (PFNGLWINDOWPOS2IPROC)GfxGLGetProcAddress("glWindowPos2i");
 		if (!pWinPos)
-			pWinPos = (PFNGLWINDOWPOS2IPROC)SDL_GL_GetProcAddress("glWindowPos2iARB");
+			pWinPos = (PFNGLWINDOWPOS2IPROC)GfxGLGetProcAddress("glWindowPos2iARB");
 	}
 	if (pWinPos)
 		pWinPos(0, 0);

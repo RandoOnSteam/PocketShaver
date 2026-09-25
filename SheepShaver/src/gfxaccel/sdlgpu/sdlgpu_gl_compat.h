@@ -276,6 +276,7 @@ inline GfxGLExt &gfx_gl_ext()
 #define SDL_GL_SetSwapInterval SDLGPUSetSwapInterval
 #define SDL_GL_SwapWindow SDLGPUSwapWindow
 #define SDL_GL_GetProcAddress SDLGPUGetProcAddress
+void *GfxGLGetProcAddress(const char *name);
 
 #define glAccum SDLGPUglAccum
 #define glActiveTexture SDLGPUglActiveTexture

@@ -122,8 +122,8 @@ set_property(CACHE GFXACCEL_BACKEND PROPERTY STRINGS auto opengl metal sdlgpu)
 if(USE_SDL1)
 	set(USE_SDL3 OFF CACHE BOOL "Use SDL 3 instead of SDL 2" FORCE)
 	set(USE_SDLGPU OFF CACHE BOOL "Use SDL-GPU for SheepShaver gfxaccel" FORCE)
-	set(ENABLE_GFXACCEL OFF CACHE BOOL
-		"SheepShaver graphics accel (NQD/RAVE/GL/DSp)" FORCE)
+	set(GFXACCEL_BACKEND "opengl" CACHE STRING
+		"gfxaccel GPU backend (auto|opengl|metal|sdlgpu)" FORCE)
 endif()
 if(GFXACCEL_BACKEND STREQUAL "metal")
 	set(USE_SDLGPU OFF)

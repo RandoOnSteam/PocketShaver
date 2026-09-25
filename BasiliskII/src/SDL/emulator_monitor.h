@@ -8,7 +8,7 @@
 
 #ifdef _WIN32
 #include <winsock2.h>
-#if SDL_VERSION_ATLEAST(2, 0, 0) && !SDL_VERSION_ATLEAST(3, 0, 0)
+#if !SDL_VERSION_ATLEAST(3, 0, 0)
 #if defined(USE_SDL2)
 #include <SDL2/SDL_syswm.h>
 #else
@@ -71,6 +71,8 @@ struct EmulatorMonitorView {
 	int width;
 	int height;
 	int depth;
+	int hostwidth;
+	int hostheight;
 };
 
 class EmulatorMonitor {
@@ -167,8 +169,6 @@ public:
 	bool HandleEvent(SDL_Event &event, const EmulatorMonitorView &view)
 	{
 		Request *request;
-		int hostwidth;
-		int hostheight;
 
 		if (event.type != eventtype)
 			return false;
@@ -178,10 +178,9 @@ public:
 		request->response[0] = 0;
 		switch (request->operation) {
 			case EMULATOR_MONITOR_STATUS:
-				GetHostSize(view, hostwidth, hostheight);
 				snprintf(request->response, sizeof(request->response),
 					"{\"ok\":true,\"width\":%d,\"height\":%d,\"depth\":%d,\"hostwidth\":%d,\"hostheight\":%d}",
-					view.width, view.height, view.depth, hostwidth, hostheight);
+					view.width, view.height, view.depth, view.hostwidth, view.hostheight);
 				break;
 			case EMULATOR_MONITOR_SHOT:
 				if (view.guestsurface == NULL)
@@ -638,20 +637,6 @@ private:
 		return strstr(response, "\"ok\":true") != NULL;
 	}
 
-	static void GetHostSize(const EmulatorMonitorView &view, int &hostwidth, int &hostheight)
-	{
-		hostwidth = 0;
-		hostheight = 0;
-		if (view.hostsurface != NULL) {
-			hostwidth = view.hostsurface->w;
-			hostheight = view.hostsurface->h;
-		}
-#if SDL_VERSION_ATLEAST(2, 0, 0)
-		else if (view.window != NULL)
-			SDL_GetWindowSize((SDL_Window *)view.window, &hostwidth, &hostheight);
-#endif
-	}
-
 	static Uint32 GetWindowId(const EmulatorMonitorView &view)
 	{
 #if SDL_VERSION_ATLEAST(2, 0, 0)
@@ -833,27 +818,36 @@ private:
 			SaveSurface(view.hostsurface, request);
 			return;
 		}
-#if defined(_WIN32) && SDL_VERSION_ATLEAST(2, 0, 0)
+#if defined(_WIN32)
 		CaptureWindow(view, request);
 #else
 		SetError(request, "host surface unavailable");
 #endif
 	}
 
-#if defined(_WIN32) && SDL_VERSION_ATLEAST(2, 0, 0)
+#if defined(_WIN32)
 	static HWND GetWindowHandle(const EmulatorMonitorView &view)
 	{
+#if SDL_VERSION_ATLEAST(3, 0, 0)
 		if (view.window == NULL)
 			return NULL;
-#if SDL_VERSION_ATLEAST(3, 0, 0)
 		return (HWND)SDL_GetPointerProperty(SDL_GetWindowProperties((SDL_Window *)view.window),
 			SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL);
-#else
+#elif SDL_VERSION_ATLEAST(2, 0, 0)
 		SDL_SysWMinfo windowinfo;
+		if (view.window == NULL)
+			return NULL;
 		SDL_VERSION(&windowinfo.version);
 		if (!SDL_GetWindowWMInfo((SDL_Window *)view.window, &windowinfo))
 			return NULL;
 		return windowinfo.info.win.window;
+#else
+		SDL_SysWMinfo windowinfo;
+		(void)view;
+		SDL_VERSION(&windowinfo.version);
+		if (SDL_GetWMInfo(&windowinfo) <= 0)
+			return NULL;
+		return windowinfo.window;
 #endif
 	}
 

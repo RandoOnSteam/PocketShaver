@@ -1405,8 +1405,8 @@ void GLMetalUpload3DTexture(GLContext*ctx,GLTextureObject*texObj,int level,int w
   glTexParameteri(GL_TEXTURE_3D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
   typedef void (APIENTRY *PFNGLTEXIMAGE3DPROC)(GLenum,GLint,GLint,GLsizei,GLsizei,GLsizei,GLint,GLenum,GLenum,const void*);
   static PFNGLTEXIMAGE3DPROC pTexImage3D=NULL; static bool tried=false;
-  if(!tried){ tried=true; pTexImage3D=(PFNGLTEXIMAGE3DPROC)SDL_GL_GetProcAddress("glTexImage3D");
-	if(!pTexImage3D) pTexImage3D=(PFNGLTEXIMAGE3DPROC)SDL_GL_GetProcAddress("glTexImage3DEXT"); }
+  if(!tried){ tried=true; pTexImage3D=(PFNGLTEXIMAGE3DPROC)GfxGLGetProcAddress("glTexImage3D");
+	if(!pTexImage3D) pTexImage3D=(PFNGLTEXIMAGE3DPROC)GfxGLGetProcAddress("glTexImage3DEXT"); }
   if(pTexImage3D && pixels)
 	pTexImage3D(GL_TEXTURE_3D,level,GL_RGBA8,width,height,depth,0,GL_BGRA,GL_UNSIGNED_BYTE,pixels);
   texObj->width=width; texObj->height=height;
@@ -1418,8 +1418,8 @@ void GLMetalUploadSubTexture3D(GLContext*ctx,GLTextureObject*texObj,int level,in
   GLMetalSelectTextureUnitZero();
   typedef void (APIENTRY *PFNGLTEXSUBIMAGE3DPROC)(GLenum,GLint,GLint,GLint,GLint,GLsizei,GLsizei,GLsizei,GLenum,GLenum,const void*);
   static PFNGLTEXSUBIMAGE3DPROC pSub=NULL; static bool tried=false;
-  if(!tried){ tried=true; pSub=(PFNGLTEXSUBIMAGE3DPROC)SDL_GL_GetProcAddress("glTexSubImage3D");
-	if(!pSub) pSub=(PFNGLTEXSUBIMAGE3DPROC)SDL_GL_GetProcAddress("glTexSubImage3DEXT"); }
+  if(!tried){ tried=true; pSub=(PFNGLTEXSUBIMAGE3DPROC)GfxGLGetProcAddress("glTexSubImage3D");
+	if(!pSub) pSub=(PFNGLTEXSUBIMAGE3DPROC)GfxGLGetProcAddress("glTexSubImage3DEXT"); }
   if(!pSub)return;
   glBindTexture(GL_TEXTURE_3D,(GLuint)(uintptr_t)texObj->metal_texture);
   pSub(GL_TEXTURE_3D,level,xoff,yoff,zoff,width,height,depth,GL_BGRA,GL_UNSIGNED_BYTE,pixels);
