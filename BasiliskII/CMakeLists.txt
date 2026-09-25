@@ -45,7 +45,6 @@ macemu_write_config(
 # ---------------------------------------------------------------------------
 # UAE codegen host tools
 # ---------------------------------------------------------------------------
-if(ENABLE_JIT)
 	add_executable(build68k "${UAE_DIR}/build68k.c")
 	target_include_directories(build68k PRIVATE
 		"${CMAKE_CURRENT_BINARY_DIR}" "${B2_SYSDEPS}" "${B2_SRC}/include" "${UAE_DIR}")
@@ -95,6 +94,7 @@ if(ENABLE_JIT)
 
 	set(B2_JIT_GEN_SRCS)
 
+if(ENABLE_JIT)
 	add_executable(gencomp "${UAE_DIR}/compiler/gencomp.c")
 	target_link_libraries(gencomp PRIVATE uae_readcpu)
 	target_include_directories(gencomp PRIVATE "${UAE_DIR}/compiler" "${UAE_DIR}")
@@ -143,13 +143,16 @@ set(B2_CORE
 	"${B2_SRC}/audio.cpp"
 	"${B2_SRC}/extfs.cpp"
 	"${B2_SRC}/user_strings.cpp"
+	"${B2_SRC}/printing.cpp"
+	"${B2_SRC}/pictpdf.c"
+	"${B2_SRC}/pdfgen.c"
+	"${B2_SRC}/joymanager.cpp"
 	${B2_XPLAT}
 	${B2_SDL}
 )
 
 
-if(ENABLE_JIT)
-	set(B2_UAE
+set(B2_UAE
 	"${UAE_DIR}/basilisk_glue.cpp"
 	"${UAE_DIR}/memory.cpp"
 	"${UAE_DIR}/newcpu.cpp"
@@ -158,9 +161,11 @@ if(ENABLE_JIT)
 	"${B2_GEN}/cpudefs.cpp"
 	"${B2_GEN}/cpuemu.cpp"
 	"${B2_GEN}/cpustbl.cpp"
-	)
+	"${B2_GEN}/cpuemu_nf.cpp"
+	"${B2_GEN}/cpustbl_nf.cpp"
+)
+if(ENABLE_JIT)
 	list(APPEND B2_UAE
-	"${B2_GEN}/cpuemu_nf.cpp" "${B2_GEN}/cpustbl_nf.cpp"
 	"${B2_GEN}/compemu.cpp" "${B2_GEN}/compstbl.cpp"
 	"${UAE_DIR}/compiler/compemu_support.cpp"
 	"${UAE_DIR}/compiler/compemu_fpp.cpp")

@@ -24,10 +24,15 @@
  */
 
 #include "sysdeps.h"
+#include "main.h"
+#include "prefs.h"
+#include "emul_op.h"
 #include "joymanager.h"
 #include "macos_util.h"
 #include "cpu_emulation.h"
+#ifdef SHEEPSHAVER
 #include "xlowmem.h"
+#endif
 
 #ifdef USE_SDL
 #include "my_sdl.h"
@@ -1603,3 +1608,143 @@ int JoyManagerHatPosition(uint8 hat)
 	return 0;
 }
 #endif /* #ifdef USE_SDL */
+
+static const uint8 joy_manager_driver[] = {	// Replacement .JoyManager driver
+	// Driver header
+	JoyManagerDriverFlags >> 8, JoyManagerDriverFlags & 0xff, 0, 0, 0, 0, 0, 0,
+	0x00, 0x1e,							// Open() offset
+	0x00, 0x22,							// Prime() offset
+	0x00, 0x26,							// Control() offset
+	0x00, 0x2a,							// Status() offset
+	0x00, 0x2e,							// Close() offset
+	0x0b, 0x2e, 0x4a, 0x6f, 0x79, 0x4d,	// ".JoyManager"
+	0x61, 0x6e, 0x61, 0x67, 0x65, 0x72,
+
+	// Open()
+	M68K_EMUL_OP_JOY_OPEN >> 8, M68K_EMUL_OP_JOY_OPEN & 0xff,
+	0x4e, 0x75,							// rts
+
+	// Prime()
+	0x70, 0xed,							// moveq #readErr,d0
+	0x60, 0x0c,							// bra IOReturn
+
+	// Control()
+	M68K_EMUL_OP_JOY_CONTROL >> 8, M68K_EMUL_OP_JOY_CONTROL & 0xff,
+	0x60, 0x08,							// bra IOReturn
+
+	// Status()
+	M68K_EMUL_OP_JOY_STATUS >> 8, M68K_EMUL_OP_JOY_STATUS & 0xff,
+	0x60, 0x04,							// bra IOReturn
+
+	// Close()
+	M68K_EMUL_OP_JOY_CLOSE >> 8, M68K_EMUL_OP_JOY_CLOSE & 0xff,
+	0x4e, 0x75,							// rts
+
+	// IOReturn
+	0x32, 0x28, 0x00, 0x06,				// move.w 6(a0),d1
+	0x08, 0x01, 0x00, 0x09,				// btst #9,d1
+	0x67, 0x0c,							// beq 1
+	0x4a, 0x40,							// tst.w d0
+	0x6f, 0x02,							// ble 2
+	0x42, 0x40,							// clr.w d0
+	0x31, 0x40, 0x00, 0x10,				// 2: move.w d0,$10(a0)
+	0x4e, 0x75,							// rts
+	0x4a, 0x40,							// 1: tst.w d0
+	0x6f, 0x04,							// ble 3
+	0x42, 0x40,							// clr.w d0
+	0x4e, 0x75,							// rts
+	0x2f, 0x38, 0x08, 0xfc,				// 3: move.l $8fc,-(sp)
+	0x4e, 0x75,							// rts
+
+	// IntPoll: Pascal calling convention, two pointer arguments, no result.
+	M68K_EMUL_OP_JOY_INTPOLL >> 8, M68K_EMUL_OP_JOY_INTPOLL & 0xff,
+	0x20, 0x5f,							// movea.l (sp)+,a0	true return address
+	0x50, 0x8f,							// addq.l  #8,sp		drop both arguments
+	0x4e, 0xd0							// jmp     (a0)
+};
+
+void JoyManagerWriteDriver(uint8 *host)
+{
+	memcpy(host, joy_manager_driver, sizeof(joy_manager_driver));
+}
+
+void JoyManagerInstall(uint32 pb, uint32 driver)
+{
+	M68kRegisters r;
+	uint32 dce;
+
+	if (JoyManagerPrepare()) {
+		int16 joy_ref_num;
+		uint32 unit_table;
+		uint32 joy_storage;
+		uint32 joy_handle;
+		int unit_count;
+		int unit;
+
+		joy_ref_num = 0;
+		unit_table = ReadMacInt32(0x011c);
+		unit_count = (int16)ReadMacInt16(0x01d2);
+		for (unit = unit_count - 1; unit >= 0; unit--) {
+			if (ReadMacInt32(unit_table + unit * 4) == 0) {
+				joy_ref_num = (int16)(-1 - unit);
+				break;
+			}
+		}
+
+		if (joy_ref_num != 0) {
+			r.d[0] = JoyManagerGuestStorageSize();
+			Execute68kTrap(0xa71e, &r);		// NewPtrSysClear()
+			joy_storage = r.a[0];
+			if (JoyManagerSetGuestStorage(joy_storage,
+					JoyManagerGuestStorageSize())) {
+				r.a[0] = driver;
+				r.d[0] = (uint32)(int32)joy_ref_num;
+				Execute68kTrap(0xa43d, &r);	// DrvrInstallRsrvMem()
+				joy_handle = ReadMacInt32(unit_table + ~joy_ref_num * 4);
+				if ((int16)r.d[0] == noErr && joy_handle != 0) {
+					r.a[0] = joy_handle;
+					Execute68kTrap(0xa029, &r);	// HLock()
+					dce = ReadMacInt32(r.a[0]);
+					WriteMacInt32(dce + dCtlDriver,
+						driver);
+					WriteMacInt16(dce + dCtlFlags, JoyManagerDriverFlags);
+
+					WriteMacInt32(pb + ioNamePtr, driver + 0x12);
+					r.a[0] = pb;
+					Execute68kTrap(0xa000, &r);	// Open()
+
+					// InputSprocket calls this driver synchronously from a Time
+					// Manager task. When the driver is busy the Device Manager
+					// queues that request, and at interrupt level the ROM can only
+					// complete it through the IntPoll chain (IntPollGlobals at
+					// ExpandMem+$24c, reached from the IOWait vector at $6dc).
+					// Such a request never completes without the chain and the
+					// wait spins with the 68k interrupt level pinned at 1.
+					JoyManagerSetDCE(dce);
+					uint32 expand_mem = ReadMacInt32(0x2b6);
+					uint32 int_poll = expand_mem
+						? ReadMacInt32(expand_mem + 0x24c) : 0;
+					if (int_poll) {
+						r.d[0] = 12;				// qLink, qType, proc
+						Execute68kTrap(0xa71e, &r);	// NewPtrSysClear()
+						uint32 elem = r.a[0];
+						if (elem) {
+							WriteMacInt32(elem + 8, driver + JOY_INTPOLL_OFFSET);
+							r.a[0] = elem;
+							r.a[1] = int_poll + 2;	// its QHdr
+							Execute68kTrap(0xa96f, &r);	// Enqueue()
+						}
+					} else
+						printf("WARNING: no IntPollGlobals; .JoyManager cannot "
+							"complete interrupt-time requests\n");
+				} else {
+					JoyManagerReset();
+				}
+			} else {
+				JoyManagerReset();
+			}
+		} else {
+			JoyManagerReset();
+		}
+	}
+}

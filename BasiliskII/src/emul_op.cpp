@@ -40,6 +40,8 @@
 #include "audio.h"
 #include "ether.h"
 #include "extfs.h"
+#include "printing.h"
+#include "joymanager.h"
 #include "emul_op.h"
 
 #ifdef ENABLE_MON
@@ -87,6 +89,7 @@ void EmulOp(uint16 opcode, M68kRegisters *r)
 		case M68K_EMUL_OP_RESET: {			// MacOS reset
 			D(bug("*** RESET ***\n"));
 			tick_inhibit = true;
+			JoyManagerReset();
 			CDROMRemount(); // for System 7.x
 			TimerReset();
 			EtherReset();
@@ -465,6 +468,9 @@ void EmulOp(uint16 opcode, M68kRegisters *r)
 					TimerInterrupt();
 #endif
 					VideoInterrupt();
+					JoyManagerVBL();
+					ADBVBL();
+					PrintInstall();
 
 					// Call DoVBLTask(0)
 					if (ROMVersion == ROM_VERSION_32) {
@@ -577,6 +583,30 @@ void EmulOp(uint16 opcode, M68kRegisters *r)
 			if (ReadMacInt32(0x14c) == 0)
 				idle_wait();
 			r->a[0] = ReadMacInt32(0x2b6);
+			break;
+
+		case M68K_EMUL_OP_PRGLUE:
+			PrintGlue(r);
+			break;
+
+		case M68K_EMUL_OP_JOY_OPEN:
+			r->d[0] = JoyManagerOpen(r->a[0], r->a[1]);
+			break;
+
+		case M68K_EMUL_OP_JOY_CONTROL:
+			r->d[0] = JoyManagerControl(r->a[0], r->a[1]);
+			break;
+
+		case M68K_EMUL_OP_JOY_STATUS:
+			r->d[0] = JoyManagerStatus(r->a[0], r->a[1]);
+			break;
+
+		case M68K_EMUL_OP_JOY_CLOSE:
+			r->d[0] = JoyManagerClose(r->a[0], r->a[1]);
+			break;
+
+		case M68K_EMUL_OP_JOY_INTPOLL:
+			JoyManagerIntPoll();
 			break;
 
 		case M68K_EMUL_OP_SUSPEND: {

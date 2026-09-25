@@ -28,6 +28,9 @@
 #include "my_sdl.h"
 #include <SDL_mutex.h>
 #include <SDL_thread.h>
+#if SDL_VERSION_ATLEAST(3, 0, 0)
+#include <SDL_main.h>
+#endif
 
 #include <string>
 typedef std::basic_string<TCHAR> tstring;

@@ -32,6 +32,8 @@
 #include "video.h"
 #include "extfs.h"
 #include "prefs.h"
+#include "printing.h"
+#include "joymanager.h"
 
 #if ENABLE_MON
 #include "mon.h"
@@ -113,6 +115,14 @@ static uint32 find_rom_resource(uint32 s_type, int16 s_id, bool cont = false)
 			break;
 	}
 	return 0;
+}
+
+
+uint32 PrintThunkAddress(void)
+{
+	if (ROMVersion != ROM_VERSION_32)
+		return 0;
+	return ROMBaseMac + sony_offset + 0xe00;
 }
 
 
@@ -754,6 +764,9 @@ void InstallDrivers(uint32 pb)
 		r.a[0] = pb;
 		Execute68kTrap(0xa000, &r);		// Open()
 	}
+
+	if (ROMVersion == ROM_VERSION_32 && !PrefsFindBool("nojoystick"))
+		JoyManagerInstall(pb, ROMBaseMac + sony_offset + 0xf00);
 }
 
 
@@ -1636,6 +1649,9 @@ static bool patch_rom_32(void)
 	*wp++ = htons(M68K_JMP);
 	*wp++ = htons(base >> 16);
 	*wp = htons(base & 0xffff);
+
+	PrintWriteThunks(ROMBaseHost + sony_offset + 0xe00);
+	JoyManagerWriteDriver(ROMBaseHost + sony_offset + 0xf00);
 
 	// Look for double PACK 4 resources
 	if ((base = find_rom_resource(FOURCC('P','A','C','K'), 4)) == 0) return false;

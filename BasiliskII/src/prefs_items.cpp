@@ -33,6 +33,7 @@ prefs_desc common_prefs_items[] = {
 	{"floppy", TYPE_STRING, true,     "device/file name of Mac floppy drive"},
 	{"cdrom", TYPE_STRING, true,      "device/file names of Mac CD-ROM drive"},
 	{"extfs", TYPE_STRING, false,     "root path of ExtFS"},
+	{"printpath", TYPE_STRING, false, "directory for printed PDF files"},
 	{"scsi0", TYPE_STRING, false,     "SCSI target for Mac SCSI ID 0"},
 	{"scsi1", TYPE_STRING, false,     "SCSI target for Mac SCSI ID 1"},
 	{"scsi2", TYPE_STRING, false,     "SCSI target for Mac SCSI ID 2"},
@@ -57,6 +58,7 @@ prefs_desc common_prefs_items[] = {
 	{"cpu", TYPE_INT32, false,        "CPU type (0 = 68000, 1 = 68010 etc.)"},
 	{"fpu", TYPE_BOOLEAN, false,      "enable FPU emulation"},
 	{"nocdrom", TYPE_BOOLEAN, false,  "don't install CD-ROM driver"},
+	{"nojoystick", TYPE_BOOLEAN, false, "don't install Joy Manager driver"},
 	{"nosound", TYPE_BOOLEAN, false,  "don't enable sound output"},
 	{"noclipconversion", TYPE_BOOLEAN, false, "don't convert clipboard contents"},
 	{"nogui", TYPE_BOOLEAN, false,    "disable GUI"},
@@ -110,6 +112,7 @@ void AddPrefsDefaults(void)
 	PrefsAddInt32("displaycolordepth", 0);
 	PrefsAddBool("fpu", false);
 	PrefsAddBool("nocdrom", false);
+	PrefsAddBool("nojoystick", false);
 	PrefsAddBool("nosound", false);
 	PrefsAddBool("noclipconversion", false);
 	PrefsAddBool("nogui", false);

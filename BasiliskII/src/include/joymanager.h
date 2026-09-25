@@ -31,6 +31,7 @@
 #include "sysdeps.h"
 
 const uint16 JoyManagerDriverFlags = 0x4c00;
+const uint32 JOY_INTPOLL_OFFSET = 0x56;
 
 /* high level API for client JoyManagerXXX() */
 extern uint32 JoyManagerGuestStorageSize(void);
@@ -44,6 +45,8 @@ extern int16 JoyManagerStatus(uint32 pb, uint32 dce);
 extern int16 JoyManagerClose(uint32 pb, uint32 dce);
 extern void JoyManagerSetDCE(uint32 dce);
 extern void JoyManagerIntPoll(void);
+extern void JoyManagerWriteDriver(uint8 *host);
+extern void JoyManagerInstall(uint32 pb, uint32 driver);
 
 /* low level API, typically for ADB joysticks */
 typedef struct JoyManagerDevice JoyManagerDevice;

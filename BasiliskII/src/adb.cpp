@@ -448,7 +448,7 @@ typedef struct ADBTHRUSTMASTER {
 #define JOY_HARDWARE_MACALLY 0
 #define JOY_HARDWARE_SIDEWINDER 0
 #define JOY_HARDWARE_CH_FLIGHTSTICKPRO 0 /* Joymanager API handles instead */
-#define JOY_HARDWARE_THRUSTMASTER 0
+#define JOY_HARDWARE_THRUSTMASTER 1
 #if JOY_HARDWARE_THRUSTMASTER
 #define JOY_THRUSTMASTER_VERSION 11 /* "version" member of struct */
 #define JOY_THRUSTMASTER_ADBADDR 7 /* ADB address issued by Apple */
