@@ -44,7 +44,8 @@ Guest coordinates are Mac framebuffer pixels.
 | `ping` | Identify the monitor and port |
 | `help` | Return the command list |
 | `status` | Return guest width, height, and bit depth, plus the host window size |
-| `shot PATH` | Save the guest framebuffer; `.png` paths are saved as PNG, anything else as BMP |
+| `extfs` | Return the host folder shown in the guest as the extfs volume |
+| `shot PATH` | Save the guest framebuffer, read straight from guest memory so it also works with gfxaccel; `.png` paths are saved as PNG, anything else as BMP |
 | `mouse X Y` | Send an absolute or relative ADB mouse movement, following the active mouse mode |
 | `mousedown BUTTON` | Press ADB mouse button 0, 1, or 2 |
 | `mouseup BUTTON` | Release ADB mouse button 0, 1, or 2 |
@@ -55,8 +56,7 @@ Guest coordinates are Mac framebuffer pixels.
 | `key down CODE` | Press an ADB key code |
 | `key up CODE` | Release an ADB key code |
 | `key tap CODE` | Press, wait 60 ms, and release |
-| `type TEXT` | Type US-layout ASCII text, using Shift where needed; `
-` is Return, `	` is Tab, `\` is a backslash |
+| `type TEXT` | Type US-layout ASCII text, using Shift where needed; `\n` is Return, `\t` is Tab, `\\` is a backslash |
 | `power` | Tap the ADB power key |
 
 Host commands go through the emulator's normal SDL event path as if they came from the host, so window scaling, letterboxing, and mouse grab are exercised.
@@ -74,4 +74,22 @@ Host coordinates are window client pixels in the emulator's own coordinate space
 | `hotkey grab` | Inject the hotkey + F5 combination that toggles mouse grab |
 
 The hotkey modifiers follow the `hotkey` preference.
+
+## Deploying guest programs
+
+The native client can copy a MacBinary file into the extfs volume, so a program built on the host can be run in the guest right away:
+
+```text
+emumonitor deploy HelloWorld.bin
+emumonitor deploy user@buildhost:/path/HelloWorld.bin
+emumonitor deploy scp://user@buildhost:2200/path/in/home/HelloWorld.bin
+emumonitor deploy HelloWorld.bin "C:\SheepShaver\Virtual Desktop"
+```
+
+`deploy` splits the file into the data fork, `.rsrc`, and `.finf` files that extfs reads, using the name, type, and creator stored in the MacBinary header.
+Without a folder it asks the running emulator with `extfs`; on Windows this is the `Virtual Desktop` folder next to the emulator, which the guest shows at the root of the extfs volume, and elsewhere it is the `extfs` preference.
+Remote sources are fetched with `scp` first.
+Retro68 writes the MacBinary file as `NAME.bin` next to the `.APPL`.
+If the Finder already has the folder open, close and reopen the window to see a new file.
+Quit the program in the guest before deploying it again, because an open file cannot be replaced.
 

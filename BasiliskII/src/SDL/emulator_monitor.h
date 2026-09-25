@@ -1,3 +1,24 @@
+/*
+ *  emulator_monitor.h - Provides the ability to manipulate guest outside
+ *	of the emulator
+ *
+ *	(C) 2026 RandoOnSteam (battlemageloveryt@gmail.com)
+ *
+ *  This program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation; either version 2 of the License, or
+ *  (at your option) any later version.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program; if not, write to the Free Software
+ *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ */
+
 #ifndef EMULATOR_MONITOR_H
 #define EMULATOR_MONITOR_H
 
@@ -65,12 +86,14 @@ typedef int EmulatorMonitorSocket;
 #endif
 
 struct EmulatorMonitorView {
-	SDL_Surface *guestsurface;
+	const Uint8 *framebuffer;
+	const SDL_Color *palette;
 	SDL_Surface *hostsurface;
 	void *window;
 	int width;
 	int height;
 	int depth;
+	int rowbytes;
 	int hostwidth;
 	int hostheight;
 };
@@ -183,10 +206,7 @@ public:
 					view.width, view.height, view.depth, view.hostwidth, view.hostheight);
 				break;
 			case EMULATOR_MONITOR_SHOT:
-				if (view.guestsurface == NULL)
-					SetError(request, "framebuffer unavailable");
-				else
-					SaveSurface(view.guestsurface, request);
+				SaveFramebuffer(view, request);
 				break;
 			case EMULATOR_MONITOR_HOSTSHOT:
 				SaveHostSurface(view, request);
@@ -341,7 +361,11 @@ private:
 		}
 		if (strcmp(command, "help") == 0) {
 			snprintf(response, responsesize,
-				"{\"ok\":true,\"commands\":[\"ping\",\"status\",\"shot PATH\",\"mouse X Y\",\"mousedown BUTTON\",\"mouseup BUTTON\",\"click X Y [BUTTON]\",\"dblclick X Y [BUTTON]\",\"drag X1 Y1 X2 Y2 [BUTTON [HOLDMS]]\",\"hold X Y MS [BUTTON]\",\"key down CODE\",\"key up CODE\",\"key tap CODE\",\"type TEXT\",\"power\",\"host shot PATH\",\"host mouse X Y\",\"host mousedown BUTTON\",\"host mouseup BUTTON\",\"host click X Y [BUTTON]\",\"hotkey fullscreen\",\"hotkey grab\"]}");
+				"{\"ok\":true,\"commands\":[\"ping\",\"status\",\"extfs\",\"shot PATH\",\"mouse X Y\",\"mousedown BUTTON\",\"mouseup BUTTON\",\"click X Y [BUTTON]\",\"dblclick X Y [BUTTON]\",\"drag X1 Y1 X2 Y2 [BUTTON [HOLDMS]]\",\"hold X Y MS [BUTTON]\",\"key down CODE\",\"key up CODE\",\"key tap CODE\",\"type TEXT\",\"power\",\"host shot PATH\",\"host mouse X Y\",\"host mousedown BUTTON\",\"host mouseup BUTTON\",\"host click X Y [BUTTON]\",\"hotkey fullscreen\",\"hotkey grab\"]}");
+			return;
+		}
+		if (strcmp(command, "extfs") == 0) {
+			WriteExtFSRoot(response, responsesize);
 			return;
 		}
 		if (strcmp(command, "status") == 0) {
@@ -939,6 +963,81 @@ private:
 			SetError(request, SDL_GetError());
 	}
 
+	static SDL_Surface *CreateRgbSurface(int width, int height)
+	{
+#if SDL_VERSION_ATLEAST(3, 0, 0)
+		return SDL_CreateSurface(width, height, SDL_PIXELFORMAT_RGB24);
+#elif SDL_VERSION_ATLEAST(2, 0, 0)
+		return SDL_CreateRGBSurfaceWithFormat(0, width, height, 24, SDL_PIXELFORMAT_RGB24);
+#elif SDL_BYTEORDER == SDL_BIG_ENDIAN
+		return SDL_CreateRGBSurface(SDL_SWSURFACE, width, height, 24,
+			0xff0000, 0x00ff00, 0x0000ff, 0);
+#else
+		return SDL_CreateRGBSurface(SDL_SWSURFACE, width, height, 24,
+			0x0000ff, 0x00ff00, 0xff0000, 0);
+#endif
+	}
+
+	static void ConvertFramebufferRow(const EmulatorMonitorView &view, const Uint8 *source, Uint8 *target)
+	{
+		int column;
+		if (view.depth == 32) {
+			for (column = 0; column < view.width; column++) {
+				target[0] = source[1];
+				target[1] = source[2];
+				target[2] = source[3];
+				source += 4;
+				target += 3;
+			}
+			return;
+		}
+		if (view.depth == 16) {
+			for (column = 0; column < view.width; column++) {
+				unsigned int pixel = ((unsigned int)source[0] << 8) | source[1];
+				unsigned int red = (pixel >> 10) & 0x1f;
+				unsigned int green = (pixel >> 5) & 0x1f;
+				unsigned int blue = pixel & 0x1f;
+				target[0] = (Uint8)((red << 3) | (red >> 2));
+				target[1] = (Uint8)((green << 3) | (green >> 2));
+				target[2] = (Uint8)((blue << 3) | (blue >> 2));
+				source += 2;
+				target += 3;
+			}
+			return;
+		}
+		for (column = 0; column < view.width; column++) {
+			int bitoffset = column * view.depth;
+			int index = (source[bitoffset >> 3] >> (8 - view.depth - (bitoffset & 7))) & ((1 << view.depth) - 1);
+			target[0] = view.palette[index].r;
+			target[1] = view.palette[index].g;
+			target[2] = view.palette[index].b;
+			target += 3;
+		}
+	}
+
+	static void SaveFramebuffer(const EmulatorMonitorView &view, Request *request)
+	{
+		SDL_Surface *surface;
+		int row;
+		if (view.framebuffer == NULL || view.width <= 0 || view.height <= 0 ||
+			(view.depth <= 8 && view.palette == NULL)) {
+			SetError(request, "framebuffer unavailable");
+			return;
+		}
+		surface = CreateRgbSurface(view.width, view.height);
+		if (surface == NULL) {
+			SetError(request, SDL_GetError());
+			return;
+		}
+		SDL_LockSurface(surface);
+		for (row = 0; row < view.height; row++)
+			ConvertFramebufferRow(view, view.framebuffer + (size_t)row * view.rowbytes,
+				(Uint8 *)surface->pixels + (size_t)row * surface->pitch);
+		SDL_UnlockSurface(surface);
+		SaveSurface(surface, request);
+		FreeSurface(surface);
+	}
+
 	static SDL_Surface *ConvertToRgb(SDL_Surface *surface)
 	{
 #if SDL_VERSION_ATLEAST(3, 0, 0)
@@ -946,14 +1045,7 @@ private:
 #elif SDL_VERSION_ATLEAST(2, 0, 0)
 		return SDL_ConvertSurfaceFormat(surface, SDL_PIXELFORMAT_RGB24, 0);
 #else
-		SDL_Surface *converted;
-#if SDL_BYTEORDER == SDL_BIG_ENDIAN
-		converted = SDL_CreateRGBSurface(SDL_SWSURFACE, surface->w, surface->h, 24,
-			0xff0000, 0x00ff00, 0x0000ff, 0);
-#else
-		converted = SDL_CreateRGBSurface(SDL_SWSURFACE, surface->w, surface->h, 24,
-			0x0000ff, 0x00ff00, 0xff0000, 0);
-#endif
+		SDL_Surface *converted = CreateRgbSurface(surface->w, surface->h);
 		if (converted != NULL && SDL_BlitSurface(surface, NULL, converted, NULL) != 0) {
 			SDL_FreeSurface(converted);
 			return NULL;
@@ -1109,6 +1201,32 @@ private:
 		Escape(path, escaped, sizeof(escaped));
 		snprintf(request->response, sizeof(request->response),
 			"{\"ok\":true,\"path\":\"%s\"}", escaped);
+	}
+
+	static void WriteExtFSRoot(char *response, size_t responsesize)
+	{
+		char escaped[1024];
+		const char *extfspath = PrefsFindString("extfs");
+#ifdef _WIN32
+		char root[512];
+		char *separator;
+		DWORD length;
+		if (PrefsFindBool("enableextfs")) {
+			length = GetModuleFileNameA(NULL, root, sizeof(root));
+			separator = strrchr(root, '\\');
+			if (length > 0 && length < sizeof(root) && separator != NULL &&
+				(size_t)(separator - root) + 17 < sizeof(root)) {
+				strcpy(separator + 1, "Virtual Desktop");
+				extfspath = root;
+			}
+		}
+#endif
+		if (extfspath == NULL || extfspath[0] == 0) {
+			WriteError(response, responsesize, "extfs is not enabled");
+			return;
+		}
+		Escape(extfspath, escaped, sizeof(escaped));
+		snprintf(response, responsesize, "{\"ok\":true,\"path\":\"%s\"}", escaped);
 	}
 
 	static void WriteError(char *response, size_t responsesize, const char *message)

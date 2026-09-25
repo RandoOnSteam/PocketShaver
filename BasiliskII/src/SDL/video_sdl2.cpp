@@ -3210,7 +3210,11 @@ static void handle_events(void)
 			default:
 				if (drv != NULL && drv->emulatormonitor != NULL) {
 					EmulatorMonitorView monitorview;
-					monitorview.guestsurface = guest_surface;
+					monitorview.framebuffer = the_buffer;
+					monitorview.palette = NULL;
+					if (sdl_palette != NULL)
+						monitorview.palette = sdl_palette->colors;
+					monitorview.rowbytes = drv->VIDEO_MODE_ROW_BYTES;
 					monitorview.hostsurface = NULL;
 					monitorview.window = sdl_window;
 					monitorview.hostwidth = 0;
