@@ -35,6 +35,18 @@ else()
 	project(macemu VERSION 1.0 LANGUAGES C CXX)
 endif()
 
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
+	add_executable(EmulatorMonitor tools/emumonitor.c)
+	set_target_properties(EmulatorMonitor PROPERTIES
+		C_STANDARD 90
+		C_STANDARD_REQUIRED ON
+		OUTPUT_NAME emumonitor)
+	if(WIN32)
+		target_link_libraries(EmulatorMonitor PRIVATE ws2_32)
+	endif()
+	install(TARGETS EmulatorMonitor RUNTIME DESTINATION bin)
+endif()
+
 # The C++ in this tree is written to C++98: no <atomic>/<thread>/<chrono>/
 # <unordered_map>, no auto/lambdas/nullptr/constexpr/range-for/move.  See
 # SheepShaver/src/include/atomic.h for the per-platform stand-in for C11
@@ -71,6 +83,7 @@ unset(SHEEPSHAVER_JIT_OPTION_DEFAULT)
 option(ENABLE_GTK				"GTK preferences UI on Unix" OFF)
 option(ENABLE_BINCUE		 "BIN/CUE CD image support" ON)
 option(ENABLE_VOSF			 "Video on SEGV signals" OFF)
+option(USE_SDL1					"Use SDL 1.2" OFF)
 option(USE_SDL3					"Use SDL 3 instead of SDL 2" ON)
 option(USE_SDLGPU				"Use SDL-GPU for SheepShaver gfxaccel" ON)
 option(USE_SDLGPU_SHADERCROSS "Use SDL_shadercross as an SDL-GPU shader fallback" OFF)
@@ -96,6 +109,9 @@ option(ENABLE_QD3D_WAIT_LOGGING
 option(ENABLE_NATIVE_CINEPAK_PATCH
 	"Patch QuickTime to use native Cinepak decoder"
 	OFF)
+option(ENABLE_EMULATOR_MONITOR
+	"Compile the localhost emulator control monitor"
+	OFF)
 # GFXACCEL_BACKEND: auto | opengl | metal | sdlgpu
 #   metal  = PocketShaver.xcodeproj (SDL2 + video_sdl2.cpp + Metal compositor)
 #   sdlgpu = "PocketShaver SDLGPU.xcodeproj" (SDL3 + video_sdl3.cpp)
@@ -103,6 +119,12 @@ option(ENABLE_NATIVE_CINEPAK_PATCH
 # USE_SDLGPU=ON selects sdlgpu unless GFXACCEL_BACKEND is set to metal.
 set(GFXACCEL_BACKEND "auto" CACHE STRING "gfxaccel GPU backend (auto|opengl|metal|sdlgpu)")
 set_property(CACHE GFXACCEL_BACKEND PROPERTY STRINGS auto opengl metal sdlgpu)
+if(USE_SDL1)
+	set(USE_SDL3 OFF CACHE BOOL "Use SDL 3 instead of SDL 2" FORCE)
+	set(USE_SDLGPU OFF CACHE BOOL "Use SDL-GPU for SheepShaver gfxaccel" FORCE)
+	set(ENABLE_GFXACCEL OFF CACHE BOOL
+		"SheepShaver graphics accel (NQD/RAVE/GL/DSp)" FORCE)
+endif()
 if(GFXACCEL_BACKEND STREQUAL "metal")
 	set(USE_SDLGPU OFF)
 	# PocketShaver.xcodeproj links SDL2.xcframework; video_sdl2.cpp is
@@ -118,7 +140,7 @@ if(USE_SDLGPU)
 	set(USE_SDL3 ON CACHE BOOL "Use SDL 3 instead of SDL 2" FORCE)
 endif()
 if(WIN32)
-	if(NOT USE_SDL3 AND NOT SDL2_DIR)
+	if(NOT USE_SDL1 AND NOT USE_SDL3 AND NOT SDL2_DIR)
 		set(SDL2_DIR "thirdparty/SDL2/cmake" CACHE PATH
 			"Directory containing SDL2Config.cmake")
 	elseif(USE_SDL3 AND NOT SDL3_DIR)
@@ -161,6 +183,7 @@ message(STATUS "	Basilisk II	: ${BUILD_BASILISKII}")
 message(STATUS "	SheepShaver	: ${BUILD_SHEEPSHAVER}")
 message(STATUS "	Basilisk JIT : ${ENABLE_JIT}")
 message(STATUS "	Sheep JIT		: ${ENABLE_SHEEPSHAVER_JIT}")
+message(STATUS "	SDL1				 : ${USE_SDL1}")
 message(STATUS "	SDL3				 : ${USE_SDL3}")
 message(STATUS "	SDL-GPU			 : ${USE_SDLGPU}")
 message(STATUS "	SDL-GPU shadercross: ${USE_SDLGPU_SHADERCROSS}")
@@ -171,6 +194,7 @@ message(STATUS "	QD3D graphics log: ${ENABLE_QD3D_GRAPHICS_LOGGING}")
 message(STATUS "	QD3D audio log: ${ENABLE_QD3D_AUDIO_LOGGING}")
 message(STATUS "	QD3D media log: ${ENABLE_QD3D_MEDIA_LOGGING}")
 message(STATUS "	QD3D wait log: ${ENABLE_QD3D_WAIT_LOGGING}")
+message(STATUS "	Emulator monitor: ${ENABLE_EMULATOR_MONITOR}")
 message(STATUS "	Platform		 : ${CMAKE_SYSTEM_NAME} / ${CMAKE_SYSTEM_PROCESSOR}")
 if(APPLE)
 	message(STATUS "	Apple target	 : ${MACEMU_APPLE_TARGET}")

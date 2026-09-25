@@ -72,6 +72,9 @@
 #include <cpu_emulation.h>
 #include "main.h"
 #include "adb.h"
+#ifdef ENABLE_EMULATOR_MONITOR
+#include "emulator_monitor.h"
+#endif
 #include "macos_util.h"
 #include "prefs.h"
 #include "user_strings.h"
@@ -712,6 +715,9 @@ public:
 
 	bool init_ok;	// Initialization succeeded (we can't use exceptions because of -fomit-frame-pointer)
 	SDL_Surface *s;	// The surface we draw into
+#ifdef ENABLE_EMULATOR_MONITOR
+	EmulatorMonitor *emulatormonitor;
+#endif
 };
 
 #ifdef ENABLE_VOSF
@@ -727,6 +733,9 @@ static driver_base *drv = NULL;	// Pointer to currently used driver object
 
 driver_base::driver_base(SDL_monitor_desc &m)
 	: monitor(m), mode(m.get_current_mode()), init_ok(false), s(NULL)
+#ifdef ENABLE_EMULATOR_MONITOR
+	, emulatormonitor(NULL)
+#endif
 {
 	the_buffer = NULL;
 	the_buffer_copy = NULL;
@@ -1428,10 +1437,23 @@ void driver_base::adapt_to_video_mode() {
 
 	// Everything went well
 	init_ok = true;
+#ifdef ENABLE_EMULATOR_MONITOR
+	if (emulatormonitor == NULL) {
+		emulatormonitor = new EmulatorMonitor();
+		if (!emulatormonitor->Start()) {
+			delete emulatormonitor;
+			emulatormonitor = NULL;
+		}
+	}
+#endif
 }
 
 driver_base::~driver_base()
 {
+#ifdef ENABLE_EMULATOR_MONITOR
+	delete emulatormonitor;
+	emulatormonitor = NULL;
+#endif
 	ungrab_mouse(); /* TODO: Needed? */
 	restore_mouse_accel();
 
@@ -3184,6 +3206,20 @@ static void handle_events(void)
 			SDL_Event & event = events[i];
 
 			switch (event.type) {
+#ifdef ENABLE_EMULATOR_MONITOR
+			default:
+				if (drv != NULL && drv->emulatormonitor != NULL) {
+					EmulatorMonitorView monitorview;
+					monitorview.guestsurface = guest_surface;
+					monitorview.hostsurface = NULL;
+					monitorview.window = sdl_window;
+					monitorview.width = drv->VIDEO_MODE_X;
+					monitorview.height = drv->VIDEO_MODE_Y;
+					monitorview.depth = 1 << (drv->VIDEO_MODE_DEPTH & 0x0f);
+					drv->emulatormonitor->HandleEvent(event, monitorview);
+				}
+				break;
+#endif
 
 			// Mouse
 			case SDL_MOUSEBUTTONDOWN:

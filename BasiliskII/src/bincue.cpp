@@ -177,7 +177,7 @@ typedef struct CDPlayer {
 #ifdef OSX_CORE_AUDIO
 	OSXsoundOutput soundoutput;
 #endif
-#ifdef USE_SDL_AUDIO
+#if defined(USE_SDL_AUDIO) && !defined(USE_SDL1)
 	SDL_AudioStream *stream;
 #endif
 } CDPlayer;
@@ -593,7 +593,7 @@ static bool LoadCueSheet(const char *cuefile, CueSheet *cs)
 	return false;
 }
 
-#ifdef USE_SDL_AUDIO
+#if defined(USE_SDL_AUDIO) && !defined(USE_SDL1)
 	static void OpenPlayerStream(CDPlayer * player);
 	static void ClosePlayerStream(CDPlayer * player);
 #endif
@@ -646,7 +646,7 @@ void *open_bincue(const char *name)
 		if (player->audiofh < 0)
 			player->audio_enabled = false;
 
-#ifdef USE_SDL_AUDIO
+#if defined(USE_SDL_AUDIO) && !defined(USE_SDL1)
 		OpenPlayerStream(player);
 #endif
 
@@ -674,7 +674,7 @@ void close_bincue(void *fh)
 
 		players.remove(player);
 
-#ifdef USE_SDL_AUDIO
+#if defined(USE_SDL_AUDIO) && !defined(USE_SDL1)
 		ClosePlayerStream(player);
 #endif
 		if (player->audiofh >= 0)
@@ -1222,7 +1222,7 @@ static uint8 *fill_buffer(int stream_len, CDPlayer* player)
 }
 
 
-#ifdef USE_SDL_AUDIO
+#if defined(USE_SDL_AUDIO) && !defined(USE_SDL1)
 
 bool HaveAudioToMix_bincue() {
 	return currently_playing != NULL;

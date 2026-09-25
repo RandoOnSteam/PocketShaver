@@ -9,7 +9,9 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
 	option(ENABLE_GTK "GTK prefs UI (Unix)" OFF)
 	option(ENABLE_BINCUE "BIN/CUE support" ON)
 	option(ENABLE_VOSF "Video on SEGV" OFF)
+	option(USE_SDL1 "Use SDL 1.2" OFF)
 	option(USE_SDL3 "Use SDL3" OFF)
+	option(ENABLE_EMULATOR_MONITOR "Compile the localhost emulator control monitor" OFF)
 	set(MACEMU_CMAKE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../cmake")
 	list(APPEND CMAKE_MODULE_PATH "${MACEMU_CMAKE_DIR}")
 	include(MacEmuCommon)
@@ -254,6 +256,9 @@ target_include_directories(BasiliskII PRIVATE
 )
 
 target_compile_definitions(BasiliskII PRIVATE FPU_IEEE UNALIGNED_PROFITABLE)
+if(ENABLE_EMULATOR_MONITOR)
+	target_compile_definitions(BasiliskII PRIVATE ENABLE_EMULATOR_MONITOR=1)
+endif()
 # DATADIR: runtime data path (keycodes etc.), matching the autoconf build's
 # -DDATADIR=\"$(datadir)/$(APP)\". Used by the SDL/X video code.
 if(NOT WIN32) # conflicts with win32 headers

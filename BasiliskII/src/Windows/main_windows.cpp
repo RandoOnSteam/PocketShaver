@@ -428,7 +428,11 @@ int main(int argc, char **argv)
 	emul_thread = GetCurrentThread();
 
 	// SDL threads available, start 60Hz thread
+#ifdef USE_SDL1
+	tick_thread_active = ((tick_thread = SDL_CreateThread(tick_func, NULL)) != NULL);
+#else
 	tick_thread_active = ((tick_thread = SDL_CreateThread(tick_func, "Redraw Thread", NULL)) != NULL);
+#endif
 	if (!tick_thread_active) {
 		sprintf(str, GetString(STR_TICK_THREAD_ERR), strerror(errno));
 		ErrorAlert(str);
@@ -438,7 +442,11 @@ int main(int argc, char **argv)
 
 	// Start XPRAM watchdog thread
 	memcpy(last_xpram, XPRAM, XPRAM_SIZE);
+#ifdef USE_SDL1
+	xpram_thread_active = ((xpram_thread = SDL_CreateThread(xpram_func, NULL)) != NULL);
+#else
 	xpram_thread_active = ((xpram_thread = SDL_CreateThread(xpram_func, "XPRAM Thread", NULL)) != NULL);
+#endif
 	D(bug("XPRAM thread started\n"));
 
 	// Start 68k and jump to ROM boot routine
@@ -656,9 +664,16 @@ static int tick_func(void *arg)
 #else
 #include <SDL_syswm.h>
 #endif
+#ifndef USE_SDL1
 extern SDL_Window *sdl_window;
+#endif
 HWND GetMainWindowHandle(void)
 {
+#ifdef USE_SDL1
+	SDL_SysWMinfo wmInfo;
+	SDL_VERSION(&wmInfo.version);
+	return SDL_GetWMInfo(&wmInfo) ? wmInfo.window : NULL;
+#else
 	if (!sdl_window) {
 		return NULL;
 	}
@@ -669,6 +684,7 @@ HWND GetMainWindowHandle(void)
 	SDL_SysWMinfo wmInfo;
 	SDL_VERSION(&wmInfo.version);
 	return SDL_GetWindowWMInfo(sdl_window, &wmInfo) ? wmInfo.info.win.window : NULL;
+#endif
 #endif
 }
 #endif
@@ -759,7 +775,11 @@ static LRESULT CALLBACK low_level_keyboard_hook(int nCode, WPARAM wParam, LPARAM
 			if (p->vkCode == VK_LWIN || p->vkCode == VK_RWIN) {
 				bool intercept_event = false;
 #ifdef USE_SDL_VIDEO
+#ifdef USE_SDL1
+				if (GetForegroundWindow() == GetMainWindowHandle()) {
+#else
 				if (sdl_window && (SDL_GetWindowFlags(sdl_window) & SDL_WINDOW_INPUT_FOCUS)) {
+#endif
 					intercept_event = true;
 				}
 #endif
@@ -772,6 +792,9 @@ static LRESULT CALLBACK low_level_keyboard_hook(int nCode, WPARAM wParam, LPARAM
 #if SDL_VERSION_ATLEAST(3, 0, 0)
 					e.key.key = (p->vkCode == VK_LWIN) ? SDLK_LGUI : SDLK_RGUI;
 					e.key.scancode = (p->vkCode == VK_LWIN) ? SDL_SCANCODE_LGUI : SDL_SCANCODE_RGUI;
+#elif defined(USE_SDL1)
+					e.key.keysym.sym = (p->vkCode == VK_LWIN) ? SDLK_LMETA : SDLK_RMETA;
+					e.key.keysym.scancode = 0;
 #else
 					e.key.keysym.sym = (p->vkCode == VK_LWIN) ? SDLK_LGUI : SDLK_RGUI;
 					e.key.keysym.scancode = (p->vkCode == VK_LWIN) ? SDL_SCANCODE_LGUI : SDL_SCANCODE_RGUI;

@@ -24,12 +24,17 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
 	"Compile CD/media I/O diagnostics" OFF)
 	option(ENABLE_QD3D_WAIT_LOGGING
 	"Compile high-volume timing/wait diagnostics" OFF)
+	option(USE_SDL1 "Use SDL 1.2" OFF)
 	option(USE_SDL3 "Use SDL3" OFF)
 	option(USE_SDLGPU "Use SDL-GPU for gfxaccel" OFF)
 	option(ENABLE_SDLGPU_TRANSITION_LOGGING
 		"Compile SDL-GPU transition diagnostics" ON)
 	option(USE_SDLGPU_SHADERCROSS "Use SDL_shadercross as an SDL-GPU shader fallback" OFF)
-	if(USE_SDLGPU)
+	option(ENABLE_EMULATOR_MONITOR "Compile the localhost emulator control monitor" OFF)
+	if(USE_SDL1)
+		set(USE_SDL3 OFF CACHE BOOL "Use SDL3" FORCE)
+		set(USE_SDLGPU OFF CACHE BOOL "Use SDL-GPU for gfxaccel" FORCE)
+	elseif(USE_SDLGPU)
 		set(USE_SDL3 ON CACHE BOOL "Use SDL3" FORCE)
 	endif()
 	set(MACEMU_CMAKE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../cmake")
@@ -302,19 +307,23 @@ endif()
 if(NOT DEFINED ENABLE_GFXACCEL)
 	option(ENABLE_GFXACCEL "SheepShaver graphics accel (NQD/RAVE/GL/DSp)" ON)
 endif()
+if(USE_SDL1)
+	set(ENABLE_GFXACCEL OFF CACHE BOOL
+		"SheepShaver graphics accel (NQD/RAVE/GL/DSp)" FORCE)
+endif()
 if(NOT DEFINED GFXACCEL_BACKEND)
 	set(GFXACCEL_BACKEND "auto" CACHE STRING "gfxaccel GPU backend (auto|opengl|metal|sdlgpu)")
 endif()
 set_property(CACHE GFXACCEL_BACKEND PROPERTY STRINGS auto opengl metal sdlgpu)
 
 set(SS_GFXACCEL)
-set(SS_GFXACCEL_INC)
+set(SS_GFXACCEL_DIR "${SS_SRC}/gfxaccel")
+set(SS_GFXACCEL_INC "${SS_GFXACCEL_DIR}" "${SS_GFXACCEL_DIR}/include")
 set(SS_GFXACCEL_LIBS)
 set(SS_GFXACCEL_DEFS)
 
 if(ENABLE_GFXACCEL)
-	set(SS_GFXACCEL_DIR "${SS_SRC}/gfxaccel")
-	set(SS_GFXACCEL_INC "${SS_GFXACCEL_DIR}" "${SS_GFXACCEL_DIR}/include" "${SS_GFXACCEL_DIR}/gl")
+	list(APPEND SS_GFXACCEL_INC "${SS_GFXACCEL_DIR}/gl")
 
 	# Portable engine / policy / dispatch sources
 	list(APPEND SS_GFXACCEL
@@ -563,6 +572,10 @@ function(sheepshaver_configure_target SHEEPSHAVER_EXECUTABLE)
 		target_compile_definitions(${SHEEPSHAVER_EXECUTABLE} PRIVATE
 			ENABLE_NATIVE_CINEPAK_PATCH=1)
 	endif()
+	if(ENABLE_EMULATOR_MONITOR)
+		target_compile_definitions(${SHEEPSHAVER_EXECUTABLE} PRIVATE
+			ENABLE_EMULATOR_MONITOR=1)
+	endif()
 
 	macemu_apply_common(${SHEEPSHAVER_EXECUTABLE})
 
@@ -629,3 +642,4 @@ message(STATUS "SheepShaver: QD3D audio logging=${ENABLE_QD3D_AUDIO_LOGGING}")
 message(STATUS "SheepShaver: QD3D media logging=${ENABLE_QD3D_MEDIA_LOGGING}")
 message(STATUS "SheepShaver: QD3D wait logging=${ENABLE_QD3D_WAIT_LOGGING}")
 message(STATUS "SheepShaver: SDL-GPU transition logging=${ENABLE_SDLGPU_TRANSITION_LOGGING}")
+message(STATUS "SheepShaver: emulator monitor=${ENABLE_EMULATOR_MONITOR}")

@@ -511,6 +511,8 @@ static Screen_blit_func_info Screen_blitters[] = {
 	{ 24, 0x0000ff, 0x00ff00, 0xff0000, Blit_BGR888_NBO	, Blit_BGR888_OBO	},	// NT
 #ifdef ENABLE_VOSF
 	{ 32, 0xff0000, 0x00ff00, 0x0000ff, Blit_RGB888_NBO	, Blit_Copy_Raw		},	// OK (NBO)
+#elif defined(USE_SDL1)
+	{ 32, 0xff0000, 0x00ff00, 0x0000ff, Blit_RGB888_NBO	, Blit_Copy_Raw		},
 #else
 	{ 32, 0xff000000, 0x00ff0000, 0x0000ff00, Blit_RGB888_NBO	, Blit_Copy_Raw		},	// OK (NBO)
 #endif

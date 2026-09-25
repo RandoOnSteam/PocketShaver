@@ -20,6 +20,7 @@
 
 #include "sysdeps.h"
 
+#if defined(ENABLE_GFXACCEL)
 #include "prefs.h"
 #include "video.h"
 #include "video_defs.h"
@@ -884,3 +885,58 @@ void VideoInstallAccel(void)
 		CinepakRegisterFromNative();
 	#endif
 }
+#else
+void VideoInstallAccel(void)
+{
+}
+
+bool NQD_sync_hook(uint32 arg)
+{
+	return false;
+}
+
+bool NQD_bitblt_hook(uint32 arg)
+{
+	return false;
+}
+
+bool NQD_fillrect_hook(uint32 arg)
+{
+	return false;
+}
+
+bool NQD_unknown_hook(uint32 arg)
+{
+	return false;
+}
+
+bool NQD_bltmask_hook(uint32 arg)
+{
+	return false;
+}
+
+bool NQD_fillmask_hook(uint32 arg)
+{
+	return false;
+}
+
+void NQD_bitblt(uint32 arg)
+{
+}
+
+void NQD_invrect(uint32 arg)
+{
+}
+
+void NQD_fillrect(uint32 arg)
+{
+}
+
+void NQD_bltmask(uint32 arg)
+{
+}
+
+void NQD_fillmask(uint32 arg)
+{
+}
+#endif

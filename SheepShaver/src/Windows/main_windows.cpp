@@ -845,9 +845,16 @@ void SheepMem::Exit(void)
 #if !SDL_VERSION_ATLEAST(3, 0, 0)
 #include <SDL_syswm.h>
 #endif
+#ifndef USE_SDL1
 extern SDL_Window *sdl_window;
+#endif
 HWND GetMainWindowHandle(void)
 {
+#ifdef USE_SDL1
+	SDL_SysWMinfo wmInfo;
+	SDL_VERSION(&wmInfo.version);
+	return SDL_GetWMInfo(&wmInfo) ? wmInfo.window : NULL;
+#else
 	if (!sdl_window) {
 		return NULL;
 	}
@@ -858,6 +865,7 @@ HWND GetMainWindowHandle(void)
 	SDL_SysWMinfo wmInfo;
 	SDL_VERSION(&wmInfo.version);
 	return SDL_GetWindowWMInfo(sdl_window, &wmInfo) ? wmInfo.info.win.window : NULL;
+#endif
 #endif
 }
 #endif
@@ -928,7 +936,11 @@ static LRESULT CALLBACK low_level_keyboard_hook(int nCode, WPARAM wParam, LPARAM
 			if (p->vkCode == VK_LWIN || p->vkCode == VK_RWIN) {
 				bool intercept_event = false;
 #ifdef USE_SDL_VIDEO
+#ifdef USE_SDL1
+				if (GetForegroundWindow() == GetMainWindowHandle()) {
+#else
 				if (sdl_window && (SDL_GetWindowFlags(sdl_window) & SDL_WINDOW_INPUT_FOCUS)) {
+#endif
 					intercept_event = true;
 				}
 #endif
@@ -941,6 +953,9 @@ static LRESULT CALLBACK low_level_keyboard_hook(int nCode, WPARAM wParam, LPARAM
 #if SDL_VERSION_ATLEAST(3, 0, 0)
 					e.key.key = (p->vkCode == VK_LWIN) ? SDLK_LGUI : SDLK_RGUI;
 					e.key.scancode = (p->vkCode == VK_LWIN) ? SDL_SCANCODE_LGUI : SDL_SCANCODE_RGUI;
+#elif defined(USE_SDL1)
+					e.key.keysym.sym = (p->vkCode == VK_LWIN) ? SDLK_LMETA : SDLK_RMETA;
+					e.key.keysym.scancode = 0;
 #else
 					e.key.keysym.sym = (p->vkCode == VK_LWIN) ? SDLK_LGUI : SDLK_RGUI;
 					e.key.keysym.scancode = (p->vkCode == VK_LWIN) ? SDL_SCANCODE_LGUI : SDL_SCANCODE_RGUI;

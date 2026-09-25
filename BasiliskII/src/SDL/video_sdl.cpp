@@ -58,6 +58,9 @@
 #include "cpu_emulation.h"
 #include "main.h"
 #include "adb.h"
+#ifdef ENABLE_EMULATOR_MONITOR
+#include "emulator_monitor.h"
+#endif
 #include "macos_util.h"
 #include "prefs.h"
 #include "user_strings.h"
@@ -138,7 +141,11 @@ static SDL_Cursor *sdl_cursor;						// Copy of Mac cursor
 static SDL_Color sdl_palette[256];					// Color palette to be used as CLUT and gamma table
 static bool sdl_palette_changed = false;			// Flag: Palette changed, redraw thread must set new colors
 static bool toggle_fullscreen = false;
+#ifdef ENABLE_EMULATOR_MONITOR
+static const int sdl_eventmask = SDL_MOUSEEVENTMASK | SDL_KEYEVENTMASK | SDL_VIDEOEXPOSEMASK | SDL_QUITMASK | SDL_ACTIVEEVENTMASK | SDL_EVENTMASK(SDL_USEREVENT);
+#else
 static const int sdl_eventmask = SDL_MOUSEEVENTMASK | SDL_KEYEVENTMASK | SDL_VIDEOEXPOSEMASK | SDL_QUITMASK | SDL_ACTIVEEVENTMASK;
+#endif
 
 static bool mouse_grabbed = false;
 static bool mouse_grabbed_window_name_status = false;
@@ -157,11 +164,6 @@ static SDL_mutex *sdl_palette_lock = NULL;
 static SDL_mutex *frame_buffer_lock = NULL;
 #define LOCK_FRAME_BUFFER SDL_LockMutex(frame_buffer_lock)
 #define UNLOCK_FRAME_BUFFER SDL_UnlockMutex(frame_buffer_lock)
-
-// Previously set gamma tables
-static uint16 last_gamma_red[256];
-static uint16 last_gamma_green[256];
-static uint16 last_gamma_blue[256];
 
 // Video refresh function
 static void VideoRefreshInit(void);
@@ -363,7 +365,7 @@ static void ErrorAlert(int error)
 
 class SDL_monitor_desc : public monitor_desc {
 public:
-	SDL_monitor_desc(const vector<VIDEO_MODE> &available_modes, video_depth default_depth, uint32 default_id) : monitor_desc(available_modes, default_depth, default_id) {}
+	SDL_monitor_desc(const vector<VIDEO_MODE> &available_modes, video_depth default_depth, uint32 default_id) : monitor_desc(available_modes, default_depth, default_id), desktopwidth(0), desktopheight(0), initialgammavalid(false), lastgammavalid(false), hostfocused(true) {}
 	~SDL_monitor_desc() {}
 
 	virtual void switch_to_current_mode(void);
@@ -372,6 +374,19 @@ public:
 
 	bool video_open(void);
 	void video_close(void);
+	void ApplyGammaRamp(void);
+
+	int desktopwidth;
+	int desktopheight;
+	uint16 initialgammared[256];
+	uint16 initialgammagreen[256];
+	uint16 initialgammablue[256];
+	uint16 lastgammared[256];
+	uint16 lastgammagreen[256];
+	uint16 lastgammablue[256];
+	bool initialgammavalid;
+	bool lastgammavalid;
+	bool hostfocused;
 };
 
 
@@ -603,14 +618,69 @@ static void migrate_screen_prefs(void)
 #endif
 }
 
-void update_sdl_video(SDL_Surface *screen, Sint32 x, Sint32 y, Sint32 w, Sint32 h)
+static float GetMagnificationRate(void)
 {
-	SDL_UpdateRect(screen, x, y, w, h);
+	const char *magnificationtext = PrefsFindString("mag_rate");
+	float magnification = 1.0f;
+	if (magnificationtext == NULL || sscanf(magnificationtext, "%f", &magnification) != 1 || magnification < 1.0f)
+		return 1.0f;
+	if (magnification > 4.0f)
+		return 4.0f;
+	return magnification;
 }
 
-void update_sdl_video(SDL_Surface *screen, int numrects, SDL_Rect *rects)
+static void BuildScaleMap(vector<int> &firstsources, vector<int> &secondsources, vector<int> &weights, int sourcesize, int destinationsize, bool nearest)
 {
-	SDL_UpdateRects(screen, numrects, rects);
+	const int64 lastposition = (int64)(sourcesize - 1) << 8;
+	firstsources.resize(destinationsize);
+	secondsources.resize(destinationsize);
+	weights.resize(destinationsize);
+	for (int index = 0; index < destinationsize; index++) {
+		int64 position;
+		if (nearest)
+			position = ((int64)(2 * index + 1) * sourcesize / (2 * destinationsize)) << 8;
+		else
+			position = (int64)(2 * index + 1) * sourcesize * 256 / (2 * destinationsize) - 128;
+		if (position < 0)
+			position = 0;
+		else if (position > lastposition)
+			position = lastposition;
+		firstsources[index] = (int)(position >> 8);
+		weights[index] = (int)(position & 255);
+		if (firstsources[index] < sourcesize - 1)
+			secondsources[index] = firstsources[index] + 1;
+		else
+			secondsources[index] = firstsources[index];
+	}
+}
+
+static inline uint32 BlendPixels(uint32 firstpixel, uint32 secondpixel, uint32 weight)
+{
+	const uint32 inverseweight = 256 - weight;
+	const uint32 evenbytes = (((firstpixel & 0x00ff00ff) * inverseweight + (secondpixel & 0x00ff00ff) * weight) >> 8) & 0x00ff00ff;
+	const uint32 oddbytes = (((firstpixel >> 8) & 0x00ff00ff) * inverseweight + ((secondpixel >> 8) & 0x00ff00ff) * weight) & 0xff00ff00;
+	return evenbytes | oddbytes;
+}
+
+static void ScaleRowNearest(uint32 *destination, const uint32 *source, const int *columns, int count)
+{
+	for (int index = 0; index < count; index++)
+		destination[index] = source[columns[index]];
+}
+
+static void ScaleRowLinear(uint32 *destination, const uint32 *source, const int *firstcolumns, const int *secondcolumns, const int *weights, int count)
+{
+	for (int index = 0; index < count; index++)
+		destination[index] = BlendPixels(source[firstcolumns[index]], source[secondcolumns[index]], weights[index]);
+}
+
+static void ScaleRowBilinear(uint32 *destination, const uint32 *upper, const uint32 *lower, const int *firstcolumns, const int *secondcolumns, const int *weights, uint32 rowweight, int count)
+{
+	for (int index = 0; index < count; index++) {
+		const uint32 top = BlendPixels(upper[firstcolumns[index]], upper[secondcolumns[index]], weights[index]);
+		const uint32 bottom = BlendPixels(lower[firstcolumns[index]], lower[secondcolumns[index]], weights[index]);
+		destination[index] = BlendPixels(top, bottom, rowweight);
+	}
 }
 
 
@@ -631,7 +701,7 @@ public:
 	void suspend(void) {}
 	void resume(void) {}
 	void toggle_mouse_grab(void);
-	void mouse_moved(int x, int y) { ADBMouseMoved(x, y); }
+	void mouse_moved(int x, int y);
 
 	void disable_mouse_accel(void);
 	void restore_mouse_accel(void);
@@ -639,12 +709,38 @@ public:
 	void grab_mouse(void);
 	void ungrab_mouse(void);
 
+	void SetupScaling(void);
+	void PresentScaled(int left, int top, int width, int height, SDL_Rect *destination);
+	void HostToGuest(int &x, int &y);
+	void GuestToHost(int &x, int &y);
+#ifdef SHEEPSHAVER
+	SDL_Cursor *CreateMagnifiedCursor(bool usehotspot);
+#endif
+
 public:
 	SDL_monitor_desc &monitor; // Associated video monitor
 	const VIDEO_MODE &mode;    // Video mode handled by the driver
 
 	bool init_ok;	// Initialization succeeded (we can't use exceptions because of -fomit-frame-pointer)
 	SDL_Surface *s;	// The surface we draw into
+	SDL_Surface *hostsurface;
+	SDL_Surface *convertsurface;
+	vector<int> columnfirst;
+	vector<int> columnsecond;
+	vector<int> columnweight;
+	vector<int> rowfirst;
+	vector<int> rowsecond;
+	vector<int> rowweight;
+	int viewleft;
+	int viewtop;
+	int viewwidth;
+	int viewheight;
+	bool scaling;
+	bool nearestscaling;
+	bool borderless;
+#ifdef ENABLE_EMULATOR_MONITOR
+	EmulatorMonitor *emulatormonitor;
+#endif
 };
 
 #ifdef ENABLE_VOSF
@@ -654,12 +750,45 @@ static void update_display_static(driver_base *drv);
 
 static driver_base *drv = NULL;	// Pointer to currently used driver object
 
+void update_sdl_video(SDL_Surface *screen, Sint32 x, Sint32 y, Sint32 w, Sint32 h)
+{
+	SDL_Rect destination;
+	if (!drv->scaling) {
+		SDL_UpdateRect(screen, x, y, w, h);
+		return;
+	}
+	if (drv->hostsurface == NULL)
+		return;
+	drv->PresentScaled(x, y, w, h, &destination);
+	SDL_UpdateRect(drv->hostsurface, destination.x, destination.y, destination.w, destination.h);
+}
+
+void update_sdl_video(SDL_Surface *screen, int numrects, SDL_Rect *rects)
+{
+	SDL_Rect *destinations;
+	if (!drv->scaling) {
+		SDL_UpdateRects(screen, numrects, rects);
+		return;
+	}
+	if (drv->hostsurface == NULL)
+		return;
+	destinations = (SDL_Rect *)alloca(sizeof(SDL_Rect) * numrects);
+	for (int index = 0; index < numrects; index++)
+		drv->PresentScaled(rects[index].x, rects[index].y, rects[index].w, rects[index].h, &destinations[index]);
+	SDL_UpdateRects(drv->hostsurface, numrects, destinations);
+}
+
 #ifdef ENABLE_VOSF
 # include "video_vosf.h"
 #endif
 
 driver_base::driver_base(SDL_monitor_desc &m)
-	: monitor(m), mode(m.get_current_mode()), init_ok(false), s(NULL)
+	: monitor(m), mode(m.get_current_mode()), init_ok(false), s(NULL),
+	  hostsurface(NULL), convertsurface(NULL), viewleft(0), viewtop(0),
+	  viewwidth(0), viewheight(0), scaling(false), nearestscaling(false), borderless(false)
+#ifdef ENABLE_EMULATOR_MONITOR
+	, emulatormonitor(NULL)
+#endif
 {
 	the_buffer = NULL;
 	the_buffer_copy = NULL;
@@ -667,18 +796,238 @@ driver_base::driver_base(SDL_monitor_desc &m)
 
 void driver_base::set_video_mode(int flags)
 {
-	int depth = sdl_depth_of_video_depth(VIDEO_MODE_DEPTH);
-	if ((s = SDL_SetVideoMode(VIDEO_MODE_X, VIDEO_MODE_Y, depth,
-			SDL_HWSURFACE | flags)) == NULL)
+	const float magnification = GetMagnificationRate();
+	const int depth = sdl_depth_of_video_depth(VIDEO_MODE_DEPTH);
+	int hostwidth;
+	int hostheight;
+	int hostflags = flags;
+	SDL_PixelFormat *hostformat;
+	scaling = magnification != 1.0f;
+	if (!scaling) {
+		hostsurface = s = SDL_SetVideoMode(VIDEO_MODE_X, VIDEO_MODE_Y, depth, SDL_HWSURFACE | flags);
+		if (s == NULL)
+			return;
+		viewleft = 0;
+		viewtop = 0;
+		viewwidth = VIDEO_MODE_X;
+		viewheight = VIDEO_MODE_Y;
+#ifdef ENABLE_VOSF
+		the_host_buffer = (uint8 *)s->pixels;
+#endif
 		return;
+	}
+	if ((flags & SDL_FULLSCREEN) && monitor.desktopwidth > 0 && monitor.desktopheight > 0) {
+		hostwidth = monitor.desktopwidth;
+		hostheight = monitor.desktopheight;
+	}
+	else if (flags & SDL_FULLSCREEN)
+		sdl_display_dimensions(hostwidth, hostheight);
+	else {
+		hostwidth = (int)(VIDEO_MODE_X * magnification + 0.5f);
+		hostheight = (int)(VIDEO_MODE_Y * magnification + 0.5f);
+	}
+#ifdef WIN32
+	if (flags & SDL_FULLSCREEN)
+		hostflags = (flags & ~SDL_FULLSCREEN) | SDL_NOFRAME;
+#endif
+	hostsurface = SDL_SetVideoMode(hostwidth, hostheight, 32, SDL_SWSURFACE | hostflags);
+	if (hostsurface == NULL)
+		return;
+#ifdef WIN32
+	if (flags & SDL_FULLSCREEN)
+		SetWindowPos(GetMainWindowHandle(), HWND_TOP, 0, 0, 0, 0, SWP_NOSIZE);
+	else if (borderless) {
+		RECT windowrect;
+		GetWindowRect(GetMainWindowHandle(), &windowrect);
+		SetWindowPos(GetMainWindowHandle(), HWND_TOP,
+			(GetSystemMetrics(SM_CXSCREEN) - (windowrect.right - windowrect.left)) / 2,
+			(GetSystemMetrics(SM_CYSCREEN) - (windowrect.bottom - windowrect.top)) / 2,
+			0, 0, SWP_NOSIZE);
+	}
+	borderless = (flags & SDL_FULLSCREEN) != 0;
+#endif
+	hostformat = hostsurface->format;
+	if (s == NULL) {
+		if (depth == 8)
+			s = SDL_CreateRGBSurface(SDL_SWSURFACE, VIDEO_MODE_X, VIDEO_MODE_Y, 8, 0, 0, 0, 0);
+		else if (depth == 16 && screen_depth == 15)
+			s = SDL_CreateRGBSurface(SDL_SWSURFACE, VIDEO_MODE_X, VIDEO_MODE_Y, 16, 0x7c00, 0x03e0, 0x001f, 0);
+		else if (depth == 16)
+			s = SDL_CreateRGBSurface(SDL_SWSURFACE, VIDEO_MODE_X, VIDEO_MODE_Y, 16, 0xf800, 0x07e0, 0x001f, 0);
+		else
+			s = SDL_CreateRGBSurface(SDL_SWSURFACE, VIDEO_MODE_X, VIDEO_MODE_Y, 32, 0xff0000, 0x00ff00, 0x0000ff, 0);
+		if (s == NULL)
+			return;
+	}
+	if (convertsurface != NULL && convertsurface != s)
+		SDL_FreeSurface(convertsurface);
+	if (s->format->BitsPerPixel == 32 && s->format->Rmask == hostformat->Rmask &&
+		s->format->Gmask == hostformat->Gmask && s->format->Bmask == hostformat->Bmask)
+		convertsurface = s;
+	else
+		convertsurface = SDL_CreateRGBSurface(SDL_SWSURFACE, VIDEO_MODE_X, VIDEO_MODE_Y, 32,
+			hostformat->Rmask, hostformat->Gmask, hostformat->Bmask, 0);
+	if (convertsurface == NULL) {
+		hostsurface = NULL;
+		return;
+	}
+	SetupScaling();
 #ifdef ENABLE_VOSF
 	the_host_buffer = (uint8 *)s->pixels;
 #endif
 }
 
+void driver_base::SetupScaling(void)
+{
+	const int guestwidth = VIDEO_MODE_X;
+	const int guestheight = VIDEO_MODE_Y;
+	double scale = (double)hostsurface->w / guestwidth;
+	if ((double)hostsurface->h / guestheight < scale)
+		scale = (double)hostsurface->h / guestheight;
+	if (PrefsFindBool("scale_integer")) {
+		scale = (double)(int)scale;
+		if (scale < 1.0)
+			scale = 1.0;
+	}
+	viewwidth = (int)(guestwidth * scale + 0.5);
+	viewheight = (int)(guestheight * scale + 0.5);
+	if (viewwidth > hostsurface->w)
+		viewwidth = hostsurface->w;
+	if (viewheight > hostsurface->h)
+		viewheight = hostsurface->h;
+	viewleft = (hostsurface->w - viewwidth) / 2;
+	viewtop = (hostsurface->h - viewheight) / 2;
+	nearestscaling = PrefsFindBool("scale_nearest");
+	BuildScaleMap(columnfirst, columnsecond, columnweight, guestwidth, viewwidth, nearestscaling);
+	BuildScaleMap(rowfirst, rowsecond, rowweight, guestheight, viewheight, nearestscaling);
+	SDL_FillRect(hostsurface, NULL, SDL_MapRGB(hostsurface->format, 0, 0, 0));
+	SDL_UpdateRect(hostsurface, 0, 0, 0, 0);
+}
+
+void driver_base::PresentScaled(int left, int top, int width, int height, SDL_Rect *destination)
+{
+	const int guestwidth = VIDEO_MODE_X;
+	const int guestheight = VIDEO_MODE_Y;
+	const int marginx = viewwidth / guestwidth + 2;
+	const int marginy = viewheight / guestheight + 2;
+	int firstcolumn = (int)((int64)left * viewwidth / guestwidth) - marginx;
+	int lastcolumn = (int)(((int64)(left + width) * viewwidth + guestwidth - 1) / guestwidth) + marginx;
+	int firstrow = (int)((int64)top * viewheight / guestheight) - marginy;
+	int lastrow = (int)(((int64)(top + height) * viewheight + guestheight - 1) / guestheight) + marginy;
+	const uint8 *sourcepixels;
+	uint8 *destinationrow;
+	int sourcepitch;
+	int count;
+	if (firstcolumn < 0)
+		firstcolumn = 0;
+	if (lastcolumn > viewwidth)
+		lastcolumn = viewwidth;
+	if (firstrow < 0)
+		firstrow = 0;
+	if (lastrow > viewheight)
+		lastrow = viewheight;
+	if (convertsurface != s) {
+		SDL_Rect sourcerect;
+		SDL_Rect convertrect;
+		sourcerect.x = left;
+		sourcerect.y = top;
+		sourcerect.w = width;
+		sourcerect.h = height;
+		convertrect = sourcerect;
+		SDL_BlitSurface(s, &sourcerect, convertsurface, &convertrect);
+	}
+	if (SDL_MUSTLOCK(hostsurface))
+		SDL_LockSurface(hostsurface);
+	sourcepixels = (const uint8 *)convertsurface->pixels;
+	sourcepitch = convertsurface->pitch;
+	destinationrow = (uint8 *)hostsurface->pixels + (viewtop + firstrow) * hostsurface->pitch + (viewleft + firstcolumn) * 4;
+	count = lastcolumn - firstcolumn;
+	for (int row = firstrow; row < lastrow; row++) {
+		const uint32 *upper = (const uint32 *)(sourcepixels + rowfirst[row] * sourcepitch);
+		if (nearestscaling)
+			ScaleRowNearest((uint32 *)destinationrow, upper, &columnfirst[firstcolumn], count);
+		else if (rowweight[row] == 0)
+			ScaleRowLinear((uint32 *)destinationrow, upper, &columnfirst[firstcolumn], &columnsecond[firstcolumn], &columnweight[firstcolumn], count);
+		else
+			ScaleRowBilinear((uint32 *)destinationrow, upper, (const uint32 *)(sourcepixels + rowsecond[row] * sourcepitch),
+				&columnfirst[firstcolumn], &columnsecond[firstcolumn], &columnweight[firstcolumn], rowweight[row], count);
+		destinationrow += hostsurface->pitch;
+	}
+	if (SDL_MUSTLOCK(hostsurface))
+		SDL_UnlockSurface(hostsurface);
+	destination->x = viewleft + firstcolumn;
+	destination->y = viewtop + firstrow;
+	destination->w = count;
+	destination->h = lastrow - firstrow;
+}
+
+void driver_base::HostToGuest(int &x, int &y)
+{
+	x = (int)((int64)(x - viewleft) * VIDEO_MODE_X / viewwidth);
+	y = (int)((int64)(y - viewtop) * VIDEO_MODE_Y / viewheight);
+	if (x < 0)
+		x = 0;
+	else if (x >= (int)VIDEO_MODE_X)
+		x = VIDEO_MODE_X - 1;
+	if (y < 0)
+		y = 0;
+	else if (y >= (int)VIDEO_MODE_Y)
+		y = VIDEO_MODE_Y - 1;
+}
+
+void driver_base::GuestToHost(int &x, int &y)
+{
+	x = viewleft + (int)((int64)x * viewwidth / VIDEO_MODE_X);
+	y = viewtop + (int)((int64)y * viewheight / VIDEO_MODE_Y);
+}
+
+void driver_base::mouse_moved(int x, int y)
+{
+	if (scaling)
+		HostToGuest(x, y);
+	ADBMouseMoved(x, y);
+}
+
+#ifdef SHEEPSHAVER
+SDL_Cursor *driver_base::CreateMagnifiedCursor(bool usehotspot)
+{
+	int size = (16 * viewwidth + VIDEO_MODE_X - 1) / VIDEO_MODE_X;
+	int rowbytes;
+	int hotx = 0;
+	int hoty = 0;
+	if (size > 32)
+		size = 32;
+	else if (size < 16)
+		size = 16;
+	rowbytes = (size + 7) >> 3;
+	vector<uint8> cursordata(rowbytes * size, 0);
+	vector<uint8> cursormask(rowbytes * size, 0);
+	for (int row = 0; row < size; row++) {
+		const int sourcerow = (row * 16 / size) * 16;
+		for (int column = 0; column < size; column++) {
+			const int sourcebit = sourcerow + column * 16 / size;
+			const uint8 sourcemask = 0x80 >> (sourcebit & 7);
+			const uint8 destinationmask = 0x80 >> (column & 7);
+			const int destinationindex = row * rowbytes + (column >> 3);
+			if (MacCursor[4 + (sourcebit >> 3)] & sourcemask)
+				cursordata[destinationindex] |= destinationmask;
+			if (MacCursor[36 + (sourcebit >> 3)] & sourcemask)
+				cursormask[destinationindex] |= destinationmask;
+		}
+	}
+	if (usehotspot) {
+		hotx = MacCursor[2] * size / 16;
+		hoty = MacCursor[3] * size / 16;
+	}
+	return SDL_CreateCursor(&cursordata[0], &cursormask[0], rowbytes * 8, size, hotx, hoty);
+}
+#endif
+
 void driver_base::init()
 {
 	set_video_mode(display_type == DISPLAY_SCREEN ? SDL_FULLSCREEN : 0);
+	if (s == NULL || hostsurface == NULL)
+		return;
 	int aligned_height = (VIDEO_MODE_Y + 15) & ~15;
 
 #ifdef ENABLE_VOSF
@@ -717,6 +1066,13 @@ void driver_base::init()
 	set_mac_frame_buffer(monitor, VIDEO_MODE_DEPTH);
 
 	adapt_to_video_mode();
+#ifdef SHEEPSHAVER
+	if (PrefsFindBool("init_grab") && !video_can_change_cursor())
+		grab_mouse();
+#else
+	if (PrefsFindBool("init_grab"))
+		grab_mouse();
+#endif
 }
 
 void driver_base::adapt_to_video_mode() {
@@ -742,8 +1098,9 @@ void driver_base::adapt_to_video_mode() {
 #ifdef SHEEPSHAVER
 	hardware_cursor = video_can_change_cursor();
 	if (hardware_cursor) {
-		// Create cursor
-		if ((sdl_cursor = SDL_CreateCursor(MacCursor + 4, MacCursor + 36, 16, 16, 0, 0)) != NULL) {
+		if (sdl_cursor)
+			SDL_FreeCursor(sdl_cursor);
+		if ((sdl_cursor = CreateMagnifiedCursor(false)) != NULL) {
 			SDL_SetCursor(sdl_cursor);
 		}
 	}
@@ -759,13 +1116,28 @@ void driver_base::adapt_to_video_mode() {
 
 	// Everything went well
 	init_ok = true;
+#ifdef ENABLE_EMULATOR_MONITOR
+	if (emulatormonitor == NULL) {
+		emulatormonitor = new EmulatorMonitor();
+		if (!emulatormonitor->Start()) {
+			delete emulatormonitor;
+			emulatormonitor = NULL;
+		}
+	}
+#endif
 }
 
 driver_base::~driver_base()
 {
+#ifdef ENABLE_EMULATOR_MONITOR
+	delete emulatormonitor;
+	emulatormonitor = NULL;
+#endif
 	ungrab_mouse();
 	restore_mouse_accel();
 
+	if (convertsurface != NULL && convertsurface != s)
+		SDL_FreeSurface(convertsurface);
 	if (s)
 		SDL_FreeSurface(s);
 
@@ -804,8 +1176,14 @@ void driver_base::update_palette(void)
 {
 	const VIDEO_MODE &mode = monitor.get_current_mode();
 
-	if ((int)VIDEO_MODE_DEPTH <= VIDEO_DEPTH_8BIT)
+	if ((int)VIDEO_MODE_DEPTH > VIDEO_DEPTH_8BIT)
+		return;
+	if (!scaling) {
 		SDL_SetPalette(s, SDL_PHYSPAL, sdl_palette, 0, 256);
+		return;
+	}
+	SDL_SetColors(s, sdl_palette, 0, 256);
+	update_sdl_video(s, 0, 0, VIDEO_MODE_X, VIDEO_MODE_Y);
 }
 
 // Disable mouse acceleration
@@ -1185,6 +1563,13 @@ bool VideoInit(bool classic)
 
 	// Create SDL_monitor_desc for this (the only) display
 	SDL_monitor_desc *monitor = new SDL_monitor_desc(VideoModes, (video_depth)color_depth, default_id);
+#ifdef WIN32
+	monitor->desktopwidth = GetSystemMetrics(SM_CXSCREEN);
+	monitor->desktopheight = GetSystemMetrics(SM_CYSCREEN);
+#else
+	monitor->desktopwidth = SDL_GetVideoInfo()->current_w;
+	monitor->desktopheight = SDL_GetVideoInfo()->current_h;
+#endif
 	VideoMonitors.push_back(monitor);
 
 	// Open display
@@ -1229,8 +1614,12 @@ void VideoExit(void)
 {
 	// Close displays
 	vector<monitor_desc *>::iterator i, end = VideoMonitors.end();
-	for (i = VideoMonitors.begin(); i != end; ++i)
-		dynamic_cast<SDL_monitor_desc *>(*i)->video_close();
+	for (i = VideoMonitors.begin(); i != end; ++i) {
+		SDL_monitor_desc *monitor = dynamic_cast<SDL_monitor_desc *>(*i);
+		monitor->hostfocused = false;
+		monitor->ApplyGammaRamp();
+		monitor->video_close();
+	}
 
 	// Destroy locks
 	if (frame_buffer_lock)
@@ -1264,10 +1653,12 @@ static void do_toggle_fullscreen(void)
 	// save the mouse position
 	int x, y;
 	SDL_GetMouseState(&x, &y);
+	drv->HostToGuest(x, y);
 
 	// save the screen contents
-	SDL_Surface *tmp_surface = SDL_ConvertSurface(drv->s, drv->s->format,
-		drv->s->flags);
+	SDL_Surface *tmp_surface = NULL;
+	if (!drv->scaling)
+		tmp_surface = SDL_ConvertSurface(drv->s, drv->s->format, drv->s->flags);
 
 	// switch modes
 	display_type = (display_type == DISPLAY_SCREEN) ? DISPLAY_WINDOW
@@ -1279,12 +1670,16 @@ static void do_toggle_fullscreen(void)
 #ifdef SHEEPSHAVER
 	video_set_palette();
 #endif
+	drv->monitor.ApplyGammaRamp();
 	drv->update_palette();
 
 	// restore the screen contents
-	SDL_BlitSurface(tmp_surface, NULL, drv->s, NULL);
-	SDL_FreeSurface(tmp_surface);
-	SDL_UpdateRect(drv->s, 0, 0, 0, 0);
+	if (tmp_surface != NULL) {
+		SDL_BlitSurface(tmp_surface, NULL, drv->s, NULL);
+		SDL_FreeSurface(tmp_surface);
+	}
+	update_sdl_video(drv->s, 0, 0, drv->VIDEO_MODE_X, drv->VIDEO_MODE_Y);
+	drv->GuestToHost(x, y);
 
 	// reset the video refresh handler
 	VideoRefreshInit();
@@ -1388,48 +1783,7 @@ void SDL_monitor_desc::set_palette(uint8 *pal, int num_in)
 	const VIDEO_MODE &mode = get_current_mode();
 
 	if ((int)VIDEO_MODE_DEPTH > VIDEO_DEPTH_8BIT) {
-		// handle the gamma ramp
-
-		if (pal[0] == 127 && pal[num_in*3-1] == 127) // solid grey
-			return; // ignore
-
-		uint16 red[256];
-		uint16 green[256];
-		uint16 blue[256];
-		
-		int repeats = 256 / num_in;
-				
-		for (int i = 0; i < num_in; i++) {
-			for (int j = 0; j < repeats; j++) {
-				red[i*repeats + j] = pal[i*3 + 0] << 8;
-				green[i*repeats + j] = pal[i*3 + 1] << 8;
-				blue[i*repeats + j] = pal[i*3 + 2] << 8;
-			}
-		}
-
-		// fill remaining entries (if any) with last value
-		for (int i = num_in * repeats; i < 256; i++) {
-			red[i] = pal[(num_in - 1) * 3] << 8;
-			green[i] = pal[(num_in - 1) * 3 + 1] << 8;
-			blue[i] = pal[(num_in - 1) * 3 + 2] << 8;
-		}
-		
-		bool changed = (memcmp(red, last_gamma_red, 512) != 0 ||
-		                memcmp(green, last_gamma_green, 512) != 0 ||
-		                memcmp(blue, last_gamma_blue, 512) != 0);
-		
-		if (changed) {
-			int result = SDL_SetGammaRamp(red, green, blue);
-
-			if (result < 0) {
-				fprintf(stderr, "SDL_SetGammaRamp returned %d, SDL error: %s\n", result, SDL_GetError());
-			}
-			
-			memcpy(last_gamma_red, red, 512);
-			memcpy(last_gamma_green, green, 512);
-			memcpy(last_gamma_blue, blue, 512);
-		}
-
+		set_gamma(pal, num_in);
 		return;
 	}
 
@@ -1473,7 +1827,59 @@ void SDL_monitor_desc::set_palette(uint8 *pal, int num_in)
 
 void SDL_monitor_desc::set_gamma(uint8 *gamma, int num_in)
 {
-	// Not implemented
+	uint16 red[256];
+	uint16 green[256];
+	uint16 blue[256];
+	const int repeats = 256 / num_in;
+
+	if (gamma[0] == 127 && gamma[num_in * 3 - 1] == 127)
+		return;
+
+	for (int entry = 0; entry < num_in; entry++) {
+		for (int repeat = 0; repeat < repeats; repeat++) {
+			red[entry * repeats + repeat] = gamma[entry * 3 + 0] << 8;
+			green[entry * repeats + repeat] = gamma[entry * 3 + 1] << 8;
+			blue[entry * repeats + repeat] = gamma[entry * 3 + 2] << 8;
+		}
+	}
+	for (int entry = num_in * repeats; entry < 256; entry++) {
+		red[entry] = gamma[(num_in - 1) * 3] << 8;
+		green[entry] = gamma[(num_in - 1) * 3 + 1] << 8;
+		blue[entry] = gamma[(num_in - 1) * 3 + 2] << 8;
+	}
+
+	if (lastgammavalid && memcmp(red, lastgammared, sizeof(red)) == 0 &&
+		memcmp(green, lastgammagreen, sizeof(green)) == 0 &&
+		memcmp(blue, lastgammablue, sizeof(blue)) == 0)
+		return;
+
+	memcpy(lastgammared, red, sizeof(red));
+	memcpy(lastgammagreen, green, sizeof(green));
+	memcpy(lastgammablue, blue, sizeof(blue));
+	lastgammavalid = true;
+	ApplyGammaRamp();
+}
+
+void SDL_monitor_desc::ApplyGammaRamp(void)
+{
+	const char *gammamode = PrefsFindString("gammaramp");
+	bool useguestgamma = false;
+	int result;
+
+	if (!initialgammavalid)
+		initialgammavalid = SDL_GetGammaRamp(initialgammared, initialgammagreen, initialgammablue) == 0;
+	if (hostfocused && lastgammavalid && gammamode != NULL && strcmp(gammamode, "off") != 0 &&
+		(strcmp(gammamode, "fullscreen") != 0 || display_type == DISPLAY_SCREEN))
+		useguestgamma = true;
+
+	if (useguestgamma)
+		result = SDL_SetGammaRamp(lastgammared, lastgammagreen, lastgammablue);
+	else if (initialgammavalid)
+		result = SDL_SetGammaRamp(initialgammared, initialgammagreen, initialgammablue);
+	else
+		return;
+	if (result < 0)
+		fprintf(stderr, "SDL_SetGammaRamp returned %d, SDL error: %s\n", result, SDL_GetError());
 }
 
 /*
@@ -1542,7 +1948,7 @@ void SDL_monitor_desc::switch_to_current_mode(void)
 #ifdef SHEEPSHAVER
 bool video_can_change_cursor(void)
 {
-	if (display_type != DISPLAY_WINDOW)
+	if (display_type != DISPLAY_WINDOW || !PrefsFindBool("hardcursor"))
 		return false;
 
 #if defined(__APPLE__)
@@ -1750,7 +2156,12 @@ static int kc_decode(SDL_keysym const & ks, bool key_down)
 	case SDLK_F2: return 0x78;
 	case SDLK_F3: return 0x63;
 	case SDLK_F4: return 0x76;
-	case SDLK_F5: if (is_hotkey_down(ks)) {if (!key_down) drv->toggle_mouse_grab(); return -2;} else return 0x60;
+	case SDLK_F5:
+#ifdef SHEEPSHAVER
+		if (is_hotkey_down(ks) && !video_can_change_cursor()) {if (!key_down) drv->toggle_mouse_grab(); return -2;} else return 0x60;
+#else
+		if (is_hotkey_down(ks)) {if (!key_down) drv->toggle_mouse_grab(); return -2;} else return 0x60;
+#endif
 	case SDLK_F6: return 0x61;
 	case SDLK_F7: return 0x62;
 	case SDLK_F8: return 0x64;
@@ -1820,8 +2231,22 @@ static void handle_events(void)
 
 	while ((n_events = SDL_PeepEvents(events, n_max_events, SDL_GETEVENT, sdl_eventmask)) > 0) {
 		for (int i = 0; i < n_events; i++) {
-			SDL_Event const & event = events[i];
+			SDL_Event & event = events[i];
 			switch (event.type) {
+#ifdef ENABLE_EMULATOR_MONITOR
+			default:
+				if (drv != NULL && drv->emulatormonitor != NULL) {
+					EmulatorMonitorView monitorview;
+					monitorview.guestsurface = drv->s;
+					monitorview.hostsurface = drv->hostsurface;
+					monitorview.window = NULL;
+					monitorview.width = drv->VIDEO_MODE_X;
+					monitorview.height = drv->VIDEO_MODE_Y;
+					monitorview.depth = 1 << (drv->VIDEO_MODE_DEPTH & 0x0f);
+					drv->emulatormonitor->HandleEvent(event, monitorview);
+				}
+				break;
+#endif
 
 			// Mouse button
 			case SDL_MOUSEBUTTONDOWN: {
@@ -1946,6 +2371,10 @@ static void handle_events(void)
 				// Force a complete window refresh when activating, to avoid redraw artifacts otherwise.
 				if (event.active.gain)
 					force_complete_window_refresh();
+				if (event.active.state & SDL_APPINPUTFOCUS) {
+					drv->monitor.hostfocused = event.active.gain != 0;
+					drv->monitor.ApplyGammaRamp();
+				}
 				break;
 			}
 		}
@@ -2043,7 +2472,7 @@ static void update_display_static(driver_base *drv)
 					SDL_UnlockSurface(drv->s);
 
 				// Refresh display
-				SDL_UpdateRect(drv->s, x1, y1, wide, high);
+				update_sdl_video(drv->s, x1, y1, wide, high);
 			}
 
 		} else {
@@ -2099,7 +2528,7 @@ static void update_display_static(driver_base *drv)
 					SDL_UnlockSurface(drv->s);
 
 				// Refresh display
-				SDL_UpdateRect(drv->s, x1, y1, wide, high);
+				update_sdl_video(drv->s, x1, y1, wide, high);
 			}
 		}
 	}
@@ -2162,7 +2591,7 @@ static void update_display_static_bbox(driver_base *drv)
 
 	// Refresh display
 	if (nr_boxes)
-		SDL_UpdateRects(drv->s, nr_boxes, boxes);
+		update_sdl_video(drv->s, nr_boxes, boxes);
 }
 
 
@@ -2385,7 +2814,25 @@ void video_set_dirty_area(int x, int y, int w, int h)
 #ifdef SHEEPSHAVER
 void video_set_gamma(int n_colors)
 {
-	// Not supported in SDL 1.2
+	monitor_desc *monitor = VideoMonitors[0];
+	uint8 gamma[256 * 3];
+	for (int color = 0; color < n_colors; color++) {
+		gamma[color * 3 + 0] = mac_gamma[color].red;
+		gamma[color * 3 + 1] = mac_gamma[color].green;
+		gamma[color * 3 + 2] = mac_gamma[color].blue;
+	}
+	((SDL_monitor_desc *)monitor)->set_gamma(gamma, n_colors);
+}
+
+bool video_get_framebuffer_drawable_rect(int *outx, int *outy, int *outwidth, int *outheight)
+{
+	if (drv == NULL || drv->hostsurface == NULL)
+		return false;
+	*outx = drv->viewleft;
+	*outy = drv->viewtop;
+	*outwidth = drv->viewwidth;
+	*outheight = drv->viewheight;
+	return true;
 }
 #endif
 

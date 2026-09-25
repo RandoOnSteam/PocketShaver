@@ -173,7 +173,7 @@ pc64le|mips|mips64|sparc|sparc64|ia64)")
 	if(ENABLE_VOSF)
 		set(ENABLE_VOSF 1)
 	endif()
-	if(ENABLE_BINCUE)
+	if(ENABLE_BINCUE AND NOT USE_SDL1)
 		set(BINCUE 1)
 	endif()
 
@@ -208,6 +208,42 @@ endfunction()
 # SDL
 # ---------------------------------------------------------------------------
 function(macemu_find_sdl)
+	if(USE_SDL1)
+		if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+			set(SDL1_LIBRARY_SUFFIX lib/x64)
+		else()
+			set(SDL1_LIBRARY_SUFFIX lib/x86)
+		endif()
+		set(SDL1_ROOTS
+			"${CMAKE_SOURCE_DIR}/thirdparty/SDL-1.2.15"
+			"${CMAKE_CURRENT_SOURCE_DIR}/../thirdparty/SDL-1.2.15")
+		find_path(SDL1_INCLUDE_DIR SDL.h
+			HINTS ${SDL1_ROOTS} ENV SDL1DIR
+			PATH_SUFFIXES include include/SDL)
+		find_library(SDL1_LIBRARY NAMES SDL
+			HINTS ${SDL1_ROOTS} ENV SDL1DIR
+			PATH_SUFFIXES ${SDL1_LIBRARY_SUFFIX} lib)
+		find_library(SDL1MAIN_LIBRARY NAMES SDLmain
+			HINTS ${SDL1_ROOTS} ENV SDL1DIR
+			PATH_SUFFIXES ${SDL1_LIBRARY_SUFFIX} lib)
+		if(WIN32)
+			find_file(SDL1_RUNTIME NAMES SDL.dll
+				HINTS ${SDL1_ROOTS} ENV SDL1DIR
+				PATH_SUFFIXES ${SDL1_LIBRARY_SUFFIX} bin)
+		endif()
+		if(NOT SDL1_INCLUDE_DIR OR NOT SDL1_LIBRARY)
+			message(FATAL_ERROR
+				"SDL 1.2 not found. Install SDL 1.2 or set SDL1DIR")
+		endif()
+		set(SDL2_INCLUDE_DIR "${SDL1_INCLUDE_DIR}" PARENT_SCOPE)
+		set(SDL2_LIBRARY "${SDL1_LIBRARY}" PARENT_SCOPE)
+		set(SDL2MAIN_LIBRARY "${SDL1MAIN_LIBRARY}" PARENT_SCOPE)
+		set(SDL1_RUNTIME "${SDL1_RUNTIME}" PARENT_SCOPE)
+		set(USE_SDL1 1 PARENT_SCOPE)
+		message(STATUS "SDL 1.2 include: ${SDL1_INCLUDE_DIR}")
+		message(STATUS "SDL 1.2 library: ${SDL1_LIBRARY}")
+		return()
+	endif()
 	if(APPLE)
 		macemu_apple_find_sdl()
 		set(MACEMU_SDL_TARGET "${MACEMU_SDL_TARGET}" PARENT_SCOPE)
@@ -420,6 +456,14 @@ function(macemu_link_sdl EMULATOR_EXECUTABLE)
 		endif()
 		target_link_libraries(${EMULATOR_EXECUTABLE} PRIVATE ${SDL2_LIBRARY})
 	endif()
+	if(WIN32 AND USE_SDL1 AND SDL1_RUNTIME)
+		add_custom_command(TARGET ${EMULATOR_EXECUTABLE} POST_BUILD
+			COMMAND ${CMAKE_COMMAND} -E copy_if_different
+				"${SDL1_RUNTIME}"
+				"$<TARGET_FILE_DIR:${EMULATOR_EXECUTABLE}>"
+			COMMENT "Copy SDL 1.2 runtime next to ${EMULATOR_EXECUTABLE}"
+			VERBATIM)
+	endif()
 endfunction()
 
 # ---------------------------------------------------------------------------
@@ -612,7 +656,7 @@ function(macemu_apply_common EMULATOR_EXECUTABLE)
 		)
 	endif()
 
-	if(ENABLE_BINCUE)
+	if(ENABLE_BINCUE AND NOT USE_SDL1)
 		target_compile_definitions(${EMULATOR_EXECUTABLE} PRIVATE BINCUE)
 	endif()
 
@@ -632,7 +676,9 @@ function(macemu_apply_common EMULATOR_EXECUTABLE)
 		)
 	endif()
 
-	if(USE_SDL3)
+	if(USE_SDL1)
+		target_compile_definitions(${EMULATOR_EXECUTABLE} PRIVATE USE_SDL1=1)
+	elseif(USE_SDL3)
 		target_compile_definitions(${EMULATOR_EXECUTABLE} PRIVATE USE_SDL3=1)
 	elseif(DEFINED USE_SDL2 AND USE_SDL2)
 		target_compile_definitions(${EMULATOR_EXECUTABLE} PRIVATE USE_SDL2=1)
