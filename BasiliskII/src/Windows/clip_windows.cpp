@@ -86,6 +86,8 @@ static bool no_clip_conversion;
 // Flag for PutScrap(): the data was put by GetScrap(), don't bounce it back to the Windows  side
 static bool we_put_this_data = false;
 
+static DWORD last_clipboard_sequence = 0;
+
 // Define a byte array (rewrite if it's a bottleneck)
 struct ByteArray : public vector<uint8> {
 	uint8 *data() { return &(*this)[0]; }
@@ -179,6 +181,7 @@ static void do_putscrap(uint32 type, void *scrap, int32 length)
 			GlobalFree(hData);
 	}
 	CloseClipboard();
+	last_clipboard_sequence = GetClipboardSequenceNumber();
 }
 
 /*
@@ -213,10 +216,15 @@ static void do_getscrap(void **handle, uint32 type, int32 offset)
 	if (uFormat != CF_TEXT)				// 'TEXT' only
 		return;
 
+	DWORD sequence = GetClipboardSequenceNumber();
+	if (sequence == last_clipboard_sequence)
+		return;
+
 	// Get the native clipboard data
 	HWND hMainWindow = GetMainWindowHandle();
 	if (!hMainWindow || !OpenClipboard(hMainWindow))
 		return;
+	last_clipboard_sequence = sequence;
 	HANDLE hData = GetClipboardData(uFormat);
 	if (hData) {
 		uint8 *data = (uint8 *)GlobalLock(hData);

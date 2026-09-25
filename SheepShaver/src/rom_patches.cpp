@@ -65,6 +65,7 @@ const uint32 CHECK_LOAD_PATCH_SPACE = 0x2fcf00;
 const uint32 ZERO_SCRAP_PATCH_SPACE = 0x2fcf80;
 const uint32 PUT_SCRAP_PATCH_SPACE = 0x2fcfc0;
 const uint32 GET_SCRAP_PATCH_SPACE = 0x2fd100;
+const uint32 INFO_SCRAP_PATCH_SPACE = 0x2fcfa0;
 const uint32 ADDR_MAP_PATCH_SPACE = 0x2fd140;
 const uint32 CURSOR_LOG_SPACE = 0x2fd240;	// MoveTo trace ring + stub
 const uint32 CURSOR_LOG_SIZE = 0x180;
@@ -2343,6 +2344,22 @@ static bool patch_68k(void)
 	*wp++ = htons((ROMBase + get_scrap) & 0xffff);
 	base = ROMBase + ReadMacInt32(ROMBase + 0x22);
 	WriteMacInt32(base + 4 * (0xa9fd & 0x3ff), GET_SCRAP_PATCH_SPACE);
+
+	uint32 info_scrap = find_rom_trap(0xa9f9);
+	wp = (uint16 *)(ROMBaseHost + INFO_SCRAP_PATCH_SPACE);
+	*wp++ = htons(0x2f3c);
+	*wp++ = htons(0x5445);
+	*wp++ = htons(0x5854);
+	*wp++ = htons(0x42a7);
+	*wp++ = htons(0x42a7);
+	*wp++ = htons(M68K_EMUL_OP_GET_SCRAP);
+	*wp++ = htons(0x4fef);
+	*wp++ = htons(0x000c);
+	*wp++ = htons(M68K_JMP);
+	*wp++ = htons((ROMBase + info_scrap) >> 16);
+	*wp++ = htons((ROMBase + info_scrap) & 0xffff);
+	base = ROMBase + ReadMacInt32(ROMBase + 0x22);
+	WriteMacInt32(base + 4 * (0xa9f9 & 0x3ff), INFO_SCRAP_PATCH_SPACE);
 
 	// Patch SynchIdleTime()
 	if (PrefsFindBool("idlewait")) {

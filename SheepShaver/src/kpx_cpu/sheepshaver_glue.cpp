@@ -575,7 +575,7 @@ void sheepshaver_cpu::execute_emul_op(uint32 emul_op)
 void sheepshaver_cpu::execute_sheep(uint32 opcode)
 {
 //	D(bug("Extended opcode %08x at %08x (68k pc %08x)\n", opcode, pc(), gpr(24)));
-	assert((((opcode >> 26) & 0x3f) == 6) && OP_MAX <= 64 + 3);
+	assert((((opcode >> 26) & 0x3f) == 6) && OP_MAX + 3 <= 64);
 
 	switch (opcode & 0x3f) {
 	case 0:		// EMUL_RETURN
