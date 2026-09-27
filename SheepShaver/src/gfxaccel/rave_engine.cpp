@@ -834,6 +834,24 @@ static void ConvertAI16_88(uint32 srcAddr, uint8_t *dst, uint32_t width, uint32_
 	}
 }
 
+static void ConvertAlpha1(uint32 srcAddr, uint8_t *dst, uint32_t width, uint32_t height, uint32_t rowBytes)
+{
+	for (uint32_t row = 0; row < height; row++) {
+		uint32 rowaddress = srcAddr + row * rowBytes;
+		uint8_t *destinationrow = dst + row * width * 4;
+		uint8_t alphabits = 0;
+		for (uint32_t column = 0; column < width; column++) {
+			if ((column & 7) == 0)
+				alphabits = ReadMacInt8(rowaddress + (column >> 3));
+			destinationrow[column * 4 + 0] = 0xFF;
+			destinationrow[column * 4 + 1] = 0xFF;
+			destinationrow[column * 4 + 2] = 0xFF;
+			destinationrow[column * 4 + 3] = (uint8_t)(0 - (alphabits >> 7));
+			alphabits = (uint8_t)(alphabits << 1);
+		}
+	}
+}
+
 // Generate mip levels by box-downsampling the level-0 BGRA8 image and upload each.
 // Replaces reading the app's per-mip TQAImages: UT (and likely others) don't supply a
 // full, valid mip chain at the level count we compute, so those reads returned
@@ -1039,6 +1057,10 @@ bool ConvertPixels(uint32_t pixelType, uint32 srcAddr, uint8_t *dst,
 		case kQAPixel_AI16_88:
 			ConvertAI16_88(srcAddr, dst, width, height, rowBytes);
 			break;
+		case kQAPixel_Alpha1:
+			// kQAPixel_Alpha1 is not used by any known Mac OS 9 RAVE apps, but is here for completeness.
+			ConvertAlpha1(srcAddr, dst, width, height, rowBytes);
+			break;
 		case kQAPixel_YUVS:
 			// YUVS BT.601 conversion. Test: RAVEPixelTypeTests.testYUVS_convertPixels
 			ConvertYUVS(srcAddr, dst, width, height, rowBytes);
@@ -1049,8 +1071,6 @@ bool ConvertPixels(uint32_t pixelType, uint32 srcAddr, uint8_t *dst,
 			break;
 		// Exotic types are deliberately unconverted. Test: RAVEPixelTypeTests.testExoticPixelTypes_documentedErrors
 		// These return false (unconverted) because they are not used by Mac OS 9 RAVE apps:
-		case kQAPixel_Alpha1:
-			// Deliberate: kQAPixel_Alpha1 not used by known Mac OS 9 RAVE apps.
 		case kQAPixel_RGB16_565:
 			// Deliberate: kQAPixel_RGB16_565 is "Win32 ONLY" per RAVE.h; no Mac OS 9 apps use this path.
 		case kQAPixel_RGB24:
