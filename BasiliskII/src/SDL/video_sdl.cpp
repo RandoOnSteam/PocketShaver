@@ -596,13 +596,13 @@ static void set_window_name(bool mouse_grabbed)
 	int grabbed = 0;
 	if (mouse_grabbed)
 	{
-        s += GetString(STR_WINDOW_TITLE_GRABBED_PRE);
+		s += GetString(STR_WINDOW_TITLE_GRABBED_PRE);
 		int hotkey = PrefsFindInt32("hotkey");
 		hotkey = hotkey ? hotkey : 1;
 		if (hotkey & 1) s += GetString(STR_WINDOW_TITLE_GRABBED1);
-        if (hotkey & 2) s += GetString(STR_WINDOW_TITLE_GRABBED2);
-        if (hotkey & 4) s += GetString(STR_WINDOW_TITLE_GRABBED4);
-        s += GetString(STR_WINDOW_TITLE_GRABBED_POST);
+		if (hotkey & 2) s += GetString(STR_WINDOW_TITLE_GRABBED2);
+		if (hotkey & 4) s += GetString(STR_WINDOW_TITLE_GRABBED4);
+		s += GetString(STR_WINDOW_TITLE_GRABBED_POST);
 	}
 	const SDL_VideoInfo *vi = SDL_GetVideoInfo();
 	if (vi && vi->wm_available)
@@ -852,6 +852,107 @@ driver_base::driver_base(SDL_monitor_desc &m)
 	the_buffer_copy = NULL;
 }
 
+static bool is_cursor_in_mac_screen()
+{
+	int windowX, windowY;
+	float cursorX, cursorY;
+	int deltaX, deltaY;
+	bool out;
+
+	// TODO figure out a check for full screen mode
+	if (display_type == DISPLAY_SCREEN)
+		return true;
+
+	if (display_type == DISPLAY_WINDOW) {
+		Uint8 appState = SDL_GetAppState();
+		if ((appState & SDL_APPMOUSEFOCUS) != SDL_APPMOUSEFOCUS)
+			return false;
+	}
+
+	return false;
+}
+#if defined(_WIN32)
+//
+// SDL1's SDL_SetVideoMode() snaps everything away from other apps
+// with SetForegroundWindow() unconditionally. We don't want this
+// if we don't have focus.
+//
+BOOL WINAPI FakeSetForegroundWindow(HWND hWnd) {
+	return TRUE;
+}
+class Win32FuncHook
+{
+public:
+	void          **slot;
+	void           *original;
+	void           *hook;
+	HMODULE         module;
+	int             active;
+
+	Win32FuncHook() : active(0) {}
+	~Win32FuncHook() {
+
+		if(active) {
+			DWORD old;
+			VirtualProtect(slot, sizeof(void*),
+				PAGE_EXECUTE_READWRITE, &old);
+			*slot = original;
+			VirtualProtect(slot, sizeof(void*), old, &old);
+		}
+	}
+	bool Hook(HMODULE module, const char *dllName, const char *funcName,
+		void *hookFunc) {
+		BYTE *base = (BYTE *)module;
+		IMAGE_DOS_HEADER *dos = (IMAGE_DOS_HEADER *)base;
+		IMAGE_NT_HEADERS *nt = (IMAGE_NT_HEADERS *)(base + dos->e_lfanew);
+		IMAGE_IMPORT_DESCRIPTOR *imp = (IMAGE_IMPORT_DESCRIPTOR *)
+			(base + nt->OptionalHeader.DataDirectory[
+				IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress);
+
+		if (!nt->OptionalHeader.DataDirectory[
+				IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress)
+			return false;
+
+		for (; imp->Name; imp++) {
+			if (_stricmp((char *)(base + imp->Name), dllName) != 0)
+				continue;
+
+			IMAGE_THUNK_DATA *thunk =
+				(IMAGE_THUNK_DATA *)(base + imp->FirstThunk);
+			IMAGE_THUNK_DATA *orig;
+
+			if (imp->OriginalFirstThunk)
+				orig = (IMAGE_THUNK_DATA *)(base + imp->OriginalFirstThunk);
+			else
+				orig = (IMAGE_THUNK_DATA *)(base + imp->FirstThunk);
+
+			for (; orig->u1.AddressOfData; thunk++, orig++) {
+				if (orig->u1.Ordinal & IMAGE_ORDINAL_FLAG)
+					continue;
+				IMAGE_IMPORT_BY_NAME *name = (IMAGE_IMPORT_BY_NAME *)
+					(base + orig->u1.AddressOfData);
+				if (strcmp(name->Name, funcName) != 0)
+					continue;
+
+				this->slot     = (void **)&thunk->u1.Function;
+				this->original = (void *)thunk->u1.Function;
+				this->hook     = hookFunc;
+				this->module   = module;
+
+				DWORD old;
+				VirtualProtect(this->slot, sizeof(void*),
+					PAGE_EXECUTE_READWRITE, &old);
+				*this->slot = hookFunc;
+				VirtualProtect(this->slot, sizeof(void*), old, &old);
+
+				this->active = 1;
+				return true;
+			}
+		}
+		return false;
+	}
+};
+#endif /* _WIN32 */
 void driver_base::set_video_mode(int flags)
 {
 	const float magnification = GetMagnificationRate();
@@ -861,10 +962,19 @@ void driver_base::set_video_mode(int flags)
 	int hostflags = flags;
 	SDL_PixelFormat *hostformat;
 	scaling = magnification != 1.0f;
+#if defined(_WIN32)
+	Win32FuncHook gfwhook;
+	if(is_cursor_in_mac_screen() == false)
+		gfwhook.Hook(GetModuleHandleA("sdl.dll"),
+			"user32.dll", "SetForegroundWindow",
+			(void*)FakeSetForegroundWindow);
+#endif /* _WIN32 */
 	if (!scaling) {
-		hostsurface = s = SDL_SetVideoMode(VIDEO_MODE_X, VIDEO_MODE_Y, depth, SDL_HWSURFACE | flags);
+		hostsurface = s = SDL_SetVideoMode(VIDEO_MODE_X, VIDEO_MODE_Y,
+			depth, SDL_HWSURFACE | flags);
 		if (s == NULL)
 			return;
+
 		viewleft = 0;
 		viewtop = 0;
 		viewwidth = VIDEO_MODE_X;
@@ -874,7 +984,8 @@ void driver_base::set_video_mode(int flags)
 #endif
 		return;
 	}
-	if ((flags & SDL_FULLSCREEN) && monitor.desktopwidth > 0 && monitor.desktopheight > 0) {
+	if ((flags & SDL_FULLSCREEN)
+			&& monitor.desktopwidth > 0 && monitor.desktopheight > 0) {
 		hostwidth = monitor.desktopwidth;
 		hostheight = monitor.desktopheight;
 	}
@@ -888,9 +999,11 @@ void driver_base::set_video_mode(int flags)
 	if (flags & SDL_FULLSCREEN)
 		hostflags = (flags & ~SDL_FULLSCREEN) | SDL_NOFRAME;
 #endif
-	hostsurface = SDL_SetVideoMode(hostwidth, hostheight, 32, SDL_SWSURFACE | hostflags);
+	hostsurface = SDL_SetVideoMode(hostwidth, hostheight, 32,
+		SDL_SWSURFACE | hostflags);
 	if (hostsurface == NULL)
 		return;
+
 #ifdef WIN32
 	if (flags & SDL_FULLSCREEN)
 		SetWindowPos(GetMainWindowHandle(), HWND_TOP, 0, 0, 0, 0, SWP_NOSIZE);
@@ -907,13 +1020,17 @@ void driver_base::set_video_mode(int flags)
 	hostformat = hostsurface->format;
 	if (s == NULL) {
 		if (depth == 8)
-			s = SDL_CreateRGBSurface(SDL_SWSURFACE, VIDEO_MODE_X, VIDEO_MODE_Y, 8, 0, 0, 0, 0);
+			s = SDL_CreateRGBSurface(SDL_SWSURFACE,
+				VIDEO_MODE_X, VIDEO_MODE_Y, 8, 0, 0, 0, 0);
 		else if (depth == 16 && screen_depth == 15)
-			s = SDL_CreateRGBSurface(SDL_SWSURFACE, VIDEO_MODE_X, VIDEO_MODE_Y, 16, 0x7c00, 0x03e0, 0x001f, 0);
+			s = SDL_CreateRGBSurface(SDL_SWSURFACE,
+				VIDEO_MODE_X, VIDEO_MODE_Y, 16, 0x7c00, 0x03e0, 0x001f, 0);
 		else if (depth == 16)
-			s = SDL_CreateRGBSurface(SDL_SWSURFACE, VIDEO_MODE_X, VIDEO_MODE_Y, 16, 0xf800, 0x07e0, 0x001f, 0);
+			s = SDL_CreateRGBSurface(SDL_SWSURFACE,
+				VIDEO_MODE_X, VIDEO_MODE_Y, 16, 0xf800, 0x07e0, 0x001f, 0);
 		else
-			s = SDL_CreateRGBSurface(SDL_SWSURFACE, VIDEO_MODE_X, VIDEO_MODE_Y, 32, 0xff0000, 0x00ff00, 0x0000ff, 0);
+			s = SDL_CreateRGBSurface(SDL_SWSURFACE,
+				VIDEO_MODE_X, VIDEO_MODE_Y, 32, 0xff0000, 0x00ff00, 0x0000ff, 0);
 		if (s == NULL)
 			return;
 	}
@@ -1631,7 +1748,7 @@ bool VideoInit(bool classic)
 				const int h = video_modes[i].h;
 #ifdef SDL1_GFXACCEL
 				if (i > 0 && ((w == default_width && h == default_height) ||
-				              w > sdl_display_width() || h > sdl_display_height()))
+							  w > sdl_display_width() || h > sdl_display_height()))
 					continue;
 #else
 				if (i > 0 && (w >= default_width || h >= default_height))
@@ -1873,8 +1990,8 @@ void VideoVBL(void)
 	// Setting the window name must happen on the main thread, else it doesn't work on
 	// some platforms - e.g. macOS Sierra.
 	if (mouse_grabbed_window_name_status != mouse_grabbed) {
-	    set_window_name(mouse_grabbed);
-	    mouse_grabbed_window_name_status = mouse_grabbed;
+		set_window_name(mouse_grabbed);
+		mouse_grabbed_window_name_status = mouse_grabbed;
 	}
 
 #ifdef SDL1_GFXACCEL
@@ -2113,12 +2230,12 @@ int16 video_mode_change(VidLocals *csSave, uint32 ParamPtr)
 		requestedmode = (uint16)absolutemode;
 
 	if ((csSave->saveData == ReadMacInt32(ParamPtr + csData)) &&
-	    (csSave->saveMode == requestedmode))
+		(csSave->saveMode == requestedmode))
 		return noErr;
 
 	for (int i = 0; VModes[i].viType != DIS_INVALID; i++) {
 		if (requestedmode == VModes[i].viAppleMode &&
-		    ReadMacInt32(ParamPtr + csData) == VModes[i].viAppleID) {
+			ReadMacInt32(ParamPtr + csData) == VModes[i].viAppleID) {
 			if (i != cur_mode) {
 				int16 result = SwitchToModeIndex(i);
 				if (result != noErr)
@@ -2211,10 +2328,13 @@ void video_set_cursor(void)
 #endif
 			if (move) {
 				int visible = SDL_ShowCursor(-1);
+
 				if (visible) {
 					int x, y;
-					SDL_GetMouseState(&x, &y);
-					SDL_WarpMouse(x, y);
+					if(is_cursor_in_mac_screen()) {
+						SDL_GetMouseState(&x, &y);
+						SDL_WarpMouse(x, y);
+					}
 				}
 			}
 		}
@@ -2517,10 +2637,10 @@ static void handle_events(void)
 							ctrl_down = true;
 						} else if (code == 0x3a) {
 							opt_down = true;
-						    code = modify_opt_cmd(code);
+							code = modify_opt_cmd(code);
 						} else if (code == 0x37) {
 							cmd_down = true;
-						    code = modify_opt_cmd(code);
+							code = modify_opt_cmd(code);
 						}
 						if (code == 0x39) {	// Caps Lock pressed
 							if (caps_on) {
@@ -2551,10 +2671,10 @@ static void handle_events(void)
 						ctrl_down = false;
 					} else if (code == 0x3a) {
 						opt_down = false;
-					    code = modify_opt_cmd(code);
+						code = modify_opt_cmd(code);
 					} else if (code == 0x37) {
 						cmd_down = false;
-					    code = modify_opt_cmd(code);
+						code = modify_opt_cmd(code);
 					}
 					if (code == 0x39) {	// Caps Lock released
 						if (caps_on) {
@@ -2869,7 +2989,7 @@ static void video_refresh_dga_vosf(void)
 {
 	// Quit DGA mode if requested
 	possibly_quit_dga_mode();
-	
+
 	// Update display (VOSF variant)
 	static uint32 tick_counter = 0;
 	if (++tick_counter >= frame_skip) {
@@ -2887,7 +3007,7 @@ static void video_refresh_window_vosf(void)
 {
 	// Ungrab mouse if requested
 	possibly_ungrab_mouse();
-	
+
 	// Update display (VOSF variant)
 	static uint32 tick_counter = 0;
 	if (++tick_counter >= frame_skip) {
