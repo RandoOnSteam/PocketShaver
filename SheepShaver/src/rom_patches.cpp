@@ -28,6 +28,7 @@
 
 #include "sysdeps.h"
 #include "rom_patches.h"
+#include "adb.h"
 #include "printing.h"
 #include "main.h"
 #include "prefs.h"
@@ -2499,6 +2500,8 @@ void InstallDrivers(void)
 	M68kRegisters r;
 	SheepArray<SIZEOF_IOParam> pb_var;
 	const uintptr pb = pb_var.addr();
+
+	ADBInstall();
 
 #if DISABLE_SCSI
 	// Setup fake SCSI Globals

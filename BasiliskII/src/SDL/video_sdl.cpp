@@ -880,6 +880,18 @@ static bool is_cursor_in_mac_screen()
 BOOL WINAPI FakeSetForegroundWindow(HWND hWnd) {
 	return TRUE;
 }
+BOOL WINAPI FakeSetWindowPos(HWND hWnd, HWND hWndInsertAfter, int X, int Y,
+	int cx, int cy, UINT uFlags) {
+	HWND foreground;
+	foreground = GetForegroundWindow();
+	if (foreground != NULL && foreground != hWnd
+			&& hWndInsertAfter != HWND_TOPMOST) {
+		hWndInsertAfter = foreground;
+		uFlags &= ~SWP_NOZORDER;
+	}
+	return SetWindowPos(hWnd, hWndInsertAfter, X, Y, cx, cy,
+		uFlags | SWP_NOACTIVATE);
+}
 class Win32FuncHook
 {
 public:
@@ -963,10 +975,15 @@ void driver_base::set_video_mode(int flags)
 	scaling = magnification != 1.0f;
 #if defined(_WIN32)
 	Win32FuncHook gfwhook;
-	if(is_cursor_in_mac_screen() == false)
+	Win32FuncHook swphook;
+	if(is_cursor_in_mac_screen() == false) {
 		gfwhook.Hook(GetModuleHandleA("sdl.dll"),
 			"user32.dll", "SetForegroundWindow",
 			(void*)FakeSetForegroundWindow);
+		swphook.Hook(GetModuleHandleA("sdl.dll"),
+			"user32.dll", "SetWindowPos",
+			(void*)FakeSetWindowPos);
+	}
 #endif /* _WIN32 */
 	if (!scaling) {
 		hostsurface = s = SDL_SetVideoMode(VIDEO_MODE_X, VIDEO_MODE_Y,

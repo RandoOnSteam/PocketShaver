@@ -218,6 +218,8 @@ static inline bool is_ethernet_broadcast(uint8 *p)
  *  Driver Open() routine
  */
 
+void EtherPreallocatePacket(void);
+
 int16 EtherOpen(uint32 pb, uint32 dce)
 {
 	D(bug("EtherOpen\n"));
@@ -230,6 +232,7 @@ int16 EtherOpen(uint32 pb, uint32 dce)
 		return openErr;
 	ether_data = r.a[0];
 	D(bug(" data %08x\n", ether_data));
+	EtherPreallocatePacket();
 
 	WriteMacInt16(ether_data + ed_DeferredTask + qType, dtQType);
 	WriteMacInt32(ether_data + ed_DeferredTask + dtAddr, ether_data + ed_Code);
@@ -465,6 +468,17 @@ void EtherResetCachedAllocation() {
     ether_packet = 0;
 }
 
+void EtherPreallocatePacket(void)
+{
+	M68kRegisters r;
+
+	if (ether_packet != 0)
+		return;
+	r.d[0] = 1516;
+	Execute68kTrap(0xa71e, &r);
+	ether_packet = r.a[0];
+}
+
 EthernetPacket::EthernetPacket()
 {
 	++n_ether_packets;
@@ -495,4 +509,5 @@ EthernetPacket::~EthernetPacket()
 }
 #else
 void EtherResetCachedAllocation() { }
+void EtherPreallocatePacket(void) { }
 #endif

@@ -249,6 +249,8 @@ void powerpc_cpu::execute_fault_report(uint32 opcode)
 	const char *arg[4] = {"mon", "-m", "-r", NULL};
 	mon(3, arg);
 #endif
+	fflush(stdout);
+	fflush(stderr);
 	abort();
 }
 

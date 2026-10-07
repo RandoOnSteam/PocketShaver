@@ -1130,7 +1130,11 @@ void check_load_invoc(uint32 type, int16 id, uint32 h)
 	uint32 p = ReadMacInt32(h);
 	if (p == 0)
 		return;
-	uint32 size = ReadMacInt32(p - 2 * 4) & 0xffffff;
+	uint32 size = ReadMacInt32(p - 2 * 4);
+	uint32 overhead = 12 + ReadMacInt8(p - 9);
+	if (size <= overhead)
+		return;
+	size -= overhead;
 
 	maybe_queue_nift_lock(type, h);		// DII fix: schedule sound-component PEF lock (no trap here)
 	CheckLoad(type, id, (uint16 *)Mac2HostAddr(p), size);
@@ -1148,7 +1152,11 @@ void named_check_load_invoc(uint32 type, uint32 name, uint32 h)
 	uint32 p = ReadMacInt32(h);
 	if (p == 0)
 		return;
-	uint32 size = ReadMacInt32(p - 2 * 4) & 0xffffff;
+	uint32 size = ReadMacInt32(p - 2 * 4);
+	uint32 overhead = 12 + ReadMacInt8(p - 9);
+	if (size <= overhead)
+		return;
+	size -= overhead;
 
 	maybe_queue_nift_lock(type, h);		// DII fix: schedule sound-component PEF lock (no trap here)
 	CheckLoad(type, (char *)Mac2HostAddr(name), Mac2HostAddr(p), size);

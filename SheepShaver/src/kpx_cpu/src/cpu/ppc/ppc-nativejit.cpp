@@ -174,8 +174,26 @@ static int NativeJitTranslateMemory(NATIVEJITEMITTER* emitter, const NATIVEJITLA
 	return 1;
 }
 
+static void NativeJitPrepareOverflow(NATIVEJITEMITTER* emitter)
+{
+	NativeJitMove(emitter, NATIVEJIT_T2, NATIVEJIT_T0);
+	NativeJitOperate(emitter, NATIVEJIT_ALU_XOR, NATIVEJIT_T2, NATIVEJIT_T1);
+	NativeJitNot(emitter, NATIVEJIT_T2);
+}
+
+static void NativeJitStoreOverflow(NATIVEJITEMITTER* emitter, const NATIVEJITLAYOUT* layout)
+{
+	NativeJitOperate(emitter, NATIVEJIT_ALU_XOR, NATIVEJIT_T1, NATIVEJIT_T0);
+	NativeJitOperate(emitter, NATIVEJIT_ALU_AND, NATIVEJIT_T2, NATIVEJIT_T1);
+	NativeJitOperateImmediate(emitter, NATIVEJIT_ALU_SHR, NATIVEJIT_T2, 31);
+	NativeJitStoreRegisterByte(emitter, layout->mOverflow, NATIVEJIT_T2);
+	NativeJitLoadRegisterByte(emitter, NATIVEJIT_T1, layout->mSummaryOverflow);
+	NativeJitOperate(emitter, NATIVEJIT_ALU_OR, NATIVEJIT_T1, NATIVEJIT_T2);
+	NativeJitStoreRegisterByte(emitter, layout->mSummaryOverflow, NATIVEJIT_T1);
+}
+
 static int NativeJitTranslateCarrying(NATIVEJITEMITTER* emitter, const NATIVEJITLAYOUT* layout, uint32 opcode,
-	int invert, int useregister, uint32 constant, int carryin)
+	int invert, int useregister, uint32 constant, int carryin, int overflow)
 {
 	NativeJitLoadGpr(emitter, layout, NATIVEJIT_T0, NATIVEJIT_OPCODE_RA(opcode));
 	if (invert)
@@ -184,7 +202,28 @@ static int NativeJitTranslateCarrying(NATIVEJITEMITTER* emitter, const NATIVEJIT
 		NativeJitLoadGpr(emitter, layout, NATIVEJIT_T1, NATIVEJIT_OPCODE_RB(opcode));
 	else
 		NativeJitLoadImmediate(emitter, NATIVEJIT_T1, constant);
+	if (overflow)
+		NativeJitPrepareOverflow(emitter);
 	NativeJitAddCarrying(emitter, NATIVEJIT_T0, NATIVEJIT_T1, carryin);
+	if (overflow)
+		NativeJitStoreOverflow(emitter, layout);
+	NativeJitStoreGpr(emitter, layout, NATIVEJIT_OPCODE_RD(opcode), NATIVEJIT_T0);
+	NativeJitRecord(emitter, layout, opcode);
+	return 1;
+}
+
+static int NativeJitTranslateOverflowArithmetic(NATIVEJITEMITTER* emitter, const NATIVEJITLAYOUT* layout,
+	uint32 opcode, int subtract)
+{
+	NativeJitLoadGpr(emitter, layout, NATIVEJIT_T0, NATIVEJIT_OPCODE_RA(opcode));
+	NativeJitLoadGpr(emitter, layout, NATIVEJIT_T1, NATIVEJIT_OPCODE_RB(opcode));
+	if (subtract)
+		NativeJitNot(emitter, NATIVEJIT_T0);
+	NativeJitPrepareOverflow(emitter);
+	NativeJitOperate(emitter, NATIVEJIT_ALU_ADD, NATIVEJIT_T0, NATIVEJIT_T1);
+	if (subtract)
+		NativeJitOperateImmediate(emitter, NATIVEJIT_ALU_ADD, NATIVEJIT_T0, 1);
+	NativeJitStoreOverflow(emitter, layout);
 	NativeJitStoreGpr(emitter, layout, NATIVEJIT_OPCODE_RD(opcode), NATIVEJIT_T0);
 	NativeJitRecord(emitter, layout, opcode);
 	return 1;
@@ -795,21 +834,41 @@ static int NativeJitTranslateExtended(NATIVEJITEMITTER* emitter, const NATIVEJIT
 	case 11:
 		return NativeJitTranslateArithmetic(emitter, layout, opcode, NATIVEJIT_ALU_MULHU, 0);
 	case 10:
-		return NativeJitTranslateCarrying(emitter, layout, opcode, 0, 1, 0, NATIVEJIT_CARRY_ZERO);
+		return NativeJitTranslateCarrying(emitter, layout, opcode, 0, 1, 0, NATIVEJIT_CARRY_ZERO, 0);
 	case 138:
-		return NativeJitTranslateCarrying(emitter, layout, opcode, 0, 1, 0, NATIVEJIT_CARRY_XER);
+		return NativeJitTranslateCarrying(emitter, layout, opcode, 0, 1, 0, NATIVEJIT_CARRY_XER, 0);
 	case 202:
-		return NativeJitTranslateCarrying(emitter, layout, opcode, 0, 0, 0, NATIVEJIT_CARRY_XER);
+		return NativeJitTranslateCarrying(emitter, layout, opcode, 0, 0, 0, NATIVEJIT_CARRY_XER, 0);
 	case 234:
-		return NativeJitTranslateCarrying(emitter, layout, opcode, 0, 0, 0xffffffffU, NATIVEJIT_CARRY_XER);
+		return NativeJitTranslateCarrying(emitter, layout, opcode, 0, 0, 0xffffffffU, NATIVEJIT_CARRY_XER, 0);
 	case 8:
-		return NativeJitTranslateCarrying(emitter, layout, opcode, 1, 1, 0, NATIVEJIT_CARRY_ONE);
+		return NativeJitTranslateCarrying(emitter, layout, opcode, 1, 1, 0, NATIVEJIT_CARRY_ONE, 0);
 	case 136:
-		return NativeJitTranslateCarrying(emitter, layout, opcode, 1, 1, 0, NATIVEJIT_CARRY_XER);
+		return NativeJitTranslateCarrying(emitter, layout, opcode, 1, 1, 0, NATIVEJIT_CARRY_XER, 0);
 	case 200:
-		return NativeJitTranslateCarrying(emitter, layout, opcode, 1, 0, 0, NATIVEJIT_CARRY_XER);
+		return NativeJitTranslateCarrying(emitter, layout, opcode, 1, 0, 0, NATIVEJIT_CARRY_XER, 0);
 	case 232:
-		return NativeJitTranslateCarrying(emitter, layout, opcode, 1, 0, 0xffffffffU, NATIVEJIT_CARRY_XER);
+		return NativeJitTranslateCarrying(emitter, layout, opcode, 1, 0, 0xffffffffU, NATIVEJIT_CARRY_XER, 0);
+	case 522:
+		return NativeJitTranslateCarrying(emitter, layout, opcode, 0, 1, 0, NATIVEJIT_CARRY_ZERO, 1);
+	case 650:
+		return NativeJitTranslateCarrying(emitter, layout, opcode, 0, 1, 0, NATIVEJIT_CARRY_XER, 1);
+	case 714:
+		return NativeJitTranslateCarrying(emitter, layout, opcode, 0, 0, 0, NATIVEJIT_CARRY_XER, 1);
+	case 746:
+		return NativeJitTranslateCarrying(emitter, layout, opcode, 0, 0, 0xffffffffU, NATIVEJIT_CARRY_XER, 1);
+	case 520:
+		return NativeJitTranslateCarrying(emitter, layout, opcode, 1, 1, 0, NATIVEJIT_CARRY_ONE, 1);
+	case 648:
+		return NativeJitTranslateCarrying(emitter, layout, opcode, 1, 1, 0, NATIVEJIT_CARRY_XER, 1);
+	case 712:
+		return NativeJitTranslateCarrying(emitter, layout, opcode, 1, 0, 0, NATIVEJIT_CARRY_XER, 1);
+	case 744:
+		return NativeJitTranslateCarrying(emitter, layout, opcode, 1, 0, 0xffffffffU, NATIVEJIT_CARRY_XER, 1);
+	case 778:
+		return NativeJitTranslateOverflowArithmetic(emitter, layout, opcode, 0);
+	case 552:
+		return NativeJitTranslateOverflowArithmetic(emitter, layout, opcode, 1);
 	case 104:
 		return NativeJitTranslateUnary(emitter, layout, opcode, NATIVEJIT_OPCODE_RA(opcode), NATIVEJIT_OPCODE_RD(opcode), 0, 1);
 	case 954:
@@ -1081,11 +1140,11 @@ static int NativeJitTranslate(NATIVEJITEMITTER* emitter, const NATIVEJITLAYOUT* 
 		NativeJitStoreGpr(emitter, layout, NATIVEJIT_OPCODE_RD(opcode), NATIVEJIT_T0);
 		return 1;
 	case 12:
-		return NativeJitTranslateCarrying(emitter, layout, opcode & ~1U, 0, 0, NATIVEJIT_OPCODE_SIMM(opcode), NATIVEJIT_CARRY_ZERO);
+		return NativeJitTranslateCarrying(emitter, layout, opcode & ~1U, 0, 0, NATIVEJIT_OPCODE_SIMM(opcode), NATIVEJIT_CARRY_ZERO, 0);
 	case 13:
-		return NativeJitTranslateCarrying(emitter, layout, opcode | 1, 0, 0, NATIVEJIT_OPCODE_SIMM(opcode), NATIVEJIT_CARRY_ZERO);
+		return NativeJitTranslateCarrying(emitter, layout, opcode | 1, 0, 0, NATIVEJIT_OPCODE_SIMM(opcode), NATIVEJIT_CARRY_ZERO, 0);
 	case 8:
-		return NativeJitTranslateCarrying(emitter, layout, opcode & ~1U, 1, 0, NATIVEJIT_OPCODE_SIMM(opcode), NATIVEJIT_CARRY_ONE);
+		return NativeJitTranslateCarrying(emitter, layout, opcode & ~1U, 1, 0, NATIVEJIT_OPCODE_SIMM(opcode), NATIVEJIT_CARRY_ONE, 0);
 	case 7:
 		NativeJitLoadGpr(emitter, layout, NATIVEJIT_T0, source);
 		NativeJitOperateImmediate(emitter, NATIVEJIT_ALU_MUL, NATIVEJIT_T0, NATIVEJIT_OPCODE_SIMM(opcode));
@@ -1173,6 +1232,43 @@ static void NativeJitDirectExit(NATIVEJITEMITTER* emitter, const NATIVEJITLAYOUT
 	NativeJitEpilogue(emitter);
 }
 
+static uint32 NativeJitPageMask(uint32 word, uint32 first, uint32 last)
+{
+	uint32 mask;
+	mask = 0xffffffffU;
+	if (word == (first >> 5))
+		mask &= 0xffffffffU << (first & 31);
+	if (word == (last >> 5))
+		mask &= 0xffffffffU >> (31 - (last & 31));
+	return mask;
+}
+
+static void NativeJitMarkPages(NATIVEJITSTATE* state, uint32 start, uint32 end)
+{
+	uint32 first;
+	uint32 last;
+	uint32 word;
+	first = start >> NATIVEJIT_PAGE_SHIFT;
+	last = (end - 1) >> NATIVEJIT_PAGE_SHIFT;
+	for (word = first >> 5; word <= (last >> 5); word++)
+		state->mPages[word] |= NativeJitPageMask(word, first, last);
+}
+
+static int NativeJitPagesCompiled(const NATIVEJITSTATE* state, uint32 start, uint32 end)
+{
+	uint32 first;
+	uint32 last;
+	uint32 word;
+	first = start >> NATIVEJIT_PAGE_SHIFT;
+	last = (end - 1) >> NATIVEJIT_PAGE_SHIFT;
+	for (word = first >> 5; word <= (last >> 5); word++)
+	{
+		if (state->mPages[word] & NativeJitPageMask(word, first, last))
+			return 1;
+	}
+	return 0;
+}
+
 void* powerpc_cpu::NativeJitCompileBlock(block_info* bi)
 {
 	NATIVEJITEMITTER emitter;
@@ -1189,6 +1285,9 @@ void* powerpc_cpu::NativeJitCompileBlock(block_info* bi)
 	uint32 lastopcode;
 	int exitcount;
 	int nativecount;
+	block_info::decode_info* olddecode;
+	block_info::decode_info* decode;
+	uint8* codestart;
 	base = (uint8*)regs_ptr();
 	nativecount = 0;
 	layout.mGpr = (int)((uint8*)&regs().gpr[0] - base);
@@ -1207,13 +1306,24 @@ void* powerpc_cpu::NativeJitCompileBlock(block_info* bi)
 	layout.mFpscr = (int)((uint8*)&regs().fpscr - base);
 	layout.mFloat = nativejit->mFloat;
 	layout.mState = nativejit;
-	NativeJitBegin(&emitter, nativejit->mCursor, (uint8*)nativejit + NATIVEJIT_CODE_SIZE,
+	decode = (block_info::decode_info*)(((uintptr)nativejit->mCursor + 15) & ~(uintptr)15);
+	codestart = (uint8*)(decode + bi->size);
+	if (codestart >= (uint8*)nativejit + NATIVEJIT_CODE_SIZE)
+	{
+		nativejit->mFull = 1;
+		return NULL;
+	}
+	NativeJitBegin(&emitter, codestart, (uint8*)nativejit + NATIVEJIT_CODE_SIZE,
 		layout.mCarry, layout.mSummaryOverflow);
 	if (!NativeJitHasRoom(&emitter))
 	{
 		nativejit->mFull = 1;
 		return NULL;
 	}
+	for (index = 0; index < bi->size; index++)
+		decode[index] = bi->di[index];
+	olddecode = bi->di;
+	bi->di = decode;
 	NativeJitPrologue(&emitter);
 	loopstart = NativeJitLabel(&emitter);
 	translated = 0;
@@ -1223,6 +1333,7 @@ void* powerpc_cpu::NativeJitCompileBlock(block_info* bi)
 	{
 		if (!NativeJitHasRoom(&emitter))
 		{
+			bi->di = olddecode;
 			nativejit->mFull = 1;
 			return NULL;
 		}
@@ -1244,7 +1355,10 @@ void* powerpc_cpu::NativeJitCompileBlock(block_info* bi)
 		address += 4;
 	}
 	if (nativecount == 0)
+	{
+		bi->di = olddecode;
 		return NULL;
+	}
 	lastopcode = bi->di[bi->size - 1].opcode;
 	exitcount = NativeJitStaticTargets(lastopcode, address - 4, targets);
 	if (translated == 3)
@@ -1273,18 +1387,18 @@ void* powerpc_cpu::NativeJitCompileBlock(block_info* bi)
 		NativeJitIndirectExit(&emitter, layout.mPc, layout.mFlags, nativejit);
 		NativeJitEpilogue(&emitter);
 	}
-	NativeJitFlush(nativejit->mCursor, emitter.mCode - nativejit->mCursor);
-	nativejit->mPrologue = (int)(loopstart - nativejit->mCursor);
+	NativeJitFlush(codestart, emitter.mCode - codestart);
+	nativejit->mPrologue = (int)(loopstart - codestart);
 	if (bi->pc < nativejit->mLow)
 		nativejit->mLow = bi->pc;
 	if (address > nativejit->mHigh)
 		nativejit->mHigh = address;
+	NativeJitMarkPages(nativejit, bi->pc, address);
 	index = (int)((bi->pc >> 2) & NATIVEJIT_LOOKUP_MASK);
 	nativejit->mLookupPc[index] = bi->pc;
 	nativejit->mLookupEntry[index] = loopstart;
-	base = nativejit->mCursor;
 	nativejit->mCursor = emitter.mCode;
-	return base;
+	return codestart;
 }
 
 void powerpc_cpu::NativeJitLinkTo(block_info* bi)
@@ -1314,11 +1428,14 @@ void powerpc_cpu::NativeJitReset()
 		nativejit->mLookupPc[index] = 1;
 		nativejit->mLookupEntry[index] = NULL;
 	}
+	memset(nativejit->mPages, 0, sizeof(nativejit->mPages));
 }
 
 void powerpc_cpu::NativeJitInvalidate(uint32 start, uint32 end)
 {
-	if (nativejit != NULL && start < nativejit->mHigh && end > nativejit->mLow)
+	if (nativejit == NULL || start >= end || start >= nativejit->mHigh || end <= nativejit->mLow)
+		return;
+	if (NativeJitPagesCompiled(nativejit, start, end))
 		nativejit->mFull = 1;
 }
 

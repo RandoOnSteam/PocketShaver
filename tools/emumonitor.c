@@ -514,11 +514,14 @@ static int WriteWholeFile(const char *directory, const char *subdirectory,
 
 static int IsRemoteSource(const char *source)
 {
-	struct stat sourcestat;
+	FILE *local;
 	const char *colon;
 
-	if (stat(source, &sourcestat) == 0)
+	local = fopen(source, "rb");
+	if (local != NULL) {
+		fclose(local);
 		return 0;
+	}
 	colon = strchr(source, ':');
 	return colon != NULL && colon - source > 1;
 }
@@ -1304,19 +1307,14 @@ static int FindVolumeOffsets(FILE *file, MonitorOffset *offsets, int maximum)
 static int OpenDiskImage(const char *path, HfsVolume *volumes, int maximum)
 {
 	MonitorOffset offsets[MONITOR_MAX_VOLUMES];
-	struct stat filestat;
 	FILE *file;
 	int offsetcount;
 	int index;
 	int count;
 
-	if (stat(path, &filestat) != 0)
-		return 0;
 	file = fopen(path, "rb");
-	if (file == NULL) {
-		fprintf(stderr, "Unable to open %s\n", path);
+	if (file == NULL)
 		return 0;
-	}
 	if (maximum > MONITOR_MAX_VOLUMES)
 		maximum = MONITOR_MAX_VOLUMES;
 	offsetcount = FindVolumeOffsets(file, offsets, maximum);

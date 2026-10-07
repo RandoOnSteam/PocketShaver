@@ -40,6 +40,7 @@
 #endif
 
 #include "rom_patches.h"
+#include "adb.h"
 
 #define DEBUG 0
 #include "debug.h"
@@ -720,6 +721,8 @@ void InstallDrivers(uint32 pb)
 {
 	D(bug("InstallDrivers, pb %08x\n", pb));
 	M68kRegisters r;
+
+	ADBInstall();
 
 	// Install Microseconds() replacement routine
 	r.a[0] = ROMBaseMac + microseconds_offset;

@@ -83,7 +83,9 @@ static unsigned int key_read_ptr = 0, key_write_ptr = 0;
 // O2S: Button event buffer (Mac button with up/down flag) -> avoid to loose tap on a trackpad
 const int BUTTON_BUFFER_SIZE = 32;
 static uint8 button_buffer[BUTTON_BUFFER_SIZE];
+static int button_h[BUTTON_BUFFER_SIZE], button_v[BUTTON_BUFFER_SIZE];
 static unsigned int button_read_ptr = 0, button_write_ptr = 0;
+static uint32 edge_ticks = 0;
 
 static uint8 mouse_reg_3[2] = {0x63, 0x01};	// Mouse ADB register 3
 
@@ -1969,24 +1971,30 @@ void ADBMouseMoved(int x, int y)
 	TriggerInterrupt();
 }
 
-void ADBMouseClick(int button) {
+static void ADBQueueButton(int button)
+{
+	B2_lock_mutex(mouse_lock);
+	button_h[button_write_ptr] = mouse_x;
+	button_v[button_write_ptr] = mouse_y;
+	B2_unlock_mutex(mouse_lock);
 	button_buffer[button_write_ptr] = button;
 	button_write_ptr = (button_write_ptr + 1) % BUTTON_BUFFER_SIZE;
+}
+
+void ADBMouseClick(int button) {
+	ADBQueueButton(button);
 	SetInterruptFlag(INTFLAG_ADB);
 	TriggerInterrupt();
 
 	Delay_usec(20000);
 
-	button_buffer[button_write_ptr] = button | 0x80;
-	button_write_ptr = (button_write_ptr + 1) % BUTTON_BUFFER_SIZE;
+	ADBQueueButton(button | 0x80);
 	SetInterruptFlag(INTFLAG_ADB);
 	TriggerInterrupt();
 }
 
 void ADBWriteMouseDown(int button) {
-	// O2S: Add button to buffer
-	button_buffer[button_write_ptr] = button;
-	button_write_ptr = (button_write_ptr + 1) % BUTTON_BUFFER_SIZE;
+	ADBQueueButton(button);
 
 	// O2S: mouse_button[button] = true;
 	SetInterruptFlag(INTFLAG_ADB);
@@ -2034,9 +2042,7 @@ void ADBMouseDown(int button)
 }
 
 void ADBWriteMouseUp(int button) {
-	// O2S: Add button to buffer
-	button_buffer[button_write_ptr] = button | 0x80;
-	button_write_ptr = (button_write_ptr + 1) % BUTTON_BUFFER_SIZE;
+	ADBQueueButton(button | 0x80);
 
 	// O2S: mouse_button[button] = false;
 	SetInterruptFlag(INTFLAG_ADB);
@@ -2257,8 +2263,7 @@ static void adb_bases_invalidate(void)
 	and checked. */
 #define ADB_ENTRY_STRIDE 12
 
-/* Deferred-task context only: see adb_resolve_entry(). */
-static void adb_alloc_scratch(void)
+void ADBInstall(void)
 {
 	M68kRegisters r;
 
@@ -2283,13 +2288,8 @@ static uint32 adb_resolve_entry(uint32 adb_base, uint8 adr)
 	   this machine's mouse and keyboard entries. */
 	memset(&r, 0, sizeof(r));
 
-	if (adb_scratch == 0) {
-		r.d[0] = 10;
-		Execute68kTrap(0xa71e, &r); /* NewPtrSysClear() */
-		if (r.a[0] == 0)
-				return 0;
-		adb_scratch = r.a[0];
-	}
+	if (adb_scratch == 0)
+		return 0;
 
 	r.a[0] = adb_scratch;
 	r.d[0] = adr;
@@ -2593,6 +2593,40 @@ static void mouse_adb_tick(uint32 adb_base, uint32 mouse_base, uint32 tmp_data)
 			mouse_dx, mouse_dy, moved,
 			mouse_button[0], mouse_button[1], mouse_button[2]);
 #endif
+
+	if (!grabbed && !relative) {
+		if (button_read_ptr != button_write_ptr) {
+			int h, v;
+
+			h = button_h[button_read_ptr];
+			v = button_v[button_read_ptr];
+			if (h != last_h || v != last_v) {
+				mouse_adb_place(mouse_base, h, v);
+				edge_ticks = ReadMacInt32(0x16a);
+				old_mouse_x = h;
+				old_mouse_y = v;
+				SetInterruptFlag(INTFLAG_ADB);
+				return;
+			}
+			if (ReadMacInt32(0x16a) == edge_ticks) {
+				old_mouse_x = h;
+				old_mouse_y = v;
+				SetInterruptFlag(INTFLAG_ADB);
+				return;
+			}
+			mouse_button[button_buffer[button_read_ptr] & 0x3] = (button_buffer[button_read_ptr] & 0x80) == 0;
+			button_read_ptr = (button_read_ptr + 1) % BUTTON_BUFFER_SIZE;
+			mouse_adb_deliver(adb_base, mouse_base, tmp_data);
+			edge_ticks = ReadMacInt32(0x16a);
+			if (button_read_ptr != button_write_ptr) {
+				old_mouse_x = h;
+				old_mouse_y = v;
+				SetInterruptFlag(INTFLAG_ADB);
+				return;
+			}
+			moved = host_h != h || host_v != v;
+		}
+	}
 
 	/* A button edge has to reach the driver as its own packet or a click
 	   inside one tick is swallowed. */
@@ -2975,7 +3009,8 @@ void ADBVBL(void)
 	uint32 adb_base, tmp_data;
 	int i;
 
-	adb_alloc_scratch();	/* deferred-task context: safe to call NewPtr here */
+	if (adb_scratch == 0)
+		return;
 	adb_base = adb_begin();
 	if (adb_base == 0)
 		return;

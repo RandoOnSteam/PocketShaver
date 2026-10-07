@@ -866,8 +866,11 @@ void powerpc_cpu::execute(uint32 entry)
 			my_block_cache.add_to_active_list(bi);
 			decode_cache_p += bi->size;
 #if PPC_NATIVE_JIT
-			if (nativejit)
+			if (nativejit) {
 				bi->nativeentry = NativeJitCompileBlock(bi);
+				if (bi->nativeentry)
+					decode_cache_p -= bi->size;
+			}
 #endif
 #if PPC_PROFILE_COMPILE_TIME
 			compile_time += (clock() - start_time);
@@ -877,9 +880,10 @@ void powerpc_cpu::execute(uint32 entry)
 		  pdi_execute:
 			for (;;) {
 #if PPC_NATIVE_JIT
-				NativeJitLinkTo(bi);
-				if (bi->nativeentry)
+				if (bi->nativeentry) {
+					NativeJitLinkTo(bi);
 					((NATIVEJITBLOCK)bi->nativeentry)(this, regs_ptr(), (void *)VMBaseDiff);
+				}
 				else
 #endif
 				{
@@ -904,16 +908,26 @@ void powerpc_cpu::execute(uint32 entry)
 					if (!check_spcflags())
 						goto return_site;
 
-					// Force redecoding if cache was invalidated
+					// Look the block up again if the cache was invalidated
 					if (spcflags().test(SPCFLAG_JIT_EXEC_RETURN)) {
 						spcflags().clear(SPCFLAG_JIT_EXEC_RETURN);
 						invalidated_cache = true;
-						break;
+#if PPC_NATIVE_JIT
+						if (nativejit && nativejit->mFull)
+							break;
+#endif
+						if ((bi = my_block_cache.find(pc())) == NULL)
+							break;
+						continue;
 					}
 				}
 
-				if ((bi->pc != pc()) && ((bi = my_block_cache.find(pc())) == NULL))
-					break;
+				if (bi->pc != pc()) {
+					block_info *next = my_block_cache.fast_find(pc());
+					if (next == NULL && (next = my_block_cache.find(pc())) == NULL)
+						break;
+					bi = next;
+				}
 			}
 		}
 #else

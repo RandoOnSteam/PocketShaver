@@ -41,6 +41,9 @@
 
 #define DEBUG 0
 #include "debug.h"
+#ifdef USE_SDL1
+#include "atomic.h"
+#endif
 
 #if defined(BINCUE)
 #include "bincue.h"
@@ -68,6 +71,8 @@ static SDL_Thread *audio_prefetch_thread = NULL;
 static SDL_atomic_t audio_prefetch_quit;
 static int audio_callback_bytes = 0;
 static int audio_fetch_bytes = 0;
+#else
+static atomic_sint audio_closing;
 #endif
 static int main_volume = MAC_MAX_VOLUME;
 static int speaker_volume = MAC_MAX_VOLUME;
@@ -259,10 +264,14 @@ void AudioInit(void)
 void close_audio(void)
 {
 #ifdef USE_SDL1
+	atomic_store_explicit(&audio_closing, 1, memory_order_release);
+	SDL_SemPost(audio_irq_done_sem);
 #if defined(BINCUE)
 	CloseAudio_bincue();
 #endif
 	SDL_CloseAudio();
+	while (SDL_SemTryWait(audio_irq_done_sem) == 0) {}
+	atomic_store_explicit(&audio_closing, 0, memory_order_release);
 	free(audio_mix_buf);
 	audio_mix_buf = NULL;
 #else
@@ -421,10 +430,12 @@ static void stream_func(void *arg, uint8 *stream, int stream_len)
 {
 #ifdef USE_SDL1
 	memset(stream, silence_byte, stream_len);
-	if (AudioStatus.num_sources) {
+	if (AudioStatus.num_sources && !atomic_load_explicit(&audio_closing, memory_order_acquire)) {
 		SetInterruptFlag(INTFLAG_AUDIO);
 		TriggerInterrupt();
 		SDL_SemWait(audio_irq_done_sem);
+		if (atomic_load_explicit(&audio_closing, memory_order_acquire))
+			return;
 		uint32 info = ReadMacInt32(audio_data + adatStreamInfo);
 		if (info && !main_mute && !speaker_mute) {
 			int bytes = ReadMacInt32(info + scd_sampleCount) *
