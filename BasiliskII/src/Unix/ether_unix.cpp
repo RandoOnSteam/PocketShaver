@@ -164,13 +164,15 @@ static VDECONN *vde_conn;
 #ifdef SHEEPSHAVER
 static bool net_open = false;				// Flag: initialization succeeded, network device open
 static uint8 ether_addr[6];					// Our Ethernet address
-static bool ready_to_receive = false;
 #else
 const bool ether_driver_opened = true;		// Flag: is the MacOS driver opened?
 #endif
+#if TARGET_OS_IPHONE
+static bool ready_to_receive = false;
+#endif
 
 
-#ifdef ENABLE_MACOSX_ETHERHELPER
+#if defined(ENABLE_MACOSX_ETHERHELPER) || TARGET_OS_IPHONE
 static uint8 packet_buffer[2048];
 #endif
 
@@ -519,7 +521,16 @@ bool ether_init(void)
 #ifdef HAVE_SLIRP
 	} else if (net_if_type == NET_IF_SLIRP || net_if_type == NET_IF_BONJOUR) {
 
+#if TARGET_OS_IPHONE
         objc_fetchHardwareAddressData(ether_addr);
+#else
+        ether_addr[0] = 0x52;
+        ether_addr[1] = 0x54;
+        ether_addr[2] = 0x00;
+        ether_addr[3] = 0x12;
+        ether_addr[4] = 0x34;
+        ether_addr[5] = 0x56;
+#endif
 
         printf("- did set address ");
         for (int i=0; i<6; i++) {
@@ -806,7 +817,9 @@ void ether_reset(void)
 
 static int16 ether_do_add_multicast(uint8 *addr)
 {
+#if TARGET_OS_IPHONE
     ready_to_receive = true;
+#endif
 
     printf("ether_do_add_multicast %d\n", 0xff & *addr);
 	switch (net_if_type) {
@@ -942,6 +955,7 @@ static int16 ether_do_write(uint32 arg)
 		return noErr;
 	} else
 #endif
+#if TARGET_OS_IPHONE
     if (net_if_type == NET_IF_BONJOUR) {
         if (!ready_to_receive) {
             ready_to_receive = true;
@@ -958,7 +972,9 @@ static int16 ether_do_write(uint32 arg)
         objc_reportBytesTransferred(len);
 
        return noErr;
-    } else if (write(fd, packet, len) < 0) {
+    } else
+#endif
+    if (write(fd, packet, len) < 0) {
 		D(bug("WARNING: Couldn't transmit packet\n"));
 		return excessCollsns;
 	} else
@@ -1113,6 +1129,7 @@ static void *receive_func(void *arg)
 	return NULL;
 }
 
+#if TARGET_OS_IPHONE
 void receive_rawdata_func(unsigned char *data, int length) {
     if (!ready_to_receive) {
         printf("- rejected package\n");
@@ -1137,6 +1154,7 @@ void receive_rawdata_func(unsigned char *data, int length) {
 
     objc_reportBytesTransferred(length);
 }
+#endif // TARGET_OS_IPHONE
 
 
 /*

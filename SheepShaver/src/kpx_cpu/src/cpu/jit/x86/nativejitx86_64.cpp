@@ -798,6 +798,22 @@ uint8* NativeJitBranchIfZero(NATIVEJITEMITTER* pThis, int condition)
 	return pThis->mCode - 4;
 }
 
+uint8* NativeJitFloatBranchIfNaN(NATIVEJITEMITTER* pThis, int source)
+{
+	NativeJitX64SseRegReg(pThis, 0x66, 0x2e, source, source);
+	NativeJitX64Byte(pThis, 0x0f);
+	NativeJitX64Byte(pThis, 0x8a);
+	NativeJitX64Dword(pThis, 0);
+	return pThis->mCode - 4;
+}
+
+uint8* NativeJitJump(NATIVEJITEMITTER* pThis)
+{
+	NativeJitX64Byte(pThis, 0xe9);
+	NativeJitX64Dword(pThis, 0);
+	return pThis->mCode - 4;
+}
+
 void NativeJitBranchLand(NATIVEJITEMITTER* pThis, uint8* branch)
 {
 	uint32 distance;
@@ -808,8 +824,26 @@ void NativeJitBranchLand(NATIVEJITEMITTER* pThis, uint8* branch)
 	branch[3] = (uint8)(distance >> 24);
 }
 
-uint8* NativeJitChainJump(NATIVEJITEMITTER* pThis, uint32 pcvalue, int flagsoffset,
-	int siteoffset, int sitepcoffset)
+static void NativeJitX64RipOperand(NATIVEJITEMITTER* pThis, int wide, uint32 opcode, int reg, const void* address,
+	int immediatesize)
+{
+	NativeJitX64Rex(pThis, wide, reg, 0, 0, 0);
+	if (opcode > 0xff)
+		NativeJitX64Byte(pThis, opcode >> 8);
+	NativeJitX64Byte(pThis, opcode);
+	NativeJitX64Byte(pThis, 0x05 | ((reg & 7) << 3));
+	NativeJitX64Dword(pThis, (uint32)((const uint8*)address - (pThis->mCode + 4 + immediatesize)));
+}
+
+static void NativeJitX64RecordSite(NATIVEJITEMITTER* pThis, uint8* site, uint32 pcvalue, NATIVEJITSTATE* state)
+{
+	NativeJitX64RipOperand(pThis, 1, 0x8d, NATIVEJITX64_R10, site, 0);
+	NativeJitX64RipOperand(pThis, 1, 0x89, NATIVEJITX64_R10, &state->mChainSite, 0);
+	NativeJitX64RipOperand(pThis, 0, 0xc7, 0, &state->mChainPc, 4);
+	NativeJitX64Dword(pThis, pcvalue);
+}
+
+uint8* NativeJitChainJump(NATIVEJITEMITTER* pThis, uint32 pcvalue, int flagsoffset, NATIVEJITSTATE* state)
 {
 	uint8* flagged;
 	uint8* site;
@@ -820,14 +854,11 @@ uint8* NativeJitChainJump(NATIVEJITEMITTER* pThis, uint32 pcvalue, int flagsoffs
 	NativeJitX64Byte(pThis, 0xe9);
 	NativeJitX64Dword(pThis, 0);
 	NativeJitX64Land(pThis, flagged);
-	NativeJitX64MoveImmediate64(pThis, NATIVEJITX64_R10, (uint64)(uintptr)site);
-	NativeJitX64RegsOperand(pThis, 1, 0x89, NATIVEJITX64_R10, siteoffset, 0);
-	NativeJitStoreRegisterImmediate(pThis, sitepcoffset, pcvalue);
+	NativeJitX64RecordSite(pThis, site, pcvalue, state);
 	return site;
 }
 
-void NativeJitIndirectExit(NATIVEJITEMITTER* pThis, int pcoffset, int flagsoffset,
-	int pctableoffset, int entrytableoffset)
+void NativeJitIndirectExit(NATIVEJITEMITTER* pThis, int pcoffset, int flagsoffset, NATIVEJITSTATE* state)
 {
 	uint8* flagged;
 	uint8* missed;
@@ -839,23 +870,23 @@ void NativeJitIndirectExit(NATIVEJITEMITTER* pThis, int pcoffset, int flagsoffse
 	NativeJitX64ShiftImmediate(pThis, 0, 5, NATIVEJITX64_R11, 2);
 	NativeJitX64RegReg(pThis, 0, 0x81, 4, NATIVEJITX64_R11);
 	NativeJitX64Dword(pThis, NATIVEJIT_LOOKUP_MASK);
-	NativeJitX64Byte(pThis, 0x47);
+	NativeJitX64RipOperand(pThis, 1, 0x8d, NATIVEJITX64_RAX, state->mLookupPc, 0);
+	NativeJitX64Byte(pThis, 0x46);
 	NativeJitX64Byte(pThis, 0x3b);
-	NativeJitX64Byte(pThis, 0x94);
-	NativeJitX64Byte(pThis, 0x9d);
-	NativeJitX64Dword(pThis, (uint32)pctableoffset);
+	NativeJitX64Byte(pThis, 0x14);
+	NativeJitX64Byte(pThis, 0x98);
 	missed = NativeJitX64JumpShort(pThis, 0x75);
-	NativeJitX64Byte(pThis, 0x43);
+	NativeJitX64Byte(pThis, 0x42);
 	NativeJitX64Byte(pThis, 0xff);
 	NativeJitX64Byte(pThis, 0xa4);
-	NativeJitX64Byte(pThis, 0xdd);
-	NativeJitX64Dword(pThis, (uint32)entrytableoffset);
+	NativeJitX64Byte(pThis, 0xd8);
+	NativeJitX64Dword(pThis, (uint32)((uint8*)state->mLookupEntry - (uint8*)state->mLookupPc));
 	NativeJitX64Land(pThis, flagged);
 	NativeJitX64Land(pThis, missed);
 }
 
 uint8* NativeJitChainExit(NATIVEJITEMITTER* pThis, int pcoffset, uint32 pcvalue, int flagsoffset,
-	int siteoffset, int sitepcoffset)
+	NATIVEJITSTATE* state)
 {
 	uint8* differentpc;
 	uint8* flagged;
@@ -869,9 +900,7 @@ uint8* NativeJitChainExit(NATIVEJITEMITTER* pThis, int pcoffset, uint32 pcvalue,
 	site = pThis->mCode;
 	NativeJitX64Byte(pThis, 0xe9);
 	NativeJitX64Dword(pThis, 0);
-	NativeJitX64MoveImmediate64(pThis, NATIVEJITX64_R10, (uint64)(uintptr)site);
-	NativeJitX64RegsOperand(pThis, 1, 0x89, NATIVEJITX64_R10, siteoffset, 0);
-	NativeJitStoreRegisterImmediate(pThis, sitepcoffset, pcvalue);
+	NativeJitX64RecordSite(pThis, site, pcvalue, state);
 	NativeJitX64Land(pThis, differentpc);
 	NativeJitX64Land(pThis, flagged);
 	return site;

@@ -1429,8 +1429,12 @@ void driver_base::adapt_to_video_mode() {
 	 * rebinding the hardware plane. This matters for every accelerated mode:
 	 * Bugdom keeps a visible QuickDraw cursor above RAVE, while Diablo can
 	 * hide that plane before Glide draws its own cursor. */
+#ifdef SHEEPSHAVER
 	SDL_ShowCursor(hardware_cursor &&
 		(private_data == NULL || private_data->cursorVisible));
+#else
+	SDL_ShowCursor(hardware_cursor);
+#endif
 
 	// Set window name/class
 	set_window_name();

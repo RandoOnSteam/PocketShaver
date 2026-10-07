@@ -252,6 +252,7 @@ static bool tick_thread_active = false;		// Flag: MacOS thread installed
 static volatile bool tick_thread_cancel;	// Flag: Cancel 60Hz thread
 static pthread_t tick_thread;				// 60Hz thread
 static int tick_cycle;
+extern std::string UserPrefsPath;
 static uint64 tick_duration;
 static pthread_t emul_thread;				// MacOS thread
 static int use_gui = -1;   					// Override prefs and show gui
@@ -426,8 +427,12 @@ static void get_system_info(void)
 	 * scalar paths. Experimental lever for suspected VMX-interpreter bugs and
 	 * graphics-acceleration conflicts (QuickTime image decode producing
 	 * chroma-scrambled, block-striped output is the canonical symptom). */
+#if TARGET_OS_IPHONE
 	PVR = objc_getAltivec() ? 0x000c0000   // 7400 (with AltiVec)
 	                        : 0x00084202;  // 740/750 G3 (no AltiVec)
+#else
+	PVR = 0x000c0000;
+#endif
 	int pref_cpu_clock = PrefsFindInt32("cpuclock");
 	if (pref_cpu_clock) CPUClockSpeed = 1000000 * pref_cpu_clock;
 #elif defined(__APPLE__) && defined(__MACH__)
@@ -898,7 +903,6 @@ int main(int argc, char *argv[])
 		} else if (strcmp(argv[i], "--config") == 0) {
 			argv[i++] = NULL;
 			if (i < argc) {
-				extern std::string UserPrefsPath;
 				UserPrefsPath = argv[i];
 				argv[i] = NULL;
 			}
@@ -1009,10 +1013,12 @@ int main(int argc, char *argv[])
 	if (vm_init() < 0) {
 		sprintf(str, "Could not initialize virtual memory system.\n");
 		ErrorAlert(str);
+#if TARGET_OS_IPHONE
 		objc_displayRamAllocFailedAlert();
+#endif
 		goto quit;
 	}
-	
+
 	// Get system info
 	get_system_info();
 	
@@ -1142,7 +1148,9 @@ int main(int argc, char *argv[])
 		if (vm_mac_acquire_fixed(RAM_BASE, RAMSize) < 0) {
 			sprintf(str, GetString(STR_RAM_MMAP_ERR), strerror(errno));
 			ErrorAlert(str);
+#if TARGET_OS_IPHONE
 			objc_displayRamAllocFailedAlert();
+#endif
 			goto quit;
 		}
 		RAMBase = RAM_BASE;
@@ -1217,7 +1225,11 @@ int main(int argc, char *argv[])
 #endif
 	vm_protect(ROMBaseHost, ROM_AREA_SIZE, VM_PAGE_READ | VM_PAGE_EXECUTE);
 
+#if TARGET_OS_IPHONE
 	tick_cycle = objc_getFrameRateSetting();
+#else
+	tick_cycle = 60;
+#endif
 	tick_duration = 1000000 / tick_cycle;
 
 	// Start 60Hz thread

@@ -803,7 +803,7 @@ void powerpc_cpu::execute(uint32 entry)
 			start_time = clock();
 #endif
 #if PPC_NATIVE_JIT
-			if (nativejitfull)
+			if (nativejit && nativejit->mFull)
 				invalidate_cache();
 #endif
 			bi = my_block_cache.new_blockinfo();
@@ -866,7 +866,7 @@ void powerpc_cpu::execute(uint32 entry)
 			my_block_cache.add_to_active_list(bi);
 			decode_cache_p += bi->size;
 #if PPC_NATIVE_JIT
-			if (usenativejit)
+			if (nativejit)
 				bi->nativeentry = NativeJitCompileBlock(bi);
 #endif
 #if PPC_PROFILE_COMPILE_TIME
@@ -977,11 +977,7 @@ void powerpc_cpu::init_decode_cache()
 	decode_cache_p = decode_cache;
 	decode_cache_end_p = decode_cache + DECODE_CACHE_MAX_ENTRIES;
 #if PPC_NATIVE_JIT
-	nativejitcode = NULL;
-	nativejitprologue = 0;
-	usenativejit = false;
-	nativejitfloat = false;
-	NativeJitReset();
+	nativejit = NULL;
 #endif
 #if FLIGHT_RECORDER
 	// Leave enough room to last call to record_step()
@@ -1000,8 +996,8 @@ void powerpc_cpu::kill_decode_cache()
 	vm_release(decode_cache, DECODE_CACHE_SIZE);
 #endif
 #if PPC_NATIVE_JIT
-	if (nativejitcode)
-		NativeJitFree(nativejitcode, NATIVEJIT_CODE_SIZE);
+	if (nativejit)
+		NativeJitFree((uint8 *)nativejit, NATIVEJIT_CODE_SIZE);
 #endif
 }
 

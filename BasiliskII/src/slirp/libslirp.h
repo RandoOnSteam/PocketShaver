@@ -10,7 +10,7 @@
 #endif
 #include <winsock2.h>
 #ifdef __MINGW32__
-#include <WS2tcpip.h>
+#include <ws2tcpip.h>
 #endif
 int inet_aton(const char *cp, struct in_addr *ia);
 #else

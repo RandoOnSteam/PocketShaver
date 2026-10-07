@@ -72,6 +72,7 @@ SRCS = ../main.cpp main_unix.cpp ../prefs.cpp ../prefs_items.cpp prefs_unix.cpp 
     ../gfxaccel.cpp ../video.cpp ../audio.cpp ../ether.cpp ../thunks.cpp \
     ../serial.cpp ../extfs.cpp disk_sparsebundle.cpp tinyxml2.cpp \
     about_window_unix.cpp ../user_strings.cpp user_strings_unix.cpp rpc_unix.cpp \
+    ../printing.cpp ../pictpdf.c ../pdfgen.c \
     sshpty.c strlcpy.c $(XPLAT_SRCS) $(SYSSRCS) $(GFXACCEL_SRCS) $(CPUSRCS) $(MONSRCS) $(SLIRP_SRCS)
 APP = SheepShaver
 APP_EXE = $(APP)$(EXEEXT)

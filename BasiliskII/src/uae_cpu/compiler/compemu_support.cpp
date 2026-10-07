@@ -47,10 +47,10 @@
 #define USE_MATCH 0
 
 /* kludge for Brian, so he can compile under MSVC++ */
-#if defined(_MSC_VER)
-#define USE_NORMAL_CALLING_CONVENTION 1
-#else
+#if defined(__GNUC__) || defined(__x86_64__)
 #define USE_NORMAL_CALLING_CONVENTION 0
+#else
+#define USE_NORMAL_CALLING_CONVENTION 1
 #endif
 
 #ifndef WIN32
@@ -589,14 +589,24 @@ class LazyBlockAllocator
 	enum {
 		kPoolSize = 1 + 4096 / sizeof(T)
 	};
+	enum {
+		kArenaSize = 1024 * 1024
+	};
 	struct Pool {
 		T chunk[kPoolSize];
 		Pool * next;
 	};
+	struct Arena {
+		Arena * next;
+	};
 	Pool * mPools;
 	T * mChunks;
+	Arena * mArenas;
+	uae_u8 * mArenaCursor;
+	uae_u8 * mArenaEnd;
+	Pool * allocatePool();
 public:
-	LazyBlockAllocator() : mPools(0), mChunks(0) { }
+	LazyBlockAllocator() : mPools(0), mChunks(0), mArenas(0), mArenaCursor(0), mArenaEnd(0) { }
 	~LazyBlockAllocator();
 	T * acquire();
 	void release(T * const);
@@ -605,12 +615,32 @@ public:
 template< class T >
 LazyBlockAllocator<T>::~LazyBlockAllocator()
 {
-	Pool * currentPool = mPools;
-	while (currentPool) {
-		Pool * deadPool = currentPool;
-		currentPool = currentPool->next;
-		free(deadPool);
+	Arena * currentArena = mArenas;
+	while (currentArena) {
+		Arena * deadArena = currentArena;
+		currentArena = currentArena->next;
+		vm_release(deadArena, kArenaSize);
 	}
+}
+
+template< class T >
+typename LazyBlockAllocator<T>::Pool * LazyBlockAllocator<T>::allocatePool()
+{
+	uae_u8 * pool;
+	if (mArenaCursor == NULL || mArenaCursor + sizeof(Pool) > mArenaEnd) {
+		Arena * arena = (Arena *)vm_acquire(kArenaSize, VM_MAP_DEFAULT | VM_MAP_32BIT);
+		if (arena == VM_MAP_FAILED) {
+			write_log("FATAL: Could not allocate JIT block pool\n");
+			abort();
+		}
+		arena->next = mArenas;
+		mArenas = arena;
+		mArenaCursor = (uae_u8 *)arena + 64;
+		mArenaEnd = (uae_u8 *)arena + kArenaSize;
+	}
+	pool = mArenaCursor;
+	mArenaCursor += (sizeof(Pool) + 63) & ~63;
+	return (Pool *)pool;
 }
 
 template< class T >
@@ -619,7 +649,7 @@ T * LazyBlockAllocator<T>::acquire()
 	if (!mChunks) {
 		// There is no chunk left, allocate a new pool and link the
 		// chunks into the free list
-		Pool * newPool = (Pool *)malloc(sizeof(Pool));
+		Pool * newPool = allocatePool();
 		for (T * chunk = &newPool->chunk[0]; chunk < &newPool->chunk[kPoolSize]; chunk++) {
 			chunk->next = mChunks;
 			mChunks = chunk;
@@ -736,6 +766,12 @@ static __inline__ void emit_long(uae_u32 x)
 {
     *((uae_u32*)target)=x;
     target+=4;
+}
+
+static __inline__ void emit_quad(uae_u64 x)
+{
+    emit_long((uae_u32)x);
+    emit_long((uae_u32)(x >> 32));
 }
 
 static __inline__ void emit_block(const uae_u8 *block, uae_u32 blocklen)
@@ -2398,14 +2434,14 @@ MIDFUNC(2,bts_l_rr,(RW4 r, R4 b))
 }
 MENDFUNC(2,bts_l_rr,(RW4 r, R4 b)) 
 
-MIDFUNC(2,mov_l_rm,(W4 d, IMM s))
+MIDFUNC(2,mov_l_rm,(W4 d, MEMR s))
 {
     CLOBBER_MOV;
     d=writereg(d,4);
     raw_mov_l_rm(d,s);
     unlock2(d);
 }
-MENDFUNC(2,mov_l_rm,(W4 d, IMM s))
+MENDFUNC(2,mov_l_rm,(W4 d, MEMR s))
 
 
 MIDFUNC(1,call_r,(R4 r)) /* Clobbering is implicit */
@@ -2416,33 +2452,33 @@ MIDFUNC(1,call_r,(R4 r)) /* Clobbering is implicit */
 }
 MENDFUNC(1,call_r,(R4 r)) /* Clobbering is implicit */
 
-MIDFUNC(2,sub_l_mi,(IMM d, IMM s)) 
+MIDFUNC(2,sub_l_mi,(MEMRW d, IMM s)) 
 {
     CLOBBER_SUB;
     raw_sub_l_mi(d,s) ;
 }
-MENDFUNC(2,sub_l_mi,(IMM d, IMM s)) 
+MENDFUNC(2,sub_l_mi,(MEMRW d, IMM s)) 
 
-MIDFUNC(2,mov_l_mi,(IMM d, IMM s)) 
+MIDFUNC(2,mov_l_mi,(MEMW d, IMM s)) 
 {
     CLOBBER_MOV;
     raw_mov_l_mi(d,s) ;
 }
-MENDFUNC(2,mov_l_mi,(IMM d, IMM s)) 
+MENDFUNC(2,mov_l_mi,(MEMW d, IMM s)) 
 
-MIDFUNC(2,mov_w_mi,(IMM d, IMM s)) 
+MIDFUNC(2,mov_w_mi,(MEMW d, IMM s)) 
 {
     CLOBBER_MOV;
     raw_mov_w_mi(d,s) ;
 }
-MENDFUNC(2,mov_w_mi,(IMM d, IMM s)) 
+MENDFUNC(2,mov_w_mi,(MEMW d, IMM s)) 
 
-MIDFUNC(2,mov_b_mi,(IMM d, IMM s)) 
+MIDFUNC(2,mov_b_mi,(MEMW d, IMM s)) 
 {
     CLOBBER_MOV;
     raw_mov_b_mi(d,s) ;
 }
-MENDFUNC(2,mov_b_mi,(IMM d, IMM s)) 
+MENDFUNC(2,mov_b_mi,(MEMW d, IMM s)) 
 
 MIDFUNC(2,rol_b_ri,(RW1 r, IMM i))
 {
@@ -2917,12 +2953,12 @@ MIDFUNC(2,setcc,(W1 d, IMM cc))
 }
 MENDFUNC(2,setcc,(W1 d, IMM cc))
 
-MIDFUNC(2,setcc_m,(IMM d, IMM cc))
+MIDFUNC(2,setcc_m,(MEMW d, IMM cc))
 {
     CLOBBER_SETCC;
     raw_setcc_m(d,cc);
 }
-MENDFUNC(2,setcc_m,(IMM d, IMM cc))
+MENDFUNC(2,setcc_m,(MEMW d, IMM cc))
 
 MIDFUNC(3,cmov_b_rr,(RW1 d, R1 s, IMM cc))
 {
@@ -2963,14 +2999,14 @@ MIDFUNC(3,cmov_l_rr,(RW4 d, R4 s, IMM cc))
 }
 MENDFUNC(3,cmov_l_rr,(RW4 d, R4 s, IMM cc))
 
-MIDFUNC(3,cmov_l_rm,(RW4 d, IMM s, IMM cc))
+MIDFUNC(3,cmov_l_rm,(RW4 d, MEMR s, IMM cc))
 {
     CLOBBER_CMOV;
     d=rmw(d,4,4);
     raw_cmov_l_rm(d,s,cc);
     unlock2(d);
 }
-MENDFUNC(3,cmov_l_rm,(RW4 d, IMM s, IMM cc))
+MENDFUNC(3,cmov_l_rm,(RW4 d, MEMR s, IMM cc))
 
 MIDFUNC(2,bsf_l_rr,(W4 d, W4 s))
 {
@@ -3447,7 +3483,7 @@ MIDFUNC(5,mov_b_brrm_indexed,(W1 d, IMM base, R4 baser, R4 index, IMM factor))
 MENDFUNC(5,mov_b_brrm_indexed,(W1 d, IMM base, R4 baser, R4 index, IMM factor))
 
 /* Read a long from base+factor*index */
-MIDFUNC(4,mov_l_rm_indexed,(W4 d, IMM base, R4 index, IMM factor))
+MIDFUNC(4,mov_l_rm_indexed,(W4 d, MEMR base, R4 index, IMM factor))
 {
     int indexreg=index;
 
@@ -3465,7 +3501,7 @@ MIDFUNC(4,mov_l_rm_indexed,(W4 d, IMM base, R4 index, IMM factor))
     unlock2(index);
     unlock2(d);
 }
-MENDFUNC(4,mov_l_rm_indexed,(W4 d, IMM base, R4 index, IMM factor))
+MENDFUNC(4,mov_l_rm_indexed,(W4 d, MEMR base, R4 index, IMM factor))
 
 
 /* read the long at the address contained in s+offset and store in d */
@@ -3865,7 +3901,7 @@ MIDFUNC(2,mov_l_rr,(W4 d, R4 s))
 }
 MENDFUNC(2,mov_l_rr,(W4 d, R4 s))
 
-MIDFUNC(2,mov_l_mr,(IMM d, R4 s))
+MIDFUNC(2,mov_l_mr,(MEMW d, R4 s))
 {
     if (isconst(s)) {
 	COMPCALL(mov_l_mi)(d,live.state[s].val);
@@ -3877,10 +3913,10 @@ MIDFUNC(2,mov_l_mr,(IMM d, R4 s))
     raw_mov_l_mr(d,s);
     unlock2(s);
 }
-MENDFUNC(2,mov_l_mr,(IMM d, R4 s))
+MENDFUNC(2,mov_l_mr,(MEMW d, R4 s))
 
 
-MIDFUNC(2,mov_w_mr,(IMM d, R2 s))
+MIDFUNC(2,mov_w_mr,(MEMW d, R2 s))
 {
     if (isconst(s)) {
 	COMPCALL(mov_w_mi)(d,(uae_u16)live.state[s].val);
@@ -3892,9 +3928,9 @@ MIDFUNC(2,mov_w_mr,(IMM d, R2 s))
     raw_mov_w_mr(d,s);
     unlock2(s);
 }
-MENDFUNC(2,mov_w_mr,(IMM d, R2 s))
+MENDFUNC(2,mov_w_mr,(MEMW d, R2 s))
 
-MIDFUNC(2,mov_w_rm,(W2 d, IMM s))
+MIDFUNC(2,mov_w_rm,(W2 d, MEMR s))
 {
     CLOBBER_MOV;
     d=writereg(d,2);
@@ -3902,9 +3938,9 @@ MIDFUNC(2,mov_w_rm,(W2 d, IMM s))
     raw_mov_w_rm(d,s);
     unlock2(d);
 }
-MENDFUNC(2,mov_w_rm,(W2 d, IMM s))
+MENDFUNC(2,mov_w_rm,(W2 d, MEMR s))
 
-MIDFUNC(2,mov_b_mr,(IMM d, R1 s))
+MIDFUNC(2,mov_b_mr,(MEMW d, R1 s))
 {
     if (isconst(s)) {
 	COMPCALL(mov_b_mi)(d,(uae_u8)live.state[s].val);
@@ -3917,9 +3953,9 @@ MIDFUNC(2,mov_b_mr,(IMM d, R1 s))
     raw_mov_b_mr(d,s);
     unlock2(s);
 }
-MENDFUNC(2,mov_b_mr,(IMM d, R1 s))
+MENDFUNC(2,mov_b_mr,(MEMW d, R1 s))
 
-MIDFUNC(2,mov_b_rm,(W1 d, IMM s))
+MIDFUNC(2,mov_b_rm,(W1 d, MEMR s))
 {
     CLOBBER_MOV;
     d=writereg(d,1);
@@ -3927,7 +3963,7 @@ MIDFUNC(2,mov_b_rm,(W1 d, IMM s))
     raw_mov_b_rm(d,s);
     unlock2(d);
 }
-MENDFUNC(2,mov_b_rm,(W1 d, IMM s))
+MENDFUNC(2,mov_b_rm,(W1 d, MEMR s))
 
 MIDFUNC(2,mov_l_ri,(W4 d, IMM s))
 {
@@ -3957,26 +3993,26 @@ MIDFUNC(2,mov_b_ri,(W1 d, IMM s))
 MENDFUNC(2,mov_b_ri,(W1 d, IMM s))
 
 
-MIDFUNC(2,add_l_mi,(IMM d, IMM s)) 
+MIDFUNC(2,add_l_mi,(MEMRW d, IMM s)) 
 {
     CLOBBER_ADD;
     raw_add_l_mi(d,s) ;
 }
-MENDFUNC(2,add_l_mi,(IMM d, IMM s)) 
+MENDFUNC(2,add_l_mi,(MEMRW d, IMM s)) 
 
-MIDFUNC(2,add_w_mi,(IMM d, IMM s)) 
+MIDFUNC(2,add_w_mi,(MEMRW d, IMM s)) 
 {
     CLOBBER_ADD;
     raw_add_w_mi(d,s) ;
 }
-MENDFUNC(2,add_w_mi,(IMM d, IMM s)) 
+MENDFUNC(2,add_w_mi,(MEMRW d, IMM s)) 
 
-MIDFUNC(2,add_b_mi,(IMM d, IMM s)) 
+MIDFUNC(2,add_b_mi,(MEMRW d, IMM s)) 
 {
     CLOBBER_ADD;
     raw_add_b_mi(d,s) ;
 }
-MENDFUNC(2,add_b_mi,(IMM d, IMM s)) 
+MENDFUNC(2,add_b_mi,(MEMRW d, IMM s)) 
 
 
 MIDFUNC(2,test_l_ri,(R4 d, IMM i))
@@ -4078,7 +4114,7 @@ MIDFUNC(2,and_b,(RW1 d, R1 s))
 MENDFUNC(2,and_b,(RW1 d, R1 s))
 
 // gb-- used for making an fpcr value in compemu_fpp.cpp
-MIDFUNC(2,or_l_rm,(RW4 d, IMM s))
+MIDFUNC(2,or_l_rm,(RW4 d, MEMR s))
 {
     CLOBBER_OR;
     d=rmw(d,4,4);
@@ -4086,7 +4122,7 @@ MIDFUNC(2,or_l_rm,(RW4 d, IMM s))
     raw_or_l_rm(d,s);
     unlock2(d);
 }
-MENDFUNC(2,or_l_rm,(RW4 d, IMM s))
+MENDFUNC(2,or_l_rm,(RW4 d, MEMR s))
 
 MIDFUNC(2,or_l_ri,(RW4 d, IMM i))
 {
@@ -4730,14 +4766,14 @@ MIDFUNC(2,fmov_rr,(FW d, FR s))
 }
 MENDFUNC(2,fmov_rr,(FW d, FR s))
 
-MIDFUNC(2,fldcw_m_indexed,(R4 index, IMM base))
+MIDFUNC(2,fldcw_m_indexed,(R4 index, MEMR base))
 {
     index=readreg(index,4);
 
     raw_fldcw_m_indexed(index,base);
     unlock2(index);
 }
-MENDFUNC(2,fldcw_m_indexed,(R4 index, IMM base))
+MENDFUNC(2,fldcw_m_indexed,(R4 index, MEMR base))
 
 MIDFUNC(1,ftst_r,(FR r))
 {
@@ -5675,7 +5711,7 @@ static uint8 *do_alloc_code(uint32 size, int depth)
 
 	return do_alloc_code(size, depth + 1);
 #else
-	uint8 *code = (uint8 *)vm_acquire(size);
+	uint8 *code = (uint8 *)vm_acquire(size, VM_MAP_DEFAULT | VM_MAP_32BIT);
 	return code == VM_MAP_FAILED ? NULL : code;
 #endif
 }
@@ -5994,6 +6030,9 @@ static __inline__ void create_popalls(void)
 	  raw_push_l_r(i);
   }
   raw_dec_sp(stack_space);
+#if defined(__x86_64__)
+  MOVQir((uintptr)&regs, R15_INDEX);
+#endif
   r=REG_PC_TMP;
   raw_mov_l_rm(r,(uintptr)&regs.pc_p);
   raw_and_l_ri(r,TAGMASK);

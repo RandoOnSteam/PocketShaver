@@ -786,6 +786,22 @@ uint8* NativeJitBranchIfZero(NATIVEJITEMITTER* pThis, int condition)
 	return pThis->mCode - 4;
 }
 
+uint8* NativeJitFloatBranchIfNaN(NATIVEJITEMITTER* pThis, int source)
+{
+	NativeJitX86SseRegReg(pThis, 0x66, 0x2e, source, source);
+	NativeJitX86Byte(pThis, 0x0f);
+	NativeJitX86Byte(pThis, 0x8a);
+	NativeJitX86Dword(pThis, 0);
+	return pThis->mCode - 4;
+}
+
+uint8* NativeJitJump(NATIVEJITEMITTER* pThis)
+{
+	NativeJitX86Byte(pThis, 0xe9);
+	NativeJitX86Dword(pThis, 0);
+	return pThis->mCode - 4;
+}
+
 void NativeJitBranchLand(NATIVEJITEMITTER* pThis, uint8* branch)
 {
 	uint32 distance;
@@ -796,8 +812,15 @@ void NativeJitBranchLand(NATIVEJITEMITTER* pThis, uint8* branch)
 	branch[3] = (uint8)(distance >> 24);
 }
 
-uint8* NativeJitChainJump(NATIVEJITEMITTER* pThis, uint32 pcvalue, int flagsoffset,
-	int siteoffset, int sitepcoffset)
+static void NativeJitX86StoreAbsolute(NATIVEJITEMITTER* pThis, const void* address, uint32 value)
+{
+	NativeJitX86Byte(pThis, 0xc7);
+	NativeJitX86Byte(pThis, 0x05);
+	NativeJitX86Dword(pThis, (uint32)(uintptr)address);
+	NativeJitX86Dword(pThis, value);
+}
+
+uint8* NativeJitChainJump(NATIVEJITEMITTER* pThis, uint32 pcvalue, int flagsoffset, NATIVEJITSTATE* state)
 {
 	uint8* flagged;
 	uint8* site;
@@ -808,13 +831,12 @@ uint8* NativeJitChainJump(NATIVEJITEMITTER* pThis, uint32 pcvalue, int flagsoffs
 	NativeJitX86Byte(pThis, 0xe9);
 	NativeJitX86Dword(pThis, 0);
 	NativeJitX86Land(pThis, flagged);
-	NativeJitStoreRegisterImmediate(pThis, siteoffset, (uint32)(uintptr)site);
-	NativeJitStoreRegisterImmediate(pThis, sitepcoffset, pcvalue);
+	NativeJitX86StoreAbsolute(pThis, &state->mChainSite, (uint32)(uintptr)site);
+	NativeJitX86StoreAbsolute(pThis, &state->mChainPc, pcvalue);
 	return site;
 }
 
-void NativeJitIndirectExit(NATIVEJITEMITTER* pThis, int pcoffset, int flagsoffset,
-	int pctableoffset, int entrytableoffset)
+void NativeJitIndirectExit(NATIVEJITEMITTER* pThis, int pcoffset, int flagsoffset, NATIVEJITSTATE* state)
 {
 	uint8* flagged;
 	uint8* missed;
@@ -826,20 +848,20 @@ void NativeJitIndirectExit(NATIVEJITEMITTER* pThis, int pcoffset, int flagsoffse
 	NativeJitX86ShiftImmediate(pThis, 5, NATIVEJITX86_S1, 2);
 	NativeJitX86OperateImmediate(pThis, 4, NATIVEJITX86_S1, NATIVEJIT_LOOKUP_MASK);
 	NativeJitX86Byte(pThis, 0x3b);
-	NativeJitX86Byte(pThis, 0xbc);
-	NativeJitX86Byte(pThis, 0xab);
-	NativeJitX86Dword(pThis, (uint32)pctableoffset);
+	NativeJitX86Byte(pThis, 0x3c);
+	NativeJitX86Byte(pThis, 0xad);
+	NativeJitX86Dword(pThis, (uint32)(uintptr)state->mLookupPc);
 	missed = NativeJitX86JumpShort(pThis, 0x75);
 	NativeJitX86Byte(pThis, 0xff);
-	NativeJitX86Byte(pThis, 0xa4);
-	NativeJitX86Byte(pThis, 0xab);
-	NativeJitX86Dword(pThis, (uint32)entrytableoffset);
+	NativeJitX86Byte(pThis, 0x24);
+	NativeJitX86Byte(pThis, 0xad);
+	NativeJitX86Dword(pThis, (uint32)(uintptr)state->mLookupEntry);
 	NativeJitX86Land(pThis, flagged);
 	NativeJitX86Land(pThis, missed);
 }
 
 uint8* NativeJitChainExit(NATIVEJITEMITTER* pThis, int pcoffset, uint32 pcvalue, int flagsoffset,
-	int siteoffset, int sitepcoffset)
+	NATIVEJITSTATE* state)
 {
 	uint8* differentpc;
 	uint8* flagged;
@@ -853,8 +875,8 @@ uint8* NativeJitChainExit(NATIVEJITEMITTER* pThis, int pcoffset, uint32 pcvalue,
 	site = pThis->mCode;
 	NativeJitX86Byte(pThis, 0xe9);
 	NativeJitX86Dword(pThis, 0);
-	NativeJitStoreRegisterImmediate(pThis, siteoffset, (uint32)(uintptr)site);
-	NativeJitStoreRegisterImmediate(pThis, sitepcoffset, pcvalue);
+	NativeJitX86StoreAbsolute(pThis, &state->mChainSite, (uint32)(uintptr)site);
+	NativeJitX86StoreAbsolute(pThis, &state->mChainPc, pcvalue);
 	NativeJitX86Land(pThis, differentpc);
 	NativeJitX86Land(pThis, flagged);
 	return site;

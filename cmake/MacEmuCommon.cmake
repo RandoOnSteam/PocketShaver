@@ -661,13 +661,13 @@ function(macemu_apply_common EMULATOR_EXECUTABLE)
 	endif()
 
 	# GCC-style asm flags only on non-MSVC (MSVC uses MSVC_INTRINSICS instead)
-	if(NOT MSVC)
+	if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang" AND NOT CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC")
 		if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64")
 			target_compile_definitions(${EMULATOR_EXECUTABLE} PRIVATE X86_64_ASSEMBLY OPTIMIZED_FLAGS)
 		elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "i[3-6]86|x86|X86")
 			target_compile_definitions(${EMULATOR_EXECUTABLE} PRIVATE X86_ASSEMBLY OPTIMIZED_FLAGS SAHF_SETO_PROFITABLE)
 		endif()
-	elseif(WIN32)
+	elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64|i[3-6]86|x86|X86")
 		target_compile_definitions(${EMULATOR_EXECUTABLE} PRIVATE
 			MSVC_INTRINSICS
 			OPTIMIZED_FLAGS
@@ -687,7 +687,7 @@ function(macemu_apply_common EMULATOR_EXECUTABLE)
 	macemu_link_sdl(${EMULATOR_EXECUTABLE})
 
 	if(WIN32)
-		target_compile_options(${EMULATOR_EXECUTABLE} PRIVATE /D__WIN32__)
+		target_compile_definitions(${EMULATOR_EXECUTABLE} PRIVATE __WIN32__)
 		target_link_libraries(${EMULATOR_EXECUTABLE} PRIVATE ws2_32 iphlpapi winmm)
 		if(MSVC)
 			set_target_properties(${EMULATOR_EXECUTABLE} PROPERTIES WIN32_EXECUTABLE TRUE)

@@ -295,7 +295,7 @@ void dump_prefs (void)
 				printf ("STRING:  %s: %s\n", p->name, p->data);
 				break;
 			case TYPE_INT32:
-				printf ("INT32:   %s: %d\n", p->name, *(int32_t*)(p->data));
+				printf ("INT32:   %s: %d\n", p->name, (int)*(int32*)(p->data));
 				break;
 			default:
 				printf ("Unknown prefs type: %d\n", p->type);

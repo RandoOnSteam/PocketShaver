@@ -51,6 +51,23 @@
 typedef void (*NATIVEJITBLOCK)(void* cpu, void* regs, void* membase);
 typedef void (*NATIVEJITHELPER)(void* cpu, const void* argument);
 
+typedef struct NATIVEJITSTATE
+{
+	uint32 mLookupPc[NATIVEJIT_LOOKUP_SIZE];
+	void* mLookupEntry[NATIVEJIT_LOOKUP_SIZE];
+	uint8* mCode;
+	uint8* mCursor;
+	uint8* mChainSite;
+	uint32 mChainPc;
+	uint32 mLow;
+	uint32 mHigh;
+	int mPrologue;
+	int mFull;
+	int mFloat;
+} NATIVEJITSTATE;
+
+#define NATIVEJIT_STATE_SPACE ((sizeof(NATIVEJITSTATE) + 4095) & ~(size_t)4095)
+
 typedef struct NATIVEJITEMITTER
 {
 	uint8* mStart;
@@ -111,13 +128,13 @@ void NativeJitFloatClass(NATIVEJITEMITTER* pThis, int target, int offset, uint32
 
 uint8* NativeJitLabel(NATIVEJITEMITTER* pThis);
 uint8* NativeJitBranchIfZero(NATIVEJITEMITTER* pThis, int condition);
+uint8* NativeJitFloatBranchIfNaN(NATIVEJITEMITTER* pThis, int source);
+uint8* NativeJitJump(NATIVEJITEMITTER* pThis);
 void NativeJitBranchLand(NATIVEJITEMITTER* pThis, uint8* branch);
 uint8* NativeJitChainExit(NATIVEJITEMITTER* pThis, int pcoffset, uint32 pcvalue, int flagsoffset,
-	int siteoffset, int sitepcoffset);
-uint8* NativeJitChainJump(NATIVEJITEMITTER* pThis, uint32 pcvalue, int flagsoffset,
-	int siteoffset, int sitepcoffset);
-void NativeJitIndirectExit(NATIVEJITEMITTER* pThis, int pcoffset, int flagsoffset,
-	int pctableoffset, int entrytableoffset);
+	NATIVEJITSTATE* state);
+uint8* NativeJitChainJump(NATIVEJITEMITTER* pThis, uint32 pcvalue, int flagsoffset, NATIVEJITSTATE* state);
+void NativeJitIndirectExit(NATIVEJITEMITTER* pThis, int pcoffset, int flagsoffset, NATIVEJITSTATE* state);
 void NativeJitChainLink(uint8* site, uint8* target);
 
 void NativeJitCallHelper(NATIVEJITEMITTER* pThis, NATIVEJITHELPER helper, const void* argument);

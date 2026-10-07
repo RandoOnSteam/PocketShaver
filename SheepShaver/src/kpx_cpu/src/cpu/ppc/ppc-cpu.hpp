@@ -503,24 +503,13 @@ private:
 #endif
 
 #if PPC_NATIVE_JIT
-	uint8 * nativejitcode;
-	uint8 * nativejitcursor;
-	uint8 * nativejitchainsite;
-	uint32 nativejitchainpc;
-	uint32 nativejitlow;
-	uint32 nativejithigh;
-	int nativejitprologue;
-	bool nativejitfull;
-	bool usenativejit;
-	bool nativejitfloat;
-	uint32 nativejitlookuppc[NATIVEJIT_LOOKUP_SIZE];
-	void * nativejitlookupentry[NATIVEJIT_LOOKUP_SIZE];
+	NATIVEJITSTATE * nativejit;
 	void * NativeJitCompileBlock(block_info * bi);
 	void NativeJitLinkTo(block_info * bi);
 	void NativeJitReset();
 	void NativeJitInvalidate(uint32 start, uint32 end);
-	static void NativeJitInterpret(void * cpu, const void * decodeinfo);
 public:
+	static void NativeJitInterpret(void * cpu, const void * decodeinfo);
 	void EnableNativeJit();
 private:
 #endif

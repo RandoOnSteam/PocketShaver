@@ -53,6 +53,8 @@ links:
 	@list='adb.cpp audio.cpp cdrom.cpp disk.cpp extfs.cpp pict.c \
 	       prefs.cpp scsi.cpp sony.cpp timer.cpp xpram.cpp \
 	       bincue.cpp include/bincue.h \
+	       joymanager.cpp printing.cpp pictpdf.c pdfgen.c \
+	       include/joymanager.h include/printing.h include/pictpdf.h include/pdfgen.h \
 	       include/adb.h include/audio.h include/audio_defs.h \
 	       include/cdrom.h include/clip.h include/debug.h include/disk.h \
 	       include/extfs.h include/extfs_defs.h include/pict.h \

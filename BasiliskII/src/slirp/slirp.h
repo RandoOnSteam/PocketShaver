@@ -30,7 +30,7 @@ typedef unsigned long ioctlsockopt_t;
 #endif
 //# include <windows.h>
 # include <winsock2.h>
-# include <WS2tcpip.h>
+# include <ws2tcpip.h>
 
 # include <sys/timeb.h>
 # include <iphlpapi.h>
@@ -379,8 +379,10 @@ void unload_host_domains();
 #define MAX_MRU 16384
 #endif
 
-#ifndef _WIN32
+#ifndef min
 #define min(x,y) ((x) < (y) ? (x) : (y))
+#endif
+#ifndef max
 #define max(x,y) ((x) > (y) ? (x) : (y))
 #endif
 

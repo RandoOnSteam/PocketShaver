@@ -44,7 +44,7 @@
 #include <time.h>
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
-#include <WinSock2.h>
+#include <winsock2.h>
 #include <sys/types.h>
 
 
@@ -220,17 +220,18 @@ static inline int spin_trylock(spinlock_t *lock)
 }
 #endif
 
+#if defined(_MSC_VER) && _MSC_VER >= 1300
 #define HAVE_OPTIMIZED_BYTESWAP_32
 #define HAVE_OPTIMIZED_BYTESWAP_16
-
-#ifdef _MSC_VER
 static inline uae_u32 do_get_mem_long(uae_u32 *a) {return _byteswap_ulong(*a);}
 static inline uae_u32 do_get_mem_word(uae_u16 *a) {return _byteswap_ushort(*a);}
 static inline void do_put_mem_long(uae_u32 *a, uae_u32 v) {*a = _byteswap_ulong(v);}
 static inline void do_put_mem_word(uae_u16 *a, uae_u32 v) {*a = _byteswap_ushort(v);}
 static inline uae_u32 do_byteswap_32_g(uae_u32 v) {return _byteswap_ulong(v);}
 static inline uae_u32 do_byteswap_16_g(uae_u32 v) {return _byteswap_ushort(v);}
-#else
+#elif defined(__GNUC__)
+#define HAVE_OPTIMIZED_BYTESWAP_32
+#define HAVE_OPTIMIZED_BYTESWAP_16
 /* Intel x86 */
 static inline uae_u32 do_get_mem_long(uae_u32 *a) {uint32 retval; __asm__ ("bswap %0" : "=r" (retval) : "0" (*a) : "cc"); return retval;}
 static inline uae_u32 do_get_mem_word(uae_u16 *a) {uint32 retval; __asm__ ("movzwl %w1,%k0\n\tshll $16,%k0\n\tbswapl %k0\n" : "=&r" (retval) : "m" (*a) : "cc"); return retval;}
@@ -239,6 +240,11 @@ static inline void do_put_mem_word(uae_u16 *a, uae_u32 v) {__asm__ ("bswapl %0" 
 /* bswap doesn't affect condition codes */
 static inline uae_u32 do_byteswap_32_g(uae_u32 v) {__asm__ ("bswap %0" : "=r" (v) : "0" (v)); return v;}
 static inline uae_u32 do_byteswap_16_g(uae_u32 v) {__asm__ ("bswapl %0" : "=&r" (v) : "0" (v << 16) : "cc"); return v;}
+#else
+static inline uae_u32 do_get_mem_long(uae_u32 *a) {uint8 *b = (uint8 *)a; return ((uae_u32)b[0] << 24) | ((uae_u32)b[1] << 16) | ((uae_u32)b[2] << 8) | b[3];}
+static inline uae_u32 do_get_mem_word(uae_u16 *a) {uint8 *b = (uint8 *)a; return ((uae_u32)b[0] << 8) | b[1];}
+static inline void do_put_mem_long(uae_u32 *a, uae_u32 v) {uint8 *b = (uint8 *)a; b[0] = (uint8)(v >> 24); b[1] = (uint8)(v >> 16); b[2] = (uint8)(v >> 8); b[3] = (uint8)v;}
+static inline void do_put_mem_word(uae_u16 *a, uae_u32 v) {uint8 *b = (uint8 *)a; b[0] = (uint8)(v >> 8); b[1] = (uint8)v;}
 #endif
 
 #define HAVE_GET_WORD_UNSWAPPED
@@ -316,10 +322,10 @@ static inline uae_u32 do_byteswap_16_g(uae_u32 v)
 #endif
 #define REGPARAM2
 
-#ifdef _MSC_VER
-#define ATTRIBUTE_PACKED
-#else
+#ifdef __GNUC__
 #define ATTRIBUTE_PACKED __attribute__((__packed__))
+#else
+#define ATTRIBUTE_PACKED
 #endif
 
 #endif

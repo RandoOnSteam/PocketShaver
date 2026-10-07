@@ -255,6 +255,7 @@ if [[ "x$WANT_SDL" = "xyes" ]]; then
         CFLAGS="$CFLAGS $sdl_CFLAGS"
         CXXFLAGS="$CXXFLAGS $sdl_CFLAGS"
         LIBS="$LIBS $sdl_LIBS"
+        AC_DEFINE([USE_SDL1], [1], [Use SDL1])
         WANT_SDL_VERSION_MAJOR=1
       ], [
         WANT_SDL=no
@@ -1780,21 +1781,33 @@ if [[ "x$WANT_GFXACCEL" = "xyes" ]]; then
   AC_DEFINE(GFXACCEL_USE_OPENGL, 1, [Define to select the OpenGL gfxaccel backend.])
   CPPFLAGS="$CPPFLAGS -I../gfxaccel -I../gfxaccel/include -I../gfxaccel/gl"
   dnl Portable engine / policy / dispatch sources.
-  GFXACCEL_SRCS="../gfxaccel/display_mode_controller.cpp ../gfxaccel/dsp_dispatch.cpp \
-../gfxaccel/dsp_engine.cpp ../gfxaccel/dsp_install_hooks.cpp ../gfxaccel/dsp_mode_enumerate.cpp \
-../gfxaccel/dsp_thunks.cpp ../gfxaccel/gfxaccel_resources.cpp ../gfxaccel/gfxaccel_resources_heap.cpp \
-../gfxaccel/gl_defer.cpp ../gfxaccel/gl_dispatch.cpp ../gfxaccel/gl_engine.cpp ../gfxaccel/gl_state.cpp \
-../gfxaccel/gl_thunks.cpp ../gfxaccel/rave_dispatch.cpp ../gfxaccel/rave_draw_context.cpp \
-../gfxaccel/rave_engine.cpp ../gfxaccel/rave_thunks.cpp"
-  dnl OpenGL backend renderers / device / compositor.
-  GFXACCEL_SRCS="$GFXACCEL_SRCS ../gfxaccel/gl/gl_device.cpp ../gfxaccel/gl/gl_compositor.cpp \
-../gfxaccel/gl/vbl_source_sdl.cpp ../gfxaccel/gl/gfxaccel_resources_gl.cpp \
-../gfxaccel/gl/gfxaccel_resources_heap_gl.cpp ../gfxaccel/gl/gfxaccel_arc_shim.cpp \
-../gfxaccel/gl/pso_archive_gl.cpp ../gfxaccel/gl/nqd_gl_renderer.cpp ../gfxaccel/gl/rave_gl_renderer.cpp \
-../gfxaccel/gl/gl_ffp_renderer.cpp ../gfxaccel/gl/dsp_gl_renderer.cpp ../gfxaccel/gl/dsp_draw_context_gl.cpp \
-../gfxaccel/gl/gfxaccel_link_stubs.cpp"
+  GFXACCEL_SRCS="../gfxaccel/display_mode_controller.cpp ../gfxaccel/dsp_alt_buffer.cpp \
+../gfxaccel/dsp_clut_gamma.cpp ../gfxaccel/dsp_dispatch.cpp ../gfxaccel/dsp_draw_context.cpp \
+../gfxaccel/dsp_engine.cpp ../gfxaccel/dsp_flatten_restore.cpp ../gfxaccel/dsp_install_hooks.cpp \
+../gfxaccel/dsp_mode_enumerate.cpp ../gfxaccel/dsp_thunks.cpp ../gfxaccel/gfxaccel_resources.cpp \
+../gfxaccel/gfxaccel_resources_heap.cpp ../gfxaccel/gl_defer.cpp ../gfxaccel/gl_dispatch.cpp \
+../gfxaccel/gl_engine.cpp ../gfxaccel/gl_state.cpp ../gfxaccel/gl_thunks.cpp ../gfxaccel/rave_dispatch.cpp \
+../gfxaccel/rave_draw_context.cpp ../gfxaccel/rave_engine.cpp ../gfxaccel/rave_thunks.cpp \
+../gfxaccel/glide_dispatch.cpp ../gfxaccel/glide_engine.cpp ../gfxaccel/glide_state.cpp \
+../gfxaccel/glide_pef_register.cpp"
+  dnl OpenGL backend renderers / compositor.
+  GFXACCEL_SRCS="$GFXACCEL_SRCS ../gfxaccel/gl/gl_compositor.cpp ../gfxaccel/gl/vbl_source_sdl.cpp \
+../gfxaccel/gl/gfxaccel_resources_gl.cpp ../gfxaccel/gl/gfxaccel_resources_heap_gl.cpp \
+../gfxaccel/gl/gfxaccel_arc_shim.cpp ../gfxaccel/gl/pso_archive_gl.cpp ../gfxaccel/gl/nqd_gl_renderer.cpp \
+../gfxaccel/gl/rave_gl_renderer.cpp ../gfxaccel/gl/gl_ffp_renderer.cpp ../gfxaccel/gl/dsp_gl_renderer.cpp \
+../gfxaccel/gl/glide_gl_renderer.cpp"
   if [[ "x$WANT_NATIVE_CINEPAK" = "xyes" ]]; then
     GFXACCEL_SRCS="$GFXACCEL_SRCS ../gfxaccel/cinepak_decoder.cpp ../gfxaccel/cinepak_hooks.cpp"
+  fi
+  if [[ "x$WANT_SDL_VERSION_MAJOR" = "x1" ]]; then
+    GFXACCEL_SRCS="$GFXACCEL_SRCS ../gfxaccel/gl/glcontext.c"
+    PKG_CHECK_MODULES([GLCONTEXT], [gtk+-3.0 egl x11], [
+      CFLAGS="$CFLAGS $GLCONTEXT_CFLAGS"
+      CXXFLAGS="$CXXFLAGS $GLCONTEXT_CFLAGS"
+      LIBS="$LIBS $GLCONTEXT_LIBS"
+    ], [
+      AC_MSG_ERROR([SDL 1.x graphics acceleration needs gtk+-3.0 and egl for its GL context])
+    ])
   fi
   LIBS="$LIBS -lGL"
 fi

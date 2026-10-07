@@ -35,12 +35,9 @@ typedef struct NATIVEJITLAYOUT
 	int mOverflow;
 	int mCarry;
 	int mCount;
-	int mChainSite;
-	int mChainPc;
 	int mFpscr;
-	int mLookupPc;
-	int mLookupEntry;
 	int mFloat;
+	NATIVEJITSTATE* mState;
 } NATIVEJITLAYOUT;
 
 static int NativeJitXerByteOffset(int field)
@@ -641,10 +638,12 @@ static int NativeJitFprfLive(const powerpc_block_info* bi, int index)
 }
 
 static int NativeJitTranslateFloatArithmetic(NATIVEJITEMITTER* emitter, const NATIVEJITLAYOUT* layout, uint32 opcode,
-	int fprflive)
+	int fprflive, uint32 address, const void* decodeinfo)
 {
 	uint32 extended;
 	uint32 lowexponent;
+	uint8* nan;
+	uint8* done;
 	int target;
 	int left;
 	int right;
@@ -687,27 +686,34 @@ static int NativeJitTranslateFloatArithmetic(NATIVEJITEMITTER* emitter, const NA
 			NativeJitFloatOperate(emitter, NATIVEJIT_FPU_SUB, NATIVEJIT_F0, NATIVEJIT_F1);
 		break;
 	}
+	nan = NativeJitFloatBranchIfNaN(emitter, NATIVEJIT_F0);
 	if (single)
 		NativeJitFloatRoundSingle(emitter, NATIVEJIT_F0);
 	if (extended == 30 || extended == 31)
 		NativeJitFloatNegate(emitter, NATIVEJIT_F0);
 	NativeJitFloatStore(emitter, target, NATIVEJIT_F0);
-	if (!fprflive)
-		return 1;
-	lowexponent = 1;
-	if (single && extended != 30 && extended != 31)
-		lowexponent = 897;
-	NativeJitFloatClass(emitter, NATIVEJIT_T0, target, lowexponent);
-	NativeJitOperateImmediate(emitter, NATIVEJIT_ALU_SHL, NATIVEJIT_T0, 12);
-	NativeJitLoadRegister(emitter, NATIVEJIT_T1, layout->mFpscr);
-	NativeJitMove(emitter, NATIVEJIT_T2, NATIVEJIT_T1);
-	NativeJitOperateImmediate(emitter, NATIVEJIT_ALU_AND, NATIVEJIT_T2, ~0x1f000U);
-	NativeJitOperate(emitter, NATIVEJIT_ALU_OR, NATIVEJIT_T2, NATIVEJIT_T0);
-	NativeJitMove(emitter, NATIVEJIT_T0, NATIVEJIT_T1);
-	NativeJitOperateImmediate(emitter, NATIVEJIT_ALU_AND, NATIVEJIT_T0, 0x80);
-	NativeJitSelect(emitter, NATIVEJIT_T1, NATIVEJIT_T0, NATIVEJIT_T1, NATIVEJIT_T2);
-	NativeJitStoreRegister(emitter, layout->mFpscr, NATIVEJIT_T1);
-	return 1;
+	if (fprflive)
+	{
+		lowexponent = 1;
+		if (single && extended != 30 && extended != 31)
+			lowexponent = 897;
+		NativeJitFloatClass(emitter, NATIVEJIT_T0, target, lowexponent);
+		NativeJitOperateImmediate(emitter, NATIVEJIT_ALU_SHL, NATIVEJIT_T0, 12);
+		NativeJitLoadRegister(emitter, NATIVEJIT_T1, layout->mFpscr);
+		NativeJitMove(emitter, NATIVEJIT_T2, NATIVEJIT_T1);
+		NativeJitOperateImmediate(emitter, NATIVEJIT_ALU_AND, NATIVEJIT_T2, ~0x1f000U);
+		NativeJitOperate(emitter, NATIVEJIT_ALU_OR, NATIVEJIT_T2, NATIVEJIT_T0);
+		NativeJitMove(emitter, NATIVEJIT_T0, NATIVEJIT_T1);
+		NativeJitOperateImmediate(emitter, NATIVEJIT_ALU_AND, NATIVEJIT_T0, 0x80);
+		NativeJitSelect(emitter, NATIVEJIT_T1, NATIVEJIT_T0, NATIVEJIT_T1, NATIVEJIT_T2);
+		NativeJitStoreRegister(emitter, layout->mFpscr, NATIVEJIT_T1);
+	}
+	done = NativeJitJump(emitter);
+	NativeJitBranchLand(emitter, nan);
+	NativeJitStoreRegisterImmediate(emitter, layout->mPc, address);
+	NativeJitCallHelper(emitter, powerpc_cpu::NativeJitInterpret, decodeinfo);
+	NativeJitBranchLand(emitter, done);
+	return 4;
 }
 
 static int NativeJitTranslateBranch(NATIVEJITEMITTER* emitter, const NATIVEJITLAYOUT* layout, uint32 opcode,
@@ -969,7 +975,7 @@ static int NativeJitStaticTargets(uint32 opcode, uint32 address, uint32* targets
 }
 
 static int NativeJitTranslate(NATIVEJITEMITTER* emitter, const NATIVEJITLAYOUT* layout, uint32 opcode, uint32 address,
-	int fprflive)
+	int fprflive, const void* decodeinfo)
 {
 	uint32 primary;
 	uint32 source;
@@ -1018,10 +1024,10 @@ static int NativeJitTranslate(NATIVEJITEMITTER* emitter, const NATIVEJITLAYOUT* 
 		}
 		return 0;
 	case 59:
-		return NativeJitTranslateFloatArithmetic(emitter, layout, opcode, fprflive);
+		return NativeJitTranslateFloatArithmetic(emitter, layout, opcode, fprflive, address, decodeinfo);
 	case 63:
 		if (((opcode >> 1) & 31) >= 18)
-			return NativeJitTranslateFloatArithmetic(emitter, layout, opcode, fprflive);
+			return NativeJitTranslateFloatArithmetic(emitter, layout, opcode, fprflive, address, decodeinfo);
 		switch ((opcode >> 1) & 0x3ff)
 		{
 		case 72:
@@ -1146,10 +1152,14 @@ void powerpc_cpu::NativeJitInterpret(void* cpu, const void* decodeinfo)
 
 void powerpc_cpu::EnableNativeJit()
 {
-	nativejitcode = NativeJitAllocate(NATIVEJIT_CODE_SIZE);
-	nativejitfloat = NativeJitHasFloat() != 0;
+	uint8* code;
+	code = NativeJitAllocate(NATIVEJIT_CODE_SIZE);
+	if (code == NULL)
+		return;
+	nativejit = (NATIVEJITSTATE*)code;
+	nativejit->mCode = code + NATIVEJIT_STATE_SPACE;
+	nativejit->mFloat = NativeJitHasFloat() != 0;
 	NativeJitReset();
-	usenativejit = nativejitcode != NULL;
 }
 
 static void NativeJitDirectExit(NATIVEJITEMITTER* emitter, const NATIVEJITLAYOUT* layout, uint32 target,
@@ -1157,7 +1167,7 @@ static void NativeJitDirectExit(NATIVEJITEMITTER* emitter, const NATIVEJITLAYOUT
 {
 	uint8* site;
 	NativeJitStoreRegisterImmediate(emitter, layout->mPc, target);
-	site = NativeJitChainJump(emitter, target, layout->mFlags, layout->mChainSite, layout->mChainPc);
+	site = NativeJitChainJump(emitter, target, layout->mFlags, layout->mState);
 	if (target == blockpc)
 		NativeJitChainLink(site, loopstart);
 	NativeJitEpilogue(emitter);
@@ -1186,8 +1196,6 @@ void* powerpc_cpu::NativeJitCompileBlock(block_info* bi)
 	layout.mLr = (int)((uint8*)&regs().lr - base);
 	layout.mCtr = (int)((uint8*)&regs().ctr - base);
 	layout.mPc = (int)((uint8*)&regs().pc - base);
-	layout.mChainSite = (int)((uint8*)&nativejitchainsite - base);
-	layout.mChainPc = (int)((uint8*)&nativejitchainpc - base);
 	layout.mFlags = (int)((uint8*)&regs().spcflags - base);
 	layout.mFpr = (int)((uint8*)&regs().fpr[0] - base);
 	layout.mFprHigh = NativeJitFprWordOffset(1);
@@ -1197,14 +1205,13 @@ void* powerpc_cpu::NativeJitCompileBlock(block_info* bi)
 	layout.mCarry = (int)((uint8*)&regs().xer - base) + NativeJitXerByteOffset(NATIVEJIT_XER_CA);
 	layout.mCount = (int)((uint8*)&regs().xer - base) + NativeJitXerByteOffset(NATIVEJIT_XER_COUNT);
 	layout.mFpscr = (int)((uint8*)&regs().fpscr - base);
-	layout.mLookupPc = (int)((uint8*)nativejitlookuppc - base);
-	layout.mLookupEntry = (int)((uint8*)nativejitlookupentry - base);
-	layout.mFloat = nativejitfloat;
-	NativeJitBegin(&emitter, nativejitcursor, nativejitcode + NATIVEJIT_CODE_SIZE,
+	layout.mFloat = nativejit->mFloat;
+	layout.mState = nativejit;
+	NativeJitBegin(&emitter, nativejit->mCursor, (uint8*)nativejit + NATIVEJIT_CODE_SIZE,
 		layout.mCarry, layout.mSummaryOverflow);
 	if (!NativeJitHasRoom(&emitter))
 	{
-		nativejitfull = true;
+		nativejit->mFull = 1;
 		return NULL;
 	}
 	NativeJitPrologue(&emitter);
@@ -1216,10 +1223,11 @@ void* powerpc_cpu::NativeJitCompileBlock(block_info* bi)
 	{
 		if (!NativeJitHasRoom(&emitter))
 		{
-			nativejitfull = true;
+			nativejit->mFull = 1;
 			return NULL;
 		}
-		translated = NativeJitTranslate(&emitter, &layout, bi->di[index].opcode, address, NativeJitFprfLive(bi, index));
+		translated = NativeJitTranslate(&emitter, &layout, bi->di[index].opcode, address, NativeJitFprfLive(bi, index),
+			&bi->di[index]);
 		if (translated)
 			nativecount++;
 		if (translated == 0)
@@ -1229,6 +1237,8 @@ void* powerpc_cpu::NativeJitCompileBlock(block_info* bi)
 			NativeJitCallHelper(&emitter, NativeJitInterpret, &bi->di[index]);
 			syncedpc = address + 4;
 		}
+		else if (translated == 4)
+			syncedpc = 0xffffffffU;
 		else if (translated >= 2)
 			syncedpc = address + 4;
 		address += 4;
@@ -1256,59 +1266,60 @@ void* powerpc_cpu::NativeJitCompileBlock(block_info* bi)
 			NativeJitStoreRegisterImmediate(&emitter, layout.mPc, address);
 		for (index = 0; index < exitcount; index++)
 		{
-			site = NativeJitChainExit(&emitter, layout.mPc, targets[index], layout.mFlags, layout.mChainSite, layout.mChainPc);
+			site = NativeJitChainExit(&emitter, layout.mPc, targets[index], layout.mFlags, nativejit);
 			if (targets[index] == bi->pc)
 				NativeJitChainLink(site, loopstart);
 		}
-		NativeJitIndirectExit(&emitter, layout.mPc, layout.mFlags, layout.mLookupPc, layout.mLookupEntry);
+		NativeJitIndirectExit(&emitter, layout.mPc, layout.mFlags, nativejit);
 		NativeJitEpilogue(&emitter);
 	}
-	NativeJitFlush(nativejitcursor, emitter.mCode - nativejitcursor);
-	nativejitprologue = (int)(loopstart - nativejitcursor);
-	if (bi->pc < nativejitlow)
-		nativejitlow = bi->pc;
-	if (address > nativejithigh)
-		nativejithigh = address;
+	NativeJitFlush(nativejit->mCursor, emitter.mCode - nativejit->mCursor);
+	nativejit->mPrologue = (int)(loopstart - nativejit->mCursor);
+	if (bi->pc < nativejit->mLow)
+		nativejit->mLow = bi->pc;
+	if (address > nativejit->mHigh)
+		nativejit->mHigh = address;
 	index = (int)((bi->pc >> 2) & NATIVEJIT_LOOKUP_MASK);
-	nativejitlookuppc[index] = bi->pc;
-	nativejitlookupentry[index] = loopstart;
-	base = nativejitcursor;
-	nativejitcursor = emitter.mCode;
+	nativejit->mLookupPc[index] = bi->pc;
+	nativejit->mLookupEntry[index] = loopstart;
+	base = nativejit->mCursor;
+	nativejit->mCursor = emitter.mCode;
 	return base;
 }
 
 void powerpc_cpu::NativeJitLinkTo(block_info* bi)
 {
-	if (nativejitchainsite)
+	if (nativejit == NULL || nativejit->mChainSite == NULL)
+		return;
+	if (bi->nativeentry && bi->pc == nativejit->mChainPc)
 	{
-		if (bi->nativeentry && bi->pc == nativejitchainpc)
-		{
-			NativeJitChainLink(nativejitchainsite, (uint8*)bi->nativeentry + nativejitprologue);
-			NativeJitFlush(nativejitchainsite, 5);
-		}
-		nativejitchainsite = NULL;
+		NativeJitChainLink(nativejit->mChainSite, (uint8*)bi->nativeentry + nativejit->mPrologue);
+		NativeJitFlush(nativejit->mChainSite, 5);
 	}
+	nativejit->mChainSite = NULL;
 }
 
 void powerpc_cpu::NativeJitReset()
 {
 	int index;
-	nativejitcursor = nativejitcode;
-	nativejitfull = false;
-	nativejitchainsite = NULL;
-	nativejitlow = 0xffffffffU;
-	nativejithigh = 0;
+	if (nativejit == NULL)
+		return;
+	nativejit->mCursor = nativejit->mCode;
+	nativejit->mFull = 0;
+	nativejit->mChainSite = NULL;
+	nativejit->mLow = 0xffffffffU;
+	nativejit->mHigh = 0;
 	for (index = 0; index < NATIVEJIT_LOOKUP_SIZE; index++)
 	{
-		nativejitlookuppc[index] = 1;
-		nativejitlookupentry[index] = NULL;
+		nativejit->mLookupPc[index] = 1;
+		nativejit->mLookupEntry[index] = NULL;
 	}
 }
 
 void powerpc_cpu::NativeJitInvalidate(uint32 start, uint32 end)
 {
-	if (start < nativejithigh && end > nativejitlow)
-		nativejitfull = true;
+	if (nativejit != NULL && start < nativejit->mHigh && end > nativejit->mLow)
+		nativejit->mFull = 1;
 }
 
 #endif

@@ -60,6 +60,7 @@ SRCS = ../main.cpp ../prefs.cpp ../prefs_items.cpp \
     ../audio.cpp ../extfs.cpp disk_sparsebundle.cpp \
 	tinyxml2.cpp \
     ../user_strings.cpp user_strings_unix.cpp sshpty.c strlcpy.c rpc_unix.cpp \
+    ../printing.cpp ../pictpdf.c ../pdfgen.c ../joymanager.cpp \
     $(XPLAT_SRCS) $(SYSSRCS) $(CPUSRCS) $(SLIRP_SRCS)
 APP_FLAVOR ?=
 ifneq ($(APP_FLAVOR),)

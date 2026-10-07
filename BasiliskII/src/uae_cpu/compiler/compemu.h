@@ -282,9 +282,9 @@ extern int touchcnt;
 #define RW1 uae_u32
 #define RW2 uae_u32
 #define RW4 uae_u32
-#define MEMR uae_u32
-#define MEMW uae_u32
-#define MEMRW uae_u32
+#define MEMR uintptr
+#define MEMW uintptr
+#define MEMRW uintptr
 
 #define FW   uae_u32
 #define FR   uae_u32
@@ -307,12 +307,12 @@ DECLARE_MIDFUNC(bts_l_ri(RW4 r, IMM i));
 DECLARE_MIDFUNC(bts_l_rr(RW4 r, R4 b));
 DECLARE_MIDFUNC(btr_l_ri(RW4 r, IMM i));
 DECLARE_MIDFUNC(btr_l_rr(RW4 r, R4 b));
-DECLARE_MIDFUNC(mov_l_rm(W4 d, IMM s));
+DECLARE_MIDFUNC(mov_l_rm(W4 d, MEMR s));
 DECLARE_MIDFUNC(call_r(R4 r));
-DECLARE_MIDFUNC(sub_l_mi(IMM d, IMM s));
-DECLARE_MIDFUNC(mov_l_mi(IMM d, IMM s));
-DECLARE_MIDFUNC(mov_w_mi(IMM d, IMM s));
-DECLARE_MIDFUNC(mov_b_mi(IMM d, IMM s));
+DECLARE_MIDFUNC(sub_l_mi(MEMRW d, IMM s));
+DECLARE_MIDFUNC(mov_l_mi(MEMW d, IMM s));
+DECLARE_MIDFUNC(mov_w_mi(MEMW d, IMM s));
+DECLARE_MIDFUNC(mov_b_mi(MEMW d, IMM s));
 DECLARE_MIDFUNC(rol_b_ri(RW1 r, IMM i));
 DECLARE_MIDFUNC(rol_w_ri(RW2 r, IMM i));
 DECLARE_MIDFUNC(rol_l_ri(RW4 r, IMM i));
@@ -344,14 +344,14 @@ DECLARE_MIDFUNC(shra_l_ri(RW4 r, IMM i));
 DECLARE_MIDFUNC(shra_w_ri(RW2 r, IMM i));
 DECLARE_MIDFUNC(shra_b_ri(RW1 r, IMM i));
 DECLARE_MIDFUNC(setcc(W1 d, IMM cc));
-DECLARE_MIDFUNC(setcc_m(IMM d, IMM cc));
+DECLARE_MIDFUNC(setcc_m(MEMW d, IMM cc));
 DECLARE_MIDFUNC(cmov_b_rr(RW1 d, R1 s, IMM cc));
 DECLARE_MIDFUNC(cmov_w_rr(RW2 d, R2 s, IMM cc));
 DECLARE_MIDFUNC(cmov_l_rr(RW4 d, R4 s, IMM cc));
-DECLARE_MIDFUNC(cmov_l_rm(RW4 d, IMM s, IMM cc));
+DECLARE_MIDFUNC(cmov_l_rm(RW4 d, MEMR s, IMM cc));
 DECLARE_MIDFUNC(bsf_l_rr(W4 d, R4 s));
-DECLARE_MIDFUNC(pop_m(IMM d));
-DECLARE_MIDFUNC(push_m(IMM d));
+DECLARE_MIDFUNC(pop_m(MEMW d));
+DECLARE_MIDFUNC(push_m(MEMR d));
 DECLARE_MIDFUNC(pop_l(W4 d));
 DECLARE_MIDFUNC(push_l_i(IMM i));
 DECLARE_MIDFUNC(push_l(R4 s));
@@ -379,7 +379,7 @@ DECLARE_MIDFUNC(mov_b_bmrr_indexed(IMM base, R4 baser, R4 index, IMM factor, R1 
 DECLARE_MIDFUNC(mov_l_brrm_indexed(W4 d, IMM base, R4 baser, R4 index, IMM factor));
 DECLARE_MIDFUNC(mov_w_brrm_indexed(W2 d, IMM base, R4 baser, R4 index, IMM factor));
 DECLARE_MIDFUNC(mov_b_brrm_indexed(W1 d, IMM base, R4 baser, R4 index, IMM factor));
-DECLARE_MIDFUNC(mov_l_rm_indexed(W4 d, IMM base, R4 index, IMM factor));
+DECLARE_MIDFUNC(mov_l_rm_indexed(W4 d, MEMR base, R4 index, IMM factor));
 DECLARE_MIDFUNC(mov_l_rR(W4 d, R4 s, IMM offset));
 DECLARE_MIDFUNC(mov_w_rR(W2 d, R4 s, IMM offset));
 DECLARE_MIDFUNC(mov_b_rR(W1 d, R4 s, IMM offset));
@@ -401,17 +401,17 @@ DECLARE_MIDFUNC(mov_b_bRr(R4 d, R1 s, IMM offset));
 DECLARE_MIDFUNC(bswap_32(RW4 r));
 DECLARE_MIDFUNC(bswap_16(RW2 r));
 DECLARE_MIDFUNC(mov_l_rr(W4 d, R4 s));
-DECLARE_MIDFUNC(mov_l_mr(IMM d, R4 s));
-DECLARE_MIDFUNC(mov_w_mr(IMM d, R2 s));
-DECLARE_MIDFUNC(mov_w_rm(W2 d, IMM s));
-DECLARE_MIDFUNC(mov_b_mr(IMM d, R1 s));
-DECLARE_MIDFUNC(mov_b_rm(W1 d, IMM s));
+DECLARE_MIDFUNC(mov_l_mr(MEMW d, R4 s));
+DECLARE_MIDFUNC(mov_w_mr(MEMW d, R2 s));
+DECLARE_MIDFUNC(mov_w_rm(W2 d, MEMR s));
+DECLARE_MIDFUNC(mov_b_mr(MEMW d, R1 s));
+DECLARE_MIDFUNC(mov_b_rm(W1 d, MEMR s));
 DECLARE_MIDFUNC(mov_l_ri(W4 d, IMM s));
 DECLARE_MIDFUNC(mov_w_ri(W2 d, IMM s));
 DECLARE_MIDFUNC(mov_b_ri(W1 d, IMM s));
-DECLARE_MIDFUNC(add_l_mi(IMM d, IMM s) );
-DECLARE_MIDFUNC(add_w_mi(IMM d, IMM s) );
-DECLARE_MIDFUNC(add_b_mi(IMM d, IMM s) );
+DECLARE_MIDFUNC(add_l_mi(MEMRW d, IMM s) );
+DECLARE_MIDFUNC(add_w_mi(MEMRW d, IMM s) );
+DECLARE_MIDFUNC(add_b_mi(MEMRW d, IMM s) );
 DECLARE_MIDFUNC(test_l_ri(R4 d, IMM i));
 DECLARE_MIDFUNC(test_l_rr(R4 d, R4 s));
 DECLARE_MIDFUNC(test_w_rr(R2 d, R2 s));
@@ -420,7 +420,7 @@ DECLARE_MIDFUNC(and_l_ri(RW4 d, IMM i));
 DECLARE_MIDFUNC(and_l(RW4 d, R4 s));
 DECLARE_MIDFUNC(and_w(RW2 d, R2 s));
 DECLARE_MIDFUNC(and_b(RW1 d, R1 s));
-DECLARE_MIDFUNC(or_l_rm(RW4 d, IMM s));
+DECLARE_MIDFUNC(or_l_rm(RW4 d, MEMR s));
 DECLARE_MIDFUNC(or_l_ri(RW4 d, IMM i));
 DECLARE_MIDFUNC(or_l(RW4 d, R4 s));
 DECLARE_MIDFUNC(or_w(RW2 d, R2 s));
@@ -478,7 +478,7 @@ DECLARE_MIDFUNC(fmov_mr(MEMW m, FR r));
 DECLARE_MIDFUNC(fmov_ext_mr(MEMW m, FR r));
 DECLARE_MIDFUNC(fmov_ext_rm(FW r, MEMR m));
 DECLARE_MIDFUNC(fmov_rr(FW d, FR s));
-DECLARE_MIDFUNC(fldcw_m_indexed(R4 index, IMM base));
+DECLARE_MIDFUNC(fldcw_m_indexed(R4 index, MEMR base));
 DECLARE_MIDFUNC(ftst_r(FR r));
 DECLARE_MIDFUNC(dont_care_fflags(void));
 DECLARE_MIDFUNC(fsqrt_rr(FW d, FR s));

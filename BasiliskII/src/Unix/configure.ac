@@ -359,6 +359,7 @@ if [[ "x$WANT_SDL" = "xyes" ]]; then
         CFLAGS="$CFLAGS $sdl_CFLAGS"
         CXXFLAGS="$CXXFLAGS $sdl_CFLAGS"
         LIBS="$LIBS $sdl_LIBS"
+        AC_DEFINE([USE_SDL1], [1], [Use SDL1])
         WANT_SDL_VERSION_MAJOR=1
       ], [
         WANT_SDL=no

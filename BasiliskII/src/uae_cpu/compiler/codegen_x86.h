@@ -254,10 +254,10 @@ typedef unsigned short	_us;
 typedef signed int	_sl;
 typedef unsigned int	_ul;
 
-#define _UC(X)		((_uc  )(unsigned long)(X))
-#define _US(X)		((_us  )(unsigned long)(X))
-#define _SL(X)		((_sl  )(unsigned long)(X))
-#define _UL(X)		((_ul  )(unsigned long)(X))
+#define _UC(X)		((_uc  )(uintptr)(X))
+#define _US(X)		((_us  )(uintptr)(X))
+#define _SL(X)		((_sl  )(uintptr)(X))
+#define _UL(X)		((_ul  )(uintptr)(X))
 
 #define _PUC(X)		((_uc *)(X))
 #define _PUS(X)		((_us *)(X))
@@ -430,7 +430,7 @@ typedef unsigned int	_ul;
 #define _r_X(   R, D,B,I,S,O)	(_r0P(I) ? (_r0P(B)    ? (!X86_TARGET_64BIT ? _r_D(R,D) : \
 					                 (_x86_RIP_addressing_possible(D, O) ? \
 				                          _r_D(R, (D) - ((uintptr)x86_get_target() + 4 + (O))) : \
-				                          _r_DSIB(R,D))) : \
+				                          _r_DSIB(R,x86_checked_disp32(D)))) : \
 				           (_rIP(B)    ? _r_D   (R,D                )   : \
 				           (_rsp12P(B) ? _r_DBIS(R,D,_rSP(),_rSP(),1)   : \
 						         _r_DB  (R,D,     B       ))))  : \
