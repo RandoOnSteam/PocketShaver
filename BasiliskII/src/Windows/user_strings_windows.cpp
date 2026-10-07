@@ -170,6 +170,7 @@ const char *GetString(int num)
 	return NULL;
 }
 
+#if __cplusplus >= 201103L || _MSC_VER >= 1600
 /*
  *  Convert text to wide string, given the string number
  */
@@ -189,3 +190,4 @@ std::wstring GetStringW(int num)
 	MultiByteToWideChar(CP_ACP, 0, str, len, &w[0], wlen);
 	return w;
 }
+#endif

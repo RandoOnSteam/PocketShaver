@@ -379,10 +379,8 @@ void unload_host_domains();
 #define MAX_MRU 16384
 #endif
 
-#ifndef min
+#ifndef _WIN32
 #define min(x,y) ((x) < (y) ? (x) : (y))
-#endif
-#ifndef max
 #define max(x,y) ((x) > (y) ? (x) : (y))
 #endif
 

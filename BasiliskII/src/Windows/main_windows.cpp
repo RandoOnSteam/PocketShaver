@@ -702,7 +702,11 @@ static void display_alert(int title_id, const char *text, int flags)
 static void display_alert(int title_id, const wchar_t *text, int flags)
 {
 	HWND hMainWnd = GetMainWindowHandle();
+#if __cplusplus >= 201103L || _MSC_VER >= 1600
 	MessageBoxW(hMainWnd, text, GetStringW(title_id).c_str(), MB_OK | flags);
+#else
+	MessageBoxW(hMainWnd, text, to_wstring(GetString(title_id)).c_str(), MB_OK | flags);
+#endif
 }
 
 

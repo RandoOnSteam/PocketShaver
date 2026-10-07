@@ -22,10 +22,12 @@
 #define USER_STRINGS_WINDOWS_H
 
 #ifdef __cplusplus
+#if __cplusplus >= 201103L || _MSC_VER >= 1600
 #include <string>
 
  // Convert text to wide string, given the string number
 extern std::wstring GetStringW(int num);
+#endif
 #endif
 
 enum {
