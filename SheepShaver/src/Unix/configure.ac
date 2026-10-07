@@ -1591,6 +1591,9 @@ if [[ "x$EMULATED_PPC" = "xyes" ]]; then
     ../kpx_cpu/src/cpu/ppc/ppc-decode.cpp \
     ../kpx_cpu/src/cpu/ppc/ppc-execute.cpp \
     ../kpx_cpu/src/cpu/ppc/ppc-translate.cpp \
+    ../kpx_cpu/src/cpu/ppc/ppc-nativejit.cpp \
+    ../kpx_cpu/src/cpu/jit/x86/nativejitx86_64.cpp \
+    ../kpx_cpu/src/cpu/jit/x86/nativejitx86_32.cpp \
     ../kpx_cpu/src/utils/utils-cpuinfo.cpp"
   CPPFLAGS="$CPPFLAGS -I../kpx_cpu/include -I../kpx_cpu/src"
 

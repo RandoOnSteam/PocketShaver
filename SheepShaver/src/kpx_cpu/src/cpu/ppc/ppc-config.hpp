@@ -73,6 +73,15 @@
 #define PPC_ENABLE_JIT ENABLE_DYNGEN
 #endif
 
+#include "cpu/jit/nativejit.h"
+#ifndef PPC_NATIVE_JIT
+#if PPC_DECODE_CACHE && !PPC_ENABLE_JIT && NATIVEJIT_AVAILABLE
+#define PPC_NATIVE_JIT 1
+#else
+#define PPC_NATIVE_JIT 0
+#endif
+#endif
+
 
 /**
  *	PPC_JIT_GENERIC_ONLY

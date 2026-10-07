@@ -802,6 +802,10 @@ void powerpc_cpu::execute(uint32 entry)
 			clock_t start_time;
 			start_time = clock();
 #endif
+#if PPC_NATIVE_JIT
+			if (nativejitfull)
+				invalidate_cache();
+#endif
 			bi = my_block_cache.new_blockinfo();
 			bi->init(pc());
 
@@ -861,6 +865,10 @@ void powerpc_cpu::execute(uint32 entry)
 			my_block_cache.add_to_cl_list(bi);
 			my_block_cache.add_to_active_list(bi);
 			decode_cache_p += bi->size;
+#if PPC_NATIVE_JIT
+			if (usenativejit)
+				bi->nativeentry = NativeJitCompileBlock(bi);
+#endif
 #if PPC_PROFILE_COMPILE_TIME
 			compile_time += (clock() - start_time);
 #endif
@@ -868,6 +876,13 @@ void powerpc_cpu::execute(uint32 entry)
 			// Execute all cached blocks
 		  pdi_execute:
 			for (;;) {
+#if PPC_NATIVE_JIT
+				NativeJitLinkTo(bi);
+				if (bi->nativeentry)
+					((NATIVEJITBLOCK)bi->nativeentry)(this, regs_ptr(), (void *)VMBaseDiff);
+				else
+#endif
+				{
 				const int r = bi->size % 4;
 				di = bi->di + r;
 				int n = (bi->size + 3) / 4;
@@ -879,6 +894,7 @@ void powerpc_cpu::execute(uint32 entry)
 				case 2: di[-2].execute(this, di[-2].opcode);
 				case 1: di[-1].execute(this, di[-1].opcode);
 					} while (--n > 0);
+				}
 				}
 
 #ifdef SHEEPSHAVER
@@ -960,6 +976,13 @@ void powerpc_cpu::init_decode_cache()
 	D(bug("powerpc_cpu: Allocated decode cache: %d KB at %p\n", DECODE_CACHE_SIZE / 1024, decode_cache));
 	decode_cache_p = decode_cache;
 	decode_cache_end_p = decode_cache + DECODE_CACHE_MAX_ENTRIES;
+#if PPC_NATIVE_JIT
+	nativejitcode = NULL;
+	nativejitprologue = 0;
+	usenativejit = false;
+	nativejitfloat = false;
+	NativeJitReset();
+#endif
 #if FLIGHT_RECORDER
 	// Leave enough room to last call to record_step()
 	decode_cache_end_p -= 2;
@@ -975,6 +998,10 @@ void powerpc_cpu::kill_decode_cache()
 {
 #if PPC_DECODE_CACHE
 	vm_release(decode_cache, DECODE_CACHE_SIZE);
+#endif
+#if PPC_NATIVE_JIT
+	if (nativejitcode)
+		NativeJitFree(nativejitcode, NATIVEJIT_CODE_SIZE);
 #endif
 }
 
@@ -996,6 +1023,9 @@ void powerpc_cpu::invalidate_cache()
 #endif
 #if PPC_DECODE_CACHE
 	decode_cache_p = decode_cache;
+#endif
+#if PPC_NATIVE_JIT
+	NativeJitReset();
 #endif
 }
 
@@ -1045,5 +1075,8 @@ void powerpc_cpu::invalidate_cache_range(uintptr start, uintptr end)
 #endif
 	spcflags().set(SPCFLAG_JIT_EXEC_RETURN);
 	my_block_cache.clear_range(start, end);
+#endif
+#if PPC_NATIVE_JIT
+	NativeJitInvalidate(start, end);
 #endif
 }

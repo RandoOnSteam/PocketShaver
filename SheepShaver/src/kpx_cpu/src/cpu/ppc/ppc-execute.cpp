@@ -1186,11 +1186,7 @@ void powerpc_cpu::execute_fp_int_convert(uint32 opcode)
  **/
 
 #ifndef FPCLASSIFY_RETURN_T
-#ifdef __MINGW32__
 #define FPCLASSIFY_RETURN_T int
-#else
-#define FPCLASSIFY_RETURN_T uint8
-#endif
 #endif
 
 template< class FP >

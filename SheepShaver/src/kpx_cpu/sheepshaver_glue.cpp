@@ -500,6 +500,9 @@ sheepshaver_cpu::sheepshaver_cpu()
 #if PPC_ENABLE_JIT
 	if (PrefsFindBool("jit"))
 		enable_jit();
+#elif PPC_NATIVE_JIT
+	if (PrefsFindBool("jit"))
+		EnableNativeJit();
 #endif
 }
 

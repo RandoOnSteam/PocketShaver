@@ -3263,7 +3263,6 @@ static LONG WINAPI main_exception_filter(EXCEPTION_POINTERS *ExceptionInfo)
 	return EXCEPTION_CONTINUE_SEARCH;
 }
 
-#if defined(_WIN64)
 /* First-chance path that works with a debugger attached. */
 static LONG WINAPI main_vectored_exception_handler(EXCEPTION_POINTERS *ExceptionInfo)
 {
@@ -3272,7 +3271,6 @@ static LONG WINAPI main_vectored_exception_handler(EXCEPTION_POINTERS *Exception
 
 	return EXCEPTION_CONTINUE_SEARCH;
 }
-#endif /* #if defined(_WIN64) */
 #if defined __CYGWIN__ && defined __i386__
 /* In Cygwin programs, SetUnhandledExceptionFilter has no effect because Cygwin
    installs a global exception handler.  We have to dig deep in order to install
@@ -3330,15 +3328,12 @@ do_install_main_exception_filter ()
 }
 
 #else
-#if defined(_WIN64) /* vectored EH is Win2k+ */
 static PVOID win32_veh_handle = NULL;
-#endif
 static void
 do_install_main_exception_filter ()
 {
   /* Keep the top-level filter for non-debug runs (and as a backstop). */
   SetUnhandledExceptionFilter ((LPTOP_LEVEL_EXCEPTION_FILTER) &main_exception_filter);
-  #if defined(_WIN64)
   /*
    * Vectored handler: required so ignoresegv/instruction-skip works under
    * Visual Studio / cdb. Call with FirstHandler=TRUE so we run early among
@@ -3360,7 +3355,6 @@ do_install_main_exception_filter ()
       fflush(stderr);
     }
   }
-  #endif /* #if defined(_WIN64) */
 }
 #endif
 
@@ -3414,7 +3408,7 @@ void sigsegv_deinstall_handler(void)
 #endif
 #ifdef HAVE_WIN32_EXCEPTIONS
 	sigsegv_fault_handler = NULL;
-#if !(defined __CYGWIN__ && defined __i386__) && defined(_WIN64)
+#if !(defined __CYGWIN__ && defined __i386__)
 	if (win32_veh_handle != NULL) {
 		RemoveVectoredExceptionHandler(win32_veh_handle);
 		win32_veh_handle = NULL;

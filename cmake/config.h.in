@@ -55,9 +55,17 @@
 
 #define SIZEOF_SHORT @SIZEOF_SHORT@
 #define SIZEOF_INT @SIZEOF_INT@
-#define SIZEOF_LONG @SIZEOF_LONG@
+#if defined(__LP64__) || defined(_LP64)
+#define SIZEOF_LONG 8
+#else
+#define SIZEOF_LONG 4
+#endif
 #define SIZEOF_LONG_LONG @SIZEOF_LONG_LONG@
-#define SIZEOF_VOID_P @SIZEOF_VOID_P@
+#if defined(_WIN64) || defined(__LP64__) || defined(_LP64)
+#define SIZEOF_VOID_P 8
+#else
+#define SIZEOF_VOID_P 4
+#endif
 #define SIZEOF_FLOAT @SIZEOF_FLOAT@
 #define SIZEOF_DOUBLE @SIZEOF_DOUBLE@
 #define SIZEOF_LONG_DOUBLE @SIZEOF_LONG_DOUBLE@

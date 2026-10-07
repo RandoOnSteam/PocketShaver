@@ -41,6 +41,9 @@ struct powerpc_block_info
 #if PPC_DECODE_CACHE
 	decode_info *		di;
 #endif
+#if PPC_NATIVE_JIT
+	void *				nativeentry;
+#endif
 #if PPC_ENABLE_JIT
 	uint8 *				entry_point;
 #if DYNGEN_DIRECT_BLOCK_CHAINING
@@ -66,6 +69,9 @@ powerpc_block_info::init(uintptr start_pc)
 	basic_block_info::init(start_pc);
 #if PPC_DECODE_CACHE
 	di = NULL;
+#endif
+#if PPC_NATIVE_JIT
+	nativeentry = NULL;
 #endif
 #if PPC_ENABLE_JIT
 #if DYNGEN_DIRECT_BLOCK_CHAINING

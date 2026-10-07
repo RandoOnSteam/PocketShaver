@@ -891,7 +891,6 @@ public:
 
 	Win32FuncHook() : active(0) {}
 	~Win32FuncHook() {
-
 		if(active) {
 			DWORD old;
 			VirtualProtect(slot, sizeof(void*),
