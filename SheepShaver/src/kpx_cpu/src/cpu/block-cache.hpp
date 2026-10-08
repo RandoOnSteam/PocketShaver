@@ -44,6 +44,9 @@ private:
 	entry *						cache_tags[HASH_SIZE];
 	entry *						active;
 	entry *						dormant;
+	uintptr						maxspan;
+
+	int clear_entry(entry *q, uintptr start, uintptr end, void (*retire)(void *, block_info *), void *context);
 
 	uint32 cacheline(uintptr addr) const {
 		return (addr >> 2) & HASH_MASK;
@@ -59,7 +62,7 @@ public:
 
 	void initialize();
 	void clear();
-	void clear_range(uintptr start, uintptr end);
+	int clear_range(uintptr start, uintptr end, void (*retire)(void *, block_info *), void *context);
 	block_info *fast_find(uintptr pc);
 	block_info *find(uintptr pc);
 
@@ -92,6 +95,7 @@ void block_cache< block_info, block_allocator >::initialize()
 {
 	for (int i = 0; i < HASH_SIZE; i++)
 		cache_tags[i] = NULL;
+	maxspan = 0;
 }
 
 template< class block_info, template<class T> class block_allocator >
@@ -117,27 +121,58 @@ void block_cache< block_info, block_allocator >::clear()
 }
 
 template< class block_info, template<class T> class block_allocator >
-void block_cache< block_info, block_allocator >::clear_range(uintptr start, uintptr end)
+int block_cache< block_info, block_allocator >::clear_entry(entry *q, uintptr start, uintptr end, void (*retire)(void *, block_info *), void *context)
 {
-	if (!active)
-		return;
+	int native;
+	native = 0;
+	if (!q->intersect(start, end))
+		return native;
+	if (q->native()) {
+		native = 1;
+		if (retire)
+			retire(context, q);
+	}
+	q->invalidate();
+	remove_from_cl_list(q);
+	remove_from_list(q);
+	delete_blockinfo(q);
+	return native;
+}
 
-	// Walk the full active list. Blocks are registered in cache_tags[]
-	// under their entry pc only, so a bucket scan over the words in
-	// [start, end) cannot see a block that spans into the range from a
-	// lower entry pc -- it would miss e.g. an icbi flush of a cache line
-	// strictly interior to an already-decoded block.
-	entry *p = active, *q;
-	while (p) {
-		q = p;
-		p = p->next;
-		if (q->intersect(start, end)) {
-			q->invalidate();
-			remove_from_cl_list(q);
-			remove_from_list(q);
-			delete_blockinfo(q);
+template< class block_info, template<class T> class block_allocator >
+int block_cache< block_info, block_allocator >::clear_range(uintptr start, uintptr end, void (*retire)(void *, block_info *), void *context)
+{
+	int native;
+	uintptr first;
+	uintptr words;
+	uintptr index;
+	entry *p;
+	entry *q;
+	native = 0;
+	if (!active)
+		return native;
+	first = 0;
+	if (start > maxspan)
+		first = (start - maxspan) & ~(uintptr)3;
+	words = (end - first + 3) >> 2;
+	if (end <= first || words >= HASH_SIZE) {
+		p = active;
+		while (p) {
+			q = p;
+			p = p->next;
+			native += clear_entry(q, start, end, retire, context);
+		}
+		return native;
+	}
+	for (index = 0; index < words; index++) {
+		p = cache_tags[cacheline(first + (index << 2))];
+		while (p) {
+			q = p;
+			p = p->next_same_cl;
+			native += clear_entry(q, start, end, retire, context);
 		}
 	}
+	return native;
 }
 
 template< class block_info, template<class T> class block_allocator >
@@ -201,6 +236,8 @@ void block_cache< block_info, block_allocator >::add_to_cl_list(block_info *bi)
 {
 	entry * bce = (entry *)bi;
 	const uint32 cl = cacheline(bi->pc);
+	if (bi->max_pc > bi->pc && bi->max_pc - bi->pc > maxspan)
+		maxspan = bi->max_pc - bi->pc;
 	if (cache_tags[cl])
 		cache_tags[cl]->prev_same_cl_p = &bce->next_same_cl;
 	bce->next_same_cl = cache_tags[cl];

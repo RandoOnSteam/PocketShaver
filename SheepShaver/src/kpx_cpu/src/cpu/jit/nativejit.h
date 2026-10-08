@@ -64,6 +64,8 @@ typedef struct NATIVEJITSTATE
 	int mPrologue;
 	int mFull;
 	int mFloat;
+	uint32 mDeadPc[NATIVEJIT_LOOKUP_SIZE];
+	uint8* mDeadStub[NATIVEJIT_LOOKUP_SIZE];
 } NATIVEJITSTATE;
 
 #define NATIVEJIT_STATE_SPACE ((sizeof(NATIVEJITSTATE) + 4095) & ~(size_t)4095)
@@ -136,6 +138,7 @@ uint8* NativeJitChainExit(NATIVEJITEMITTER* pThis, int pcoffset, uint32 pcvalue,
 uint8* NativeJitChainJump(NATIVEJITEMITTER* pThis, uint32 pcvalue, int flagsoffset, NATIVEJITSTATE* state);
 void NativeJitIndirectExit(NATIVEJITEMITTER* pThis, int pcoffset, int flagsoffset, NATIVEJITSTATE* state);
 void NativeJitChainLink(uint8* site, uint8* target);
+void NativeJitJumpTo(uint8* site, uint8* target);
 
 void NativeJitCallHelper(NATIVEJITEMITTER* pThis, NATIVEJITHELPER helper, const void* argument);
 

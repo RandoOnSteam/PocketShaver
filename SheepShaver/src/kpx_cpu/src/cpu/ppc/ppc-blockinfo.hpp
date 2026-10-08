@@ -60,6 +60,7 @@ struct powerpc_block_info
 
 	void init(uintptr start_pc);
 	bool intersect(uintptr start, uintptr end);
+	int native();
 	void invalidate();
 };
 
@@ -78,6 +79,16 @@ powerpc_block_info::init(uintptr start_pc)
 	for (int i = 0; i < MAX_TARGETS; i++)
 		li[i].jmp_pc = INVALID_PC;
 #endif
+#endif
+}
+
+inline int
+powerpc_block_info::native()
+{
+#if PPC_NATIVE_JIT
+	return nativeentry != NULL;
+#else
+	return 0;
 #endif
 }
 

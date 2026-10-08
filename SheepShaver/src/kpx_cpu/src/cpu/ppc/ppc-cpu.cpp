@@ -1084,9 +1084,10 @@ void powerpc_cpu::invalidate_cache_range(uintptr start, uintptr end)
 	}
 #endif
 	spcflags().set(SPCFLAG_JIT_EXEC_RETURN);
-	my_block_cache.clear_range(start, end);
-#endif
 #if PPC_NATIVE_JIT
-	NativeJitInvalidate(start, end);
+	my_block_cache.clear_range(start, end, NativeJitRetireBlock, this);
+#else
+	my_block_cache.clear_range(start, end, NULL, NULL);
+#endif
 #endif
 }

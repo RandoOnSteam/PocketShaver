@@ -882,6 +882,12 @@ uint8* NativeJitChainExit(NATIVEJITEMITTER* pThis, int pcoffset, uint32 pcvalue,
 	return site;
 }
 
+void NativeJitJumpTo(uint8* site, uint8* target)
+{
+	site[0] = 0xe9;
+	NativeJitChainLink(site, target);
+}
+
 void NativeJitChainLink(uint8* site, uint8* target)
 {
 	uint32 distance;

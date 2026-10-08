@@ -507,7 +507,8 @@ private:
 	void * NativeJitCompileBlock(block_info * bi);
 	void NativeJitLinkTo(block_info * bi);
 	void NativeJitReset();
-	void NativeJitInvalidate(uint32 start, uint32 end);
+	void NativeJitRetire(block_info * bi);
+	static void NativeJitRetireBlock(void * cpu, block_info * bi);
 public:
 	static void NativeJitInterpret(void * cpu, const void * decodeinfo);
 	void EnableNativeJit();
