@@ -42,8 +42,10 @@
 #define NATIVEJIT_FPU_MUL 2
 #define NATIVEJIT_FPU_DIV 3
 
-#define NATIVEJIT_LOOKUP_SIZE 16384
+#define NATIVEJIT_LOOKUP_SIZE 4096
 #define NATIVEJIT_LOOKUP_MASK (NATIVEJIT_LOOKUP_SIZE - 1)
+#define NATIVEJIT_LOOKUP_SHIFT 13
+#define NATIVEJIT_LOOKUP_INDEX(pc) ((int)((((pc) >> 2) ^ ((pc) >> NATIVEJIT_LOOKUP_SHIFT)) & NATIVEJIT_LOOKUP_MASK))
 
 #define NATIVEJIT_CODE_SIZE (8 * 1024 * 1024)
 #define NATIVEJIT_BLOCK_RESERVE 4096
@@ -59,13 +61,10 @@ typedef struct NATIVEJITSTATE
 	uint8* mCursor;
 	uint8* mChainSite;
 	uint32 mChainPc;
-	uint32 mLow;
-	uint32 mHigh;
 	int mPrologue;
 	int mFull;
 	int mFloat;
-	uint32 mDeadPc[NATIVEJIT_LOOKUP_SIZE];
-	uint8* mDeadStub[NATIVEJIT_LOOKUP_SIZE];
+	uint8* mRetired;
 } NATIVEJITSTATE;
 
 #define NATIVEJIT_STATE_SPACE ((sizeof(NATIVEJITSTATE) + 4095) & ~(size_t)4095)

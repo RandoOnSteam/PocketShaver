@@ -846,6 +846,10 @@ void NativeJitIndirectExit(NATIVEJITEMITTER* pThis, int pcoffset, int flagsoffse
 	NativeJitX86RegsOperand(pThis, 0x8b, NATIVEJITX86_S0, pcoffset);
 	NativeJitX86Move(pThis, NATIVEJITX86_S1, NATIVEJITX86_S0);
 	NativeJitX86ShiftImmediate(pThis, 5, NATIVEJITX86_S1, 2);
+	NativeJitX86Move(pThis, NATIVEJITX86_EAX, NATIVEJITX86_S0);
+	NativeJitX86ShiftImmediate(pThis, 5, NATIVEJITX86_EAX, NATIVEJIT_LOOKUP_SHIFT);
+	NativeJitX86Byte(pThis, 0x31);
+	NativeJitX86Byte(pThis, 0xc0 | (NATIVEJITX86_EAX << 3) | NATIVEJITX86_S1);
 	NativeJitX86OperateImmediate(pThis, 4, NATIVEJITX86_S1, NATIVEJIT_LOOKUP_MASK);
 	NativeJitX86Byte(pThis, 0x3b);
 	NativeJitX86Byte(pThis, 0x3c);

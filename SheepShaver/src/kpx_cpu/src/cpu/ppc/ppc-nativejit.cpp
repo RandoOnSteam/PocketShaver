@@ -1350,22 +1350,11 @@ void* powerpc_cpu::NativeJitCompileBlock(block_info* bi)
 		NativeJitIndirectExit(&emitter, layout.mPc, layout.mFlags, nativejit);
 		NativeJitEpilogue(&emitter);
 	}
-	NativeJitEpilogue(&emitter);
 	NativeJitFlush(codestart, emitter.mCode - codestart);
 	nativejit->mPrologue = (int)(loopstart - codestart);
-	if (bi->pc < nativejit->mLow)
-		nativejit->mLow = bi->pc;
-	if (address > nativejit->mHigh)
-		nativejit->mHigh = address;
-	index = (int)((bi->pc >> 2) & NATIVEJIT_LOOKUP_MASK);
+	index = NATIVEJIT_LOOKUP_INDEX(bi->pc);
 	nativejit->mLookupPc[index] = bi->pc;
 	nativejit->mLookupEntry[index] = loopstart;
-	if (nativejit->mDeadPc[index] == bi->pc)
-	{
-		NativeJitJumpTo(nativejit->mDeadStub[index], loopstart);
-		NativeJitFlush(nativejit->mDeadStub[index], 5);
-		nativejit->mDeadPc[index] = 1;
-	}
 	nativejit->mCursor = emitter.mCode;
 	return codestart;
 }
@@ -1377,7 +1366,7 @@ void powerpc_cpu::NativeJitLinkTo(block_info* bi)
 		return;
 	if (bi->nativeentry)
 	{
-		index = (int)((bi->pc >> 2) & NATIVEJIT_LOOKUP_MASK);
+		index = NATIVEJIT_LOOKUP_INDEX(bi->pc);
 		nativejit->mLookupPc[index] = bi->pc;
 		nativejit->mLookupEntry[index] = (uint8*)bi->nativeentry + nativejit->mPrologue;
 	}
@@ -1393,31 +1382,34 @@ void powerpc_cpu::NativeJitLinkTo(block_info* bi)
 
 void powerpc_cpu::NativeJitReset()
 {
+	NATIVEJITEMITTER emitter;
+	uint8* base;
 	int index;
 	if (nativejit == NULL)
 		return;
-	nativejit->mCursor = nativejit->mCode;
+	base = (uint8*)regs_ptr();
+	NativeJitBegin(&emitter, nativejit->mCode, (uint8*)nativejit + NATIVEJIT_CODE_SIZE, 0, 0);
+	NativeJitIndirectExit(&emitter, (int)((uint8*)&regs().pc - base), (int)((uint8*)&regs().spcflags - base), nativejit);
+	NativeJitEpilogue(&emitter);
+	NativeJitFlush(nativejit->mCode, emitter.mCode - nativejit->mCode);
+	nativejit->mRetired = nativejit->mCode;
+	nativejit->mCursor = emitter.mCode;
 	nativejit->mFull = 0;
 	nativejit->mChainSite = NULL;
-	nativejit->mLow = 0xffffffffU;
-	nativejit->mHigh = 0;
 	for (index = 0; index < NATIVEJIT_LOOKUP_SIZE; index++)
 	{
 		nativejit->mLookupPc[index] = 1;
 		nativejit->mLookupEntry[index] = NULL;
-		nativejit->mDeadPc[index] = 1;
-		nativejit->mDeadStub[index] = NULL;
 	}
 }
 
 void powerpc_cpu::NativeJitRetire(block_info* bi)
 {
-	NATIVEJITEMITTER emitter;
 	uint8* loopstart;
 	int index;
 	if (nativejit == NULL || bi->nativeentry == NULL)
 		return;
-	index = (int)((bi->pc >> 2) & NATIVEJIT_LOOKUP_MASK);
+	index = NATIVEJIT_LOOKUP_INDEX(bi->pc);
 	if (nativejit->mLookupPc[index] == bi->pc)
 	{
 		nativejit->mLookupPc[index] = 1;
@@ -1425,16 +1417,8 @@ void powerpc_cpu::NativeJitRetire(block_info* bi)
 	}
 	nativejit->mChainSite = NULL;
 	loopstart = (uint8*)bi->nativeentry + nativejit->mPrologue;
-	NativeJitBegin(&emitter, loopstart, (uint8*)nativejit + NATIVEJIT_CODE_SIZE, 0, 0);
-	NativeJitEpilogue(&emitter);
-	NativeJitFlush(loopstart, emitter.mCode - loopstart);
-	if (nativejit->mDeadPc[index] == bi->pc)
-	{
-		NativeJitJumpTo(nativejit->mDeadStub[index], loopstart);
-		NativeJitFlush(nativejit->mDeadStub[index], 5);
-	}
-	nativejit->mDeadPc[index] = bi->pc;
-	nativejit->mDeadStub[index] = loopstart;
+	NativeJitJumpTo(loopstart, nativejit->mRetired);
+	NativeJitFlush(loopstart, 5);
 	bi->nativeentry = NULL;
 }
 

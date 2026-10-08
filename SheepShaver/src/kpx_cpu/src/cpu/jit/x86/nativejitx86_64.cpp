@@ -868,6 +868,9 @@ void NativeJitIndirectExit(NATIVEJITEMITTER* pThis, int pcoffset, int flagsoffse
 	NativeJitX64RegsOperand(pThis, 0, 0x8b, NATIVEJITX64_R10, pcoffset, 0);
 	NativeJitX64Move32(pThis, NATIVEJITX64_R11, NATIVEJITX64_R10);
 	NativeJitX64ShiftImmediate(pThis, 0, 5, NATIVEJITX64_R11, 2);
+	NativeJitX64Move32(pThis, NATIVEJITX64_RAX, NATIVEJITX64_R10);
+	NativeJitX64ShiftImmediate(pThis, 0, 5, NATIVEJITX64_RAX, NATIVEJIT_LOOKUP_SHIFT);
+	NativeJitX64RegReg(pThis, 0, 0x31, NATIVEJITX64_RAX, NATIVEJITX64_R11);
 	NativeJitX64RegReg(pThis, 0, 0x81, 4, NATIVEJITX64_R11);
 	NativeJitX64Dword(pThis, NATIVEJIT_LOOKUP_MASK);
 	NativeJitX64RipOperand(pThis, 1, 0x8d, NATIVEJITX64_RAX, state->mLookupPc, 0);
