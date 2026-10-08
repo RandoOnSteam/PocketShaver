@@ -1232,43 +1232,6 @@ static void NativeJitDirectExit(NATIVEJITEMITTER* emitter, const NATIVEJITLAYOUT
 	NativeJitEpilogue(emitter);
 }
 
-static uint32 NativeJitPageMask(uint32 word, uint32 first, uint32 last)
-{
-	uint32 mask;
-	mask = 0xffffffffU;
-	if (word == (first >> 5))
-		mask &= 0xffffffffU << (first & 31);
-	if (word == (last >> 5))
-		mask &= 0xffffffffU >> (31 - (last & 31));
-	return mask;
-}
-
-static void NativeJitMarkPages(NATIVEJITSTATE* state, uint32 start, uint32 end)
-{
-	uint32 first;
-	uint32 last;
-	uint32 word;
-	first = start >> NATIVEJIT_PAGE_SHIFT;
-	last = (end - 1) >> NATIVEJIT_PAGE_SHIFT;
-	for (word = first >> 5; word <= (last >> 5); word++)
-		state->mPages[word] |= NativeJitPageMask(word, first, last);
-}
-
-static int NativeJitPagesCompiled(const NATIVEJITSTATE* state, uint32 start, uint32 end)
-{
-	uint32 first;
-	uint32 last;
-	uint32 word;
-	first = start >> NATIVEJIT_PAGE_SHIFT;
-	last = (end - 1) >> NATIVEJIT_PAGE_SHIFT;
-	for (word = first >> 5; word <= (last >> 5); word++)
-	{
-		if (state->mPages[word] & NativeJitPageMask(word, first, last))
-			return 1;
-	}
-	return 0;
-}
-
 void* powerpc_cpu::NativeJitCompileBlock(block_info* bi)
 {
 	NATIVEJITEMITTER emitter;
@@ -1393,7 +1356,6 @@ void* powerpc_cpu::NativeJitCompileBlock(block_info* bi)
 		nativejit->mLow = bi->pc;
 	if (address > nativejit->mHigh)
 		nativejit->mHigh = address;
-	NativeJitMarkPages(nativejit, bi->pc, address);
 	index = (int)((bi->pc >> 2) & NATIVEJIT_LOOKUP_MASK);
 	nativejit->mLookupPc[index] = bi->pc;
 	nativejit->mLookupEntry[index] = loopstart;
@@ -1428,14 +1390,11 @@ void powerpc_cpu::NativeJitReset()
 		nativejit->mLookupPc[index] = 1;
 		nativejit->mLookupEntry[index] = NULL;
 	}
-	memset(nativejit->mPages, 0, sizeof(nativejit->mPages));
 }
 
 void powerpc_cpu::NativeJitInvalidate(uint32 start, uint32 end)
 {
-	if (nativejit == NULL || start >= end || start >= nativejit->mHigh || end <= nativejit->mLow)
-		return;
-	if (NativeJitPagesCompiled(nativejit, start, end))
+	if (nativejit != NULL && start < nativejit->mHigh && end > nativejit->mLow)
 		nativejit->mFull = 1;
 }
 
