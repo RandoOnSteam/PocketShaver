@@ -872,7 +872,6 @@ void sheepshaver_cpu::execute_68k(uint32 entry, M68kRegisters *r)
 	gpr(24) = entry;
 	gpr(25) = ReadMacInt32(XLM_68K_R25);		// MSB of SR
 	gpr(26) = 0;
-	gpr(28) = 0;								// VBR
 	gpr(29) = ReadMacInt32(KERNEL_DATA_BASE + 0x1074);		// Pointer to opcode table
 	gpr(30) = ReadMacInt32(KERNEL_DATA_BASE + 0x1078);		// Address of emulator
 	gpr(31) = KernelDataAddr + 0x1000;
