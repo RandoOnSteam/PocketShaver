@@ -624,7 +624,9 @@ void *Sys_open(const char *name, bool read_only, bool is_cdrom)
 	// Open file/device
 
 #if defined(BINCUE)
-	void *binfd = open_bincue(name);
+	void *binfd = NULL;
+	if (is_file && (is_cdrom || IsCueSheetPath(name)))
+		binfd = OpenCDImage(name);
 	if (binfd) {
 		mac_file_handle *fh = open_filehandle(name);
 		D(bug("opening %s as bincue\n", name));

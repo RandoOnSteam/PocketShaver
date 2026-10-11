@@ -520,16 +520,17 @@ void *Sys_open(const char *path_name, bool read_only, bool is_cdrom)
 
 #if defined(BINCUE)
 		/*
-		 * BIN/CUE images: open via open_bincue() using the original narrow
+		 * BIN/CUE and CD images: open via OpenCDImage() using the original narrow
 		 * path_name (never the TCHAR buffer - wrong under UNICODE builds).
 		 * Match Unix Sys_open: on success return immediately; do not require
 		 * CreateFile on the .cue text file (that only produced a useless
-		 * handle and hid open_bincue failures when the cue path was wrong).
+		 * handle and hid OpenCDImage failures when the cue path was wrong).
 		 */
 		{
-			const char *dot = strrchr(path_name, '.');
-			const bool is_cue_path = dot && _stricmp(dot, ".cue") == 0;
-			void *binfd = is_cue_path ? open_bincue(path_name) : NULL;
+			const bool is_cue_path = IsCueSheetPath(path_name);
+			void *binfd = NULL;
+			if (is_cue_path || is_cdrom)
+				binfd = OpenCDImage(path_name);
 			if (binfd) {
 				fh = new file_handle;
 				fh->name = _tcsdup(name);

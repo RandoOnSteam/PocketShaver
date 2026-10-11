@@ -599,66 +599,150 @@ static bool LoadCueSheet(const char *cuefile, CueSheet *cs)
 #endif
 
 
-void *open_bincue(const char *name)
+static bool IsRawSectorSync(const unsigned char *sector)
 {
-	CueSheet *cs = (CueSheet *) malloc(sizeof(CueSheet));
-	if (!cs) {
-		D(bug("malloc failed\n"));
+	int byteindex;
+	if (sector[0] != 0 || sector[11] != 0)
+		return false;
+	for (byteindex = 1; byteindex < 11; byteindex++)
+	{
+		if (sector[byteindex] != 0xff)
+			return false;
+	}
+	return true;
+}
+
+static bool LoadImageSheet(const char *imagefile, CueSheet *cs)
+{
+	struct stat imagestat;
+	unsigned char firstsector[16];
+	int imagefh;
+	Track *datatrack;
+
+	bzero(cs, sizeof(*cs));
+#ifdef WIN32
+	imagefh = open(imagefile, O_RDONLY | O_BINARY);
+#else
+	imagefh = open(imagefile, O_RDONLY);
+#endif
+	if (imagefh < 0)
+		return false;
+	if (fstat(imagefh, &imagestat) != 0 ||
+		read(imagefh, firstsector, sizeof(firstsector)) != (int)sizeof(firstsector))
+	{
+		close(imagefh);
+		return false;
+	}
+
+	cs->raw_sector_size = 2048;
+	cs->cooked_sector_size = 2048;
+	cs->header_size = 0;
+	if (imagestat.st_size % 2352 == 0 && IsRawSectorSync(firstsector))
+	{
+		cs->raw_sector_size = 2352;
+		cs->header_size = 16;
+		if (firstsector[15] == 2)
+			cs->cooked_sector_size = 2336;
+	}
+
+	cs->length = imagestat.st_size / cs->raw_sector_size;
+	cs->binfile = strdup(imagefile);
+	if (cs->length == 0 || !cs->binfile)
+	{
+		free(cs->binfile);
+		cs->binfile = NULL;
+		close(imagefh);
+		return false;
+	}
+	cs->binfh = imagefh;
+	cs->tcnt = 1;
+	datatrack = &cs->tracks[0];
+	datatrack->number = 1;
+	datatrack->start = 0;
+	datatrack->length = cs->length;
+	datatrack->fileoffset = 0;
+	datatrack->tcf = DATA;
+	return true;
+}
+
+static void *AttachPlayer(CueSheet *cs)
+{
+	CDPlayer *player = (CDPlayer *) malloc(sizeof(CDPlayer));
+	if (!player) {
+		close(cs->binfh);
+		free(cs->binfile);
+		free(cs);
 		return NULL;
 	}
-	if (LoadCueSheet(name, cs)) {
-		CDPlayer *player = (CDPlayer *) malloc(sizeof(CDPlayer));
-		if (!player) {
-			close(cs->binfh);
-			free(cs->binfile);
-			free(cs);
-			return NULL;
-		}
-		player->cs = cs;
-		player->volume_left = 0;
-		player->volume_right = 0;
-		player->volume_mono = 0;
-		player->audioposition = 0;
-		player->audiostart = 0;
-		player->audioend = 0;
-		player->silence = 0;
-		player->fileoffset = 0;
-		player->audio_enabled = false;
-		player->scanning = false;
-		player->reverse = 0;
+	player->cs = cs;
+	player->volume_left = 0;
+	player->volume_right = 0;
+	player->volume_mono = 0;
+	player->audioposition = 0;
+	player->audiostart = 0;
+	player->audioend = 0;
+	player->silence = 0;
+	player->fileoffset = 0;
+	player->audio_enabled = false;
+	player->scanning = false;
+	player->reverse = 0;
 #ifdef OSX_CORE_AUDIO
-		player->audio_enabled = true;
+	player->audio_enabled = true;
 #endif
-		if (player->audio_enabled)
-			player->audiostatus = CDROM_AUDIO_NO_STATUS;
-		else
-			player->audiostatus = CDROM_AUDIO_INVALID;
-		/* dup() shares the underlying file position with cs->binfh.  The SDL
-		 * audio callback seeks/reads audio while the emulation thread seeks/reads
-		 * data sectors; sharing that cursor lets either thread move it between
-		 * the other's lseek() and read(), intermittently returning audio bytes to
-		 * a CD data read.  Open the BIN again to obtain an independent cursor. */
+	if (player->audio_enabled)
+		player->audiostatus = CDROM_AUDIO_NO_STATUS;
+	else
+		player->audiostatus = CDROM_AUDIO_INVALID;
+	/* dup() shares the underlying file position with cs->binfh.  The SDL
+	 * audio callback seeks/reads audio while the emulation thread seeks/reads
+	 * data sectors; sharing that cursor lets either thread move it between
+	 * the other's lseek() and read(), intermittently returning audio bytes to
+	 * a CD data read.  Open the BIN again to obtain an independent cursor. */
 #ifdef WIN32
-		player->audiofh = open(cs->binfile, O_RDONLY | O_BINARY);
+	player->audiofh = open(cs->binfile, O_RDONLY | O_BINARY);
 #else
-		player->audiofh = open(cs->binfile, O_RDONLY);
+	player->audiofh = open(cs->binfile, O_RDONLY);
 #endif
-		if (player->audiofh < 0)
-			player->audio_enabled = false;
+	if (player->audiofh < 0)
+		player->audio_enabled = false;
 
 #ifdef USE_SDL_AUDIO
-		OpenPlayerStream(player);
+	OpenPlayerStream(player);
 #endif
 
-		// add to list of available CD players
-		players.push_back(player);
+	// add to list of available CD players
+	players.push_back(player);
 
-		return cs;
-	}
+	return cs;
+}
+
+bool IsCueSheetPath(const char *path)
+{
+	const char *extension = strrchr(path, '.');
+	if (!extension)
+		return false;
+	return tolower((unsigned char)extension[1]) == 'c' &&
+		tolower((unsigned char)extension[2]) == 'u' &&
+		tolower((unsigned char)extension[3]) == 'e' &&
+		extension[4] == 0;
+}
+
+void *OpenCDImage(const char *path)
+{
+	bool loaded;
+	CueSheet *cs = (CueSheet *) malloc(sizeof(CueSheet));
+	if (!cs)
+		return NULL;
+	if (IsCueSheetPath(path))
+		loaded = LoadCueSheet(path, cs);
 	else
+		loaded = LoadImageSheet(path, cs);
+	if (!loaded)
+	{
 		free(cs);
-
-	return NULL;
+		return NULL;
+	}
+	return AttachPlayer(cs);
 }
 
 void close_bincue(void *fh)

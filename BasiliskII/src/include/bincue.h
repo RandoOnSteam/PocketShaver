@@ -24,7 +24,8 @@
 extern void InitBinCue();
 extern void ExitBinCue();
 
-extern void *open_bincue(const char *name);
+extern bool IsCueSheetPath(const char *path);
+extern void *OpenCDImage(const char *path);
 extern bool readtoc_bincue(void *, uint8 *);
 extern size_t read_bincue(void *, void *, loff_t,  size_t);
 extern loff_t size_bincue(void *);
