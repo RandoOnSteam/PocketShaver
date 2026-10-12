@@ -712,6 +712,30 @@ static void AddAtaNode(OsxTreeNode *macio, const char *name, uint32 offset, uint
 	AddCell(node, "#size-cells", 0);
 }
 
+static void AddBmacNode(OsxTreeNode *macio)
+{
+	OsxTreeNode *node;
+	uint32 cells[6];
+	uint8 address[6];
+	node = NewNode(macio, "bmac");
+	AddString(node, "device_type", "network");
+	AddString(node, "compatible", "bmac+");
+	cells[0] = OSXBMACOFFSET;
+	cells[1] = OSXBMACSIZE;
+	cells[2] = 0x8000 + OSXDBDMABMACTX * 0x100;
+	cells[3] = 0x100;
+	cells[4] = 0x8000 + OSXDBDMABMACRX * 0x100;
+	cells[5] = 0x100;
+	AddCells(node, "reg", cells, 6);
+	cells[0] = OSXIRQBMAC;
+	cells[1] = OSXIRQBMACTXDMA;
+	cells[2] = OSXIRQBMACRXDMA;
+	AddCells(node, "AAPL,interrupts", cells, 3);
+	AddCells(node, "interrupts", cells, 3);
+	OsxBmacHardwareAddress(address);
+	AddProperty(node, "local-mac-address", address, sizeof(address));
+}
+
 static OsxTreeNode *BuildTree(OsxBootState *state, OsxTreeNode **memorymap)
 {
 	OsxMachine *machine;
@@ -863,6 +887,7 @@ static OsxTreeNode *BuildTree(OsxBootState *state, OsxTreeNode **memorymap)
 
 	AddAtaNode(macio, "ata", 0x20000, 0x8b00, OSXIRQIDE0, OSXIRQIDE0DMA);
 	AddAtaNode(macio, "ata", 0x21000, 0x8c00, OSXIRQIDE1, OSXIRQIDE1DMA);
+	AddBmacNode(macio);
 
 	node = NewNode(pci, "display");
 	AddString(node, "device_type", "display");

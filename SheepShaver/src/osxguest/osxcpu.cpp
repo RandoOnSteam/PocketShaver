@@ -453,6 +453,28 @@ int OsxCpuTranslate(OsxCpu *cpu, uint32 address, int kind, int raise, uint32 *ph
 	return 0;
 }
 
+void OsxCpuWatch(OsxCpu *cpu, FILE *file, uint32 rowbytes, uint32 left, uint32 top, uint32 right, uint32 bottom)
+{
+	cpu->watchfile = file;
+	cpu->watchrowbytes = rowbytes;
+	cpu->watchleft = left;
+	cpu->watchright = right;
+	cpu->watchlow = cpu->vrambase + top * rowbytes;
+	cpu->watchhigh = cpu->vrambase + bottom * rowbytes;
+	OsxCpuFlushTlb(cpu);
+}
+
+static void WatchWrite(OsxCpu *cpu, uint32 physical, int size, uint32 value)
+{
+	uint32 column;
+	if (physical < cpu->watchlow || physical >= cpu->watchhigh)
+		return;
+	column = ((physical - cpu->vrambase) % cpu->watchrowbytes) / 4;
+	if (column < cpu->watchleft || column >= cpu->watchright)
+		return;
+	fprintf(cpu->watchfile, "%llu %llu pc %08x lr %08x pr %u sr %06x x %u y %u size %d value %08x\n", (unsigned long long)OsxCpuTimebase(cpu), (unsigned long long)cpu->instructions, cpu->pc, cpu->lr, (cpu->msr >> 14) & 1, cpu->sr[0] & 0xffffff, column, (physical - cpu->vrambase) / cpu->watchrowbytes, size, value);
+}
+
 static int AccessSlow(OsxCpu *cpu, uint32 address, int kind, uint8 **host, uint32 *physical)
 {
 	OsxTlbEntry *entry;
@@ -466,6 +488,8 @@ static int AccessSlow(OsxCpu *cpu, uint32 address, int kind, uint8 **host, uint3
 		entry = &cpu->fetchtlb[(address >> 12) & OSXTLBMASK];
 		segments = cpu->fetchsr;
 	} else if (kind == OSXTLBWRITE) {
+		if (cpu->watchfile && *physical - cpu->vrambase < cpu->vramsize)
+			return OSXACCESSHOST;
 		entry = &cpu->writetlb[(address >> 12) & OSXTLBMASK];
 		segments = cpu->datasr;
 	} else {
@@ -521,6 +545,8 @@ static int WriteSlow(OsxCpu *cpu, uint32 address, int size, uint32 value)
 	status = AccessSlow(cpu, address, OSXTLBWRITE, &host, &physical);
 	if (status == OSXACCESSFAULT)
 		return 0;
+	if (cpu->watchfile)
+		WatchWrite(cpu, physical, size, value);
 	if (status == OSXACCESSHOST)
 		StoreHostSized(host, size, value);
 	else
@@ -1121,6 +1147,8 @@ static void ZeroCacheBlock(OsxCpu *cpu, uint32 address)
 	if (status == OSXACCESSFAULT)
 		return;
 	if (status == OSXACCESSHOST) {
+		if (cpu->watchfile)
+			WatchWrite(cpu, physical, 32, 0);
 		memset(host, 0, 32);
 		return;
 	}

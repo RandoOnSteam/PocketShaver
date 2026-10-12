@@ -1747,3 +1747,62 @@ static int slirp_add_redir(const char *redir_str)
 #if DEBUG
 #pragma optimize("",on)
 #endif
+
+static unsigned int WINAPI EtherSlirpStart(void *context)
+{
+	InitializeCriticalSectionAndSpinCount(&queue_csection, 5000);
+	InitializeCriticalSection(&slirp_single_call_csection);
+	init_queue();
+	wait_request = false;
+	thread_active = true;
+	if (slirp_init() < 0)
+		return 0;
+	slirp_add_redirs();
+	return 1;
+}
+
+void *EtherSlirpOpen(void)
+{
+	return (void *)_beginthreadex(NULL, 0, EtherSlirpStart, NULL, 0, NULL);
+}
+
+int EtherSlirpReady(void *thread)
+{
+	DWORD code;
+	if (thread == NULL)
+		return -1;
+	if (WaitForSingleObject((HANDLE)thread, 0) != WAIT_OBJECT_0)
+		return 0;
+	if (!GetExitCodeThread((HANDLE)thread, &code) || code == 0)
+		return -1;
+	return 1;
+}
+
+void EtherSlirpPoll(void)
+{
+	fd_set readfds;
+	fd_set writefds;
+	fd_set exceptfds;
+	struct timeval timeout;
+	int count;
+	count = -1;
+	FD_ZERO(&readfds);
+	FD_ZERO(&writefds);
+	FD_ZERO(&exceptfds);
+	slirp_select_fill(&count, &readfds, &writefds, &exceptfds);
+	timeout.tv_sec = 0;
+	timeout.tv_usec = 0;
+	if (count >= 0 && select(0, &readfds, &writefds, &exceptfds, &timeout) < 0)
+		return;
+	slirp_select_poll(&readfds, &writefds, &exceptfds);
+}
+
+int EtherSlirpReceive(uint8 *packet)
+{
+	return dequeue_packet(packet);
+}
+
+void EtherSlirpSend(const uint8 *packet, int length)
+{
+	slirp_input(packet, length);
+}

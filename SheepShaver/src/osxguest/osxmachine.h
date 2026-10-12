@@ -49,10 +49,17 @@
 #define OSXIRQIDE1 14
 #define OSXIRQCUDA 18
 #define OSXIRQLEVELMASK 0x1ff00000u
+#define OSXIRQBMACTXDMA 8
+#define OSXIRQBMACRXDMA 9
+#define OSXIRQBMAC 42
 
 #define OSXDBDMACHANNELS 16
 #define OSXDBDMAIDE0 11
 #define OSXDBDMAIDE1 12
+#define OSXDBDMABMACTX 2
+#define OSXDBDMABMACRX 3
+#define OSXBMACOFFSET 0x11000
+#define OSXBMACSIZE 0x1000
 
 #define OSXATABUSES 2
 #define OSXATASECTOR 512
@@ -98,6 +105,26 @@ typedef struct OsxDbdma {
 	uint32 waitselect;
 	int irq;
 } OsxDbdma;
+
+typedef struct OsxBmac {
+	uint16 registers[0x100];
+	uint16 status;
+	uint16 srom[64];
+	uint16 sromword;
+	uint32 sromcommand;
+	int srombits;
+	int sromoutput;
+	int sromclock;
+	int sromdata;
+	int attached;
+	int ready;
+	void *slirpthread;
+	int pendinglength;
+	uint64 polldeadline;
+	uint64 busydeadline;
+	uint8 pending[1600];
+	uint8 frame[1600];
+} OsxBmac;
 
 typedef struct OsxAtaDrive {
 	void *file;
@@ -262,6 +289,7 @@ struct OsxMachine {
 	OsxDbdma dbdma[OSXDBDMACHANNELS];
 	OsxAtaBus ata[OSXATABUSES];
 	OsxCuda cuda;
+	OsxBmac bmac;
 	uint8 nvram[OSXNVRAMSIZE];
 	char nvrampath[512];
 	uint8 flash[OSXFLASHSIZE];
@@ -310,6 +338,23 @@ void OsxAtaPoll(OsxMachine *machine, uint64 now);
 int OsxDbdmaTransfer(OsxMachine *machine, int channel, uint8 *data, uint32 length, int towardmemory);
 void OsxDbdmaFinish(OsxMachine *machine, int channel);
 void OsxDbdmaDump(OsxMachine *machine, int channel);
+int OsxDbdmaOutputFrame(OsxMachine *machine, int channel, uint8 *data, uint32 limit);
+int OsxDbdmaInputFrame(OsxMachine *machine, int channel, const uint8 *data, uint32 length);
+
+void OsxBmacHardwareAddress(uint8 *address);
+void OsxBmacReset(OsxMachine *machine);
+uint32 OsxBmacRead(OsxMachine *machine, uint32 offset);
+void OsxBmacWrite(OsxMachine *machine, uint32 offset, uint32 value);
+void OsxBmacTransmit(OsxMachine *machine);
+void OsxBmacReceive(OsxMachine *machine);
+void OsxBmacPoll(OsxMachine *machine, uint64 now);
+uint64 OsxBmacNextDeadline(OsxMachine *machine);
+
+void *EtherSlirpOpen(void);
+int EtherSlirpReady(void *thread);
+void EtherSlirpPoll(void);
+int EtherSlirpReceive(uint8 *packet);
+void EtherSlirpSend(const uint8 *packet, int length);
 
 uint32 OsxFlashRead(OsxMachine *machine, uint32 offset, int size);
 void OsxFlashWrite(OsxMachine *machine, uint32 offset, int size, uint32 value);

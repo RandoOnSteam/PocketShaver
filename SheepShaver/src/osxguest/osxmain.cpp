@@ -47,6 +47,11 @@ typedef struct OsxSession {
 	SDL_Surface *screen;
 	uint8 *shadow;
 	FILE *slicelog;
+	FILE *script;
+	FILE *msglog;
+	char scriptline[512];
+	char *scriptcommand;
+	uint64 scriptticks;
 	char consoleline[512];
 	int consolelength;
 	int hostx;
@@ -674,8 +679,19 @@ static void SyscallObserver(OsxCpu *cpu, void *context)
 		session->writelogs++;
 	}
 	key = cpu->gpr[0] << 16;
-	if ((int32)cpu->gpr[0] == -31 && OsxCpuReadVirtual(cpu, cpu->gpr[3] + 20, &identifier))
+	if ((int32)cpu->gpr[0] == -31 && OsxCpuReadVirtual(cpu, cpu->gpr[3] + 20, &identifier)) {
 		key = 0xffe10000u | (identifier & 0xffff);
+		if (session->msglog && OsxCpuReadVirtual(cpu, cpu->gpr[3] + 8, &frame)) {
+			fprintf(session->msglog, "%llu sr %06x lr %08x option %x id %d remote %x size %u bt", (unsigned long long)OsxCpuTimebase(cpu), cpu->sr[0] & 0xffffff, cpu->lr, cpu->gpr[4], identifier, frame, cpu->gpr[5]);
+			frame = cpu->gpr[1];
+			for (index = 0; index < 12; index++) {
+				if (!OsxCpuReadVirtual(cpu, frame, &frame) || frame == 0 || !OsxCpuReadVirtual(cpu, frame + 8, &identifier))
+					break;
+				fprintf(session->msglog, " %08x", identifier);
+			}
+			fprintf(session->msglog, "\n");
+		}
+	}
 	if (key == session->backtracekey && session->backtracecount < 16) {
 		frame = cpu->gpr[1];
 		session->backtraces[session->backtracecount][0] = cpu->lr;
@@ -846,6 +862,95 @@ static void DumpProcesses(OsxSession *session)
 	fprintf(machine->log, "\n");
 }
 
+static void SaveFramebuffer(OsxMachine *machine, const char *path)
+{
+	FILE *file;
+	uint8 *row;
+	uint8 *pixels;
+	uint32 y;
+	uint32 x;
+	file = fopen(path, "wb");
+	if (file == NULL)
+		return;
+	pixels = (uint8 *)malloc(machine->width * 3);
+	fprintf(file, "P6\n%u %u\n255\n", machine->width, machine->height);
+	for (y = 0; y < machine->height; y++) {
+		row = machine->vram + y * machine->rowbytes;
+		for (x = 0; x < machine->width; x++) {
+			pixels[x * 3] = row[x * 4 + 1];
+			pixels[x * 3 + 1] = row[x * 4 + 2];
+			pixels[x * 3 + 2] = row[x * 4 + 3];
+		}
+		fwrite(pixels, 1, machine->width * 3, file);
+	}
+	free(pixels);
+	fclose(file);
+}
+
+static int NextScriptLine(OsxSession *session)
+{
+	double seconds;
+	int consumed;
+	while (fgets(session->scriptline, sizeof(session->scriptline), session->script)) {
+		if (sscanf(session->scriptline, "%lf %n", &seconds, &consumed) < 1)
+			continue;
+		session->scriptticks = (uint64)(seconds * OSXTIMEBASEFREQUENCY);
+		session->scriptcommand = session->scriptline + consumed;
+		return 1;
+	}
+	fclose(session->script);
+	session->script = NULL;
+	return 0;
+}
+
+static void ExecuteScriptCommand(OsxSession *session, const char *command)
+{
+	OsxMachine *machine;
+	char path[256];
+	int first;
+	int second;
+	int third;
+	int fourth;
+	machine = session->machine;
+	if (machine->log)
+		fprintf(machine->log, "script %llu %s", (unsigned long long)OsxCpuTimebase(machine->cpu), command);
+	if (sscanf(command, "mouse %d %d", &first, &second) == 2)
+		MovePointer(session, first, second);
+	else if (sscanf(command, "down %d", &first) == 1)
+		PressButton(session, first, 1);
+	else if (sscanf(command, "up %d", &first) == 1)
+		PressButton(session, first, 0);
+	else if (sscanf(command, "wheel %d", &first) == 1)
+		OsxCudaWheel(machine, first);
+	else if (sscanf(command, "keydown %d", &first) == 1)
+		OsxCudaKey(machine, first, 1);
+	else if (sscanf(command, "keyup %d", &first) == 1)
+		OsxCudaKey(machine, first, 0);
+	else if (sscanf(command, "shot %255s", path) == 1)
+		SaveFramebuffer(machine, path);
+	else if (sscanf(command, "watch %d %d %d %d %255s", &first, &second, &third, &fourth, path) == 5)
+		OsxCpuWatch(machine->cpu, fopen(path, "w"), machine->rowbytes, (uint32)first, (uint32)second, (uint32)third, (uint32)fourth);
+	else if (strncmp(command, "unwatch", 7) == 0 && machine->cpu->watchfile) {
+		fclose(machine->cpu->watchfile);
+		machine->cpu->watchfile = NULL;
+		OsxCpuFlushTlb(machine->cpu);
+	} else if (sscanf(command, "msglog %255s", path) == 1)
+		session->msglog = fopen(path, "w");
+	else if (strncmp(command, "msgunlog", 8) == 0 && session->msglog) {
+		fclose(session->msglog);
+		session->msglog = NULL;
+	} else if (strncmp(command, "quit", 4) == 0)
+		machine->quit = 1;
+}
+
+static void RunScript(OsxSession *session, uint64 now)
+{
+	while (session->script && now >= session->scriptticks) {
+		ExecuteScriptCommand(session, session->scriptcommand);
+		NextScriptLine(session);
+	}
+}
+
 static void LogSlice(FILE *slicelog, OsxCpu *cpu)
 {
 	uint32 hash;
@@ -891,6 +996,8 @@ static void RunMachine(OsxSession *session, void *monitor)
 			if (cpu->decdeadline != OSXNEVER && cpu->decdeadline > now && cpu->decdeadline - now < waitticks)
 				waitticks = cpu->decdeadline - now;
 			cudadeadline = OsxCudaNextDeadline(machine);
+			if (OsxBmacNextDeadline(machine) < cudadeadline)
+				cudadeadline = OsxBmacNextDeadline(machine);
 			if (cudadeadline <= now)
 				waitticks = 0;
 			else if (cudadeadline - now < waitticks)
@@ -914,7 +1021,9 @@ static void RunMachine(OsxSession *session, void *monitor)
 		}
 		now = OsxCpuTimebase(cpu);
 		OsxCudaPoll(machine, now);
+		OsxBmacPoll(machine, now);
 		OsxAtaPoll(machine, now);
+		RunScript(session, now);
 		if (now >= nextframe) {
 			nextframe = now + frameticks;
 			PresentFrame(session);
@@ -975,6 +1084,11 @@ int OsxGuestMain(void)
 		cpu->deterministic = (uint32)PrefsFindInt32("osxdeterministic");
 		session.slicelog = fopen("osxslices.log", "w");
 	}
+	if (PrefsFindString("osxinputscript")) {
+		session.script = fopen(PrefsFindString("osxinputscript"), "r");
+		if (session.script)
+			NextScriptLine(&session);
+	}
 	cpu->ram = machine->ram;
 	cpu->ramsize = machine->ramsize;
 	cpu->vram = machine->vram;
@@ -987,6 +1101,7 @@ int OsxGuestMain(void)
 	OsxPciReset(machine);
 	OsxAtaReset(machine);
 	OsxCudaReset(machine);
+	OsxBmacReset(machine);
 	OsxFlashLoad(machine, "osx_nvram.bin");
 	AttachDisks(machine, &bootimage, &bootbus, &bootunit);
 	ParseDiskPatches(machine);

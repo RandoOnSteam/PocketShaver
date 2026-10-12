@@ -65,6 +65,7 @@ prefs_desc common_prefs_items[] = {
 	{"osxlogxml", TYPE_STRING, false,   "kernel address of the IOKit property copyout helper to log"},
 	{"osxbacktracekey", TYPE_STRING, false, "syscall key whose user backtraces are logged"},
 	{"osxcputest", TYPE_INT32, false,   "run the Mac OS X CPU lockstep test for this many instructions"},
+	{"osxinputscript", TYPE_STRING, false, "file of timed Mac OS X guest input and capture commands"},
 	{"osxdeterministic", TYPE_INT32, false, "derive the Mac OS X guest clock from instructions divided by this value and log slice states"},
 	{"frameskip", TYPE_INT32, false,    "number of frames to skip in refreshed video modes"},
 	{"gfxaccel", TYPE_BOOLEAN, false,   "turn on QuickDraw acceleration"},

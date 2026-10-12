@@ -151,6 +151,7 @@ set(SS_CORE
 	"${SS_SRC}/osxguest/osxboot.cpp"
 	"${SS_SRC}/osxguest/osxmain.cpp"
 	"${SS_SRC}/osxguest/osxkext.cpp"
+	"${SS_SRC}/osxguest/osxnet.cpp"
 	"${SS_SRC}/osxguest/osxflash.cpp"
 	"${SS_SRC}/usbuim.cpp"
 	"${SS_SRC}/macos_util.cpp"
