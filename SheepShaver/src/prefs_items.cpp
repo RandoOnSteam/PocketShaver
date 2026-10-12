@@ -51,6 +51,21 @@ prefs_desc common_prefs_items[] = {
 	{"bootdrive", TYPE_INT32, false,    "boot drive number"},
 	{"bootdriver", TYPE_INT32, false,   "boot driver number"},
 	{"ramsize", TYPE_INT32, false,      "size of Mac RAM in bytes"},
+	{"machine", TYPE_STRING, false,      "emulated machine, macos9 or osx"},
+	{"osxboot", TYPE_STRING, false,      "Mac OS X boot device, cdrom or disk"},
+	{"osxbootargs", TYPE_STRING, false,  "Mac OS X kernel boot arguments"},
+	{"osxseconds", TYPE_INT32, false,   "stop the Mac OS X guest after this many seconds"},
+	{"osxjit", TYPE_BOOLEAN, false,     "enable the Mac OS X native JIT compiler"},
+	{"osxtracestart", TYPE_STRING, false, "kernel symbol that starts instruction tracing"},
+	{"osxtracestop", TYPE_STRING, false, "kernel symbol that stops instruction tracing"},
+	{"osxlogcalls", TYPE_STRING, false, "kernel symbols whose calls are logged"},
+	{"osxdump", TYPE_STRING, false,     "file that receives Mac OS X guest RAM on exit"},
+	{"osxlogkext", TYPE_STRING, false,  "kext bundle:symbol+offset locations whose execution is logged"},
+	{"osxpatch", TYPE_STRING, true,     "disk image byte patch, hexoffset:hexbytes, applied to guest reads"},
+	{"osxlogxml", TYPE_STRING, false,   "kernel address of the IOKit property copyout helper to log"},
+	{"osxbacktracekey", TYPE_STRING, false, "syscall key whose user backtraces are logged"},
+	{"osxcputest", TYPE_INT32, false,   "run the Mac OS X CPU lockstep test for this many instructions"},
+	{"osxdeterministic", TYPE_INT32, false, "derive the Mac OS X guest clock from instructions divided by this value and log slice states"},
 	{"frameskip", TYPE_INT32, false,    "number of frames to skip in refreshed video modes"},
 	{"gfxaccel", TYPE_BOOLEAN, false,   "turn on QuickDraw acceleration"},
 	{"nocdrom", TYPE_BOOLEAN, false,    "don't install CD-ROM driver"},
@@ -126,6 +141,7 @@ void AddPrefsDefaults(void)
 	PrefsAddInt32("frameskip", 8);
 #endif
 	PrefsAddBool("gfxaccel", true);
+	PrefsAddBool("osxjit", true);
 	PrefsAddBool("nqdaccel",true);
 	PrefsAddBool("raveaccel",true);
 	PrefsAddBool("glaccel",true);

@@ -42,6 +42,7 @@
 #include "rom_patches.h"
 #include "user_strings.h"
 #include "vm_alloc.h"
+#include "osxguest.h"
 #include "sigsegv.h"
 #include "macio_escc.h"
 #include "usbhid.h"
@@ -231,6 +232,11 @@ int main(int argc, char **argv)
 			fprintf(stderr, "Unrecognized option '%s'\n", argv[i]);
 			usage(argv[0]);
 		}
+	}
+
+	if (OsxGuestRequested()) {
+		SysInit();
+		return OsxGuestMain();
 	}
 
 	// #chenchijung 2024/2/21: move vm_init(), memory allocation for Mac RAM and Mac ROM here to avoid "cannot map RAM: no Error" bug.
@@ -432,6 +438,13 @@ int main(int argc, char **argv)
 	if (!InitAll(NULL))
 		goto quit;
 	D(bug("Initialization complete\n"));
+
+	if (PrefsFindInt32("osxcputest") > 0) {
+		init_emul_ppc();
+		OsxLockstepTest(RAMBaseHost, RAMSize, PrefsFindInt32("osxcputest"), "osxcputest.log");
+		Quit();
+		return 0;
+	}
 
 	// Write protect ROM if not in MSVC's debugger
 #if defined(_WIN64) /* IsDebuggerPresent is always in Win64; Win32 dynload*/

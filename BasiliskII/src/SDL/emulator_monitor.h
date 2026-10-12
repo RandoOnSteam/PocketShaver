@@ -87,7 +87,11 @@ typedef int EmulatorMonitorSocket;
 #define EMULATOR_MONITOR_INVALID_SOCKET (-1)
 #endif
 
+typedef void (*EmulatorMonitorInputFunction)(void *context, int operation, int first, int second);
+
 struct EmulatorMonitorView {
+	EmulatorMonitorInputFunction inputfunction;
+	void *inputcontext;
 	const Uint8 *framebuffer;
 	const SDL_Color *palette;
 	SDL_Surface *hostsurface;
@@ -221,28 +225,28 @@ public:
 				SaveHostSurface(view, request);
 				break;
 			case EMULATOR_MONITOR_MOUSE:
-				ADBMouseMoved(request->first, request->second);
+				DeliverInput(view, EMULATOR_MONITOR_MOUSE, request->first, request->second);
 				SetOk(request);
 				break;
 			case EMULATOR_MONITOR_MOUSEDOWN:
-				ADBMouseDown(request->first);
+				DeliverInput(view, EMULATOR_MONITOR_MOUSEDOWN, request->first, request->second);
 				SetOk(request);
 				break;
 			case EMULATOR_MONITOR_MOUSEUP:
-				ADBMouseUp(request->first);
+				DeliverInput(view, EMULATOR_MONITOR_MOUSEUP, request->first, request->second);
 				SetOk(request);
 				break;
 			case EMULATOR_MONITOR_KEYDOWN:
-				ADBKeyDown(request->first);
+				DeliverInput(view, EMULATOR_MONITOR_KEYDOWN, request->first, request->second);
 				SetOk(request);
 				break;
 			case EMULATOR_MONITOR_KEYUP:
-				ADBKeyUp(request->first);
+				DeliverInput(view, EMULATOR_MONITOR_KEYUP, request->first, request->second);
 				SetOk(request);
 				break;
 			case EMULATOR_MONITOR_POWER:
-				ADBKeyDown(0x7f);
-				ADBKeyUp(0x7f);
+				DeliverInput(view, EMULATOR_MONITOR_KEYDOWN, 0x7f, 0);
+				DeliverInput(view, EMULATOR_MONITOR_KEYUP, 0x7f, 0);
 				SetOk(request);
 				break;
 			case EMULATOR_MONITOR_HOSTMOUSE:
@@ -286,6 +290,31 @@ public:
 	}
 
 private:
+	static void DeliverInput(const EmulatorMonitorView &view, int operation, int first, int second)
+	{
+		if (view.inputfunction != NULL) {
+			view.inputfunction(view.inputcontext, operation, first, second);
+			return;
+		}
+		switch (operation) {
+			case EMULATOR_MONITOR_MOUSE:
+				ADBMouseMoved(first, second);
+				break;
+			case EMULATOR_MONITOR_MOUSEDOWN:
+				ADBMouseDown(first);
+				break;
+			case EMULATOR_MONITOR_MOUSEUP:
+				ADBMouseUp(first);
+				break;
+			case EMULATOR_MONITOR_KEYDOWN:
+				ADBKeyDown(first);
+				break;
+			case EMULATOR_MONITOR_KEYUP:
+				ADBKeyUp(first);
+				break;
+		}
+	}
+
 	struct Request {
 		int operation;
 		int first;

@@ -42,6 +42,7 @@ extern "C" void catalyst_pump_appkit_events(void);
 #include "cpu/ppc/ppc-operations.hpp"
 #include "cpu/ppc/ppc-instructions.hpp"
 #include "thunks.h"
+#include "osxguest.h"
 
 // Used for NativeOp trampolines
 #include "video.h"
@@ -223,6 +224,8 @@ public:
 
 	// Execute ppc routine
 	void execute_ppc(uint32 entry);
+
+	void ReferenceExecute(uint32 entry, OsxReferenceState *state);
 
 	// Execute MacOS/PPC code
 	uint32 execute_macos_code(uint32 tvect, int nargs, uint32 const *args);
@@ -4037,4 +4040,35 @@ uint32 call_macos8(uint32 tvect, uint32 arg1, uint32 arg2, uint32 arg3, uint32 a
 {
 	const uint32 args[] = { arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8 };
 	return ppc_cpu->execute_macos_code(tvect, sizeof(args)/sizeof(args[0]), args);
+}
+
+void sheepshaver_cpu::ReferenceExecute(uint32 entry, OsxReferenceState *state)
+{
+	int index;
+	for (index = 0; index < 32; index++) {
+		gpr(index) = state->gpr[index];
+		fpr_dw(index) = state->fpr[index];
+	}
+	cr().set(state->cr);
+	xer().set(state->xer);
+	lr() = state->lr;
+	ctr() = state->ctr;
+	fpscr() = state->fpscr;
+	invalidate_cache_range(entry, entry + 8);
+	execute(entry);
+	for (index = 0; index < 32; index++) {
+		state->gpr[index] = gpr(index);
+		state->fpr[index] = fpr_dw(index);
+	}
+	state->cr = cr().get();
+	state->xer = xer().get();
+	state->lr = lr();
+	state->ctr = ctr();
+	state->fpscr = fpscr();
+	state->pc = pc();
+}
+
+void OsxReferenceExecute(uint32 entry, OsxReferenceState *state)
+{
+	ppc_cpu->ReferenceExecute(entry, state);
 }

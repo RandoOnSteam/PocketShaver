@@ -2841,6 +2841,8 @@ static void handle_events(void)
 						monitorview.palette = sdl_palette->colors;
 					monitorview.rowbytes = drv->VIDEO_MODE_ROW_BYTES;
 					monitorview.hostsurface = NULL;
+					monitorview.inputfunction = NULL;
+					monitorview.inputcontext = NULL;
 					monitorview.window = sdl_window;
 					monitorview.hostwidth = 0;
 					monitorview.hostheight = 0;

@@ -964,6 +964,17 @@ public:
 	}
 };
 #endif /* _WIN32 */
+
+SDL_Surface *SDLSetVideoModeQuietly(int width, int height, int depth, Uint32 flags)
+{
+#if defined(_WIN32)
+	Win32FuncHook foregroundhook;
+	Win32FuncHook positionhook;
+	foregroundhook.Hook(GetModuleHandleA("sdl.dll"), "user32.dll", "SetForegroundWindow", (void *)FakeSetForegroundWindow);
+	positionhook.Hook(GetModuleHandleA("sdl.dll"), "user32.dll", "SetWindowPos", (void *)FakeSetWindowPos);
+#endif
+	return SDL_SetVideoMode(width, height, depth, flags);
+}
 void driver_base::set_video_mode(int flags)
 {
 	const float magnification = GetMagnificationRate();
@@ -2589,6 +2600,8 @@ static void handle_events(void)
 					monitorview.hostsurface = drv->hostsurface;
 					if (HostPresentationSuspended())
 						monitorview.hostsurface = NULL;
+					monitorview.inputfunction = NULL;
+					monitorview.inputcontext = NULL;
 					monitorview.window = NULL;
 					video_get_host_window_size(&monitorview.hostwidth, &monitorview.hostheight);
 					monitorview.width = drv->VIDEO_MODE_X;

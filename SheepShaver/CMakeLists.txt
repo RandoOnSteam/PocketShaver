@@ -9,6 +9,10 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
 	set(CMAKE_CXX_STANDARD 20)
 	set(CMAKE_CXX_STANDARD_REQUIRED ON)
 	set(CMAKE_C_STANDARD 99)
+	option(ENABLE_OSX_GUEST_TESTS "Build OS X guest native CPU regression tests" OFF)
+	if(ENABLE_OSX_GUEST_TESTS)
+		enable_testing()
+	endif()
 	option(ENABLE_JIT "Legacy default for the PPC JIT" OFF)
 	option(ENABLE_SHEEPSHAVER_JIT "Enable PPC JIT (precompiled dyngen)" ${ENABLE_JIT})
 	option(ENABLE_GTK "GTK prefs UI (Unix)" OFF)
@@ -136,6 +140,18 @@ set(SS_CORE
 	"${SS_SRC}/macio_escc.cpp"
 	"${SS_SRC}/mmio.cpp"
 	"${SS_SRC}/pcibridge.cpp"
+	"${SS_SRC}/osxguest/osxcpu.cpp"
+	"${SS_SRC}/osxguest/osxjit.cpp"
+	"${SS_SRC}/osxguest/osxfpu.cpp"
+	"${SS_SRC}/osxguest/osxtest.cpp"
+	"${SS_SRC}/osxguest/osxbus.cpp"
+	"${SS_SRC}/osxguest/osxata.cpp"
+	"${SS_SRC}/osxguest/osxcuda.cpp"
+	"${SS_SRC}/osxguest/osxpointer.cpp"
+	"${SS_SRC}/osxguest/osxboot.cpp"
+	"${SS_SRC}/osxguest/osxmain.cpp"
+	"${SS_SRC}/osxguest/osxkext.cpp"
+	"${SS_SRC}/osxguest/osxflash.cpp"
 	"${SS_SRC}/usbuim.cpp"
 	"${SS_SRC}/macos_util.cpp"
 	"${SS_SRC}/gfxaccel.cpp"
@@ -518,11 +534,41 @@ endif()
 # Executable
 # ---------------------------------------------------------------------------
 # ppc-execute-impl.cpp is #included by ppc-execute.cpp (not a separate TU)
+if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 8 AND ENABLE_OSX_GUEST_TESTS)
+	add_executable(OsxJitTest
+		"${SS_SRC}/../../tools/tests/osxjit.cpp"
+		"${SS_SRC}/osxguest/osxcpu.cpp"
+		"${SS_SRC}/osxguest/osxfpu.cpp"
+		"${SS_SRC}/osxguest/osxjit.cpp")
+	target_include_directories(OsxJitTest PRIVATE
+		${SS_PLATFORM_INC} "${SS_SRC}/include" "${SS_SRC}/osxguest"
+		"${SS_KPX}/include" "${B2_SRC}/CrossPlatform")
+	if(MSVC)
+		target_compile_options(OsxJitTest PRIVATE /Zc:__STDC__ /FImalloc.h)
+		target_compile_definitions(OsxJitTest PRIVATE __STDC__ __WIN32__ _CRT_SECURE_NO_WARNINGS)
+	endif()
+	add_test(NAME OsxJitTest COMMAND OsxJitTest)
+	add_executable(OsxInputTest "${SS_SRC}/../../tools/tests/osxinput.cpp"
+		"${SS_SRC}/osxguest/osxpointer.cpp"
+		"${SS_SRC}/osxguest/osxcpu.cpp"
+		"${SS_SRC}/osxguest/osxfpu.cpp"
+		"${SS_SRC}/osxguest/osxjit.cpp")
+	target_include_directories(OsxInputTest PRIVATE
+		${SS_PLATFORM_INC} "${SS_SRC}/include" "${SS_SRC}/osxguest"
+		"${SS_KPX}/include" "${B2_SRC}/CrossPlatform")
+	if(MSVC)
+		target_compile_options(OsxInputTest PRIVATE /Zc:__STDC__ /FImalloc.h)
+		target_compile_definitions(OsxInputTest PRIVATE __STDC__ __WIN32__ _CRT_SECURE_NO_WARNINGS)
+	endif()
+	add_test(NAME OsxInputTest COMMAND OsxInputTest)
+endif()
+
 function(sheepshaver_configure_target SHEEPSHAVER_EXECUTABLE)
 	target_include_directories(${SHEEPSHAVER_EXECUTABLE} PRIVATE
 		# Platform sysdeps (Windows/ Unix/ MacOSX/config) must come first
 		${SS_PLATFORM_INC}
 		"${SS_SRC}/include"
+		"${SS_SRC}/osxguest"
 		${SS_DYNGEN_INC}
 		"${B2_SRC}/include"
 		"${B2_SRC}/CrossPlatform"
