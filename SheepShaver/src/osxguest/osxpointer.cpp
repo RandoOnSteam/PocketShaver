@@ -28,8 +28,9 @@ void OsxPointerHook(OsxCpu *cpu, void *context, uint32 address)
 	pressed = cpu->gpr[4] != 0;
 	while (cuda->pointerread != cuda->pointerwrite) {
 		event = &cuda->pointerqueue[cuda->pointerread];
-		if (!event->motion && event->button != pressed)
+		if (!event->motion && (event->button & 1) != pressed)
 			break;
+		pointer->pointerbuttons = event->button;
 		pointer->pointerx = event->x;
 		pointer->pointery = event->y;
 		pointer->pointervalid = 1;
@@ -58,7 +59,11 @@ void OsxPointerHook(OsxCpu *cpu, void *context, uint32 address)
 	cpu->gpr[1] = stack;
 	cpu->gpr[4] = 0;
 	if (pressed)
-		cpu->gpr[4] = 4;
+		cpu->gpr[4] |= 4;
+	if (pointer->pointerbuttons & 2)
+		cpu->gpr[4] |= 1;
+	if (pointer->pointerbuttons & 4)
+		cpu->gpr[4] |= 2;
 	cpu->gpr[5] = stack + 0x40;
 	cpu->gpr[6] = stack + 0x44;
 	cpu->gpr[7] = 1;

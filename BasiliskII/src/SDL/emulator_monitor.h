@@ -160,7 +160,10 @@ public:
 #else
 		address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 #endif
-		address.sin_port = htons(EMULATOR_MONITOR_PORT);
+		listenport = EMULATOR_MONITOR_PORT;
+		if (getenv("EMULATOR_MONITOR_PORT"))
+			listenport = atoi(getenv("EMULATOR_MONITOR_PORT"));
+		address.sin_port = htons((unsigned short)listenport);
 		if (bind(listensocket, (struct sockaddr *)&address,
 			sizeof(address)) != 0) {
 			Stop();
@@ -401,11 +404,11 @@ private:
 #ifdef SHEEPSHAVER
 			snprintf(response, responsesize,
 				"{\"ok\":true,\"monitor\":\"PocketShaver\",\"port\":%d,\"pid\":%lu}",
-				EMULATOR_MONITOR_PORT, processid);
+				listenport, processid);
 #else
 			snprintf(response, responsesize,
 				"{\"ok\":true,\"monitor\":\"BasiliskII\",\"port\":%d,\"pid\":%lu}",
-				EMULATOR_MONITOR_PORT, processid);
+				listenport, processid);
 #endif
 			return;
 		}
@@ -1367,6 +1370,7 @@ private:
 	}
 
 	EmulatorMonitorSocket listensocket;
+	int listenport;
 	EmulatorMonitorSocket clientsocket;
 	SDL_Thread *thread;
 	atomic_sint cancelrequested;

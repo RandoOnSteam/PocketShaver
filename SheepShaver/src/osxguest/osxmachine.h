@@ -211,6 +211,7 @@ typedef struct OsxPointer {
 	int pointerx;
 	int pointery;
 	int pointervalid;
+	int pointerbuttons;
 	uint32 registers[13];
 	uint32 lr;
 	uint32 ctr;
@@ -298,6 +299,7 @@ void OsxCudaReset(OsxMachine *machine);
 uint32 OsxCudaRead(OsxMachine *machine, uint32 offset);
 void OsxCudaWrite(OsxMachine *machine, uint32 offset, uint32 value);
 void OsxCudaPoll(OsxMachine *machine, uint64 now);
+uint64 OsxCudaNextDeadline(OsxMachine *machine);
 void OsxCudaKey(OsxMachine *machine, int code, int down);
 void OsxCudaMouse(OsxMachine *machine, int dx, int dy, int button);
 void OsxPointerHook(OsxCpu *cpu, void *context, uint32 address);

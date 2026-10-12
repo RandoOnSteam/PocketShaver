@@ -217,10 +217,10 @@ static int TalkMouse(OsxCuda *cuda, int reg, uint8 *output)
 			cuda->pointerwrite = (cuda->pointerwrite + 1) % OSXMOUSEQUEUE;
 			cuda->mouseread = (cuda->mouseread + 1) % OSXMOUSEQUEUE;
 			output[0] = 0;
-			if (!event->button)
+			if (!(event->button & 1))
 				output[0] = 0x80;
 			output[1] = 0x81;
-			cuda->mousereported = event->button;
+			cuda->mousereported = event->button & 1;
 			return 2;
 		}
 		dx = ClampDelta(cuda->mousedx);
@@ -642,6 +642,26 @@ static void AutoPoll(OsxMachine *machine)
 	SendToHost(machine, packet, 3 + result);
 }
 
+static uint64 EarlierDeadline(uint64 current, uint64 deadline)
+{
+	if (deadline && deadline < current)
+		return deadline;
+	return current;
+}
+
+uint64 OsxCudaNextDeadline(OsxMachine *machine)
+{
+	OsxCuda *cuda;
+	uint64 next;
+	cuda = &machine->cuda;
+	next = EarlierDeadline(OSXNEVER, cuda->srdeadline);
+	next = EarlierDeadline(next, cuda->t1deadline);
+	next = EarlierDeadline(next, cuda->t2deadline);
+	if (cuda->autopoll)
+		next = EarlierDeadline(next, cuda->polldeadline);
+	return next;
+}
+
 void OsxCudaPoll(OsxMachine *machine, uint64 now)
 {
 	OsxCuda *cuda;
@@ -720,7 +740,7 @@ void OsxCudaMouse(OsxMachine *machine, int dx, int dy, int button)
 	}
 	cuda->mousedx += dx;
 	cuda->mousedy += dy;
-	if (button != cuda->mousebutton)
+	if ((button ^ cuda->mousebutton) & 1)
 		cuda->mousepending++;
 	cuda->mousebutton = button;
 }

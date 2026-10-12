@@ -4,6 +4,10 @@
 #include "prefs.h"
 #include "osxmachine.h"
 #include "osxguest.h"
+#ifdef _WIN32
+#include <mmsystem.h>
+#pragma comment(lib, "winmm.lib")
+#endif
 #ifdef ENABLE_EMULATOR_MONITOR
 #include "../../../BasiliskII/src/SDL/emulator_monitor.h"
 #endif
@@ -436,13 +440,24 @@ static void MovePointer(OsxSession *session, int x, int y)
 
 static void PressButton(OsxSession *session, int button, int down)
 {
-	if (button != 0)
+	if (button < 0 || button > 2)
 		return;
 	if (down)
-		session->buttons |= 1;
+		session->buttons |= 1 << button;
 	else
-		session->buttons &= ~1;
-	OsxCudaMouse(session->machine, 0, 0, session->buttons & 1);
+		session->buttons &= ~(1 << button);
+	OsxCudaMouse(session->machine, 0, 0, session->buttons);
+}
+
+static int HostButton(int button)
+{
+	if (button == SDL_BUTTON_LEFT)
+		return 0;
+	if (button == SDL_BUTTON_RIGHT)
+		return 1;
+	if (button == SDL_BUTTON_MIDDLE)
+		return 2;
+	return -1;
 }
 
 #ifdef ENABLE_EMULATOR_MONITOR
@@ -535,12 +550,10 @@ static void HandleEvents(OsxSession *session, void *monitor)
 			MovePointer(session, event.motion.x, event.motion.y);
 			break;
 		case SDL_MOUSEBUTTONDOWN:
-			if (event.button.button == SDL_BUTTON_LEFT)
-				PressButton(session, 0, 1);
+			PressButton(session, HostButton(event.button.button), 1);
 			break;
 		case SDL_MOUSEBUTTONUP:
-			if (event.button.button == SDL_BUTTON_LEFT)
-				PressButton(session, 0, 0);
+			PressButton(session, HostButton(event.button.button), 0);
 			break;
 		case SDL_KEYDOWN:
 			code = MapKey(event.key.keysym.sym);
@@ -814,6 +827,7 @@ static void RunMachine(OsxSession *session, void *monitor)
 	uint64 nextframe;
 	uint64 frameticks;
 	uint64 waitticks;
+	uint64 cudadeadline;
 	uint32 milliseconds;
 	uint64 nextstatus;
 	uint64 runstart;
@@ -839,8 +853,11 @@ static void RunMachine(OsxSession *session, void *monitor)
 			waitticks = frameticks;
 			if (cpu->decdeadline != OSXNEVER && cpu->decdeadline > now && cpu->decdeadline - now < waitticks)
 				waitticks = cpu->decdeadline - now;
-			if (machine->cuda.srdeadline && machine->cuda.srdeadline > now && machine->cuda.srdeadline - now < waitticks)
-				waitticks = machine->cuda.srdeadline - now;
+			cudadeadline = OsxCudaNextDeadline(machine);
+			if (cudadeadline <= now)
+				waitticks = 0;
+			else if (cudadeadline - now < waitticks)
+				waitticks = cudadeadline - now;
 			if (machine->ata[0].irqdeadline || machine->ata[1].irqdeadline)
 				waitticks = 0;
 			milliseconds = (uint32)(waitticks * 1000 / OSXTIMEBASEFREQUENCY);
@@ -1003,7 +1020,13 @@ int OsxGuestMain(void)
 		monitor = NULL;
 	}
 #endif
+#ifdef _WIN32
+	timeBeginPeriod(1);
+#endif
 	RunMachine(&session, monitor);
+#ifdef _WIN32
+	timeEndPeriod(1);
+#endif
 	OsxFlashSave(machine);
 	OsxJitDestroy(cpu);
 	if (machine->log) {

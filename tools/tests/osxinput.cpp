@@ -118,6 +118,29 @@ static void TestAbsolute(OsxInputTest *test, OsxMachine *machine)
 	OsxCpuReadVirtual(cpu, cpu->gpr[5], &value);
 	Check(test, value == (660u << 16 | 460) && cpu->gpr[4] == 0 && machine->cuda.pointerread == machine->cuda.pointerwrite, "release after dropped motion packet");
 	OsxPointerHook(cpu, &pointer, 0x2000);
+	OsxCudaMouse(machine, 0, 0, 2);
+	OsxCudaMouse(machine, 0, 0, 0);
+	OsxCudaMouse(machine, 0, 0, 4);
+	OsxCudaMouse(machine, 0, 0, 0);
+	for (index = 0; index < 4; index++)
+		ReadMouse(machine);
+	Check(test, (machine->cuda.inbuffer[3] & 0x80) != 0, "secondary button keeps primary bit released");
+	cpu->gpr[4] = 0;
+	OsxPointerHook(cpu, &pointer, 0x2000);
+	Check(test, cpu->gpr[4] == 1, "secondary button press");
+	OsxPointerHook(cpu, &pointer, 0x2000);
+	cpu->gpr[4] = 0;
+	OsxPointerHook(cpu, &pointer, 0x2000);
+	Check(test, cpu->gpr[4] == 0, "secondary button release");
+	OsxPointerHook(cpu, &pointer, 0x2000);
+	cpu->gpr[4] = 0;
+	OsxPointerHook(cpu, &pointer, 0x2000);
+	Check(test, cpu->gpr[4] == 2, "middle button press");
+	OsxPointerHook(cpu, &pointer, 0x2000);
+	cpu->gpr[4] = 0;
+	OsxPointerHook(cpu, &pointer, 0x2000);
+	Check(test, cpu->gpr[4] == 0 && machine->cuda.pointerread == machine->cuda.pointerwrite, "middle button release");
+	OsxPointerHook(cpu, &pointer, 0x2000);
 	free(cpu->ram);
 }
 
