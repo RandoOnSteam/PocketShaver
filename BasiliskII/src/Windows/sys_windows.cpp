@@ -21,6 +21,7 @@
 #include "sysdeps.h"
 
 #include <winioctl.h>
+#include <io.h>
 
 #include <string>
 typedef std::basic_string<TCHAR> tstring;
@@ -302,15 +303,18 @@ static inline int cd_read_with_retry(file_handle *fh, ULONG offset, int count, c
 /*
  * Generic offset read function for a file or a device that behaves like one
  */
+static bool SeekFileHandle(HANDLE filehandle, loff_t offset)
+{
+	LONG lowoffset = (LONG)offset;
+	LONG highoffset = (LONG)(offset >> 32);
+	DWORD result = SetFilePointer(filehandle, lowoffset, &highoffset, FILE_BEGIN);
+	return result != INVALID_SET_FILE_POINTER || GetLastError() == NO_ERROR;
+}
+
 static DWORD file_offset_read(HANDLE fh, loff_t offset, int count, char *buf)
 {
-	// Seek to position
-	LONG lo = (LONG)offset;
-	LONG hi = (LONG)(offset >> 32);
-	DWORD r = SetFilePointer(fh, lo, &hi, FILE_BEGIN);
-	if (r == INVALID_SET_FILE_POINTER && GetLastError() != NO_ERROR) {
+	if (!SeekFileHandle(fh, offset))
 		return 0;
-	}
 
 	DWORD bytes_read;
 
@@ -706,11 +710,7 @@ size_t Sys_write(void *arg, void *buffer, loff_t offset, size_t length)
 	DWORD bytes_written = 0;
 
 	if (fh->is_file) {
-		// Seek to position
-		LONG lo = (LONG)offset;
-		LONG hi = (LONG)(offset >> 32);
-		DWORD r = SetFilePointer(fh->fh, lo, &hi, FILE_BEGIN);
-		if (r == INVALID_SET_FILE_POINTER && GetLastError() != NO_ERROR)
+		if (!SeekFileHandle(fh->fh, offset))
 			return 0;
 
 		// Write data
@@ -746,6 +746,27 @@ loff_t SysGetFileSize(void *arg)
 		// TODO: other media
 		return 0;
 	}
+}
+
+loff_t SysSeekDescriptor(int filedescriptor, loff_t offset, int origin)
+{
+#if defined(_MSC_VER) || defined(__MINGW32__)
+	return (loff_t)_lseeki64(filedescriptor, (__int64)offset, origin);
+#else
+	long narrowoffset = (long)offset;
+	if ((loff_t)narrowoffset != offset)
+		return -1;
+	return (loff_t)_lseek(filedescriptor, narrowoffset, origin);
+#endif
+}
+
+loff_t SysGetDescriptorSize(int filedescriptor)
+{
+#if defined(_MSC_VER) || defined(__MINGW32__)
+	return (loff_t)_filelengthi64(filedescriptor);
+#else
+	return (loff_t)_filelength(filedescriptor);
+#endif
 }
 
 static void PreventRemovalCommon(file_handle * fh, bool val) {

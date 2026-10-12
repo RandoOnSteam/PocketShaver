@@ -625,7 +625,7 @@ function(macemu_apply_common EMULATOR_EXECUTABLE)
 		DIRECT_ADDRESSING
 	)
 	if(NOT WIN32)
-		target_compile_definitions(${EMULATOR_EXECUTABLE} PRIVATE _GNU_SOURCE)
+		target_compile_definitions(${EMULATOR_EXECUTABLE} PRIVATE _GNU_SOURCE _FILE_OFFSET_BITS=64)
 	endif()
 
 	if(WIN32)

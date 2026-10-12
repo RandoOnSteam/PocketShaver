@@ -31,6 +31,7 @@
 #include <inline/dos.h>
 #include <inline/exec.h>
 #include <inline/disk.h>
+#include <unistd.h>
 
 #include "sysdeps.h"
 #include "main.h"
@@ -619,6 +620,28 @@ size_t Sys_write(void *arg, void *buffer, loff_t offset, size_t length)
 		D(bug("Sys_write/%ld return %ld\n", __LINE__, actual));
 		return actual;
 	}
+}
+
+
+loff_t SysSeekDescriptor(int filedescriptor, loff_t offset, int origin)
+{
+	off_t nativeoffset = (off_t)offset;
+	if ((loff_t)nativeoffset != offset)
+		return -1;
+	return (loff_t)lseek(filedescriptor, nativeoffset, origin);
+}
+
+loff_t SysGetDescriptorSize(int filedescriptor)
+{
+	loff_t currentposition;
+	loff_t endposition;
+	currentposition = SysSeekDescriptor(filedescriptor, 0, SEEK_CUR);
+	if (currentposition < 0)
+		return -1;
+	endposition = SysSeekDescriptor(filedescriptor, 0, SEEK_END);
+	if (SysSeekDescriptor(filedescriptor, currentposition, SEEK_SET) < 0)
+		return -1;
+	return endposition;
 }
 
 

@@ -434,13 +434,12 @@ bool InitEmulator (void)
 		QuitEmulator();
 	}
 	printf(GetString(STR_READING_ROM_FILE));
-	ROMSize = lseek(rom_fd, 0, SEEK_END);
+	ROMSize = SysGetDescriptorSize(rom_fd);
 	if (ROMSize != 64*1024 && ROMSize != 128*1024 && ROMSize != 256*1024 && ROMSize != 512*1024 && ROMSize != 1024*1024) {
 		ErrorAlert(STR_ROM_SIZE_ERR);
 		close(rom_fd);
 		QuitEmulator();
 	}
-	lseek(rom_fd, 0, SEEK_SET);
 	if (read(rom_fd, ROMBaseHost, ROMSize) != (ssize_t)ROMSize) {
 		ErrorAlert(STR_ROM_FILE_READ_ERR);
 		close(rom_fd);

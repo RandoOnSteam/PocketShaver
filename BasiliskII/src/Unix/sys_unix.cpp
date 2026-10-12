@@ -693,10 +693,8 @@ void *Sys_open(const char *name, bool read_only, bool is_cdrom)
 		if (fh->is_file) {
 			fh->is_media_present = true;
 			// Detect disk image file layout
-			loff_t size = 0;
-			size = lseek(fd, 0, SEEK_END);
+			loff_t size = SysGetDescriptorSize(fd);
 			uint8 data[256];
-			lseek(fd, 0, SEEK_SET);
 			read(fd, data, 256);
 			FileDiskLayout(size, data, fh->start_byte, fh->file_size);
 		} else {
@@ -796,7 +794,7 @@ size_t Sys_read(void *arg, void *buffer, loff_t offset, size_t length)
 		return fh->generic_disk->read(buffer, offset, length);
 	
 	// Seek to position
-	if (lseek(fh->fd, offset + fh->start_byte, SEEK_SET) < 0)
+	if (SysSeekDescriptor(fh->fd, offset + fh->start_byte, SEEK_SET) < 0)
 		return 0;
 
 	// Read data
@@ -819,11 +817,33 @@ size_t Sys_write(void *arg, void *buffer, loff_t offset, size_t length)
 		return fh->generic_disk->write(buffer, offset, length);
 
 	// Seek to position
-	if (lseek(fh->fd, offset + fh->start_byte, SEEK_SET) < 0)
+	if (SysSeekDescriptor(fh->fd, offset + fh->start_byte, SEEK_SET) < 0)
 		return 0;
 
 	// Write data
 	return write(fh->fd, buffer, length);
+}
+
+
+loff_t SysSeekDescriptor(int filedescriptor, loff_t offset, int origin)
+{
+	off_t nativeoffset = (off_t)offset;
+	if ((loff_t)nativeoffset != offset)
+		return -1;
+	return (loff_t)lseek(filedescriptor, nativeoffset, origin);
+}
+
+loff_t SysGetDescriptorSize(int filedescriptor)
+{
+	loff_t currentposition;
+	loff_t endposition;
+	currentposition = SysSeekDescriptor(filedescriptor, 0, SEEK_CUR);
+	if (currentposition < 0)
+		return -1;
+	endposition = SysSeekDescriptor(filedescriptor, 0, SEEK_END);
+	if (SysSeekDescriptor(filedescriptor, currentposition, SEEK_SET) < 0)
+		return -1;
+	return endposition;
 }
 
 
@@ -865,7 +885,7 @@ loff_t SysGetFileSize(void *arg)
 		D(bug(" DKIOCGETBLOCKCOUNT returns %llu blocks\n", (unsigned long long)block_count));
 		return block_count * block_size;
 #else
-		return lseek(fh->fd, 0, SEEK_END) - fh->start_byte;
+		return SysGetDescriptorSize(fh->fd) - fh->start_byte;
 #endif
 	}
 }
@@ -1013,7 +1033,7 @@ bool SysIsDiskInserted(void *arg)
 #if defined(__linux__)
 	} else if (fh->is_floppy) {
 		char block[512];
-		lseek(fh->fd, 0, SEEK_SET);
+		SysSeekDescriptor(fh->fd, 0, SEEK_SET);
 		ssize_t actual = read(fh->fd, block, 512);
 		if (actual < 0) {
 			close(fh->fd);	// Close and reopen so the driver will see the media change

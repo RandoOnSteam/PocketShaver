@@ -595,7 +595,11 @@ int16 CDROMPrime(uint32 pb, uint32 dce)
 	// Get parameters
 	void *buffer = Mac2HostAddr(ReadMacInt32(pb + ioBuffer));
 	size_t length = ReadMacInt32(pb + ioReqCount);
-	loff_t position = ReadMacInt32(dce + dCtlPosition);
+	loff_t position;
+	if (ReadMacInt16(pb + ioPosMode) & (1 << kWidePosOffsetBit))
+		position = ((loff_t)ReadMacInt32(pb + ioWPosOffset) << 32) | ReadMacInt32(pb + ioWPosOffset + 4);
+	else
+		position = ReadMacInt32(dce + dCtlPosition);
 	if ((length & (info->block_size - 1)) || (position & (info->block_size - 1)))
 		return paramErr;
 	info->twok_offset = (position + info->start_byte) & 0x7ff;
@@ -623,7 +627,7 @@ int16 CDROMPrime(uint32 pb, uint32 dce)
 	
 	// Update ParamBlock and DCE
 	WriteMacInt32(pb + ioActCount, actual);
-	WriteMacInt32(dce + dCtlPosition, ReadMacInt32(dce + dCtlPosition) + actual);
+	WriteMacInt32(dce + dCtlPosition, (uint32)(position + actual));
 	return noErr;
 }
 
@@ -1182,7 +1186,7 @@ int16 CDROMStatus(uint32 pb, uint32 dce)
 					WriteMacInt16(pb + csParam + 6, info->driver_reference_number);
 					break;
 				case FOURCC('w','i','d','e'):	// 64-bit access supported?
-					WriteMacInt16(pb + csParam + 4, 0);
+					WriteMacInt16(pb + csParam + 4, 0x0100);
 					break;
 				case FOURCC('p','u','r','g'):	// Purge flags
 					WriteMacInt32(pb + csParam + 4, 0);

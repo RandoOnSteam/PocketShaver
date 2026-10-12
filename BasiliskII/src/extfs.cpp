@@ -60,6 +60,7 @@
 #include "user_strings.h"
 #include "extfs.h"
 #include "extfs_defs.h"
+#include "sys.h"
 
 #ifdef WIN32
 # include "posix_emu.h"
@@ -1553,27 +1554,21 @@ static int16 fs_open(uint32 pb, uint32 dirID, uint32 vcb, bool resource_fork)
 
 	// Try to open and stat the file
 	int fd = -1;
-	struct stat st;
+	loff_t forksize = 0;
 	if (resource_fork) {
 		if (access(full_path, F_OK))
 			return fnfErr;
 		fd = open_rfork(full_path, flag);
-		if (fd >= 0) {
-			if (fstat(fd, &st) < 0) {
-				close(fd);
-				return errno2oserr();
-			}
-		} else {	// Resource fork not supported, silently ignore it ("pseudo" resource fork)
-			st.st_size = 0;
-			st.st_mode = 0;
-		}
 	} else {
 		fd = open(full_path, flag);
 		if (fd < 0)
 			return errno2oserr();
-		if (fstat(fd, &st) < 0) {
+	}
+	if (fd >= 0) {
+		forksize = SysGetDescriptorSize(fd);
+		if (forksize < 0) {
 			close(fd);
-			return errno2oserr();
+			return ioErr;
 		}
 	}
 
@@ -1592,7 +1587,7 @@ static int16 fs_open(uint32 pb, uint32 dirID, uint32 vcb, bool resource_fork)
 	// Initialize FCB, fd is stored in fcbCatPos
 	WriteMacInt32(fcb + fcbFlNm, fs_item->id);
 	WriteMacInt8(fcb + fcbFlags, ((flag == O_WRONLY || flag == O_RDWR) ? fcbWriteMask : 0) | (resource_fork ? fcbResourceMask : 0) | (write_ok ? 0 : fcbFileLockedMask));
-	uint32 file_size = (uint32) st.st_size;
+	uint32 file_size = (uint32) forksize;
 	WriteMacInt32(fcb + fcbEOF, file_size);
 	WriteMacInt32(fcb + fcbPLen, (file_size | (AL_BLK_SIZE - 1)) + 1);
 	WriteMacInt32(fcb + fcbCrPs, 0);
@@ -1709,12 +1704,12 @@ static int16 fs_get_eof(uint32 pb)
 	}
 
 	// Get file size
-	struct stat st;
-	if (fstat(fd, &st) < 0)
-		return errno2oserr();
+	loff_t forksize = SysGetDescriptorSize(fd);
+	if (forksize < 0)
+		return ioErr;
 
 	// Adjust FCBs
-	uint32 file_size = (uint32) st.st_size;
+	uint32 file_size = (uint32) forksize;
 	WriteMacInt32(fcb + fcbEOF, file_size);
 	WriteMacInt32(fcb + fcbPLen, (file_size | (AL_BLK_SIZE - 1)) + 1);
 	WriteMacInt32(pb + ioMisc, file_size);
@@ -1760,6 +1755,13 @@ static int16 fs_set_eof(uint32 pb)
 	return noErr;
 }
 
+static void UpdateForkMark(int filedescriptor, uint32 fcb, uint32 pb)
+{
+	uint32 position = (uint32) SysSeekDescriptor(filedescriptor, 0, SEEK_CUR);
+	WriteMacInt32(fcb + fcbCrPs, position);
+	WriteMacInt32(pb + ioPosOffset, position);
+}
+
 // Query current file position
 static int16 fs_get_fpos(uint32 pb)
 {
@@ -1785,9 +1787,28 @@ static int16 fs_get_fpos(uint32 pb)
 	}
 
 	// Get file position
-	uint32 pos = (uint32) lseek(fd, 0, SEEK_CUR);
-	WriteMacInt32(fcb + fcbCrPs, pos);
-	WriteMacInt32(pb + ioPosOffset, pos);
+	UpdateForkMark(fd, fcb, pb);
+	return noErr;
+}
+
+static int16 SeekForkPosition(int filedescriptor, uint32 pb)
+{
+	loff_t result = 0;
+	switch (ReadMacInt16(pb + ioPosMode) & 3) {
+		case fsFromStart:
+			result = SysSeekDescriptor(filedescriptor, (loff_t)ReadMacInt32(pb + ioPosOffset), SEEK_SET);
+			break;
+		case fsFromLEOF:
+			result = SysSeekDescriptor(filedescriptor, (int32)ReadMacInt32(pb + ioPosOffset), SEEK_END);
+			break;
+		case fsFromMark:
+			result = SysSeekDescriptor(filedescriptor, (int32)ReadMacInt32(pb + ioPosOffset), SEEK_CUR);
+			break;
+		default:
+			break;
+	}
+	if (result < 0)
+		return posErr;
 	return noErr;
 }
 
@@ -1812,25 +1833,9 @@ static int16 fs_set_fpos(uint32 pb)
 	}
 
 	// Set file position
-	switch (ReadMacInt16(pb + ioPosMode) & 3) {
-		case fsFromStart:
-			if (lseek(fd, ReadMacInt32(pb + ioPosOffset), SEEK_SET) < 0)
-				return posErr;
-			break;
-		case fsFromLEOF:
-			if (lseek(fd, (int32)ReadMacInt32(pb + ioPosOffset), SEEK_END) < 0)
-				return posErr;
-			break;
-		case fsFromMark:
-			if (lseek(fd, (int32)ReadMacInt32(pb + ioPosOffset), SEEK_CUR) < 0)
-				return posErr;
-			break;
-		default:
-			break;
-	}
-	uint32 pos = (uint32) lseek(fd, 0, SEEK_CUR);
-	WriteMacInt32(fcb + fcbCrPs, pos);
-	WriteMacInt32(pb + ioPosOffset, pos);
+	if (SeekForkPosition(fd, pb) != noErr)
+		return posErr;
+	UpdateForkMark(fd, fcb, pb);
 	return noErr;
 }
 
@@ -1859,29 +1864,15 @@ static int16 fs_read(uint32 pb)
 	}
 
 	// Seek
-	switch (ReadMacInt16(pb + ioPosMode) & 3) {
-		case fsFromStart:
-			if (lseek(fd, ReadMacInt32(pb + ioPosOffset), SEEK_SET) < 0)
-				return posErr;
-			break;
-		case fsFromLEOF:
-			if (lseek(fd, (int32)ReadMacInt32(pb + ioPosOffset), SEEK_END) < 0)
-				return posErr;
-			break;
-		case fsFromMark:
-			if (lseek(fd, (int32)ReadMacInt32(pb + ioPosOffset), SEEK_CUR) < 0)
-				return posErr;
-			break;
-	}
+	if (SeekForkPosition(fd, pb) != noErr)
+		return posErr;
 
 	// Read
 	ssize_t actual = extfs_read(fd, Mac2HostAddr(ReadMacInt32(pb + ioBuffer)), ReadMacInt32(pb + ioReqCount));
 	int16 read_err = errno2oserr();
 	D(bug("  actual %d\n", actual));
 	WriteMacInt32(pb + ioActCount, actual >= 0 ? actual : 0);
-	uint32 pos = (uint32) lseek(fd, 0, SEEK_CUR);
-	WriteMacInt32(fcb + fcbCrPs, pos);
-	WriteMacInt32(pb + ioPosOffset, pos);
+	UpdateForkMark(fd, fcb, pb);
 	if (actual != (ssize_t)ReadMacInt32(pb + ioReqCount))
 		return actual < 0 ? read_err : eofErr;
 	else
@@ -1913,29 +1904,15 @@ static int16 fs_write(uint32 pb)
 	}
 
 	// Seek
-	switch (ReadMacInt16(pb + ioPosMode) & 3) {
-		case fsFromStart:
-			if (lseek(fd, ReadMacInt32(pb + ioPosOffset), SEEK_SET) < 0)
-				return posErr;
-			break;
-		case fsFromLEOF:
-			if (lseek(fd, (int32)ReadMacInt32(pb + ioPosOffset), SEEK_END) < 0)
-				return posErr;
-			break;
-		case fsFromMark:
-			if (lseek(fd, (int32)ReadMacInt32(pb + ioPosOffset), SEEK_CUR) < 0)
-				return posErr;
-			break;
-	}
+	if (SeekForkPosition(fd, pb) != noErr)
+		return posErr;
 
 	// Write
 	ssize_t actual = extfs_write(fd, Mac2HostAddr(ReadMacInt32(pb + ioBuffer)), ReadMacInt32(pb + ioReqCount));
 	int16 write_err = errno2oserr();
 	D(bug("  actual %d\n", actual));
 	WriteMacInt32(pb + ioActCount, actual >= 0 ? actual : 0);
-	uint32 pos = (uint32) lseek(fd, 0, SEEK_CUR);
-	WriteMacInt32(fcb + fcbCrPs, pos);
-	WriteMacInt32(pb + ioPosOffset, pos);
+	UpdateForkMark(fd, fcb, pb);
 	if (actual != (ssize_t)ReadMacInt32(pb + ioReqCount))
 		return write_err;
 	else

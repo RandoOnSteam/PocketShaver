@@ -642,8 +642,7 @@ static bool load_mac_rom(void)
 	}
 	
 	printf("%s", GetString(STR_READING_ROM_FILE));
-	rom_size = lseek(rom_fd, 0, SEEK_END);
-	lseek(rom_fd, 0, SEEK_SET);
+	rom_size = SysGetDescriptorSize(rom_fd);
 	rom_tmp = new uint8[ROM_SIZE];
 	actual = read(rom_fd, (void *)rom_tmp, ROM_SIZE);
 	close(rom_fd);

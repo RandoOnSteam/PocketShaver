@@ -55,6 +55,8 @@ extern void Sys_close(void *fh);
 extern size_t Sys_read(void *fh, void *buffer, loff_t offset, size_t length);
 extern size_t Sys_write(void *fh, void *buffer, loff_t offset, size_t length);
 extern loff_t SysGetFileSize(void *fh);
+extern loff_t SysSeekDescriptor(int filedescriptor, loff_t offset, int origin);
+extern loff_t SysGetDescriptorSize(int filedescriptor);
 extern void SysEject(void *fh);
 extern bool SysFormat(void *fh);
 extern bool SysIsReadOnly(void *fh);

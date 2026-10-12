@@ -98,6 +98,7 @@ static int bincue_core_audio_callback(void);
 #endif
 
 #include "bincue.h"
+#include "sys.h"
 
 #if defined(QD3D_AUDIO_LOGGING_ENABLED) && QD3D_AUDIO_LOGGING_ENABLED
 #include "gfx_log.h"
@@ -531,7 +532,7 @@ static bool LoadCueSheet(const char *cuefile, CueSheet *cs)
 {
 	FILE *fh = NULL;
 	int binfh = -1;
-	struct stat buf;
+	loff_t binlength;
 	Track *tlast = NULL;
 
 	if (cs) {
@@ -555,8 +556,9 @@ static bool LoadCueSheet(const char *cuefile, CueSheet *cs)
 			goto fail;
 		}
 
-		if (fstat(binfh, &buf)) {
-			D(bug("fstat returned error\n"));
+		binlength = SysGetDescriptorSize(binfh);
+		if (binlength < 0) {
+			D(bug("Can't get length of bin file %s\n", cs->binfile));
 			goto fail;
 		}
 
@@ -564,7 +566,7 @@ static bool LoadCueSheet(const char *cuefile, CueSheet *cs)
 
 
 		tlast = &cs->tracks[cs->tcnt - 1];
-		tlast->length = buf.st_size/cs->raw_sector_size
+		tlast->length = binlength/cs->raw_sector_size
 						- tlast->start + totalPregap;
 
 		if (tlast->length < 0) {
@@ -574,7 +576,7 @@ static bool LoadCueSheet(const char *cuefile, CueSheet *cs)
 
 		// save bin file length and pointer
 
-		cs->length = buf.st_size/cs->raw_sector_size;
+		cs->length = (unsigned int)(binlength/cs->raw_sector_size);
 		cs->binfh = binfh;
 
 		fclose(fh);
@@ -614,7 +616,7 @@ static bool IsRawSectorSync(const unsigned char *sector)
 
 static bool LoadImageSheet(const char *imagefile, CueSheet *cs)
 {
-	struct stat imagestat;
+	loff_t imagelength;
 	unsigned char firstsector[16];
 	int imagefh;
 	Track *datatrack;
@@ -627,7 +629,8 @@ static bool LoadImageSheet(const char *imagefile, CueSheet *cs)
 #endif
 	if (imagefh < 0)
 		return false;
-	if (fstat(imagefh, &imagestat) != 0 ||
+	imagelength = SysGetDescriptorSize(imagefh);
+	if (imagelength < 0 ||
 		read(imagefh, firstsector, sizeof(firstsector)) != (int)sizeof(firstsector))
 	{
 		close(imagefh);
@@ -637,7 +640,7 @@ static bool LoadImageSheet(const char *imagefile, CueSheet *cs)
 	cs->raw_sector_size = 2048;
 	cs->cooked_sector_size = 2048;
 	cs->header_size = 0;
-	if (imagestat.st_size % 2352 == 0 && IsRawSectorSync(firstsector))
+	if (imagelength % 2352 == 0 && IsRawSectorSync(firstsector))
 	{
 		cs->raw_sector_size = 2352;
 		cs->header_size = 16;
@@ -645,7 +648,7 @@ static bool LoadImageSheet(const char *imagefile, CueSheet *cs)
 			cs->cooked_sector_size = 2336;
 	}
 
-	cs->length = imagestat.st_size / cs->raw_sector_size;
+	cs->length = (unsigned int)(imagelength / cs->raw_sector_size);
 	cs->binfile = strdup(imagefile);
 	if (cs->length == 0 || !cs->binfile)
 	{
@@ -805,15 +808,15 @@ size_t read_bincue(void *fh, void *b, loff_t offset, size_t len)
 	    (size_t)cs->raw_sector_size > sizeof(secbuf))
 		return (size_t)-1;
 
-	off_t sec = ((offset/cs->cooked_sector_size) * cs->raw_sector_size);
-	off_t secoff = offset % cs->cooked_sector_size;
+	loff_t sec = ((offset/cs->cooked_sector_size) * cs->raw_sector_size);
+	loff_t secoff = offset % cs->cooked_sector_size;
 
 	// sec contains location (in bytes) of next raw sector to read
 	// secoff contains offset within that sector at which to start
 	// reading since we can request a read that starts in the middle
 	// of a sector
 
-	if (lseek(cs->binfh, sec, SEEK_SET) < 0) {
+	if (SysSeekDescriptor(cs->binfh, sec, SEEK_SET) < 0) {
 		return (size_t)-1;
 	}
 	while (len) {
@@ -850,7 +853,7 @@ size_t read_bincue(void *fh, void *b, loff_t offset, size_t len)
 loff_t size_bincue(void *fh)
 {
 	if (fh) {
-		return ((CueSheet *)fh)->length * ((CueSheet *)fh)->cooked_sector_size;
+		return (loff_t)((CueSheet *)fh)->length * ((CueSheet *)fh)->cooked_sector_size;
 	}
 	return 0;
 }
@@ -877,6 +880,11 @@ bool readtoc_bincue(void *fh, unsigned char *toc)
 			*p++ = msf.f;
 		}
 		FramesToMSF(cs->length, &msf);
+		if (msf.m > 255) {
+			msf.m = 255;
+			msf.s = 59;
+			msf.f = 74;
+		}
 		*p++ = 0;
 		*p++ = 0x14;
 		*p++ = 0xAA;
@@ -1270,7 +1278,7 @@ static uint8 *fill_buffer(int stream_len, CDPlayer* player)
 			}
 			current_read_bytes_limit = full_read_bytes_limit;
 
-			if (lseek(player->audiofh,
+			if (SysSeekDescriptor(player->audiofh,
 					  player->fileoffset + player->audioposition - player->silence,
 						  SEEK_SET) < 0)
 				return NULL;

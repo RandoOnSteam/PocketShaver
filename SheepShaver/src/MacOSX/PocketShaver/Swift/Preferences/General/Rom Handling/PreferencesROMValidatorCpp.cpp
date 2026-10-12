@@ -11,6 +11,7 @@
 #include "xlowmem.h"
 #include "macos_util.h"
 #include "rom_patches.h"
+#include "sys.h"
 
 
 bool test_patchability(int rom_type) {
@@ -262,8 +263,7 @@ bool validate_rom(const char *rom_path, int rom_type) {
 	}
 
 
-	rom_size = lseek(rom_fd, 0, SEEK_END);
-	lseek(rom_fd, 0, SEEK_SET);
+	rom_size = SysGetDescriptorSize(rom_fd);
 	rom_tmp = new uint8[ROM_SIZE];
 	actual = read(rom_fd, (void *)rom_tmp, ROM_SIZE);
 	close(rom_fd);

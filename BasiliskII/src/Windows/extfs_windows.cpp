@@ -22,6 +22,7 @@
 #include "main.h"
 #include "extfs.h"
 #include "extfs_defs.h"
+#include "sys.h"
 #include "posix_emu.h"
 
 #include <sys/types.h>
@@ -231,27 +232,42 @@ static const ext2type e2t_translation[] = {
 	{NULL, 0, 0}	// End marker
 };
 
-void get_finfo(const char *path, uint32 finfo, uint32 fxinfo, bool is_dir)
+static void PutBigEndian(uint8 *destination, uint32 value, int bytecount)
 {
-	// Set default finder info
-	Mac_memset(finfo, 0, SIZEOF_FInfo);
-	if (fxinfo)
-		Mac_memset(fxinfo, 0, SIZEOF_FXInfo);
-	WriteMacInt16(finfo + fdFlags, DEFAULT_FINDER_FLAGS);
-	WriteMacInt32(finfo + fdLocation, (uint32)-1);
+	int byteindex;
+	for (byteindex = bytecount - 1; byteindex >= 0; byteindex--) {
+		destination[byteindex] = (uint8)value;
+		value >>= 8;
+	}
+}
 
-	// Read Finder info file
+static uint32 GetBigEndian(const uint8 *source, int bytecount)
+{
+	uint32 value = 0;
+	int byteindex;
+	for (byteindex = 0; byteindex < bytecount; byteindex++)
+		value = (value << 8) | source[byteindex];
+	return value;
+}
+
+static void ReadFinderInfo(const char *path, uint8 *finfo, uint8 *fxinfo, bool is_dir)
+{
+	memset(finfo, 0, SIZEOF_FInfo);
+	if (fxinfo)
+		memset(fxinfo, 0, SIZEOF_FXInfo);
+	PutBigEndian(finfo + fdFlags, DEFAULT_FINDER_FLAGS, 2);
+	PutBigEndian(finfo + fdLocation, (uint32)-1, 4);
+
 	int fd = open_finf(path, O_RDONLY);
 	if (fd >= 0) {
-		ssize_t actual = read(fd, Mac2HostAddr(finfo), SIZEOF_FInfo);
+		ssize_t actual = read(fd, finfo, SIZEOF_FInfo);
 		if (fxinfo)
-			actual += read(fd, Mac2HostAddr(fxinfo), SIZEOF_FXInfo);
+			actual += read(fd, fxinfo, SIZEOF_FXInfo);
 		close(fd);
 		if (actual >= SIZEOF_FInfo)
 			return;
 	}
 
-	// No Finder info file, translate file name extension to MacOS type/creator
 	if (!is_dir) {
 		int path_len = strlen(path);
 		for (int i=0; e2t_translation[i].ext; i++) {
@@ -259,34 +275,60 @@ void get_finfo(const char *path, uint32 finfo, uint32 fxinfo, bool is_dir)
 			if (path_len < ext_len)
 				continue;
 			if (!strcmp(path + path_len - ext_len, e2t_translation[i].ext)) {
-				WriteMacInt32(finfo + fdType, e2t_translation[i].type);
-				WriteMacInt32(finfo + fdCreator, e2t_translation[i].creator);
+				PutBigEndian(finfo + fdType, e2t_translation[i].type, 4);
+				PutBigEndian(finfo + fdCreator, e2t_translation[i].creator, 4);
 				break;
 			}
 		}
 	}
 }
 
-void set_finfo(const char *path, uint32 finfo, uint32 fxinfo, bool is_dir)
+void get_finfo(const char *path, uint32 finfo, uint32 fxinfo, bool is_dir)
+{
+	uint8 *hostfxinfo = NULL;
+	if (fxinfo)
+		hostfxinfo = Mac2HostAddr(fxinfo);
+	ReadFinderInfo(path, Mac2HostAddr(finfo), hostfxinfo, is_dir);
+}
+
+static void WriteFinderInfo(const char *path, const uint8 *finfo, const uint8 *fxinfo, uint32 creationdate, uint32 modificationdate)
 {
 	struct my_utimbuf times;
-	times.actime = MacTimeToTime(ReadMacInt32(finfo - ioFlFndrInfo + ioFlCrDat));
-	times.modtime = MacTimeToTime(ReadMacInt32(finfo - ioFlFndrInfo + ioFlMdDat));
+	times.actime = MacTimeToTime(creationdate);
+	times.modtime = MacTimeToTime(modificationdate);
 
 	if (utime(path, &times) < 0) {
 		D(bug("utime failed on %s, error %d\n", path, GetLastError()));
 	}
 
-	// Open Finder info file
 	int fd = open_finf(path, O_RDWR);
 	if (fd < 0)
 		return;
 
-	// Write file
-	write(fd, Mac2HostAddr(finfo), SIZEOF_FInfo);
+	write(fd, finfo, SIZEOF_FInfo);
 	if (fxinfo)
-		write(fd, Mac2HostAddr(fxinfo), SIZEOF_FXInfo);
+		write(fd, fxinfo, SIZEOF_FXInfo);
 	close(fd);
+}
+
+void set_finfo(const char *path, uint32 finfo, uint32 fxinfo, bool is_dir)
+{
+	const uint8 *hostfxinfo = NULL;
+	if (fxinfo)
+		hostfxinfo = Mac2HostAddr(fxinfo);
+	WriteFinderInfo(path, Mac2HostAddr(finfo), hostfxinfo,
+		ReadMacInt32(finfo - ioFlFndrInfo + ioFlCrDat),
+		ReadMacInt32(finfo - ioFlFndrInfo + ioFlMdDat));
+}
+
+void SetFinderFlags(const char *path, bool is_dir, uint16 flags, bool keepexisting, uint32 creationdate, uint32 modificationdate)
+{
+	uint8 finderinfo[SIZEOF_FInfo];
+	ReadFinderInfo(path, finderinfo, NULL, is_dir);
+	if (keepexisting)
+		flags |= GetBigEndian(finderinfo + fdFlags, 2);
+	PutBigEndian(finderinfo + fdFlags, flags, 2);
+	WriteFinderInfo(path, finderinfo, NULL, creationdate, modificationdate);
 }
 
 
@@ -302,11 +344,13 @@ uint32 get_rfork_size(const char *path)
 		return 0;
 
 	// Get size
-	off_t size = lseek(fd, 0, SEEK_END);
+	loff_t size = SysGetDescriptorSize(fd);
 	
 	// Close file and return size
 	close(fd);
-	return size < 0 ? 0 : size;
+	if (size < 0)
+		return 0;
+	return (uint32) size;
 }
 
 int open_rfork(const char *path, int flag)

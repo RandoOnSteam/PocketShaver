@@ -32,6 +32,7 @@
 #include "prefs.h"
 #include "extfs.h"
 #include "extfs_defs.h"
+#include "sys.h"
 
 // XXX: don't clobber with native definitions
 #define noErr	native_noErr
@@ -513,11 +514,13 @@ uint32 get_rfork_size(const char *path)
 		return 0;
 
 	// Get size
-	off_t size = lseek(fd, 0, SEEK_END);
+	loff_t size = SysGetDescriptorSize(fd);
 	
 	// Close file and return size
 	close(fd);
-	return size < 0 ? 0 : size;
+	if (size < 0)
+		return 0;
+	return (uint32) size;
 }
 
 int open_rfork(const char *path, int flag)

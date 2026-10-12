@@ -59,7 +59,6 @@ struct dirent *readdir( DIR *d );
 // hook stat functions to create virtual desktop
 // because of errno all used funcs must be hooked.
 int my_stat( const char *, struct my_stat * );
-int my_fstat( int, struct my_stat * );
 int my_open( const char *, int, ... );
 int my_rename( const char *, const char * );
 int my_access( const char *, int );
@@ -68,12 +67,13 @@ int my_remove( const char * );
 int my_creat( const char *path, int mode );
 int my_creat( const char *path, int mode );
 int my_close( int fd );
-long my_lseek( int fd, long, int);
 int my_read( int fd, void *, unsigned int);
 int my_write( int fd, const void *, unsigned int);
 int my_chsize( int fd, unsigned int size );
 int my_locking( int fd, int mode, long nbytes );
 int my_utime( const char *path, struct my_utimbuf * );
+
+void SetFinderFlags( const char *path, bool is_dir, uint16 flags, bool keepexisting, uint32 creationdate, uint32 modificationdate );
 
 extern int my_errno;
 
@@ -83,10 +83,6 @@ extern int my_errno;
 #  undef stat
 # endif
 # define stat my_stat
-# ifdef fstat
-#  undef fstat
-# endif
-# define fstat my_fstat
 # define open my_open
 # define rename my_rename
 # define access my_access
@@ -94,10 +90,6 @@ extern int my_errno;
 # define remove my_remove
 # define creat my_creat
 # define close my_close
-# ifdef lseek
-#  undef lseek
-# endif
-# define lseek my_lseek
 # define read my_read
 # define write my_write
 # define ftruncate my_chsize

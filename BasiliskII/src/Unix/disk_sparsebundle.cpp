@@ -20,6 +20,7 @@
 
 #include "disk_unix.h"
 #include "tinyxml2.h"
+#include "sys.h"
 
 #include <errno.h>
 #include <limits.h>
@@ -125,7 +126,7 @@ protected:
 		
 		// Get the allocated size
 		if (!read_only) {
-			band_alloc = lseek(band_fd, 0, SEEK_END);
+			band_alloc = SysGetDescriptorSize(band_fd);
 			if (band_alloc == -1)
 				band_alloc = band_size;
 		}
@@ -142,7 +143,7 @@ protected:
 		size_t want = (st == OPEN_NOENT || off >= band_alloc) ? 0
 			: std::min(len, (size_t)band_alloc - off);
 		if (want) {
-			if (lseek(band_fd, off, SEEK_SET) == -1)
+			if (SysSeekDescriptor(band_fd, (loff_t)off, SEEK_SET) < 0)
 				return -1;
 			ssize_t err = ::read(band_fd, buf, want);
 			if (err < want)
@@ -164,7 +165,7 @@ protected:
 		if (st != OPEN_OK)
 			return st == OPEN_NOENT ? len : -1;
 
-		if (lseek(band_fd, off, SEEK_SET) == -1)
+		if (SysSeekDescriptor(band_fd, (loff_t)off, SEEK_SET) < 0)
 			return -1;
 		
 		size_t space = (off >= band_alloc ? 0 : band_alloc - off);
