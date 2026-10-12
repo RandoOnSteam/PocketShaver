@@ -408,6 +408,7 @@ static void InstallPointerHook(OsxSession *session)
 	OsxCpu *cpu;
 	uint32 text;
 	uint32 physical;
+	uint32 wheeloffset;
 	machine = session->machine;
 	cpu = machine->cpu;
 	if (session->pointerhooked || (cpu->msr & OSXMSRPR) || !(cpu->msr & OSXMSRDR))
@@ -424,6 +425,9 @@ static void InstallPointerHook(OsxSession *session)
 		return;
 	session->pointer.machine = machine;
 	session->pointer.absoluteaddress = text + session->absoluteoffset;
+	session->pointer.wheeladdress = 0;
+	if (OsxKextSymbolOffset(machine, "com.apple.iokit.IOHIDFamily", "__ZN11IOHIDSystem21scrollWheelEventGatedEsss12UnsignedWide", &wheeloffset))
+		session->pointer.wheeladdress = text + wheeloffset;
 	OsxCpuAddHook(cpu, physical, OsxPointerHook, &session->pointer);
 	machine->cuda.mouseabsolute = 1;
 	session->pointerhooked = 1;
@@ -440,6 +444,13 @@ static void MovePointer(OsxSession *session, int x, int y)
 
 static void PressButton(OsxSession *session, int button, int down)
 {
+	if (button == 3 || button == 4) {
+		if (down && button == 3)
+			OsxCudaWheel(session->machine, 1);
+		else if (down)
+			OsxCudaWheel(session->machine, -1);
+		return;
+	}
 	if (button < 0 || button > 2)
 		return;
 	if (down)
@@ -457,6 +468,10 @@ static int HostButton(int button)
 		return 1;
 	if (button == SDL_BUTTON_MIDDLE)
 		return 2;
+	if (button == SDL_BUTTON_WHEELUP)
+		return 3;
+	if (button == SDL_BUTTON_WHEELDOWN)
+		return 4;
 	return -1;
 }
 
@@ -474,6 +489,9 @@ static void MonitorInput(void *context, int operation, int first, int second)
 		break;
 	case EMULATOR_MONITOR_MOUSEUP:
 		PressButton(session, first, 0);
+		break;
+	case EMULATOR_MONITOR_WHEEL:
+		OsxCudaWheel(session->machine, first);
 		break;
 	case EMULATOR_MONITOR_KEYDOWN:
 		OsxCudaKey(session->machine, first, 1);

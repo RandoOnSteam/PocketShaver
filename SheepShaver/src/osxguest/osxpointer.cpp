@@ -1,6 +1,37 @@
 #include "sysdeps.h"
 #include "osxmachine.h"
 
+static void CallGuest(OsxCpu *cpu, OsxPointer *pointer, uint32 stack, uint32 target)
+{
+	memcpy(pointer->registers, cpu->gpr, sizeof(pointer->registers));
+	pointer->lr = cpu->lr;
+	pointer->ctr = cpu->ctr;
+	pointer->cr = cpu->cr;
+	pointer->xer = cpu->xer;
+	pointer->callstack = stack;
+	cpu->gpr[1] = stack;
+	cpu->lr = cpu->pc;
+	cpu->nextpc = target;
+}
+
+static void ScrollWheel(OsxCpu *cpu, OsxPointer *pointer, int delta)
+{
+	uint32 stack;
+	uint32 timehigh;
+	uint32 timelow;
+	stack = (cpu->gpr[1] - 0x60) & ~15u;
+	timehigh = cpu->gpr[7];
+	timelow = cpu->gpr[8];
+	if (pointer->wheeladdress == 0 || !OsxCpuWriteVirtual(cpu, stack, cpu->gpr[1]))
+		return;
+	CallGuest(cpu, pointer, stack, pointer->wheeladdress);
+	cpu->gpr[4] = (uint32)(int32)(int16)delta;
+	cpu->gpr[5] = 0;
+	cpu->gpr[6] = 0;
+	cpu->gpr[7] = timehigh;
+	cpu->gpr[8] = timelow;
+}
+
 void OsxPointerHook(OsxCpu *cpu, void *context, uint32 address)
 {
 	OsxPointer *pointer;
@@ -10,6 +41,7 @@ void OsxPointerHook(OsxCpu *cpu, void *context, uint32 address)
 	uint32 location;
 	uint32 timehigh;
 	uint32 timelow;
+	uint32 buttons;
 	int pressed;
 	pointer = (OsxPointer *)context;
 	if (pointer->callstack == cpu->gpr[1] && pointer->callstack != 0) {
@@ -25,10 +57,16 @@ void OsxPointerHook(OsxCpu *cpu, void *context, uint32 address)
 	if (pointer->callstack != 0)
 		return;
 	cuda = &pointer->machine->cuda;
+	if (cuda->pointerread != cuda->pointerwrite && cuda->pointerqueue[cuda->pointerread].wheel) {
+		event = &cuda->pointerqueue[cuda->pointerread];
+		cuda->pointerread = (cuda->pointerread + 1) % OSXMOUSEQUEUE;
+		ScrollWheel(cpu, pointer, event->wheel);
+		return;
+	}
 	pressed = cpu->gpr[4] != 0;
 	while (cuda->pointerread != cuda->pointerwrite) {
 		event = &cuda->pointerqueue[cuda->pointerread];
-		if (!event->motion && (event->button & 1) != pressed)
+		if (event->wheel || (!event->motion && (event->button & 1) != pressed))
 			break;
 		pointer->pointerbuttons = event->button;
 		pointer->pointerx = event->x;
@@ -50,27 +88,20 @@ void OsxPointerHook(OsxCpu *cpu, void *context, uint32 address)
 		!OsxCpuWriteVirtual(cpu, stack + 0x44, pointer->machine->width) ||
 		!OsxCpuWriteVirtual(cpu, stack + 0x48, pointer->machine->height))
 		return;
-	memcpy(pointer->registers, cpu->gpr, sizeof(pointer->registers));
-	pointer->lr = cpu->lr;
-	pointer->ctr = cpu->ctr;
-	pointer->cr = cpu->cr;
-	pointer->xer = cpu->xer;
-	pointer->callstack = stack;
-	cpu->gpr[1] = stack;
-	cpu->gpr[4] = 0;
+	buttons = 0;
 	if (pressed)
-		cpu->gpr[4] |= 4;
+		buttons |= 4;
 	if (pointer->pointerbuttons & 2)
-		cpu->gpr[4] |= 1;
+		buttons |= 1;
 	if (pointer->pointerbuttons & 4)
-		cpu->gpr[4] |= 2;
+		buttons |= 2;
+	CallGuest(cpu, pointer, stack, pointer->absoluteaddress);
+	cpu->gpr[4] = buttons;
 	cpu->gpr[5] = stack + 0x40;
 	cpu->gpr[6] = stack + 0x44;
 	cpu->gpr[7] = 1;
 	cpu->gpr[8] = 0;
 	cpu->gpr[9] = 0;
 	cpu->gpr[10] = timehigh;
-	cpu->lr = cpu->pc;
-	cpu->nextpc = pointer->absoluteaddress;
 	(void)address;
 }

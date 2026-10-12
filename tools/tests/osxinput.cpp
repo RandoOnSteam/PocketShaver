@@ -141,6 +141,22 @@ static void TestAbsolute(OsxInputTest *test, OsxMachine *machine)
 	OsxPointerHook(cpu, &pointer, 0x2000);
 	Check(test, cpu->gpr[4] == 0 && machine->cuda.pointerread == machine->cuda.pointerwrite, "middle button release");
 	OsxPointerHook(cpu, &pointer, 0x2000);
+	pointer.wheeladdress = 0x3800;
+	OsxCudaWheel(machine, 1);
+	OsxCudaWheel(machine, -1);
+	for (index = 0; index < 2; index++)
+		ReadMouse(machine);
+	cpu->gpr[4] = 0;
+	cpu->gpr[7] = 0x11111111;
+	cpu->gpr[8] = 0x22222222;
+	OsxPointerHook(cpu, &pointer, 0x2000);
+	Check(test, cpu->nextpc == 0x3800 && cpu->gpr[4] == 1 && cpu->gpr[5] == 0 && cpu->gpr[6] == 0 && cpu->gpr[7] == 0x11111111 && cpu->gpr[8] == 0x22222222, "wheel up call");
+	OsxPointerHook(cpu, &pointer, 0x2000);
+	Check(test, cpu->nextpc == 0x4000, "wheel return restores caller");
+	cpu->gpr[4] = 0;
+	OsxPointerHook(cpu, &pointer, 0x2000);
+	Check(test, cpu->nextpc == 0x3800 && cpu->gpr[4] == 0xffffffff && machine->cuda.pointerread == machine->cuda.pointerwrite, "wheel down call");
+	OsxPointerHook(cpu, &pointer, 0x2000);
 	free(cpu->ram);
 }
 

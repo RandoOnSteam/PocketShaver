@@ -59,6 +59,7 @@
 #define EMULATOR_MONITOR_HOTKEYFULLSCREEN 13
 #define EMULATOR_MONITOR_HOTKEYGRAB 14
 #define EMULATOR_MONITOR_HOTKEYQUIT 15
+#define EMULATOR_MONITOR_WHEEL 16
 #define EMULATOR_MONITOR_PORT 19840
 #define EMULATOR_MONITOR_PRESS_MS 60
 #define EMULATOR_MONITOR_SETTLE_MS 50
@@ -247,6 +248,10 @@ public:
 				DeliverInput(view, EMULATOR_MONITOR_KEYUP, request->first, request->second);
 				SetOk(request);
 				break;
+			case EMULATOR_MONITOR_WHEEL:
+				DeliverInput(view, EMULATOR_MONITOR_WHEEL, request->first, 0);
+				SetOk(request);
+				break;
 			case EMULATOR_MONITOR_POWER:
 				DeliverInput(view, EMULATOR_MONITOR_KEYDOWN, 0x7f, 0);
 				DeliverInput(view, EMULATOR_MONITOR_KEYUP, 0x7f, 0);
@@ -414,7 +419,7 @@ private:
 		}
 		if (strcmp(command, "help") == 0) {
 			snprintf(response, responsesize,
-				"{\"ok\":true,\"commands\":[\"ping\",\"status\",\"extfs\",\"disks\",\"shot PATH\",\"mouse X Y\",\"mousedown BUTTON\",\"mouseup BUTTON\",\"click X Y [BUTTON]\",\"dblclick X Y [BUTTON]\",\"drag X1 Y1 X2 Y2 [BUTTON [HOLDMS]]\",\"hold X Y MS [BUTTON]\",\"key down CODE\",\"key up CODE\",\"key tap CODE\",\"type TEXT\",\"power\",\"host shot PATH\",\"host mouse X Y\",\"host mousedown BUTTON\",\"host mouseup BUTTON\",\"host click X Y [BUTTON]\",\"hotkey fullscreen\",\"hotkey grab\",\"quit\"]}");
+				"{\"ok\":true,\"commands\":[\"ping\",\"status\",\"extfs\",\"disks\",\"shot PATH\",\"mouse X Y\",\"mousedown BUTTON\",\"mouseup BUTTON\",\"wheel DELTA\",\"click X Y [BUTTON]\",\"dblclick X Y [BUTTON]\",\"drag X1 Y1 X2 Y2 [BUTTON [HOLDMS]]\",\"hold X Y MS [BUTTON]\",\"key down CODE\",\"key up CODE\",\"key tap CODE\",\"type TEXT\",\"power\",\"host shot PATH\",\"host mouse X Y\",\"host mousedown BUTTON\",\"host mouseup BUTTON\",\"host click X Y [BUTTON]\",\"hotkey fullscreen\",\"hotkey grab\",\"quit\"]}");
 			return;
 		}
 		if (strcmp(command, "extfs") == 0) {
@@ -478,6 +483,10 @@ private:
 		}
 		if (sscanf(command, "mouse %d %d", &first, &second) == 2) {
 			Dispatch(EMULATOR_MONITOR_MOUSE, first, second, NULL, response, responsesize);
+			return;
+		}
+		if (sscanf(command, "wheel %d", &first) == 1) {
+			Dispatch(EMULATOR_MONITOR_WHEEL, first, 0, NULL, response, responsesize);
 			return;
 		}
 		if (sscanf(command, "mousedown %d", &first) == 1) {

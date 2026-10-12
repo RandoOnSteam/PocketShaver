@@ -707,6 +707,26 @@ void OsxCudaKey(OsxMachine *machine, int code, int down)
 	cuda->keywrite = next;
 }
 
+void OsxCudaWheel(OsxMachine *machine, int delta)
+{
+	OsxCuda *cuda;
+	OsxMouseEvent *event;
+	int next;
+	cuda = &machine->cuda;
+	if (!cuda->mouseabsolute)
+		return;
+	next = (cuda->mousewrite + 1) % OSXMOUSEQUEUE;
+	if (next == cuda->mouseread)
+		return;
+	event = &cuda->mousequeue[cuda->mousewrite];
+	event->x = cuda->mousex;
+	event->y = cuda->mousey;
+	event->button = cuda->mousebutton;
+	event->motion = 0;
+	event->wheel = delta;
+	cuda->mousewrite = next;
+}
+
 void OsxCudaMouse(OsxMachine *machine, int dx, int dy, int button)
 {
 	OsxCuda *cuda;
@@ -735,6 +755,7 @@ void OsxCudaMouse(OsxMachine *machine, int dx, int dy, int button)
 		event->y = cuda->mousey;
 		event->button = button;
 		event->motion = motion;
+		event->wheel = 0;
 		cuda->mousebutton = button;
 		return;
 	}

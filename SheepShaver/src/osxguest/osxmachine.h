@@ -151,6 +151,7 @@ typedef struct OsxMouseEvent {
 	int y;
 	int button;
 	int motion;
+	int wheel;
 } OsxMouseEvent;
 
 typedef struct OsxCuda {
@@ -207,6 +208,7 @@ typedef struct OsxCuda {
 typedef struct OsxPointer {
 	OsxMachine *machine;
 	uint32 absoluteaddress;
+	uint32 wheeladdress;
 	uint32 callstack;
 	int pointerx;
 	int pointery;
@@ -302,6 +304,7 @@ void OsxCudaPoll(OsxMachine *machine, uint64 now);
 uint64 OsxCudaNextDeadline(OsxMachine *machine);
 void OsxCudaKey(OsxMachine *machine, int code, int down);
 void OsxCudaMouse(OsxMachine *machine, int dx, int dy, int button);
+void OsxCudaWheel(OsxMachine *machine, int delta);
 void OsxPointerHook(OsxCpu *cpu, void *context, uint32 address);
 
 int OsxBootLoad(OsxMachine *machine, const char *imagepath, int bootbus, int bootunit, const char *commandline);
