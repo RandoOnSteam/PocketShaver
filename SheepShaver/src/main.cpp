@@ -222,6 +222,18 @@ bool InitAll(const char *vmdir)
 		WriteMacInt32(KERNEL_DATA_BASE + 0xf8c, TimebaseSpeed);			// timebase-frequency
 	}
 
+	if (HasNanoKernel2()) {
+		WriteMacInt32(KERNEL_DATA_BASE + 0xd00, RAMSize);
+		WriteMacInt32(KERNEL_DATA_BASE + 0xd04, RAMSize);
+		WriteMacInt32(KERNEL_DATA_BASE + 0xd10, RAMSize);
+		WriteMacInt32(KERNEL_DATA_BASE + 0xd14, RAMSize);
+		WriteMacInt32(KERNEL_DATA_BASE + 0xd18, 0x00010020);
+		WriteMacInt32(KERNEL_DATA_BASE + 0xd1c, 0x00200001);
+		WriteMacInt32(KERNEL_DATA_BASE + 0xd20, 0x00010000);
+		WriteMacInt32(KERNEL_DATA_BASE + 0xd30, RAMBase);
+		WriteMacInt32(KERNEL_DATA_BASE + 0xd34, RAMSize);
+	}
+
 	// Initialize extra low memory
 	D(bug("Initializing Low Memory...\n"));
 	Mac_memset(0, 0, 0x3000);

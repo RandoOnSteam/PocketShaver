@@ -100,8 +100,8 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 	D(bug("EmulOp %04x at %08x\n", selector, pc));
 	switch (selector) {
 		case OP_BREAK:				// Breakpoint
-			printf("*** Breakpoint\n");
-			Dump68kRegs(r);
+			{ FILE *f = fopen("tmpc160.txt", "a"); if (f) { int i; fprintf(f, "syserr d0 %08x d1 %08x d6 %08x d7 %08x a0 %08x a7 %08x:", r->d[0], r->d[1], r->d[6], r->d[7], r->a[0], r->a[7]); for (i = 0; i < 12; i++) fprintf(f, " %08x", ReadMacInt32(r->a[7] + i * 4)); fprintf(f, "\n"); fclose(f); } }
+			Execute68kTrap(0xa9c9, r);
 			break;
 
 		case OP_XPRAM1: {			// Read/write from/to XPRam

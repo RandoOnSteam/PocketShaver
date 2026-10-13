@@ -26,6 +26,7 @@
 #include "macos_util.h"
 #include "user_strings.h"
 #include "emul_op.h"
+#include "rom_patches.h"
 #include "thunks.h"
 #include "usbhid.h"
 #include "pcibridge.h"
@@ -201,7 +202,14 @@ void DoPatchNameRegistry(void)
 	if (!RegistryCStrEntryCreate(0, "Devices:device-tree", device_tree.addr())) {
 		u32.set_value(BusClockSpeed);
 		RegistryPropertyCreate(device_tree.addr(), "clock-frequency", u32.addr(), 4);
+#ifdef CLASSICMACHINENEWWORLD
+		RegistryPropertyCreateStr(device_tree.addr(), "model", "PowerMac3,1");
+		SheepArray<37> compatible;
+		memcpy(Mac2HostAddr(compatible.addr()), "PowerMac3,1\0MacRISC\0Power Macintosh", 37);
+		RegistryPropertyCreate(device_tree.addr(), "compatible", compatible.addr(), 37);
+#else
 		RegistryPropertyCreateStr(device_tree.addr(), "model", "Power Macintosh");
+#endif
 
 		// Create "AAPL,ROM"
 		SheepRegEntryID aapl_rom;

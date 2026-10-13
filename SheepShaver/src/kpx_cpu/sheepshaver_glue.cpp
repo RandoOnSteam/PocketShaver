@@ -232,6 +232,8 @@ public:
 
 	// Hand a taken trap to the MacOS exception handler chain
 	const char *deliver_trap_exception(uint32 opcode);
+	bool DeliverSystemCall(void);
+	bool nanokernel2;
 	const char *enter_exception_vector(uint32 vector, uint32 handler_slot,
 		uint32 saved_pc, uint32 saved_msr);
 	void exception_step(void);
@@ -404,6 +406,7 @@ public:
 sheepshaver_cpu::sheepshaver_cpu()
 {
 	init_decoder();
+	nanokernel2 = HasNanoKernel2();
 	sprg(0) = KernelDataAddr;
 	sprg(3) = KernelDataAddr + PPC_68K_EXCEPTION_TABLE_OFFSET;
 	exception_step_active = false;
@@ -2089,11 +2092,15 @@ bool sheepshaver_cpu::exception_step_trampoline_ready(void)
 const char *sheepshaver_cpu::enter_exception_vector(
 	uint32 vector, uint32 handler_slot, uint32 saved_pc, uint32 saved_msr)
 {
-	const uint32 table = KernelDataAddr +
-		(ReadMacInt32(XLM_RUN_MODE) == MODE_NATIVE
-			? PPC_NATIVE_EXCEPTION_TABLE_OFFSET
-			: PPC_68K_EXCEPTION_TABLE_OFFSET);
-	sprg(3) = table;
+	uint32 table;
+	if (nanokernel2)
+		table = sprg(3);
+	else {
+		table = KernelDataAddr + PPC_68K_EXCEPTION_TABLE_OFFSET;
+		if (ReadMacInt32(XLM_RUN_MODE) == MODE_NATIVE)
+			table = KernelDataAddr + PPC_NATIVE_EXCEPTION_TABLE_OFFSET;
+		sprg(3) = table;
+	}
 	const uint32 vector_pc = ROMBase + vector;
 	if (!guest_addr_ok(table + handler_slot, 4))
 		return "the nanokernel exception table is not mapped";
@@ -2174,18 +2181,18 @@ bool sheepshaver_cpu::external_interrupt()
 	// and then restore SRR/MSR, preventing an interrupt-driven context switch
 	// from becoming the CPU's actual continuation.
 	const uint32 run_mode = ReadMacInt32(XLM_RUN_MODE);
-	if (run_mode != MODE_NATIVE)
+	if (!nanokernel2 && run_mode != MODE_NATIVE)
 		return powerpc_cpu::external_interrupt();
 
 	// A native exception may context-switch and make its rfi continuation the
 	// CPU's new architectural state. That is valid only for the outer execution
 	// frame; returning through a nested host helper would restore stale state.
-	if (current_execute_depth() != 1) {
+	if (!nanokernel2 && current_execute_depth() != 1) {
 		external_interrupt_mode_deferred_count++;
 		return false;
 	}
 
-	if (int32(ReadMacInt32(XLM_IRQ_NEST)) > 0) {
+	if (!nanokernel2 && int32(ReadMacInt32(XLM_IRQ_NEST)) > 0) {
 		external_interrupt_nest_deferred_count++;
 		return false;
 	}
@@ -2230,6 +2237,14 @@ bool sheepshaver_cpu::external_interrupt()
 	return true;
 }
 
+bool sheepshaver_cpu::DeliverSystemCall(void)
+{
+	if (!nanokernel2)
+		return false;
+	return enter_exception_vector(0x00300c00, 0x30, pc() + 4,
+		ppc_exception_srr1(msr(), 0)) == NULL;
+}
+
 const char *sheepshaver_cpu::deliver_trap_exception(uint32 opcode)
 {
 	if (exception_step_active) {
@@ -2237,7 +2252,7 @@ const char *sheepshaver_cpu::deliver_trap_exception(uint32 opcode)
 		exception_step_opcode = opcode;
 		return NULL;
 	}
-	if (!PrefsFindBool("ppcexceptions"))
+	if (!nanokernel2 && !PrefsFindBool("ppcexceptions"))
 		return "PowerPC exception delivery is disabled";
 	if (!exception_step_trampoline_ready())
 		return "the single-step return trampoline could not be allocated";
@@ -3951,6 +3966,11 @@ void sheepshaver_cpu::execute_native_op(uint32 selector)
  *  Offer a taken trap to the MacOS exception handler chain (see
  *  sheepshaver_cpu::deliver_trap_exception).  Called from the PowerPC core.
  */
+
+bool DeliverSystemCall(void)
+{
+	return ppc_cpu->DeliverSystemCall();
+}
 
 const char *DeliverTrapException(uint32 opcode)
 {

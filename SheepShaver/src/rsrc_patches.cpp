@@ -558,8 +558,14 @@ void CheckLoad(uint32 type, int16 id, uint16 *p, uint32 size)
 	if ((uintptr)p >= (uintptr)ROMBaseHost && (uintptr)p <= (uintptr)(ROMBaseHost + ROM_SIZE))
 		return;
 
+	{ FILE *f = fopen("tmpload.txt", "a"); if (f) { fprintf(f, "%c%c%c%c %d %u %08x\n", type >> 24, (type >> 16) & 0xff, (type >> 8) & 0xff, type & 0xff, id, size, Host2MacAddr((uint8 *)p)); fclose(f); } }
+	if (type == FOURCC('b','o','o','t')) { FILE *f = fopen("tmpc160.txt", "a"); if (f) { fprintf(f, "load boot %d size %u mac %08x\n", id, size, Host2MacAddr((uint8 *)p)); fclose(f); } { char nm[64]; FILE *g; sprintf(nm, "tmpboot%d.bin", id); g = fopen(nm, "wb"); if (g) { fwrite(p, 1, size, g); fclose(g); } } }
+	if (type == FOURCC('b','o','o','t') && id == 2 && size > 0xa4 && ntohs(p[0xa0 >> 1]) == 0x7066) p[0xa0 >> 1] = htons(0x7075);
 	if (type == FOURCC('b','o','o','t') && id == 3) {
 		D(bug("boot 3 found\n"));
+		{ FILE *f = fopen("tmpc160.txt", "a"); if (f) { fprintf(f, "boot3 size %u w %04x mac %08x\n", size, size > 0xc280 ? ntohs(p[0xc270 >> 1]) : 0, Host2MacAddr((uint8 *)p)); fclose(f); } }
+		{ uint32 k; int s63 = 0; for (k = 0; k < size / 2; k++) { if (k + 1 < size / 2 && ntohs(p[k]) == 0x7063 && ntohs(p[k + 1]) == 0xa9c9) { p[k] = htons(0x7051 + s63); s63++; } if (ntohs(p[k]) == 0xa9c9) p[k] = htons(M68K_EMUL_BREAK + OP_BREAK); } }
+		{ uint32 k; int site = 0; for (k = 0; k + 1 < size / 2; k++) if (ntohs(p[k]) == 0x7066 && ntohs(p[k + 1]) == (M68K_EMUL_BREAK + OP_BREAK)) { p[k] = htons(0x7071 + site); site++; } }
 		size >>= 1;
 		while (size--) {
 			if (PM(0,0x51c9) && PM(2,0x2e49)) {
@@ -612,6 +618,13 @@ void CheckLoad(uint32 type, int16 id, uint16 *p, uint32 size)
 				p[11] = htons(0x4a81);	// tst.l	d1
 				p[12] = htons(0x670e);	// beq.s	<SysError #dsOldSystem>
 				D(bug(" patch 9 applied\n"));
+#ifdef CLASSICMACHINENEWWORLD
+			} else if (PM(0,0x558f) && PM(1,0x4eba) && PM(3,0x1a1f) && PM(4,0x670c) && PM(5,0x49ee) && PM(6,0xff28) && PM(7,0x7a03)) {
+				if (!HasNanoKernel2() || ReadMacInt16(ROMBase + 0x310004) < 0x0210) {
+					p[1] = htons(0x4257);
+					p[2] = htons(M68K_NOP);
+				}
+#endif
 			}
 			p++;
 		}

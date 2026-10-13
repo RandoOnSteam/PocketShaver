@@ -1271,6 +1271,9 @@ void powerpc_cpu::execute_fp_round(uint32 opcode)
 void powerpc_cpu::execute_syscall(uint32 opcode)
 {
 #ifdef SHEEPSHAVER
+	extern bool DeliverSystemCall(void);
+	if (DeliverSystemCall())
+		return;
 	execute_illegal(opcode);
 #else
 	cr().set_so(0, execute_do_syscall && !execute_do_syscall(this));

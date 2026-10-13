@@ -878,7 +878,11 @@ const powerpc_cpu::instr_info_t powerpc_cpu::powerpc_ii_table[] = {
 	{ "sc",
 	  EXECUTE_0(syscall),
 	  PPC_I(SC),
+	  #ifdef SHEEPSHAVER
+	  SC_form, 17, 0, CFLOW_TRAP
+#else
 	  SC_form, 17, 0, CFLOW_NORMAL
+#endif
 	},
 	{ "slw",
 	  EXECUTE_SHIFT(shll, RA, RS, RB, andi<0x3f>, CA_BIT_0, RC_BIT_G),

@@ -21,6 +21,10 @@
 #ifndef ROM_PATCHES_H
 #define ROM_PATCHES_H
 
+#ifndef CLASSICMACHINE9500
+#define CLASSICMACHINENEWWORLD
+#endif
+
 // ROM types
 enum {
 	ROMTYPE_TNT,
@@ -34,6 +38,7 @@ extern int ROMType;
 
 extern bool DecodeROM(uint8 *data, uint32 size);
 extern bool PatchROM(void);
+extern bool HasNanoKernel2(void);
 extern void InstallDrivers(void);
 
 extern void AddSifter(uint32 type, int16 id);
