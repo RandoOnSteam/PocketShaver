@@ -29,6 +29,40 @@ static void ReadMouse(OsxMachine *machine)
 	ReceivePacket(machine, request, sizeof(request));
 }
 
+static void TestPowerCommands(OsxInputTest *test, OsxMachine *machine)
+{
+	uint8 request[2] = {CUDAPACKETCUDA, CUDARESETSYSTEM};
+	ReceivePacket(machine, request, sizeof(request));
+	Check(test, machine->quit == 2, "restart requests startup selection");
+	request[1] = CUDAPOWERDOWN;
+	ReceivePacket(machine, request, sizeof(request));
+	Check(test, machine->quit == 1, "power down exits without restart");
+	machine->quit = 0;
+}
+
+static void TestPram(OsxInputTest *test, OsxMachine *machine)
+{
+	uint8 request[6] = {CUDAPACKETCUDA, CUDASETPRAM, 0, 0x78, 0x12, 0x34};
+	OsxCudaReset(machine);
+	ReceivePacket(machine, request, sizeof(request));
+	Check(test, machine->nvram[OSXPRAMOFFSET + 0x78] == 0x12 &&
+		machine->nvram[OSXPRAMOFFSET + 0x79] == 0x34, "CUDA writes shared startup PRAM");
+	machine->nvram[OSXPRAMOFFSET + 0x78] = 0x56;
+	request[1] = CUDAGETPRAM;
+	ReceivePacket(machine, request, 4);
+	Check(test, machine->cuda.inlength == 4 && machine->cuda.inbuffer[3] == 0x56,
+		"CUDA reads memory-mapped PRAM");
+	OsxCudaReset(machine);
+	ReceivePacket(machine, request, 4);
+	Check(test, machine->cuda.inbuffer[3] == 0x56, "CUDA reset preserves PRAM");
+	request[1] = CUDASETPRAM;
+	request[3] = 0xff;
+	machine->nvram[OSXPRAMOFFSET + OSXPRAMSIZE] = 0x78;
+	ReceivePacket(machine, request, sizeof(request));
+	Check(test, machine->nvram[OSXPRAMOFFSET + 0xff] == 0x12 &&
+		machine->nvram[OSXPRAMOFFSET + OSXPRAMSIZE] == 0x78, "CUDA PRAM write boundary");
+}
+
 static void TestAbsolute(OsxInputTest *test, OsxMachine *machine)
 {
 	OsxCpu *cpu;
@@ -215,6 +249,8 @@ int main(void)
 	OsxCudaMouse(machine, 0, 0, 1);
 	OsxCudaReset(machine);
 	Check(&test, !MouseHasData(&machine->cuda), "reset clears pending input");
+	TestPowerCommands(&test, machine);
+	TestPram(&test, machine);
 	TestAbsolute(&test, machine);
 	free(machine->cpu);
 	free(machine);

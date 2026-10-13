@@ -384,19 +384,21 @@ static void ReceiveCudaCommand(OsxMachine *machine, const uint8 *data, int lengt
 		if (length > 2) {
 			address = ((uint32)data[1] << 8) | data[2];
 			for (index = 0; index < 1 && address + index < OSXPRAMSIZE; index++)
-				reply[replylength++] = cuda->pram[address + index];
+				reply[replylength++] = machine->nvram[OSXPRAMOFFSET + address + index];
 		}
 		break;
 	case CUDASETPRAM:
 		if (length > 2) {
 			address = ((uint32)data[1] << 8) | data[2];
 			for (index = 3; index < length && address + index - 3 < OSXPRAMSIZE; index++)
-				cuda->pram[address + index - 3] = data[index];
+				machine->nvram[OSXPRAMOFFSET + address + index - 3] = data[index];
 		}
 		break;
 	case CUDAPOWERDOWN:
-	case CUDARESETSYSTEM:
 		machine->quit = 1;
+		break;
+	case CUDARESETSYSTEM:
+		machine->quit = 2;
 		break;
 	case CUDAFILESERVERFLAG:
 	case CUDASETONESECOND:

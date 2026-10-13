@@ -28,6 +28,7 @@
 #include "emul_op.h"
 #include "xlowmem.h"
 #include "xpram.h"
+#include "osxguest.h"
 #include "timer.h"
 #include "adb.h"
 #include "sony.h"
@@ -75,44 +76,24 @@ bool InitAll(const char *vmdir)
 	// Load NVRAM
 	XPRAMInit(vmdir);
 
-	// Load XPRAM default values if signature not found
-	if (XPRAM[0x130c] != 0x4e || XPRAM[0x130d] != 0x75
-	 || XPRAM[0x130e] != 0x4d || XPRAM[0x130f] != 0x63) {
-		D(bug("Loading XPRAM default values\n"));
-		memset(XPRAM + 0x1300, 0, 0x100);
-		XPRAM[0x130c] = 0x4e;	// "NuMc" signature
-		XPRAM[0x130d] = 0x75;
-		XPRAM[0x130e] = 0x4d;
-		XPRAM[0x130f] = 0x63;
-		XPRAM[0x1301] = 0x80;	// InternalWaitFlags = DynWait (don't wait for SCSI devices upon bootup)
-		XPRAM[0x1310] = 0xa8;	// Standard PRAM values
-		XPRAM[0x1311] = 0x00;
-		XPRAM[0x1312] = 0x00;
-		XPRAM[0x1313] = 0x22;
-		XPRAM[0x1314] = 0xcc;
-		XPRAM[0x1315] = 0x0a;
-		XPRAM[0x1316] = 0xcc;
-		XPRAM[0x1317] = 0x0a;
-		XPRAM[0x131c] = 0x00;
-		XPRAM[0x131d] = 0x02;
-		XPRAM[0x131e] = 0x63;
-		XPRAM[0x131f] = 0x00;
-		XPRAM[0x1308] = 0x13;
-		XPRAM[0x1309] = 0x88;
-		XPRAM[0x130a] = 0x00;
-		XPRAM[0x130b] = 0xcc;
-		XPRAM[0x1376] = 0x00;	// OSDefault = MacOS
-		XPRAM[0x1377] = 0x01;
-		XPRAM[0x138a] = 0x25;	// Use PPC memory manager ("Modern Memory Manager")
+	int startupindex;
+	int startuppartition;
+	if (OsxSelectBootImage(&startupindex, &startuppartition) == OSXBOOTCLASSIC && startupindex >= 0) {
+		XPRAM[0x1378] = (startupindex + 1) >> 8;
+		XPRAM[0x1379] = (startupindex + 1) & 0xff;
 	}
 
 	// Set boot volume
-	int16 i16 = PrefsFindInt32("bootdrive");
-	XPRAM[0x1378] = i16 >> 8;
-	XPRAM[0x1379] = i16 & 0xff;
-	i16 = PrefsFindInt32("bootdriver");
-	XPRAM[0x137a] = i16 >> 8;
-	XPRAM[0x137b] = i16 & 0xff;
+	int16 bootdrive = PrefsFindInt32("bootdrive");
+	if (bootdrive != 0) {
+		XPRAM[0x1378] = bootdrive >> 8;
+		XPRAM[0x1379] = bootdrive & 0xff;
+	}
+	int16 bootdriver = PrefsFindInt32("bootdriver");
+	if (bootdriver != 0) {
+		XPRAM[0x137a] = bootdriver >> 8;
+		XPRAM[0x137b] = bootdriver & 0xff;
+	}
 
 	// Create BootGlobs at top of Mac memory
 	memset(RAMBaseHost + RAMSize - 4096, 0, 4096);

@@ -21,6 +21,8 @@
 #include "sys.h"
 #include "prefs.h"
 #include "osxmachine.h"
+#include "osxguest.h"
+#include "xpram.h"
 
 #define HFSFOLDERRECORD 1
 #define HFSFILERECORD 2
@@ -303,13 +305,13 @@ static int FindCatalogRecord(OsxHfsVolume *volume, uint32 parent, const char *te
 	return 0;
 }
 
-static int OpenVolume(OsxHfsVolume *volume, void *file)
+static int LocateVolume(OsxHfsVolume *volume, void *file, int partition, uint8 *block)
 {
-	uint8 block[512];
 	uint32 index;
 	uint32 allocationblock;
 	uint32 firstblock;
 	uint32 embedstart;
+	int found = 0;
 	volume->file = file;
 	volume->base = 0;
 	volume->partition = 0;
@@ -320,16 +322,23 @@ static int OpenVolume(OsxHfsVolume *volume, void *file)
 		for (index = 1; index < 64; index++) {
 			if (Sys_read(file, block, (loff_t)index * 512, 512) != 512 || block[0] != 'P' || block[1] != 'M')
 				return 0;
-			if (strncmp((const char *)block + 48, "Apple_HFS", 32) == 0) {
+			if (strncmp((const char *)block + 48, "Apple_HFS", 32) == 0 &&
+				(partition < 0 || partition == (int)index)) {
 				volume->base = (loff_t)Big32(block + 8) * 512;
 				volume->partition = (int)index;
+				found = 1;
 				break;
 			}
 		}
-	}
+		if (!found)
+			return 0;
+	} else if (partition > 0)
+		return 0;
 	if (!ReadVolume(volume, 1024, block, 512))
 		return 0;
 	if (block[0] == 'B' && block[1] == 'D') {
+		if (Big16(block + 124) != 0x482b)
+			return 1;
 		allocationblock = Big32(block + 20);
 		firstblock = Big16(block + 28);
 		embedstart = Big16(block + 126);
@@ -337,7 +346,13 @@ static int OpenVolume(OsxHfsVolume *volume, void *file)
 		if (!ReadVolume(volume, 1024, block, 512))
 			return 0;
 	}
-	if (!(block[0] == 'H' && (block[1] == '+' || block[1] == 'X')))
+	return block[0] == 'H' && (block[1] == '+' || block[1] == 'X');
+}
+
+static int OpenVolume(OsxHfsVolume *volume, void *file, int partition)
+{
+	uint8 block[512];
+	if (!LocateVolume(volume, file, partition, block) || block[0] != 'H')
 		return 0;
 	volume->blocksize = Big32(block + 40);
 	ParseFork(block + 0xc0, 3, 0, &volume->overflow);
@@ -360,6 +375,186 @@ static int OpenVolume(OsxHfsVolume *volume, void *file)
 static void CloseVolume(OsxHfsVolume *volume)
 {
 	free(volume->node);
+}
+
+static int ProbeBootImage(const char *path, int *partition, int *attached)
+{
+	OsxHfsVolume volume;
+	uint8 block[512];
+	uint8 record[248];
+	void *file;
+	int systems = 0;
+	uint32 folder;
+	*attached = 0;
+	if (path[0] == '*')
+		path++;
+	file = Sys_open(path, true, false);
+	if (file == NULL)
+		return 0;
+	if (SysGetFileSize(file) >= 512)
+		*attached = 1;
+	if (LocateVolume(&volume, file, *partition, block)) {
+		*partition = volume.partition;
+		if (block[0] == 'B') {
+			if (Big32(block + 92) != 0)
+				systems = OSXBOOTCLASSIC;
+		} else if (OpenVolume(&volume, file, *partition)) {
+			if (FindCatalogRecord(&volume, HFSROOTFOLDER, "mach_kernel", record) &&
+				Big16(record) == HFSFILERECORD)
+				systems = OSXBOOTNATIVE;
+			folder = Big32(block + 92);
+			if (folder == 0 && systems == 0)
+				folder = Big32(block + 80);
+			if (folder != 0 && FindCatalogRecord(&volume, folder, "System", record) &&
+				Big16(record) == HFSFILERECORD &&
+				FindCatalogRecord(&volume, folder, "Finder", record) && Big16(record) == HFSFILERECORD)
+				systems |= OSXBOOTCLASSIC;
+		}
+	}
+	CloseVolume(&volume);
+	Sys_close(file);
+	return systems;
+}
+
+static void ReadFirmwareString(int index, char *output, int size)
+{
+	uint32 header = 0x1834 + index * 4;
+	uint32 offset = ((uint32)XPRAM[header] << 8) | XPRAM[header + 1];
+	uint32 length = ((uint32)XPRAM[header + 2] << 8) | XPRAM[header + 3];
+	output[0] = 0;
+	if (offset < 0x1800 || offset + length > 0x2000 || length >= (uint32)size)
+		return;
+	memcpy(output, XPRAM + offset, length);
+	output[length] = 0;
+}
+
+int OsxSelectBootImage(int *diskindex, int *partition)
+{
+	char device[256];
+	char command[256];
+	const char *path;
+	const char *address;
+	const char *bootfrom;
+	unsigned long controller;
+	int unit;
+	int wantedindex = -2147483647;
+	int bootdrive;
+	int bootdriver;
+	int wantedpartition = -1;
+	int wantclassic;
+	int index;
+	int used = 0;
+	int candidatepartition;
+	int systems;
+	int attached;
+	int secondary = 0;
+	int secondaryindex = -2147483647;
+	int secondarypartition = -1;
+	int fallback = 0;
+	int fallbackindex = -2147483647;
+	int fallbackpartition = -1;
+	*diskindex = -2147483647;
+	*partition = -1;
+	ReadFirmwareString(0, device, sizeof(device));
+	ReadFirmwareString(9, command, sizeof(command));
+	wantclassic = strstr(device, "AAPL,ROM") != NULL || strstr(command, "mac-boot") != NULL;
+	address = strstr(device, "/ata@");
+	if (address != NULL) {
+		controller = strtoul(address + 5, NULL, 16);
+		address = strchr(address + 5, '/');
+		if (address != NULL) {
+			address = strchr(address, '@');
+			if (address != NULL) {
+				unit = (int)strtol(address + 1, NULL, 16);
+				address = strchr(address, ':');
+				if (address != NULL)
+					wantedpartition = (int)strtol(address + 1, NULL, 10);
+				if (controller == 0x20000 && unit >= 0 && unit <= 1)
+					wantedindex = unit;
+				else if (controller == 0x21000 && unit == 1)
+					wantedindex = 2;
+				else if (controller == 0x21000 && unit == 0)
+					wantedindex = -1;
+			}
+		}
+	}
+	bootdrive = PrefsFindInt32("bootdrive");
+	bootdriver = PrefsFindInt32("bootdriver");
+	if (bootdrive == 0)
+		bootdrive = ((int)XPRAM[0x1378] << 8) | XPRAM[0x1379];
+	if (bootdriver == 0)
+		bootdriver = (int16)(((uint16)XPRAM[0x137a] << 8) | XPRAM[0x137b]);
+	if (wantclassic || device[0] == 0) {
+		if (bootdrive > 0 && (bootdriver == 0 || bootdriver == -63)) {
+			wantedindex = bootdrive - 1;
+			wantclassic = 1;
+		} else if (bootdriver == -62) {
+			wantedindex = -1;
+			wantclassic = 1;
+		}
+	}
+	bootfrom = PrefsFindString("osxboot");
+	if (PrefsFindInt32("bootdriver") == -62 ||
+		(device[0] == 0 && bootfrom != NULL && strcmp(bootfrom, "cdrom") == 0))
+		wantedindex = -1;
+	for (index = 0; (path = PrefsFindString("disk", index)) != NULL; index++) {
+		candidatepartition = -1;
+		if (wantedindex == used)
+			candidatepartition = wantedpartition;
+		systems = ProbeBootImage(path, &candidatepartition, &attached);
+		if (used >= 3)
+			systems &= OSXBOOTCLASSIC;
+		if (systems != 0) {
+			if (secondary == 0) {
+				secondary = systems;
+				if (systems & OSXBOOTNATIVE)
+					secondary = OSXBOOTNATIVE;
+				secondaryindex = used;
+				secondarypartition = candidatepartition;
+			}
+			if (wantclassic && (wantedindex != used || (systems & OSXBOOTCLASSIC) != 0))
+				systems &= OSXBOOTCLASSIC;
+			else if (systems & OSXBOOTNATIVE)
+				systems = OSXBOOTNATIVE;
+			if (systems != 0 && fallback == 0) {
+				fallback = systems;
+				fallbackindex = used;
+				fallbackpartition = candidatepartition;
+			}
+			if (systems != 0 && wantedindex == used) {
+				*diskindex = used;
+				*partition = candidatepartition;
+				return systems;
+			}
+		}
+		if (attached)
+			used++;
+	}
+	for (index = 0; (path = PrefsFindString("cdrom", index)) != NULL; index++) {
+		candidatepartition = -1;
+		if (wantedindex == -1 && index == 0)
+			candidatepartition = wantedpartition;
+		systems = ProbeBootImage(path, &candidatepartition, &attached);
+		if (index != 0)
+			systems &= OSXBOOTCLASSIC;
+		if (wantclassic && (wantedindex != -1 || index != 0 || (systems & OSXBOOTCLASSIC) != 0))
+			systems &= OSXBOOTCLASSIC;
+		else if (systems & OSXBOOTNATIVE)
+			systems = OSXBOOTNATIVE;
+		if (systems != 0 && (fallback == 0 || (wantedindex == -1 && index == 0))) {
+			fallback = systems;
+			fallbackindex = -1 - index;
+			fallbackpartition = candidatepartition;
+		}
+	}
+	if (fallback == 0) {
+		fallback = secondary;
+		fallbackindex = secondaryindex;
+		fallbackpartition = secondarypartition;
+	}
+	*diskindex = fallbackindex;
+	*partition = fallbackpartition;
+	return fallback;
 }
 
 static uint8 *ReadFile(OsxHfsVolume *volume, const char *path, uint32 *size)
@@ -789,15 +984,6 @@ static OsxTreeNode *BuildTree(OsxBootState *state, OsxTreeNode **memorymap)
 	AddString(chosen, "rootpath", state->rootpath);
 	*memorymap = NewNode(chosen, "memory-map");
 
-	node = NewNode(root, "nvram");
-	AddString(node, "device_type", "nvram");
-	AddStrings(node, "compatible", "nvram", "flash");
-	cells[0] = OSXFLASHBASE;
-	cells[1] = OSXFLASHSIZE;
-	AddCells(node, "reg", cells, 2);
-	AddCell(node, "#bytes", OSXFLASHSIZE / 2);
-	AddString(node, "AAPL,unit-string", "fff80000");
-
 	node = NewNode(root, "options");
 	AddString(node, "boot-args", "");
 	AddString(node, "auto-boot?", "true");
@@ -868,6 +1054,12 @@ static OsxTreeNode *BuildTree(OsxBootState *state, OsxTreeNode **memorymap)
 	AddCell(macio, "#address-cells", 1);
 	AddCell(macio, "#size-cells", 1);
 	AddString(macio, "AAPL,unit-string", "10");
+
+	node = NewNode(macio, "nvram");
+	AddString(node, "device_type", "nvram");
+	cells[0] = 0x60000;
+	cells[1] = OSXNVRAMSIZE * 16;
+	AddCells(node, "reg", cells, 2);
 
 	cuda = NewNode(macio, "via-cuda");
 	AddString(cuda, "device_type", "via-cuda");
@@ -971,7 +1163,7 @@ int OsxBootLoad(OsxMachine *machine, const char *imagepath, int bootbus, int boo
 	memset(&state, 0, sizeof(state));
 	state.machine = machine;
 	file = machine->ata[bootbus].drives[bootunit].file;
-	if (!OpenVolume(&volume, file)) {
+	if (!OpenVolume(&volume, file, machine->bootpartition)) {
 		fprintf(stderr, "osx: no HFS+ volume in %s\n", imagepath);
 		CloseVolume(&volume);
 		return 0;

@@ -69,6 +69,7 @@
 
 #define OSXNVRAMSIZE 8192
 #define OSXPRAMSIZE 256
+#define OSXPRAMOFFSET 0x1300
 #define OSXCUDABUFFER 64
 #define OSXADBQUEUE 64
 #define OSXMOUSEQUEUE 256
@@ -228,7 +229,6 @@ typedef struct OsxCuda {
 	uint32 pollrate;
 	uint16 pollmask;
 	int irqline;
-	uint8 pram[OSXPRAMSIZE];
 	int64 timeoffset;
 	OsxAdbDevice keyboard;
 	OsxAdbDevice mouse;
@@ -304,6 +304,7 @@ struct OsxMachine {
 	int verbose;
 	uint32 kernelentry;
 	uint32 bootargs;
+	int bootpartition;
 	uint32 kernelend;
 	uint32 scratch;
 	uint8 *kernelimage;

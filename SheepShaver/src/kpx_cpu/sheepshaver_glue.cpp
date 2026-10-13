@@ -234,6 +234,7 @@ public:
 	const char *deliver_trap_exception(uint32 opcode);
 	bool DeliverSystemCall(void);
 	bool nanokernel2;
+	bool resetseen;
 	const char *enter_exception_vector(uint32 vector, uint32 handler_slot,
 		uint32 saved_pc, uint32 saved_msr);
 	void exception_step(void);
@@ -407,6 +408,7 @@ sheepshaver_cpu::sheepshaver_cpu()
 {
 	init_decoder();
 	nanokernel2 = HasNanoKernel2();
+	resetseen = false;
 	sprg(0) = KernelDataAddr;
 	sprg(3) = KernelDataAddr + PPC_68K_EXCEPTION_TABLE_OFFSET;
 	exception_step_active = false;
@@ -549,6 +551,13 @@ void sheepshaver_cpu::call_execute_emul_op(powerpc_cpu * cpu, uint32 emul_op) {
 // Execute EMUL_OP routine
 void sheepshaver_cpu::execute_emul_op(uint32 emul_op)
 {
+#ifdef _WIN32
+	if (emul_op == OP_RESET) {
+		if (resetseen)
+			RestartEmulator();
+		resetseen = true;
+	}
+#endif
 	M68kRegisters r68;
 	// The 68K side services VBL and therefore owns the newest system Ticks
 	// value.  Observe it before crossing into a host EmulOp; a later PowerPC

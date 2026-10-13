@@ -33,6 +33,9 @@ typedef struct OsxReferenceState {
 
 void OsxReferenceExecute(uint32 entry, OsxReferenceState *state);
 void OsxLockstepTest(uint8 *ramhost, uint32 ramsize, int iterations, const char *logpath);
+#define OSXBOOTCLASSIC 1
+#define OSXBOOTNATIVE 2
+int OsxSelectBootImage(int *diskindex, int *partition);
 int OsxGuestRequested(void);
 int OsxGuestMain(void);
 

@@ -22,6 +22,7 @@
 #include "sys.h"
 #include "prefs.h"
 #include "osxmachine.h"
+#include "xpram.h"
 #include "osxguest.h"
 #ifdef _WIN32
 #include <mmsystem.h>
@@ -86,9 +87,10 @@ typedef struct OsxSession {
 
 int OsxGuestRequested(void)
 {
-	const char *machine;
-	machine = PrefsFindString("machine");
-	return machine != NULL && strcmp(machine, "osx") == 0;
+	int diskindex;
+	int partition;
+	XPRAMInit(NULL);
+	return OsxSelectBootImage(&diskindex, &partition) == OSXBOOTNATIVE;
 }
 
 static int MapKey(int key)
@@ -631,18 +633,19 @@ static void AttachDisks(OsxMachine *machine, const char **bootimage, int *bootbu
 {
 	static const int diskslots[3] = { 0, 1, 3 };
 	const char *path;
-	const char *bootfrom;
+	int diskindex;
 	int index;
 	int used;
 	int cdromattached;
 	*bootimage = NULL;
 	*bootbus = 0;
 	*bootunit = 0;
+	OsxSelectBootImage(&diskindex, &machine->bootpartition);
 	used = 0;
 	for (index = 0; (path = PrefsFindString("disk", index)) != NULL && used < 3; index++) {
 		if (!OsxAtaAttach(machine, diskslots[used] >> 1, diskslots[used] & 1, path, 0))
 			continue;
-		if (*bootimage == NULL) {
+		if (used == diskindex) {
 			*bootimage = path;
 			*bootbus = diskslots[used] >> 1;
 			*bootunit = diskslots[used] & 1;
@@ -654,8 +657,7 @@ static void AttachDisks(OsxMachine *machine, const char **bootimage, int *bootbu
 	machine->cdromcount = index;
 	path = PrefsFindString("cdrom", 0);
 	cdromattached = path != NULL && OsxAtaAttach(machine, 1, 0, path, 1);
-	bootfrom = PrefsFindString("osxboot");
-	if (cdromattached && (*bootimage == NULL || bootfrom == NULL || strcmp(bootfrom, "disk") != 0)) {
+	if (cdromattached && diskindex == -1) {
 		*bootimage = path;
 		*bootbus = 1;
 		*bootunit = 0;
@@ -1056,6 +1058,8 @@ int OsxGuestMain(void)
 	const char *bootargs;
 	int bootbus;
 	int bootunit;
+	int busindex;
+	int unitindex;
 	FILE *dump;
 	void *monitor;
 	int32 ramsize;
@@ -1102,6 +1106,8 @@ int OsxGuestMain(void)
 	OsxAtaReset(machine);
 	OsxCudaReset(machine);
 	OsxBmacReset(machine);
+	XPRAMInit(NULL);
+	memcpy(machine->nvram, XPRAM, OSXNVRAMSIZE);
 	OsxFlashLoad(machine, "osx_nvram.bin");
 	AttachDisks(machine, &bootimage, &bootbus, &bootunit);
 	ParseDiskPatches(machine);
@@ -1179,6 +1185,8 @@ int OsxGuestMain(void)
 #ifdef _WIN32
 	timeEndPeriod(1);
 #endif
+	memcpy(XPRAM, machine->nvram, OSXNVRAMSIZE);
+	XPRAMExit();
 	OsxFlashSave(machine);
 	OsxJitDestroy(cpu);
 	if (machine->log) {
@@ -1198,6 +1206,14 @@ int OsxGuestMain(void)
 #endif
 	if (machine->console)
 		fclose(machine->console);
+	for (busindex = 0; busindex < 2; busindex++) {
+		for (unitindex = 0; unitindex < 2; unitindex++) {
+			if (machine->ata[busindex].drives[unitindex].file)
+				Sys_close(machine->ata[busindex].drives[unitindex].file);
+		}
+	}
 	SDL_Quit();
+	if (machine->quit == 2)
+		return 2;
 	return 0;
 }

@@ -51,7 +51,6 @@ prefs_desc common_prefs_items[] = {
 	{"bootdrive", TYPE_INT32, false,    "boot drive number"},
 	{"bootdriver", TYPE_INT32, false,   "boot driver number"},
 	{"ramsize", TYPE_INT32, false,      "size of Mac RAM in bytes"},
-	{"machine", TYPE_STRING, false,      "emulated machine, macos9 or osx"},
 	{"osxboot", TYPE_STRING, false,      "Mac OS X boot device, cdrom or disk"},
 	{"osxbootargs", TYPE_STRING, false,  "Mac OS X kernel boot arguments"},
 	{"osxseconds", TYPE_INT32, false,   "stop the Mac OS X guest after this many seconds"},

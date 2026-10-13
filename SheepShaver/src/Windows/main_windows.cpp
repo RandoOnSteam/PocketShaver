@@ -126,7 +126,27 @@ static HHOOK keyboard_hook;					// Hook for intercepting windows key events
 // Prototypes
 static bool kernel_data_init(void);
 static void kernel_data_exit(void);
-static void Quit(void);
+static int RelaunchEmulator(void)
+{
+	STARTUPINFOA startup;
+	PROCESS_INFORMATION process;
+	char executable[MAX_PATH];
+	char *commandline = _strdup(GetCommandLineA());
+	int result = 1;
+	memset(&startup, 0, sizeof(startup));
+	startup.cb = sizeof(startup);
+	if (GetModuleFileNameA(NULL, executable, sizeof(executable)) && commandline &&
+		CreateProcessA(executable, commandline, NULL, NULL, FALSE, 0, NULL, NULL, &startup, &process)) {
+		CloseHandle(process.hThread);
+		CloseHandle(process.hProcess);
+		result = 0;
+	} else
+		fprintf(stderr, "Cannot restart emulator: %lu\n", GetLastError());
+	free(commandline);
+	return result;
+}
+
+static void Quit(bool restart = false);
 static DWORD WINAPI nvram_func(void *arg);
 static DWORD WINAPI tick_func(void *arg);
 
@@ -236,7 +256,10 @@ int main(int argc, char **argv)
 
 	if (OsxGuestRequested()) {
 		SysInit();
-		return OsxGuestMain();
+		int result = OsxGuestMain();
+		if (result == 2)
+			result = RelaunchEmulator();
+		return result;
 	}
 
 	// #chenchijung 2024/2/21: move vm_init(), memory allocation for Mac RAM and Mac ROM here to avoid "cannot map RAM: no Error" bug.
@@ -484,7 +507,7 @@ quit:
  *  Cleanup and quit
  */
 
-static void Quit(void)
+static void Quit(bool restart)
 {
 	// Stop 60Hz thread
 	if (tick_thread_active) {
@@ -537,6 +560,9 @@ static void Quit(void)
 	// Exit mon
 	mon_exit();
 #endif
+
+	if (restart)
+		RelaunchEmulator();
 
 	exit(0);
 }
@@ -613,6 +639,12 @@ void jump_to_rom(uint32 entry)
 /*
  *  Quit emulator (cause return from jump_to_rom)
  */
+
+void RestartEmulator(void)
+{
+	Quit(true);
+}
+
 
 void QuitEmulator(void)
 {
