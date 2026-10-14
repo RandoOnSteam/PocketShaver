@@ -547,6 +547,8 @@ void CheckLoad(uint32 type, int16 id, uint16 *p, uint32 size)
 {
 	uint16 *p16;
 	uint32 base;
+	if (type == FOURCC('p','t','c','h') && id == -20217)
+		ReserveKernelRam();
 	D(bug("vCheckLoad %c%c%c%c (%08x) ID %d, data %p, size %d\n", type >> 24, (type >> 16) & 0xff, (type >> 8) & 0xff, type & 0xff, type, id, p, size));
 
 #if defined(SHEEPSHAVER) && defined(ENABLE_GFXACCEL)
@@ -558,14 +560,14 @@ void CheckLoad(uint32 type, int16 id, uint16 *p, uint32 size)
 	if ((uintptr)p >= (uintptr)ROMBaseHost && (uintptr)p <= (uintptr)(ROMBaseHost + ROM_SIZE))
 		return;
 
-	{ FILE *f = fopen("tmpload.txt", "a"); if (f) { fprintf(f, "%c%c%c%c %d %u %08x\n", type >> 24, (type >> 16) & 0xff, (type >> 8) & 0xff, type & 0xff, id, size, Host2MacAddr((uint8 *)p)); fclose(f); } }
-	if (type == FOURCC('b','o','o','t')) { FILE *f = fopen("tmpc160.txt", "a"); if (f) { fprintf(f, "load boot %d size %u mac %08x\n", id, size, Host2MacAddr((uint8 *)p)); fclose(f); } { char nm[64]; FILE *g; sprintf(nm, "tmpboot%d.bin", id); g = fopen(nm, "wb"); if (g) { fwrite(p, 1, size, g); fclose(g); } } }
-	if (type == FOURCC('b','o','o','t') && id == 2 && size > 0xa4 && ntohs(p[0xa0 >> 1]) == 0x7066) p[0xa0 >> 1] = htons(0x7075);
+	if (type == FOURCC('I','N','I','T') && size == 26390 &&
+		ReadMacInt32(Host2MacAddr((uint8 *)p)) == 0x60000cd4 &&
+		ReadMacInt32(Host2MacAddr((uint8 *)p) + 0xc90) == 0x2f0d41fa &&
+		ReadMacInt32(Host2MacAddr((uint8 *)p) + 0xc94) == 0xf5d42a50)
+		WriteMacInt32(Host2MacAddr((uint8 *)p) + 0x268, ReadMacInt32(0x904));
+
 	if (type == FOURCC('b','o','o','t') && id == 3) {
 		D(bug("boot 3 found\n"));
-		{ FILE *f = fopen("tmpc160.txt", "a"); if (f) { fprintf(f, "boot3 size %u w %04x mac %08x\n", size, size > 0xc280 ? ntohs(p[0xc270 >> 1]) : 0, Host2MacAddr((uint8 *)p)); fclose(f); } }
-		{ uint32 k; int s63 = 0; for (k = 0; k < size / 2; k++) { if (k + 1 < size / 2 && ntohs(p[k]) == 0x7063 && ntohs(p[k + 1]) == 0xa9c9) { p[k] = htons(0x7051 + s63); s63++; } if (ntohs(p[k]) == 0xa9c9) p[k] = htons(M68K_EMUL_BREAK + OP_BREAK); } }
-		{ uint32 k; int site = 0; for (k = 0; k + 1 < size / 2; k++) if (ntohs(p[k]) == 0x7066 && ntohs(p[k + 1]) == (M68K_EMUL_BREAK + OP_BREAK)) { p[k] = htons(0x7071 + site); site++; } }
 		size >>= 1;
 		while (size--) {
 			if (PM(0,0x51c9) && PM(2,0x2e49)) {

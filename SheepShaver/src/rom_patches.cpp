@@ -152,6 +152,89 @@ void decode_parcels(const uint8 *src, uint8 *dest, int size)
 }
 
 
+static bool DecodeParcelLibraries(const uint8 *source, uint8 *destination, uint32 sourcesize)
+{
+	uint32 directory = ntohl(*(uint32 *)(destination + 0x1a));
+	uint32 headersize = destination[directory + 5];
+	uint32 resource = ntohl(*(uint32 *)(destination + directory));
+	uint32 resourceheader = 0;
+	uint32 masteroffset = 0;
+	uint32 storage = 0x280000;
+	uint32 parcel = 0x14;
+	int16 libraryid = -30000;
+	while (resource != 0) {
+		if (ntohl(*(uint32 *)(destination + resource + headersize + 8)) == FOURCC('n','l','i','b')) {
+			if (resourceheader == 0)
+				resourceheader = resource;
+		}
+		uint32 dataoffset = ntohl(*(uint32 *)(destination + resource + headersize + 4));
+		uint32 handleoffset = ntohl(*(uint32 *)(destination + dataoffset - 4));
+		if (handleoffset > masteroffset)
+			masteroffset = handleoffset;
+		resource = ntohl(*(uint32 *)(destination + resource + headersize));
+	}
+	if (resourceheader == 0 || headersize != 8)
+		return false;
+	while (parcel != 0) {
+		if (parcel > sourcesize - 24)
+			return false;
+		const uint8 *parceldata = source + parcel;
+		uint32 nextparcel = ntohl(*(uint32 *)parceldata);
+		uint32 payload = ntohl(*(uint32 *)(parceldata + 8));
+		bool cudaplugin = ntohl(*(uint32 *)(parceldata + 4)) == FOURCC('p','r','o','p') &&
+			memcmp(parceldata + 24, "cuda", 5) == 0;
+		if (ntohl(*(uint32 *)(parceldata + 4)) == FOURCC('n','o','d','e') || cudaplugin) {
+			for (uint32 property = 0x58; property + 0x3c <= payload; property += 0x3c) {
+				if (parcel + property > sourcesize - 0x3c)
+					return false;
+				const uint8 *descriptor = parceldata + property;
+				uint32 type = ntohl(*(uint32 *)descriptor);
+				if (type != FOURCC('n','l','i','b') && type != FOURCC('s','h','l','b') &&
+					!(cudaplugin && type == FOURCC('n','d','r','v')))
+					continue;
+				const uint8 *libraryname = descriptor + 28;
+				if (cudaplugin)
+					libraryname = (const uint8 *)"PowerMgrPlugin";
+				uint32 decodedsize = ntohl(*(uint32 *)(descriptor + 12));
+				uint32 compressedsize = ntohl(*(uint32 *)(descriptor + 20));
+				uint32 compressedoffset = ntohl(*(uint32 *)(descriptor + 24));
+				uint32 namelength = 0;
+				while (namelength < 32 && libraryname[namelength] != 0)
+					namelength++;
+				uint32 header = (storage + 8 + decodedsize + 3) & ~3;
+				uint32 entrysize = (24 + namelength + 3) & ~3;
+				if (compressedoffset > sourcesize || compressedsize > sourcesize - compressedoffset ||
+					decodedsize > 0x2fc000 - storage || header + entrysize > 0x2fc000)
+					return false;
+				for (uint32 position = storage; position < header + entrysize; position += 4) {
+					uint32 fill = ntohl(*(uint32 *)(destination + position));
+					if (fill != 0x6b636b63 && fill != 0)
+						return false;
+				}
+				decode_lzss(source + compressedoffset, destination + storage + 8, compressedsize);
+				if (memcmp(destination + storage + 8, "Joy!peff", 8) != 0)
+					return false;
+				masteroffset += 4;
+				*(uint32 *)(destination + storage) = htonl(decodedsize);
+				*(uint32 *)(destination + storage + 4) = htonl(masteroffset);
+				memset(destination + header, 0, entrysize);
+				memcpy(destination + header, destination + resourceheader, headersize);
+				*(uint32 *)(destination + header + 8) = *(uint32 *)(destination + directory);
+				*(uint32 *)(destination + header + 12) = htonl(storage + 8);
+				*(uint32 *)(destination + header + 16) = htonl(FOURCC('n','l','i','b'));
+				*(uint16 *)(destination + header + 20) = htons(libraryid--);
+				destination[header + 22] = destination[resourceheader + headersize + 14];
+				destination[header + 23] = namelength;
+				memcpy(destination + header + 24, libraryname, namelength);
+				*(uint32 *)(destination + directory) = htonl(header);
+				storage = header + entrysize;
+			}
+		}
+		parcel = nextparcel;
+	}
+	return true;
+}
+
 /*
  *  Decode ROM image, 4 MB plain images or NewWorld images
  */
@@ -199,6 +282,9 @@ bool DecodeROM(uint8 *data, uint32 size)
 			D(bug("Offset of parcels data: %08x\n", image_offset));
 			D(bug("Size of parcels data: %08x\n", image_size));
 			decode_parcels(data + image_offset, ROMBaseHost, image_size);
+			if (ReadMacInt16(ROMBase + 0x310004) >= 0x0210 &&
+				!DecodeParcelLibraries(data + image_offset, ROMBaseHost, image_size))
+				return false;
 		}
 		else {
 			D(bug("Offset of compressed data: %08x\n", image_offset));
@@ -2670,8 +2756,11 @@ static bool patch_68k(void)
 
 	// Don't install serial drivers from ROM
 	if (ROMType == ROMTYPE_ZANZIBAR || ROMType == ROMTYPE_NEWWORLD || ROMType == ROMTYPE_GOSSAMER) {
-		wp = (uint16 *)(ROMBaseHost + find_rom_resource(FOURCC('S','E','R','D'), 0));
-		*wp = htons(M68K_RTS);
+		base = find_rom_resource(FOURCC('S','E','R','D'), 0);
+		if (base != 0) {
+			wp = (uint16 *)(ROMBaseHost + base);
+			*wp = htons(M68K_RTS);
+		}
 	} else {
 		wp = (uint16 *)(ROMBaseHost + find_rom_resource(FOURCC('s','l','0','5'), 2) + 0xc4);
 		*wp++ = htons(M68K_NOP);
@@ -2991,6 +3080,59 @@ static bool patch_68k(void)
 /*
  *  Install .Sony, disk and CD-ROM drivers
  */
+
+void ReserveKernelRam(void)
+{
+	if (!HasNanoKernel2() || ReadMacInt16(ROMBase + 0x310004) < 0x0210)
+		return;
+	uint32 freepages = ReadMacInt32(KERNEL_DATA_BASE + 0x6a8);
+	if (freepages == 0 || freepages >= (RAMSize >> 12))
+		return;
+	uint32 available = freepages << 12;
+	uint32 difference = ReadMacInt32(0x1ef8) - ReadMacInt32(0x1ef4);
+	WriteMacInt32(0x1ef8, available);
+	WriteMacInt32(0x1ef4, available - difference);
+	WriteMacInt32(0x108, RAMBase + available);
+	WriteMacInt32(BootGlobsAddr - 20, RAMBase + available);
+	uint32 ramfields[] = {0, 4, 0x10, 0x14, 0x34};
+	for (int fieldindex = 0; fieldindex < 5; fieldindex++) {
+		WriteMacInt32(KERNEL_DATA_BASE + 0xd00 + ramfields[fieldindex], available);
+		WriteMacInt32(KernelDataAddr - 0xa000 + 0xdc0 + ramfields[fieldindex], available);
+	}
+}
+
+bool InitFirmwareTimeManager(void)
+{
+	if (!HasNanoKernel2() || ReadMacInt16(ROMBase + 0x310004) < 0x0210)
+		return true;
+	const uint8 procedure[] = {
+		0x55, 0x8f, 0x2f, 0x08, 0x2f, 0x3c, 0x70, 0x77, 0x70, 0x63,
+		0x2f, 0x3c, 0x00, 0x00, 0x00, 0x01, 0x2f, 0x09, 0x2f, 0x0a,
+		0x2f, 0x0b, 0x3f, 0x3c, 0x00, 0x01, 0xaa, 0x5a, 0x30, 0x1f,
+		M68K_RTS >> 8, M68K_RTS & 0xff
+	};
+	SheepArray<sizeof(procedure)> guestprocedure;
+	Host2Mac_memcpy(guestprocedure.addr(), procedure, sizeof(procedure));
+	SheepString library("\016TimeManagerLib");
+	SheepVar32 connection = 0;
+	SheepVar32 mainaddress = 0;
+	SheepArray<256> error;
+	WriteMacInt8(error.addr(), 0);
+	M68kRegisters registers;
+	memset(&registers, 0, sizeof(registers));
+	registers.a[0] = library.addr();
+	registers.a[1] = connection.addr();
+	registers.a[2] = mainaddress.addr();
+	registers.a[3] = error.addr();
+	Execute68k(guestprocedure.addr(), &registers);
+	if ((int16)registers.d[0] != 0) {
+		char message[96];
+		sprintf(message, "Cannot initialize ROM Time Manager (%d)", (int16)registers.d[0]);
+		ErrorAlert(message);
+		return false;
+	}
+	return true;
+}
 
 void InstallDrivers(void)
 {

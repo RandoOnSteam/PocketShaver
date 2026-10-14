@@ -100,7 +100,6 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 	D(bug("EmulOp %04x at %08x\n", selector, pc));
 	switch (selector) {
 		case OP_BREAK:				// Breakpoint
-			{ FILE *f = fopen("tmpc160.txt", "a"); if (f) { int i; fprintf(f, "syserr d0 %08x d1 %08x d6 %08x d7 %08x a0 %08x a7 %08x:", r->d[0], r->d[1], r->d[6], r->d[7], r->a[0], r->a[7]); for (i = 0; i < 12; i++) fprintf(f, " %08x", ReadMacInt32(r->a[7] + i * 4)); fprintf(f, "\n"); fclose(f); } }
 			Execute68kTrap(0xa9c9, r);
 			break;
 
@@ -170,7 +169,8 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 		case OP_FIX_MEMTOP:			// Fixes MemTop in BootGlobs during startup
 			D(bug("Fix MemTop\n"));
 			WriteMacInt32(BootGlobsAddr - 20, RAMBase + RAMSize);	// MemTop
-			r->a[6] = RAMBase + RAMSize;
+			ReserveKernelRam();
+			r->a[6] = ReadMacInt32(BootGlobsAddr - 20);
 			break;
 
 		case OP_FIX_MEMSIZE: {		// Fixes physical/logical RAM size during startup
@@ -178,11 +178,13 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 			uint32 diff = ReadMacInt32(0x1ef8) - ReadMacInt32(0x1ef4);
 			WriteMacInt32(0x1ef8, RAMSize);			// Physical RAM size
 			WriteMacInt32(0x1ef4, RAMSize - diff);	// Logical RAM size
+			ReserveKernelRam();
 			break;
 		}
 
 		case OP_FIX_BOOTSTACK:		// Fixes boot stack pointer in boot 3 resource
 			D(bug("Fix BootStack\n"));
+			ReserveKernelRam();
 			r->a[1] = r->a[7] = RAMBase + RAMSize * 3 / 4;
 			break;
 
@@ -330,6 +332,8 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 			r->d[0] = (uint32)-1;
 			PatchNameRegistry();
 			InitCallUniversalProc();
+			if (!InitFirmwareTimeManager())
+				QuitEmulator();
 			break;
 
 		case OP_RESET:				// Early in MacOS reset

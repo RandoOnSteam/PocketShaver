@@ -1713,6 +1713,22 @@ void ADBExit(void)
 
 static void adb_bases_invalidate(void);
 
+static bool ReadKeyboardPacket(uint8 *packet)
+{
+	packet[0] = 0;
+	packet[1] = 0xff;
+	packet[2] = 0xff;
+	if (key_read_ptr == key_write_ptr)
+		return false;
+	uint8 keycode = key_buffer[key_read_ptr];
+	key_read_ptr = (key_read_ptr + 1) % KEY_BUFFER_SIZE;
+	packet[0] = 2;
+	packet[1] = keycode;
+	if (keycode == 0x7f)
+		packet[2] = 0x7f;
+	return true;
+}
+
 void ADBOp(uint8 op, uint8 *data)
 {
 	D(bug("ADBOp op %02x, data %02x %02x %02x\n", op, data[0], data[1], data[2]));
@@ -1830,6 +1846,9 @@ void ADBOp(uint8 op, uint8 *data)
 
 			// Talk
 			switch (reg) {
+				case 0:
+					ReadKeyboardPacket(data);
+					break;
 				case 2: {	// LEDs/Modifiers
 					uint8 reg2hi = 0xff;
 					uint8 reg2lo = key_reg_2[1] | 0xf8;
@@ -3176,14 +3195,10 @@ void ADBInterrupt(void)
 	// Process accumulated keyboard events
 	while (key_read_ptr != key_write_ptr) {
 
-		// Read keyboard event
-		uint8 mac_code = key_buffer[key_read_ptr];
-		key_read_ptr = (key_read_ptr + 1) % KEY_BUFFER_SIZE;
-
-		// Call keyboard ADB handler
-		WriteMacInt8(tmp_data, 2);
-		WriteMacInt8(tmp_data + 1, mac_code);
-		WriteMacInt8(tmp_data + 2, mac_code == 0x7f ? 0x7f : 0xff);	// Power key is special
+		// Read keyboard event and call guest handler (ADB or otherwise)
+		uint8 keyboardpacket[3];
+		ReadKeyboardPacket(keyboardpacket);
+		Host2Mac_memcpy(tmp_data, keyboardpacket, sizeof(keyboardpacket));
 		/* execute_68k() copies d0-d7 and a0-a6 into the 68k emulator, so
 		   the registers this call does not set would otherwise arrive
 		   holding whatever the host left on the stack. */
