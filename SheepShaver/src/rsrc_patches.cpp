@@ -578,6 +578,20 @@ void CheckLoad(uint32 type, int16 id, uint16 *p, uint32 size)
 	if (type == FOURCC('b','o','o','t') && id == 3) {
 		D(bug("boot 3 found\n"));
 		if (HasNanoKernel2() && ReadMacInt16(ROMBase + 0x310004) >= 0x0210) {
+			static const uint8 displayinitpattern[] = {0x55, 0x4f, 0x70, 0xff, 0xab, 0xeb, 0x54, 0x4f};
+			uint32 displayinitoffset = find_rsrc_data((uint8 *)p, size, displayinitpattern, sizeof(displayinitpattern));
+			if (displayinitoffset) {
+				uint32 displayinithelper = ROMBase + 0x36f6a0;
+				Host2Mac_memcpy(displayinithelper, displayinitpattern, sizeof(displayinitpattern));
+				WriteMacInt32(displayinithelper + 8, 0x48e7fffe);
+				WriteMacInt16(displayinithelper + 12, 0x4eb9);
+				WriteMacInt32(displayinithelper + 14, NativeRoutineDescriptor(NATIVE_VIDEO_INSTALL_ACCEL));
+				WriteMacInt32(displayinithelper + 18, 0x4cdf7fff);
+				WriteMacInt16(displayinithelper + 22, M68K_RTS);
+				WriteMacInt16(Host2MacAddr((uint8 *)p) + displayinitoffset, 0x4eb9);
+				WriteMacInt32(Host2MacAddr((uint8 *)p) + displayinitoffset + 2, displayinithelper);
+				WriteMacInt16(Host2MacAddr((uint8 *)p) + displayinitoffset + 6, M68K_NOP);
+			}
 			static const uint8 displaypattern[] = {0x30, 0x3c, 0x01, 0xed, 0xab, 0xeb, 0x54, 0x4f, 0x4c, 0xee, 0x00, 0xc8, 0xff, 0xf0, 0x4e, 0x5e, 0x4e, 0x75};
 			uint32 displayoffset = find_rsrc_data((uint8 *)p, size, displaypattern, sizeof(displaypattern));
 			if (displayoffset) {

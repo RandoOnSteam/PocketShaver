@@ -199,16 +199,19 @@ void VideoInstallDisplay(void)
 	}
 	if (!error)
 		error = (int16)CallMacOS2(displaydeviceproc, enableroutine, private_data->displayhandle, displaystate.value());
-	if (!error)
-		error = (int16)CallMacOS2(displaydeviceproc, mainroutine, private_data->displayhandle, displaystate.value());
+	if (!error) {
+		uint32 maindevice = ReadMacInt32(LMADDR_MAIN_DEVICE);
+		if (maindevice != 0 && ReadMacInt16(ReadMacInt32(maindevice)) == (uint16)private_data->driverreference)
+			private_data->displayhandle = maindevice;
+		else
+			error = (int16)CallMacOS2(displaydeviceproc, mainroutine, private_data->displayhandle, displaystate.value());
+	}
 	int16 enderror = (int16)CallMacOS1(displayendproc, endroutine, displaystate.value());
 	if (!error)
 		error = enderror;
 	if (!error)
 		private_data->displayregistered = true;
 	private_data->displayregistrationactive = false;
-	printf("VIDEO REGISTER ref=%d device=%08x error=%d\n", private_data->driverreference, private_data->displayhandle, error);
-	fflush(stdout);
 }
 
 bool VideoDriverInitialized(void)
