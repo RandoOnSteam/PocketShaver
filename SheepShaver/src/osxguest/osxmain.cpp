@@ -1115,6 +1115,10 @@ int OsxGuestMain(void)
 		fprintf(stderr, "osx: no cdrom or disk image configured\n");
 		return 1;
 	}
+	if (!OsxNvramPrepareBoot(machine, bootbus, bootunit, machine->bootpartition)) {
+		fprintf(stderr, "osx: cannot store Startup Disk selection\n");
+		return 1;
+	}
 	bootargs = PrefsFindString("osxbootargs");
 	if (bootargs == NULL)
 		bootargs = "-v";
@@ -1185,6 +1189,7 @@ int OsxGuestMain(void)
 #ifdef _WIN32
 	timeEndPeriod(1);
 #endif
+	OsxNvramFinishBoot(machine, XPRAM + 0x1378);
 	memcpy(XPRAM, machine->nvram, OSXNVRAMSIZE);
 	XPRAMExit();
 	OsxFlashSave(machine);

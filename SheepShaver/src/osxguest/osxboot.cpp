@@ -416,18 +416,6 @@ static int ProbeBootImage(const char *path, int *partition, int *attached)
 	return systems;
 }
 
-static void ReadFirmwareString(int index, char *output, int size)
-{
-	uint32 header = 0x1834 + index * 4;
-	uint32 offset = ((uint32)XPRAM[header] << 8) | XPRAM[header + 1];
-	uint32 length = ((uint32)XPRAM[header + 2] << 8) | XPRAM[header + 3];
-	output[0] = 0;
-	if (offset < 0x1800 || offset + length > 0x2000 || length >= (uint32)size)
-		return;
-	memcpy(output, XPRAM + offset, length);
-	output[length] = 0;
-}
-
 int OsxSelectBootImage(int *diskindex, int *partition)
 {
 	char device[256];
@@ -455,8 +443,8 @@ int OsxSelectBootImage(int *diskindex, int *partition)
 	int fallbackpartition = -1;
 	*diskindex = -2147483647;
 	*partition = -1;
-	ReadFirmwareString(0, device, sizeof(device));
-	ReadFirmwareString(9, command, sizeof(command));
+	OsxNvramReadString(XPRAM, 0, device, sizeof(device));
+	OsxNvramReadString(XPRAM, 9, command, sizeof(command));
 	wantclassic = strstr(device, "AAPL,ROM") != NULL || strstr(command, "mac-boot") != NULL;
 	address = strstr(device, "/ata@");
 	if (address != NULL) {

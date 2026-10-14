@@ -1094,6 +1094,18 @@ const powerpc_cpu::instr_info_t powerpc_cpu::powerpc_ii_table[] = {
 	  PPC_I(SUBFZE),
 	  XO_form, 31, 200, CFLOW_NORMAL
 	},
+#ifdef SHEEPSHAVER
+	{ "tlbie",
+	  EXECUTE_0(nop),
+	  PPC_I(SYNC),
+	  X_form, 31, 306, CFLOW_NORMAL
+	},
+	{ "tlbsync",
+	  EXECUTE_0(nop),
+	  PPC_I(SYNC),
+	  X_form, 31, 566, CFLOW_NORMAL
+	},
+#endif
 	{ "sync",
 	  EXECUTE_0(nop),
 	  PPC_I(SYNC),

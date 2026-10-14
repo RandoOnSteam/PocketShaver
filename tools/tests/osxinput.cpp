@@ -1,4 +1,5 @@
 #include "../../SheepShaver/src/osxguest/osxcuda.cpp"
+#include "../../SheepShaver/src/osxguest/osxflash.cpp"
 
 typedef struct OsxInputTest {
 	int checks;
@@ -38,6 +39,56 @@ static void TestPowerCommands(OsxInputTest *test, OsxMachine *machine)
 	ReceivePacket(machine, request, sizeof(request));
 	Check(test, machine->quit == 1, "power down exits without restart");
 	machine->quit = 0;
+}
+
+static void TestBootPreferences(OsxInputTest *test, OsxMachine *machine)
+{
+	char value[256];
+	uint8 startup[4] = {0, 1, 0xff, 0xc1};
+	uint32 checksum = 0;
+	int index;
+	memset(machine->nvram, 0, OSXNVRAMSIZE);
+	machine->nvram[0x1800] = 0x12;
+	machine->nvram[0x1801] = 0x75;
+	machine->nvram[0x1802] = 1;
+	machine->nvram[0x1803] = 8;
+	machine->nvram[0x1806] = 0x18;
+	machine->nvram[0x1807] = 0x5c;
+	machine->nvram[0x1808] = 0x20;
+	for (index = 0x1834; index < 0x185c; index += 4)
+		machine->nvram[index] = 0x20;
+	machine->nvram[0x1838] = 0x1f;
+	machine->nvram[0x1839] = 0xf0;
+	machine->nvram[0x183b] = 3;
+	memcpy(machine->nvram + 0x1ff0, "abc", 3);
+	machine->nvram[0x1376] = 1;
+	machine->nvram[0x1377] = 2;
+	machine->nvram[0x1379] = 1;
+	machine->nvram[0x137a] = 0xff;
+	machine->nvram[0x137b] = 0xc1;
+	Check(test, OsxNvramPrepareBoot(machine, 0, 0, 2), "prepare PRAM-selected native boot");
+	OsxNvramReadString(machine->nvram, 0, value, sizeof(value));
+	Check(test, strcmp(value, "pci/mac-io@10/ata@20000/@0:2") == 0, "canonical native disk selection");
+	OsxNvramReadString(machine->nvram, 9, value, sizeof(value));
+	Check(test, strcmp(value, "0 bootr") == 0, "canonical native boot command");
+	OsxNvramReadString(machine->nvram, 1, value, sizeof(value));
+	Check(test, strcmp(value, "abc") == 0, "preserve unrelated firmware string");
+	for (index = 0x1800; index < 0x2000; index += 2)
+		checksum += ((uint32)machine->nvram[index] << 8) | machine->nvram[index + 1];
+	Check(test, checksum % 0xffff == 0, "canonical firmware checksum");
+	OsxNvramFinishBoot(machine, startup);
+	Check(test, machine->nvram[0x1379] == 1 && machine->nvram[0x137b] == 0xc1,
+		"normal native restart preserves PRAM selection");
+	Check(test, SetFirmwareBoot(machine->nvram, "/AAPL,ROM", "boot"), "guest selects classic firmware boot");
+	OsxNvramFinishBoot(machine, startup);
+	Check(test, machine->nvram[0x1378] == 0 && machine->nvram[0x1379] == 0 &&
+		machine->nvram[0x137a] == 0 && machine->nvram[0x137b] == 0,
+		"classic firmware selection clears stale native PRAM drive");
+	Check(test, machine->nvram[0x1376] == 1 && machine->nvram[0x1377] == 2,
+		"synchronization preserves adjacent PRAM");
+	machine->nvram[0x1379] = 2;
+	OsxNvramFinishBoot(machine, startup);
+	Check(test, machine->nvram[0x1379] == 2, "preserve newly selected classic drive");
 }
 
 static void TestPram(OsxInputTest *test, OsxMachine *machine)
@@ -250,6 +301,7 @@ int main(void)
 	OsxCudaReset(machine);
 	Check(&test, !MouseHasData(&machine->cuda), "reset clears pending input");
 	TestPowerCommands(&test, machine);
+	TestBootPreferences(&test, machine);
 	TestPram(&test, machine);
 	TestAbsolute(&test, machine);
 	free(machine->cpu);

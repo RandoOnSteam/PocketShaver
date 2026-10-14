@@ -23,6 +23,7 @@
 #include "ppc-report.h"
 #include "main.h"
 #include "prefs.h"
+#include "vm_alloc.h"
 #include "xlowmem.h"
 
 #if defined(__APPLE__)
@@ -204,6 +205,7 @@ public:
 
 	// Constructor
 	sheepshaver_cpu();
+	~sheepshaver_cpu();
 
 	// CR & XER accessors
 	uint32 get_cr() const		{ return cr().get(); }
@@ -235,6 +237,8 @@ public:
 	bool DeliverSystemCall(void);
 	bool nanokernel2;
 	bool resetseen;
+	bool kernelmemorymapped;
+	uint32 kernelmemorybase;
 	const char *enter_exception_vector(uint32 vector, uint32 handler_slot,
 		uint32 saved_pc, uint32 saved_msr);
 	void exception_step(void);
@@ -409,7 +413,23 @@ sheepshaver_cpu::sheepshaver_cpu()
 	init_decoder();
 	nanokernel2 = HasNanoKernel2();
 	resetseen = false;
+#if PPC_FLIGHT_RECORDER >= 2
+	start_log();
+#endif
+	kernelmemorymapped = false;
+	kernelmemorybase = ((RAMSize + 0x0fffffff) & 0xf0000000) + 0x10000000;
+	if (nanokernel2 && ReadMacInt16(ROMBase + 0x310004) >= 0x0210) {
+		if (vm_acquire_fixed(Mac2HostAddr(kernelmemorybase), 0x200000) < 0) {
+			ErrorAlert("Cannot allocate NanoKernel memory");
+			QuitEmulator();
+		}
+		kernelmemorymapped = true;
+		WriteMacInt32(KernelDataAddr - 0x20, KernelDataAddr - 0xa000);
+		Mac2Mac_memcpy(KernelDataAddr - 0xa000 + 0xdc0, KernelDataAddr + 0xd00, 0x100);
+	}
 	sprg(0) = KernelDataAddr;
+	if (nanokernel2)
+		WriteMacInt32(KernelDataAddr - 4, KernelDataAddr);
 	sprg(3) = KernelDataAddr + PPC_68K_EXCEPTION_TABLE_OFFSET;
 	exception_step_active = false;
 	exception_step_trap = false;
@@ -549,6 +569,13 @@ void sheepshaver_cpu::call_execute_emul_op(powerpc_cpu * cpu, uint32 emul_op) {
 }
 
 // Execute EMUL_OP routine
+sheepshaver_cpu::~sheepshaver_cpu()
+{
+	if (kernelmemorymapped)
+		vm_release(Mac2HostAddr(kernelmemorybase), 0x200000);
+}
+
+
 void sheepshaver_cpu::execute_emul_op(uint32 emul_op)
 {
 #ifdef _WIN32

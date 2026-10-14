@@ -360,6 +360,9 @@ void EtherSlirpSend(const uint8 *packet, int length);
 uint32 OsxFlashRead(OsxMachine *machine, uint32 offset, int size);
 void OsxFlashWrite(OsxMachine *machine, uint32 offset, int size, uint32 value);
 void OsxFlashLoad(OsxMachine *machine, const char *path);
+void OsxNvramReadString(const uint8 *nvram, int index, char *output, int size);
+int OsxNvramPrepareBoot(OsxMachine *machine, int bus, int unit, int partition);
+void OsxNvramFinishBoot(OsxMachine *machine, const uint8 *startup);
 void OsxFlashSave(OsxMachine *machine);
 
 void OsxCudaReset(OsxMachine *machine);
