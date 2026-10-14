@@ -35,6 +35,7 @@
 #include "user_strings.h"
 #include "version.h"
 #include "thunks.h"
+#include "rom_patches.h"
 
 #if defined(__APPLE__)
 #include "TargetConditionals.h"
@@ -164,6 +165,52 @@ int16 VSLDoInterruptService(uint32 arg1)
 }
 typedef void (*nqdmisc_ptr)(uint32, void *);
 static uint32 nqdmisc_tvect = 0;
+void VideoInstallDisplay(void)
+{
+	if (!HasNanoKernel2() || ReadMacInt16(ROMBase + 0x310004) < 0x0210)
+		return;
+	if (private_data == NULL || private_data->displayregistered || private_data->displayregistrationactive)
+		return;
+	private_data->displayregistrationactive = true;
+	typedef int16 (*displaybeginproc)(uint32 *);
+	typedef int16 (*displaynewproc)(uint32 *, int16, uint32, uint32, uint32, uint32, uint32);
+	typedef int16 (*displaydeviceproc)(uint32, uint32);
+	typedef int16 (*displayendproc)(uint32);
+	uint32 beginroutine = FindLibSymbol("\014InterfaceLib", "\030DMBeginConfigureDisplays");
+	uint32 newroutine = FindLibSymbol("\014InterfaceLib", "\014DMNewDisplay");
+	uint32 enableroutine = FindLibSymbol("\014InterfaceLib", "\017DMEnableDisplay");
+	uint32 mainroutine = FindLibSymbol("\014InterfaceLib", "\020DMSetMainDisplay");
+	uint32 endroutine = FindLibSymbol("\014InterfaceLib", "\026DMEndConfigureDisplays");
+	if (!beginroutine || !newroutine || !enableroutine || !mainroutine || !endroutine) {
+		private_data->displayregistrationactive = false;
+		return;
+	}
+	SheepVar32 displaystate = 0;
+	SheepVar32 displaydevice = 0;
+	int16 error = (int16)CallMacOS1(displaybeginproc, beginroutine, (uint32 *)(uintptr)displaystate.addr());
+	if (error) {
+		private_data->displayregistrationactive = false;
+		return;
+	}
+	if (private_data->displayhandle == 0) {
+		error = (int16)CallMacOS7(displaynewproc, newroutine, (uint32 *)(uintptr)displaydevice.addr(), private_data->driverreference, video_rel_depth_from_abs(private_data->saveMode), 0, 0, 0, displaystate.value());
+		if (!error)
+			private_data->displayhandle = displaydevice.value();
+	}
+	if (!error)
+		error = (int16)CallMacOS2(displaydeviceproc, enableroutine, private_data->displayhandle, displaystate.value());
+	if (!error)
+		error = (int16)CallMacOS2(displaydeviceproc, mainroutine, private_data->displayhandle, displaystate.value());
+	int16 enderror = (int16)CallMacOS1(displayendproc, endroutine, displaystate.value());
+	if (!error)
+		error = enderror;
+	if (!error)
+		private_data->displayregistered = true;
+	private_data->displayregistrationactive = false;
+	printf("VIDEO REGISTER ref=%d device=%08x error=%d\n", private_data->driverreference, private_data->displayhandle, error);
+	fflush(stdout);
+}
+
 bool VideoDriverInitialized(void)
 {
 	return private_data != NULL;
@@ -1739,6 +1786,10 @@ int16 VideoDoDriverIO(uint32 spaceID, uint32 commandID, uint32 commandContents, 
 			}
 
 			private_data = new VidLocals;
+			private_data->driverreference = (int16)ReadMacInt16(commandContents);
+			private_data->displayhandle = 0;
+			private_data->displayregistered = false;
+			private_data->displayregistrationactive = false;
 			private_data->gammaTable = 0;
 			private_data->regEntryID = Mac_sysalloc(sizeof(RegEntryID));
 			if (private_data->regEntryID == 0) {

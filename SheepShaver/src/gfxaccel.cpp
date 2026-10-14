@@ -19,10 +19,10 @@
  */
 
 #include "sysdeps.h"
+#include "video.h"
 
 #if defined(ENABLE_GFXACCEL)
 #include "prefs.h"
-#include "video.h"
 #include "video_defs.h"
 #include "rave_engine.h"
 #include "gl_engine.h"
@@ -747,6 +747,8 @@ bool GfxAccelInstallSweepPending(void)
 {
 	if (!VideoDriverInitialized())
 		return false;
+	if (private_data->displayregistrationactive)
+		return false;
 	uint8 applicationnamelength = ReadMacInt8(0x910);
 	return gfxaccel_install_sweep_armed && applicationnamelength != 0 && applicationnamelength <= 31;
 }
@@ -781,6 +783,12 @@ void GfxAccelResetForReboot(void)
 
 void VideoInstallAccel(void)
 {
+	if (private_data != NULL && private_data->displayregistrationactive)
+		return;
+	VideoInstallDisplay();
+	uint8 applicationnamelength = ReadMacInt8(0x910);
+	if (applicationnamelength == 0 || applicationnamelength > 31)
+		return;
 	QD3D_INIT_LOG("VideoInstallAccel: gfx=%d nqd=%d rave=%d gl=%d dsp=%d registered=%d",
 	              PrefsFindBool("gfxaccel"), PrefsFindBool("nqdaccel"),
 	              PrefsFindBool("raveaccel"), PrefsFindBool("glaccel"),
@@ -852,9 +860,6 @@ void VideoInstallAccel(void)
 
 	if (!gfxaccel_install_sweep_armed)
 		return;
-	uint8 applicationnamelength = ReadMacInt8(0x910);
-	if (applicationnamelength == 0 || applicationnamelength > 31)
-		return;
 	gfxaccel_install_sweep_armed = false;
 
 	// Register RAVE engine for 3D acceleration.
@@ -900,6 +905,7 @@ bool GfxAccelInstallSweepPending(void)
 
 void VideoInstallAccel(void)
 {
+	VideoInstallDisplay();
 }
 
 bool NQD_sync_hook(uint32 arg)

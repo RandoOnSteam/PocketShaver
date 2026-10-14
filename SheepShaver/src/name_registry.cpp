@@ -502,11 +502,20 @@ void DoPatchNameRegistry(void)
 			}
 			RegistryPropertyCreateStr(video.addr(), "AAPL,connector", "monitor");
 			RegistryPropertyCreateStr(video.addr(), "device_type", "display");
-			SheepArray<sizeof(video_driver)> the_video_driver;
-			Host2Mac_memcpy(the_video_driver.addr(), video_driver, sizeof(video_driver));
-			if (HasNanoKernel2() && ReadMacInt16(ROMBase + 0x310004) >= 0x0210)
-				WriteMacInt8(the_video_driver.addr() + 0x156, 3);
-			RegistryPropertyCreate(video.addr(), "driver,AAPL,MacOS,PowerPC", the_video_driver.addr(), sizeof(video_driver));
+			SheepArray<sizeof(video_driver) + 1> the_video_driver;
+			uint32 videodriversize = sizeof(video_driver);
+			Host2Mac_memcpy(the_video_driver.addr(), video_driver, videodriversize);
+			if (HasNanoKernel2() && ReadMacInt16(ROMBase + 0x310004) >= 0x0210) {
+				Host2Mac_memcpy(the_video_driver.addr() + 0x159, video_driver + 0x158, videodriversize - 0x158);
+				WriteMacInt32(the_video_driver.addr() + 0x54, 0x40);
+				WriteMacInt8(the_video_driver.addr() + 0x155, 0x3c);
+				WriteMacInt8(the_video_driver.addr() + 0x156, 7);
+				WriteMacInt8(the_video_driver.addr() + 0x157, 26);
+				WriteMacInt8(the_video_driver.addr() + 0x158, '.');
+				WriteMacInt8(the_video_driver.addr() + 0x173, 0x28);
+				videodriversize++;
+			}
+			RegistryPropertyCreate(video.addr(), "driver,AAPL,MacOS,PowerPC", the_video_driver.addr(), videodriversize);
 			RegistryPropertyCreateStr(video.addr(), "model", "SheepShaver Video");
 		}
 

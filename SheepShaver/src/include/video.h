@@ -131,6 +131,10 @@ struct VidLocals{
 	uint8	cursorHotY;
 	uint32	vslServiceID;		// VSL interrupt service ID
 	bool	interruptsEnabled;	// VBL interrupts on/off
+	int16 driverreference;
+	uint32 displayhandle;
+	bool displayregistered;
+	bool displayregistrationactive;
 	uint32	regEntryID;			// Mac address of the service owner
 };
 
@@ -196,6 +200,7 @@ void video_guest_show_cursor(void);
 
 extern int16 VSLDoInterruptService(uint32 arg1);
 extern bool VideoDriverInitialized(void);
+extern void VideoInstallDisplay(void);
 extern void NQDMisc(uint32 arg1, uintptr arg2);
 
 // Native QuickDraw acceleration callbacks
