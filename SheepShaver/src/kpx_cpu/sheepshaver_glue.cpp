@@ -987,20 +987,23 @@ uint32 sheepshaver_cpu::execute_macos_code(uint32 tvect, int nargs, uint32 const
 	uint32 saved_pc = pc();
 	uint32 saved_lr = lr();
 	uint32 saved_ctr= ctr();
+	uint32 savedcondition = get_cr();
+	uint32 savedexception = get_xer();
+	uint32 registers[32];
+	memcpy(registers, &gpr(0), sizeof(registers));
 
 	// Build trampoline with EXEC_RETURN
 	SheepVar32 trampoline = POWERPC_EXEC_RETURN;
 	lr() = trampoline.addr();
 
-	gpr(1) -= 64;								// Create stack frame
+	uint32 savedstack = gpr(1);
+	gpr(1) = (savedstack - 64) & ~15U;
+	WriteMacInt32(gpr(1), savedstack);								// Create stack frame
 	uint32 proc = ReadMacInt32(tvect);			// Get routine address
 	uint32 toc = ReadMacInt32(tvect + 4);		// Get TOC pointer
 
 	// Save PowerPC registers.
-	uint32 regs[9];
-	regs[0] = gpr(2);
-	for (int i = 0; i < nargs; i++)
-		regs[i + 1] = gpr(i + 3);
+
 
 	// Prepare and call MacOS routine
 	gpr(2) = toc;
@@ -1016,11 +1019,9 @@ uint32 sheepshaver_cpu::execute_macos_code(uint32 tvect, int nargs, uint32 const
 	uint32 retval = gpr(3);
 
 	// Restore PowerPC registers
-	for (int i = 0; i <= nargs; i++)
-		gpr(i + 2) = regs[i];
-
-	// Cleanup stack
-	gpr(1) += 64;
+	memcpy(&gpr(0), registers, sizeof(registers));
+	set_cr(savedcondition);
+	set_xer(savedexception);
 
 	// Restore program counters and branch registers
 	pc() = saved_pc;
@@ -3521,6 +3522,15 @@ void sheepshaver_cpu::execute_native_op(uint32 selector)
 #endif
 
 	switch (selector) {
+	case NATIVE_RTC_DISPATCH:
+		if (gpr(11) == 0) {
+			WriteMacInt16(gpr(3), 0);
+			WriteMacInt32(gpr(3) + 2, TimerDateTime() + ReadMacInt32(gpr(2) + 0x3c));
+			WriteMacInt16(gpr(3) + 6, 0);
+		} else
+			WriteMacInt32(gpr(2) + 0x3c, ReadMacInt32(gpr(3) + 2) - TimerDateTime());
+		gpr(3) = 0;
+		break;
 	case NATIVE_PATCH_NAME_REGISTRY:
 		DoPatchNameRegistry();
 		break;

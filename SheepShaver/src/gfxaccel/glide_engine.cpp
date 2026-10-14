@@ -265,7 +265,7 @@ void GlideInstallHooks(void)
 		const char *candidate = kGlideLibCandidates[c];
 		QD3D_INIT_LOG("GlideInstallHooks: trying library \"%s\" (%d chars)",
 					  candidate + 1, (int)(unsigned char)candidate[0]);
-		uint32_t probe_tvect = FindLibSymbol(candidate, glide_symbols[0].pascal_sym);
+		uint32_t probe_tvect = FindLibSymbol(candidate, glide_symbols[0].pascal_sym, 2);
 		if (probe_tvect == 0)
 			continue;
 

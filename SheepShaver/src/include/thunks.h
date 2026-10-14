@@ -96,6 +96,9 @@ enum {
   NATIVE_OP_MAX
 };
 
+#define NATIVE_RTC_DISPATCH NATIVE_OP_MAX
+typedef char nativertcdispatchfits[(NATIVE_RTC_DISPATCH < 64)];
+
 // Ensure we don't exceed the 6-bit NATIVE_OP field (bits 20-25). A negative
 // array bound is the pre-C11/C++11 compile-time assertion; the typedef is
 // never instantiated.

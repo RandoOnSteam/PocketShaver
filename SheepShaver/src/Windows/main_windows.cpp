@@ -754,7 +754,6 @@ static DWORD WINAPI tick_func(void *arg)
 		if (++tick_counter > 60) {
 			tick_counter = 0;
 			WriteMacInt32(0x20c, TimerDateTime());
-			{ FILE *f = fopen("tmpboot.txt", "a"); if (f) { uint32 em = ReadMacInt32(0x2b6); fprintf(f, "nkver %04x efe0 %08x efd8 %08x ", ReadMacInt16(0x68ffefe4), ReadMacInt32(0x68ffefe0), ReadMacInt32(0x68ffefd8)); fprintf(f, "dserr %04x b20 %04x b9e %04x em %08x 2f2 %08x 2f6 %08x box %08x\n", ReadMacInt16(0xaf0), ReadMacInt16(0xb20), ReadMacInt16(0xb9e), em, em ? ReadMacInt32(em + 0x2f2) : 0, em ? ReadMacInt32(em + 0x2f6) : 0, ReadMacInt32(ReadMacInt32(0xdd8) + 0x60)); if (em && ReadMacInt32(em + 0x2f6)) { uint32 p = ReadMacInt32(em + 0x2f6); int i; for (i = 0; i < 24; i++) fputc(ReadMacInt8(p + i) >= 32 ? ReadMacInt8(p + i) : '.', f); fputc('\n', f); } fclose(f); } { static int dumped = 0; if (!dumped && ReadMacInt16(0xaf0) == 0x66) { FILE *g = fopen("tmpstack.txt", "w"); uint32 sp = ReadMacInt32(0x908); uint32 a; dumped = 1; if (g) { fprintf(g, "908 %08x 904 %08x\n", sp, ReadMacInt32(0x904)); for (a = sp - 0x2000; a < sp + 0x100; a += 4) fprintf(g, "%08x %08x\n", a, ReadMacInt32(a)); fclose(g); } } } }
 		}
 		SetInterruptFlag(INTFLAG_VIA);
 		TriggerInterrupt();

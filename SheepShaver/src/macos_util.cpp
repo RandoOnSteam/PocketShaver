@@ -265,7 +265,7 @@ void FileDiskLayout(loff_t size, uint8 *data, loff_t &start_byte, loff_t &real_s
  *  lib and sym must be Pascal strings!
  */
 
-uint32 FindLibSymbol(const char *lib_str, const char *sym_str)
+uint32 FindLibSymbol(const char *lib_str, const char *sym_str, uint32 loadoptions)
 {
 	SheepVar32 conn_id = 0;
 	SheepVar32 main_addr = 0;
@@ -283,13 +283,16 @@ uint32 FindLibSymbol(const char *lib_str, const char *sym_str)
 	if (ReadMacInt32(XLM_RUN_MODE) == MODE_EMUL_OP) {
 		D(bug("FindLibSymbol: using EMUL_OP (Execute68k) path\n"));
 		M68kRegisters r;
+		memset(&r, 0, sizeof(r));
+		if (HasMacStarted())
+			r.a[5] = ReadMacInt32(0x904);
 	
 		// Find shared library
 		static const uint8 proc1_template[] = {
 			0x55, 0x8f,							// subq.l	#2,a7
 			0x2f, 0x08,							// move.l	a0,-(a7)
 			0x2f, 0x3c, 0x70, 0x77, 0x70, 0x63,	// move.l	#'pwpc',-(a7)
-			0x2f, 0x3c, 0x00, 0x00, 0x00, 0x01,	// move.l	#kReferenceCFrag,-(a7)
+			0x2f, 0x01, 0x4e, 0x71, 0x4e, 0x71,
 			0x2f, 0x09,							// move.l	a1,-(a7)
 			0x2f, 0x0a,							// move.l	a2,-(a7)
 			0x2f, 0x0b,							// move.l	a3,-(a7)
@@ -299,6 +302,7 @@ uint32 FindLibSymbol(const char *lib_str, const char *sym_str)
 			M68K_RTS >> 8, M68K_RTS & 0xff
 		};
 		BUILD_SHEEPSHAVER_PROCEDURE(proc1);
+		r.d[1] = loadoptions;
 		r.a[0] = lib.addr();
 		r.a[1] = conn_id.addr();
 		r.a[2] = main_addr.addr();
@@ -355,7 +359,7 @@ uint32 FindLibSymbol(const char *lib_str, const char *sym_str)
 			return 0;
 		}
 		int16 res;
-		res = GetSharedLibrary(lib.addr(), FOURCC('p','w','p','c'), 1, conn_id.addr(), main_addr.addr(), err.addr());
+		res = GetSharedLibrary(lib.addr(), FOURCC('p','w','p','c'), loadoptions, conn_id.addr(), main_addr.addr(), err.addr());
 		D(bug("FindLibSymbol: GetSharedLibrary returned %d (connID=%ld, main=0x%lx)\n",
 			   res, (long)conn_id.value(), (unsigned long)main_addr.value()));
 		D(bug(" GetSharedLibrary: ret %d, connection ID %ld, main %p\n", res, conn_id.value(), main_addr.value()));

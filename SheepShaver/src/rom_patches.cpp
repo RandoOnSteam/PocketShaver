@@ -38,6 +38,7 @@
 #include "sony.h"
 #include "disk.h"
 #include "cdrom.h"
+#include "video.h"
 #include "audio.h"
 #include "audio_defs.h"
 #include "serial.h"
@@ -917,6 +918,9 @@ static bool PatchNanoKernel2PageMap(void)
 	uint32 irpoffset;
 	uint32 kdpoffset;
 	uint32 edpoffset;
+	uint32 framebuffersize = 0;
+	uint32 framebufferpage;
+	uint32 framebufferpages;
 	for (index = 0; index < 0x100; index += 4) {
 		if (ReadMacInt32(ROMBase + pagemap + index) != POWERPC_NOP)
 			return false;
@@ -935,6 +939,30 @@ static bool PatchNanoKernel2PageMap(void)
 		WriteMacInt32(ROMBase + pagemap + records, 0x0000ffff);
 		WriteMacInt32(ROMBase + pagemap + records + 4, 0x00000400);
 		records += 8;
+	}
+	for (index = 0; VModes[index].viType != DIS_INVALID; index++) {
+		uint32 modesize = VModes[index].viRowBytes * (VModes[index].viYsize + 2);
+		if (modesize > framebuffersize)
+			framebuffersize = modesize;
+	}
+	framebufferpage = screen_base & 0xfffff000;
+	framebufferpages = (framebuffersize + (screen_base & 0xfff) + 0xfff) >> 12;
+	while (framebufferpages != 0) {
+		uint32 segmentpage = (framebufferpage & 0x0fffffff) >> 12;
+		uint32 segmentpages = 0x10000 - segmentpage;
+		if (segmentpages > framebufferpages)
+			segmentpages = framebufferpages;
+		if (segments[framebufferpage >> 28] != 0)
+			return false;
+		segments[framebufferpage >> 28] = records;
+		WriteMacInt32(ROMBase + pagemap + records, (segmentpage << 16) | (segmentpages - 1));
+		WriteMacInt32(ROMBase + pagemap + records + 4, framebufferpage | 2);
+		records += 8;
+		WriteMacInt32(ROMBase + pagemap + records, 0x0000ffff);
+		WriteMacInt32(ROMBase + pagemap + records + 4, 0x00000400);
+		records += 8;
+		framebufferpage += segmentpages << 12;
+		framebufferpages -= segmentpages;
 	}
 	segments[4] = records;
 	WriteMacInt32(ROMBase + pagemap + records, 0x080004ff);
@@ -3101,7 +3129,7 @@ void ReserveKernelRam(void)
 	}
 }
 
-bool InitFirmwareTimeManager(void)
+bool InitFirmwareClockServices(void)
 {
 	if (!HasNanoKernel2() || ReadMacInt16(ROMBase + 0x310004) < 0x0210)
 		return true;
@@ -3113,23 +3141,26 @@ bool InitFirmwareTimeManager(void)
 	};
 	SheepArray<sizeof(procedure)> guestprocedure;
 	Host2Mac_memcpy(guestprocedure.addr(), procedure, sizeof(procedure));
-	SheepString library("\016TimeManagerLib");
-	SheepVar32 connection = 0;
-	SheepVar32 mainaddress = 0;
-	SheepArray<256> error;
-	WriteMacInt8(error.addr(), 0);
-	M68kRegisters registers;
-	memset(&registers, 0, sizeof(registers));
-	registers.a[0] = library.addr();
-	registers.a[1] = connection.addr();
-	registers.a[2] = mainaddress.addr();
-	registers.a[3] = error.addr();
-	Execute68k(guestprocedure.addr(), &registers);
-	if ((int16)registers.d[0] != 0) {
-		char message[96];
-		sprintf(message, "Cannot initialize ROM Time Manager (%d)", (int16)registers.d[0]);
-		ErrorAlert(message);
-		return false;
+	const char *libraries[] = {"\016TimeManagerLib", "\016RTCServicesLib"};
+	for (uint32 index = 0; index < sizeof(libraries) / sizeof(libraries[0]); index++) {
+		SheepString library(libraries[index]);
+		SheepVar32 connection = 0;
+		SheepVar32 mainaddress = 0;
+		SheepArray<256> error;
+		WriteMacInt8(error.addr(), 0);
+		M68kRegisters registers;
+		memset(&registers, 0, sizeof(registers));
+		registers.a[0] = library.addr();
+		registers.a[1] = connection.addr();
+		registers.a[2] = mainaddress.addr();
+		registers.a[3] = error.addr();
+		Execute68k(guestprocedure.addr(), &registers);
+		if ((int16)registers.d[0] != 0) {
+			char message[96];
+			sprintf(message, "Cannot initialize ROM %s (%d)", libraries[index] + 1, (int16)registers.d[0]);
+			ErrorAlert(message);
+			return false;
+		}
 	}
 	return true;
 }

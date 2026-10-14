@@ -2952,6 +2952,8 @@ void GLInstallHooks()
 		{ "\014gluUnProject", GL_SUB_GLU_UNPROJECT, "gluUnProject" },
 	};
 	const int num_glu = sizeof(glu_symbols) / sizeof(glu_symbols[0]);
+	bool glpresent = FindLibSymbol(gl_lib, "\013glGetString", 2) != 0;
+	bool glupresent = FindLibSymbol(glu_lib, "\016gluPerspective", 2) != 0;
 
 	// ---- Cache AGL TVECTs ----
 	struct CachedTVECT {
@@ -2965,8 +2967,8 @@ void GLInstallHooks()
 	int not_found_count = 0;
 
 	// Search AGL functions in OpenGLLibrary
-	for (int i = 0; !gl_hooks_installed && i < num_agl; i++) {
-		uint32_t tvect = FindLibSymbol(gl_lib, agl_symbols[i].pascal_sym);
+	for (int i = 0; !gl_hooks_installed && glpresent && i < num_agl; i++) {
+		uint32_t tvect = FindLibSymbol(gl_lib, agl_symbols[i].pascal_sym, 2);
 		if (tvect != 0) {
 			cached_tvects.push_back({ tvect, agl_symbols[i].sub_opcode, agl_symbols[i].name });
 			found_count++;
@@ -2980,8 +2982,8 @@ void GLInstallHooks()
 
 	// Search core GL functions in OpenGLLibrary
 	int gl_found = 0, gl_notfound = 0;
-	for (int i = 0; !gl_hooks_installed && i < num_gl; i++) {
-		uint32_t tvect = FindLibSymbol(gl_lib, gl_symbols[i].pascal_sym);
+	for (int i = 0; !gl_hooks_installed && glpresent && i < num_gl; i++) {
+		uint32_t tvect = FindLibSymbol(gl_lib, gl_symbols[i].pascal_sym, 2);
 		if (tvect != 0) {
 			cached_tvects.push_back({ tvect, gl_symbols[i].sub_opcode, gl_symbols[i].name });
 			gl_found++;
@@ -2994,8 +2996,8 @@ void GLInstallHooks()
 	// Search GL/extension functions without expanding the core AGL context
 	// dispatch table.
 	int gl_extra_found = 0, gl_extra_notfound = 0;
-	for (int i = 0; !gl_hooks_installed && i < num_gl_extra; i++) {
-		uint32_t tvect = FindLibSymbol(gl_lib, gl_extra_symbols[i].pascal_sym);
+	for (int i = 0; !gl_hooks_installed && glpresent && i < num_gl_extra; i++) {
+		uint32_t tvect = FindLibSymbol(gl_lib, gl_extra_symbols[i].pascal_sym, 2);
 		if (tvect != 0) {
 			cached_tvects.push_back({ tvect, gl_extra_symbols[i].sub_opcode, gl_extra_symbols[i].name });
 			gl_extra_found++;
@@ -3014,10 +3016,12 @@ void GLInstallHooks()
 	// GLThunksInit already allocates for the 700..753 GLU range).
 	const size_t glu_range_begin = cached_tvects.size();
 	int glu_found = 0, glu_notfound = 0;
-	for (int i = 0; !glu_hooks_installed && i < num_glu; i++) {
-		uint32_t tvect = FindLibSymbol(glu_lib, glu_symbols[i].pascal_sym);
-		if (tvect == 0)
-			tvect = FindLibSymbol(gl_lib, glu_symbols[i].pascal_sym);
+	for (int i = 0; !glu_hooks_installed && (glupresent || glpresent) && i < num_glu; i++) {
+		uint32_t tvect = 0;
+		if (glupresent)
+			tvect = FindLibSymbol(glu_lib, glu_symbols[i].pascal_sym, 2);
+		if (tvect == 0 && glpresent)
+			tvect = FindLibSymbol(gl_lib, glu_symbols[i].pascal_sym, 2);
 		if (tvect != 0) {
 			cached_tvects.push_back({ tvect, glu_symbols[i].sub_opcode, glu_symbols[i].name });
 			glu_found++;

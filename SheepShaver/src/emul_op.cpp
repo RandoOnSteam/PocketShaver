@@ -332,7 +332,7 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 			r->d[0] = (uint32)-1;
 			PatchNameRegistry();
 			InitCallUniversalProc();
-			if (!InitFirmwareTimeManager())
+			if (!InitFirmwareClockServices())
 				QuitEmulator();
 			break;
 
@@ -384,7 +384,10 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 #if !PRECISE_TIMING
 					TimerInterrupt();
 #endif
-					ExecuteNative(NATIVE_VIDEO_VBL);
+					if (VideoDriverInitialized())
+						ExecuteNative(NATIVE_VIDEO_VBL);
+					else
+						VideoVBL();
 #ifdef ENABLE_JOYMANAGER
 					JoyManagerVBL();
 #endif

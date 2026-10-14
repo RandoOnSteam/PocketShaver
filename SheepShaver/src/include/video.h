@@ -143,6 +143,7 @@ extern void VideoVBL(void);
 extern void VideoFallbackVBL(void);
 #endif
 extern void VideoInstallAccel(void);
+extern bool GfxAccelInstallSweepPending(void);
 // Unwind guest-facing gfxaccel registration on a guest soft reboot so the
 // accRun/VideoInstallAccel retry path reinstalls into the fresh guest.
 extern void GfxAccelResetForReboot(void);
@@ -194,6 +195,7 @@ void video_guest_hide_cursor(void);
 void video_guest_show_cursor(void);
 
 extern int16 VSLDoInterruptService(uint32 arg1);
+extern bool VideoDriverInitialized(void);
 extern void NQDMisc(uint32 arg1, uintptr arg2);
 
 // Native QuickDraw acceleration callbacks

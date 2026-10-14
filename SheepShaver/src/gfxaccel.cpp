@@ -745,7 +745,10 @@ void GfxAccelRequestInstallSweep(void)
 }
 bool GfxAccelInstallSweepPending(void)
 {
-	return gfxaccel_install_sweep_armed;
+	if (!VideoDriverInitialized())
+		return false;
+	uint8 applicationnamelength = ReadMacInt8(0x910);
+	return gfxaccel_install_sweep_armed && applicationnamelength != 0 && applicationnamelength <= 31;
 }
 
 /*
@@ -849,6 +852,9 @@ void VideoInstallAccel(void)
 
 	if (!gfxaccel_install_sweep_armed)
 		return;
+	uint8 applicationnamelength = ReadMacInt8(0x910);
+	if (applicationnamelength == 0 || applicationnamelength > 31)
+		return;
 	gfxaccel_install_sweep_armed = false;
 
 	// Register RAVE engine for 3D acceleration.
@@ -884,8 +890,14 @@ void VideoInstallAccel(void)
 			&& ENABLE_NATIVE_CINEPAK_PATCH
 		CinepakRegisterFromNative();
 	#endif
+	gfxaccel_install_sweep_armed = false;
 }
 #else
+bool GfxAccelInstallSweepPending(void)
+{
+	return false;
+}
+
 void VideoInstallAccel(void)
 {
 }

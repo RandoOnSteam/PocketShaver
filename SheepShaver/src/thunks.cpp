@@ -108,6 +108,9 @@ uint32 NativeOpcode(int selector)
 	case NATIVE_MAKE_EXECUTABLE:
 		opcode = POWERPC_NATIVE_OP(1, selector);
 		break;
+	case NATIVE_RTC_DISPATCH:
+		opcode = POWERPC_NATIVE_OP(0, selector);
+		break;
 	case NATIVE_RAVE_DISPATCH:
 		opcode = POWERPC_NATIVE_OP(0, selector);
 		break;
@@ -485,5 +488,8 @@ uint32 NativeRoutineDescriptor(int selector)
 void ExecuteNative(int selector)
 {
 	M68kRegisters r;
+	memset(&r, 0, sizeof(r));
+	if (HasMacStarted())
+		r.a[5] = ReadMacInt32(0x904);
 	Execute68k(NativeRoutineDescriptor(selector), &r);
 }

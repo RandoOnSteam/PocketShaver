@@ -164,6 +164,11 @@ int16 VSLDoInterruptService(uint32 arg1)
 }
 typedef void (*nqdmisc_ptr)(uint32, void *);
 static uint32 nqdmisc_tvect = 0;
+bool VideoDriverInitialized(void)
+{
+	return private_data != NULL;
+}
+
 void NQDMisc(uint32 arg1, uintptr arg2)
 {
 	CallMacOS2(nqdmisc_ptr, nqdmisc_tvect, arg1, (void *)arg2);
@@ -1727,7 +1732,6 @@ int16 VideoDoDriverIO(uint32 spaceID, uint32 commandID, uint32 commandContents, 
 				break;
 			}
 			nqdmisc_tvect = FindLibSymbol("\014InterfaceLib", "\007NQDMisc");
-			D(bug("NQDMisc TVECT at %08lx\n", nqdmisc_tvect));
 			if (nqdmisc_tvect == 0) {
 				printf("FATAL: VideoDoDriverIO(): Can't find NQDMisc()\n");
 				err = -1;

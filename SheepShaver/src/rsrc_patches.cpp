@@ -489,6 +489,9 @@ void DrainPendingResourceLocks(void)
 		if (h == 0 || ReadMacInt32(h) == 0)
 			continue;									// empty / already-purged handle
 		M68kRegisters r;
+		memset(&r, 0, sizeof(r));
+		if (HasMacStarted())
+			r.a[5] = ReadMacInt32(0x904);
 		r.a[0] = h;
 		Execute68kTrap(0xa04a, &r);					// HNoPurge(h)
 		r.a[0] = h;
@@ -511,6 +514,9 @@ void DrainPendingResourceLocks(void)
 	static bool dispose_patch_installed = false;
 	if (!dispose_patch_installed && locked_nift_count > 0) {
 		M68kRegisters r;
+		memset(&r, 0, sizeof(r));
+		if (HasMacStarted())
+			r.a[5] = ReadMacInt32(0x904);
 		r.d[0] = 0xa023;								// _DisposHandle (OS trap, number 0x23)
 		Execute68kTrap(0xa346, &r);						// GetOSTrapAddress -> A0 = stock entry
 		dispose_orig_addr = r.a[0];						// host global; thunk gets it via A1
@@ -531,6 +537,9 @@ void DrainPendingResourceLocks(void)
 	static bool gestalt_hook_installed = false;
 	if (!gestalt_hook_installed) {
 		M68kRegisters r;
+		memset(&r, 0, sizeof(r));
+		if (HasMacStarted())
+			r.a[5] = ReadMacInt32(0x904);
 		r.d[0] = 0xa1ad;								// _Gestalt (OS trap, number 0xAD)
 		Execute68kTrap(0xa346, &r);						// GetOSTrapAddress -> A0 = stock entry
 		gestalt_hook_orig = r.a[0];

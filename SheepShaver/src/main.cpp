@@ -344,5 +344,6 @@ void PatchAfterStartup(void)
 	// yet (e.g. Disk First Aid runs at startup, delaying extension loading).
 	// VideoInstallAccel -> RaveRegisterEngine has its own guards and will
 	// return quickly if already registered.
-	ExecuteNative(NATIVE_VIDEO_INSTALL_ACCEL);
+	if (GfxAccelInstallSweepPending())
+		ExecuteNative(NATIVE_VIDEO_INSTALL_ACCEL);
 }
