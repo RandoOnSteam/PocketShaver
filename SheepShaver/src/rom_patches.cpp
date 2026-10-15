@@ -2595,6 +2595,50 @@ static bool patch_68k(void)
 	D(bug("name_reg %08lx\n", base));
 	wp = (uint16 *)(ROMBaseHost + base);
 	*wp = htons(M68K_EMUL_OP_NAME_REGISTRY);
+	if (newworldv2) {
+		uint32 displayhelper = ROMBase + 0x36f680;
+		WriteMacInt32(displayhelper, 0x4cee00c8);
+		WriteMacInt16(displayhelper + 4, 0xfff0);
+		WriteMacInt32(displayhelper + 6, 0x48e7fffe);
+		WriteMacInt16(displayhelper + 10, 0x4eb9);
+		WriteMacInt32(displayhelper + 12, NativeRoutineDescriptor(NATIVE_VIDEO_INSTALL_ACCEL));
+		WriteMacInt32(displayhelper + 16, 0x4cdf7fff);
+		WriteMacInt16(displayhelper + 20, M68K_RTS);
+		displayhelper = ROMBase + 0x36f6a0;
+		WriteMacInt32(displayhelper, 0x554f70ff);
+		WriteMacInt32(displayhelper + 4, 0xabeb544f);
+		WriteMacInt32(displayhelper + 8, 0x48e7fffe);
+		WriteMacInt16(displayhelper + 12, 0x4eb9);
+		WriteMacInt32(displayhelper + 14, NativeRoutineDescriptor(NATIVE_VIDEO_INSTALL_ACCEL));
+		WriteMacInt32(displayhelper + 18, 0x4cdf7fff);
+		WriteMacInt16(displayhelper + 22, M68K_RTS);
+		static const uint8 startuppreferencepattern[] = {0x4a, 0x40, 0x66, 0x30, 0x30, 0x2c, 0xff, 0xfc, 0xb0, 0x6a, 0x00, 0x06, 0x67, 0x2a, 0x60, 0x24, 0xb8, 0x6a, 0x00, 0x08, 0x66, 0x1e};
+		uint32 startuppreferenceoffset = find_rom_data(0x3500, 0x4200, startuppreferencepattern, sizeof(startuppreferencepattern));
+		if (startuppreferenceoffset)
+			WriteMacInt16(ROMBase + startuppreferenceoffset + 2, 0x660c);
+		static const uint8 displayreadypattern[] = {0x61, 0xff, 0x00, 0x05, 0xd5, 0x8a, 0x61, 0x00, 0x1d, 0x24, 0x60, 0x00, 0x3f, 0x50};
+		static const uint8 bootgraphicspattern[] = {0x48, 0x6d, 0xff, 0xfc, 0xa8, 0x6e, 0x48, 0x6d, 0x00, 0x70, 0xaa, 0x00};
+		uint32 displayreadyoffset = find_rom_data(0x380, 0x420, displayreadypattern, sizeof(displayreadypattern));
+		uint32 bootgraphicsoffset = find_rom_data(0xa00, 0xc00, bootgraphicspattern, sizeof(bootgraphicspattern));
+		if (displayreadyoffset && bootgraphicsoffset) {
+			uint32 displayinithelper = ROMBase + 0x36f6e0;
+			WriteMacInt16(displayinithelper, 0x4eb9);
+			WriteMacInt32(displayinithelper + 2, ROMBase + displayreadyoffset + 2 + ReadMacInt32(ROMBase + displayreadyoffset + 2));
+			WriteMacInt32(displayinithelper + 6, 0x48e7fffe);
+			WriteMacInt16(displayinithelper + 10, 0x4eb9);
+			WriteMacInt32(displayinithelper + 12, NativeRoutineDescriptor(NATIVE_VIDEO_INSTALL_ACCEL));
+			WriteMacInt32(displayinithelper + 16, 0x486d0070);
+			WriteMacInt16(displayinithelper + 20, 0xaa01);
+			WriteMacInt16(displayinithelper + 22, 0x4eb9);
+			WriteMacInt32(displayinithelper + 24, ROMBase + bootgraphicsoffset);
+			WriteMacInt32(displayinithelper + 28, 0x4cdf7fff);
+			WriteMacInt16(displayinithelper + 32, M68K_RTS);
+			wp = (uint16 *)(ROMBaseHost + displayreadyoffset);
+			*wp++ = htons(0x4eb9);
+			*wp++ = htons(displayinithelper >> 16);
+			*wp = htons(displayinithelper & 0xffff);
+		}
+	}
 
 #if DISABLE_SCSI
 	// Fake SCSI Manager
@@ -2639,7 +2683,10 @@ static bool patch_68k(void)
 		if ((base = find_rom_data(0x19000, 0x1fa00, scsi_var2_dat, sizeof(scsi_var2_dat))) != 0) {
 			D(bug("scsi_var2 %08lx\n", base));
 			wp = (uint16 *)(ROMBaseHost + base);
-			*wp++ = htons(0x7000);	// moveq #0,d0
+			if (newworldv2)
+				*wp++ = htons(0x7001);
+			else
+				*wp++ = htons(0x7000);
 			*wp = htons(M68K_RTS);
 		}
 	}
@@ -2849,8 +2896,23 @@ static bool patch_68k(void)
 	if ((base = find_rom_data(0x9000, 0x10000, egret_dat, sizeof(egret_dat))) == 0) return false;
 	D(bug("egret %08lx\n", base));
 	wp = (uint16 *)(ROMBaseHost + base);
-	*wp++ = htons(0x7000);
-	*wp = htons(M68K_RTS);
+	if (HasNanoKernel2() && ReadMacInt16(ROMBase + 0x310004) >= 0x0210) {
+		uint32 powerhandler = ROMBase + 0x36f6c0;
+		WriteMacInt32(powerhandler, 0x0c100001);
+		WriteMacInt16(powerhandler + 4, 0x660a);
+		WriteMacInt32(powerhandler + 6, 0x0c28000a);
+		WriteMacInt16(powerhandler + 10, 0x0001);
+		WriteMacInt16(powerhandler + 12, 0x6602);
+		WriteMacInt16(powerhandler + 14, M68K_EMUL_RETURN);
+		WriteMacInt16(powerhandler + 16, 0x7000);
+		WriteMacInt16(powerhandler + 18, M68K_RTS);
+		*wp++ = htons(M68K_JMP);
+		*wp++ = htons(powerhandler >> 16);
+		*wp = htons(powerhandler & 0xffff);
+	} else {
+		*wp++ = htons(0x7000);
+		*wp = htons(M68K_RTS);
+	}
 
 	// Don't call FE0A opcode in Shutdown Manager
 	static const uint8 shutdown_dat[] = {0x40, 0xe7, 0x00, 0x7c, 0x07, 0x00, 0x48, 0xe7, 0x3f, 0x00, 0x2c, 0x00, 0x2e, 0x01};

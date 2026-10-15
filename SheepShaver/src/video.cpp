@@ -172,6 +172,28 @@ void VideoInstallDisplay(void)
 	if (private_data == NULL || private_data->displayregistered || private_data->displayregistrationactive)
 		return;
 	private_data->displayregistrationactive = true;
+	uint32 bootdevice = ReadMacInt32(LMADDR_MAIN_DEVICE);
+	if (bootdevice != 0) {
+		uint32 bootrecord = ReadMacInt32(bootdevice);
+		uint32 bootpixmaphandle = ReadMacInt32(bootrecord + 0x16);
+		uint32 bootpixmap = ReadMacInt32(bootpixmaphandle);
+		if (ReadMacInt16(bootrecord) == 0 && ReadMacInt16(bootpixmap + 10) == 32 && ReadMacInt16(bootpixmap + 12) == 32) {
+			typedef void (*displayinitproc)(int16, uint32, uint32);
+			typedef void (*displayattributeproc)(uint32, int16, uint8);
+			typedef void (*displayselectproc)(uint32);
+			uint32 initroutine = FindLibSymbol("\014InterfaceLib", "\013InitGDevice");
+			uint32 attributeroutine = FindLibSymbol("\014InterfaceLib", "\022SetDeviceAttribute");
+			uint32 selectroutine = FindLibSymbol("\014InterfaceLib", "\012SetGDevice");
+			if (initroutine && attributeroutine && selectroutine) {
+				CallMacOS3(displayattributeproc, attributeroutine, bootdevice, 14, 0);
+				CallMacOS3(displayattributeproc, attributeroutine, bootdevice, 10, 0);
+				CallMacOS3(displayinitproc, initroutine, private_data->driverreference, video_rel_depth_from_abs(private_data->saveMode), bootdevice);
+				CallMacOS1(displayselectproc, selectroutine, bootdevice);
+			}
+			private_data->displayregistrationactive = false;
+			return;
+		}
+	}
 	typedef int16 (*displaybeginproc)(uint32 *);
 	typedef int16 (*displaynewproc)(uint32 *, int16, uint32, uint32, uint32, uint32, uint32);
 	typedef int16 (*displaydeviceproc)(uint32, uint32);

@@ -338,6 +338,9 @@ static void monitor_locked_nifts(void)
 		}
 		// State check via HGetState; re-assert the lock if the guest undid it.
 		M68kRegisters r;
+		memset(&r, 0, sizeof(r));
+		if (HasMacStarted())
+			r.a[5] = ReadMacInt32(0x904);
 		r.a[0] = n.h;
 		Execute68kTrap(0xa069, &r);					// HGetState(h)
 		uint8 st = r.d[0] & 0xff;
@@ -582,12 +585,6 @@ void CheckLoad(uint32 type, int16 id, uint16 *p, uint32 size)
 			uint32 displayinitoffset = find_rsrc_data((uint8 *)p, size, displayinitpattern, sizeof(displayinitpattern));
 			if (displayinitoffset) {
 				uint32 displayinithelper = ROMBase + 0x36f6a0;
-				Host2Mac_memcpy(displayinithelper, displayinitpattern, sizeof(displayinitpattern));
-				WriteMacInt32(displayinithelper + 8, 0x48e7fffe);
-				WriteMacInt16(displayinithelper + 12, 0x4eb9);
-				WriteMacInt32(displayinithelper + 14, NativeRoutineDescriptor(NATIVE_VIDEO_INSTALL_ACCEL));
-				WriteMacInt32(displayinithelper + 18, 0x4cdf7fff);
-				WriteMacInt16(displayinithelper + 22, M68K_RTS);
 				WriteMacInt16(Host2MacAddr((uint8 *)p) + displayinitoffset, 0x4eb9);
 				WriteMacInt32(Host2MacAddr((uint8 *)p) + displayinitoffset + 2, displayinithelper);
 				WriteMacInt16(Host2MacAddr((uint8 *)p) + displayinitoffset + 6, M68K_NOP);
@@ -596,12 +593,6 @@ void CheckLoad(uint32 type, int16 id, uint16 *p, uint32 size)
 			uint32 displayoffset = find_rsrc_data((uint8 *)p, size, displaypattern, sizeof(displaypattern));
 			if (displayoffset) {
 				uint32 displayhelper = ROMBase + 0x36f680;
-				Host2Mac_memcpy(displayhelper, displaypattern + 8, 6);
-				WriteMacInt32(displayhelper + 6, 0x48e7fffe);
-				WriteMacInt16(displayhelper + 10, 0x4eb9);
-				WriteMacInt32(displayhelper + 12, NativeRoutineDescriptor(NATIVE_VIDEO_INSTALL_ACCEL));
-				WriteMacInt32(displayhelper + 16, 0x4cdf7fff);
-				WriteMacInt16(displayhelper + 20, M68K_RTS);
 				WriteMacInt16(Host2MacAddr((uint8 *)p) + displayoffset + 8, 0x4eb9);
 				WriteMacInt32(Host2MacAddr((uint8 *)p) + displayoffset + 10, displayhelper);
 			}

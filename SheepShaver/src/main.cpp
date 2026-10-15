@@ -81,6 +81,8 @@ bool InitAll(const char *vmdir)
 	if (OsxSelectBootImage(&startupindex, &startuppartition) == OSXBOOTCLASSIC && startupindex >= 0) {
 		XPRAM[0x1378] = (startupindex + 1) >> 8;
 		XPRAM[0x1379] = (startupindex + 1) & 0xff;
+		XPRAM[0x137a] = (uint16)DiskRefNum >> 8;
+		XPRAM[0x137b] = DiskRefNum & 0xff;
 	}
 
 	// Set boot volume
