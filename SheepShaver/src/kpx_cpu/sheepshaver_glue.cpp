@@ -236,9 +236,9 @@ public:
 	const char *deliver_trap_exception(uint32 opcode);
 	bool DeliverSystemCall(void);
 	bool nanokernel2;
-	bool resetseen;
 	bool kernelmemorymapped;
 	uint32 kernelmemorybase;
+	uint32 idlevectortable;
 	const char *enter_exception_vector(uint32 vector, uint32 handler_slot,
 		uint32 saved_pc, uint32 saved_msr);
 	void exception_step(void);
@@ -412,12 +412,19 @@ sheepshaver_cpu::sheepshaver_cpu()
 {
 	init_decoder();
 	nanokernel2 = HasNanoKernel2();
-	resetseen = false;
-#if PPC_FLIGHT_RECORDER >= 2
-	start_log();
-#endif
 	kernelmemorymapped = false;
 	kernelmemorybase = ((RAMSize + 0x0fffffff) & 0xf0000000) + 0x10000000;
+	idlevectortable = 0;
+	if (nanokernel2) {
+		for (uint32 kerneloffset = 0x310000; kerneloffset < 0x330000; kerneloffset += 4) {
+			if (ReadMacInt32(ROMBase + kerneloffset) == 0x7ff342a6 &&
+				ReadMacInt16(ROMBase + kerneloffset + 4) == 0x3901 &&
+				ReadMacInt32(ROMBase + kerneloffset + 8) == 0x7d1343a6) {
+				idlevectortable = KernelDataAddr + (int16)ReadMacInt16(ROMBase + kerneloffset + 6);
+				break;
+			}
+		}
+	}
 	if (nanokernel2 && ReadMacInt16(ROMBase + 0x310004) >= 0x0210) {
 		if (vm_acquire_fixed(Mac2HostAddr(kernelmemorybase), 0x200000) < 0) {
 			ErrorAlert("Cannot allocate NanoKernel memory");
@@ -568,23 +575,15 @@ void sheepshaver_cpu::call_execute_emul_op(powerpc_cpu * cpu, uint32 emul_op) {
 	static_cast<sheepshaver_cpu *>(cpu)->execute_emul_op(emul_op);
 }
 
-// Execute EMUL_OP routine
 sheepshaver_cpu::~sheepshaver_cpu()
 {
 	if (kernelmemorymapped)
 		vm_release(Mac2HostAddr(kernelmemorybase), 0x200000);
 }
 
-
+// Execute EMUL_OP routine
 void sheepshaver_cpu::execute_emul_op(uint32 emul_op)
 {
-#ifdef _WIN32
-	if (emul_op == OP_RESET) {
-		if (resetseen)
-			RestartEmulator();
-		resetseen = true;
-	}
-#endif
 	M68kRegisters r68;
 	// The 68K side services VBL and therefore owns the newest system Ticks
 	// value.  Observe it before crossing into a host EmulOp; a later PowerPC
@@ -987,23 +986,31 @@ uint32 sheepshaver_cpu::execute_macos_code(uint32 tvect, int nargs, uint32 const
 	uint32 saved_pc = pc();
 	uint32 saved_lr = lr();
 	uint32 saved_ctr= ctr();
-	uint32 savedcondition = get_cr();
-	uint32 savedexception = get_xer();
+	uint32 savedcondition = 0;
+	uint32 savedexception = 0;
+	uint32 savedstack = gpr(1);
 	uint32 registers[32];
-	memcpy(registers, &gpr(0), sizeof(registers));
 
 	// Build trampoline with EXEC_RETURN
 	SheepVar32 trampoline = POWERPC_EXEC_RETURN;
 	lr() = trampoline.addr();
 
-	uint32 savedstack = gpr(1);
-	gpr(1) = (savedstack - 64) & ~15U;
-	WriteMacInt32(gpr(1), savedstack);								// Create stack frame
 	uint32 proc = ReadMacInt32(tvect);			// Get routine address
 	uint32 toc = ReadMacInt32(tvect + 4);		// Get TOC pointer
 
 	// Save PowerPC registers.
-
+	if (nanokernel2) {
+		savedcondition = get_cr();
+		savedexception = get_xer();
+		memcpy(registers, &gpr(0), sizeof(registers));
+		gpr(1) = (savedstack - 64) & ~15U;
+		WriteMacInt32(gpr(1), savedstack);
+	} else {
+		registers[2] = gpr(2);
+		for (int i = 0; i < nargs; i++)
+			registers[i + 3] = gpr(i + 3);
+		gpr(1) -= 64;								// Create stack frame
+	}
 
 	// Prepare and call MacOS routine
 	gpr(2) = toc;
@@ -1019,9 +1026,17 @@ uint32 sheepshaver_cpu::execute_macos_code(uint32 tvect, int nargs, uint32 const
 	uint32 retval = gpr(3);
 
 	// Restore PowerPC registers
-	memcpy(&gpr(0), registers, sizeof(registers));
-	set_cr(savedcondition);
-	set_xer(savedexception);
+	if (nanokernel2) {
+		memcpy(&gpr(0), registers, sizeof(registers));
+		set_cr(savedcondition);
+		set_xer(savedexception);
+	} else {
+		for (int i = 2; i < nargs + 3; i++)
+			gpr(i) = registers[i];
+
+		// Cleanup stack
+		gpr(1) += 64;
+	}
 
 	// Restore program counters and branch registers
 	pc() = saved_pc;
@@ -2259,12 +2274,15 @@ bool sheepshaver_cpu::external_interrupt()
 		ReadMacInt32(context + 0xdc) |
 		ReadMacInt32(KERNEL_DATA_BASE + 0x674));
 
+	const bool idlewakeup = nanokernel2 && sprg(3) == idlevectortable;
 	const char *why = enter_exception_vector(PPC_EXTERNAL_VECTOR,
 		PPC_EXTERNAL_HANDLER_SLOT, pc(), ppc_exception_srr1(msr(), 0));
 	if (why != NULL) {
 		external_interrupt_mode_deferred_count++;
 		return false;
 	}
+	if (idlewakeup)
+		return false;
 
 #if EMUL_TIME_STATS
 	interrupt_count++;

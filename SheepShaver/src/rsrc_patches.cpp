@@ -572,12 +572,6 @@ void CheckLoad(uint32 type, int16 id, uint16 *p, uint32 size)
 	if ((uintptr)p >= (uintptr)ROMBaseHost && (uintptr)p <= (uintptr)(ROMBaseHost + ROM_SIZE))
 		return;
 
-	if (type == FOURCC('I','N','I','T') && size == 26390 &&
-		ReadMacInt32(Host2MacAddr((uint8 *)p)) == 0x60000cd4 &&
-		ReadMacInt32(Host2MacAddr((uint8 *)p) + 0xc90) == 0x2f0d41fa &&
-		ReadMacInt32(Host2MacAddr((uint8 *)p) + 0xc94) == 0xf5d42a50)
-		WriteMacInt32(Host2MacAddr((uint8 *)p) + 0x268, ReadMacInt32(0x904));
-
 	if (type == FOURCC('b','o','o','t') && id == 3) {
 		D(bug("boot 3 found\n"));
 		if (HasNanoKernel2() && ReadMacInt16(ROMBase + 0x310004) >= 0x0210) {

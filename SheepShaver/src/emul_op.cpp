@@ -100,7 +100,12 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 	D(bug("EmulOp %04x at %08x\n", selector, pc));
 	switch (selector) {
 		case OP_BREAK:				// Breakpoint
-			Execute68kTrap(0xa9c9, r);
+			if (HasNanoKernel2()) {
+				Execute68kTrap(0xa9c9, r);
+				break;
+			}
+			printf("*** Breakpoint\n");
+			Dump68kRegs(r);
 			break;
 
 		case OP_XPRAM1: {			// Read/write from/to XPRam
@@ -338,6 +343,10 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 
 		case OP_RESET:				// Early in MacOS reset
 			D(bug("*** RESET ***\n"));
+#ifdef _WIN32
+			if (VideoDriverInitialized())
+				RestartEmulator();
+#endif
 			tick_inhibit = true;
 		#ifdef ENABLE_JOYMANAGER
 			JoyManagerReset();

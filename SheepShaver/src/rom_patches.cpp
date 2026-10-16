@@ -846,6 +846,14 @@ bool HasNanoKernel2(void)
 }
 
 
+static uint32 RomSearchBound(bool nanokernel2, uint32 original, uint32 extended)
+{
+	if (nanokernel2)
+		return extended;
+	return original;
+}
+
+
 static bool PatchNanoKernel2ContextTable(uint32 address, uint32 patchaddress,
 	uint32 mode, uint32 tableoffset)
 {
@@ -1484,7 +1492,7 @@ static bool patch_68k_emul(void)
 		lp++;
 	else
 		*lp++ = htonl(POWERPC_ILLEGAL);
-	*lp++ = htonl(0x48000000 + 0x36fd00 - base - 20);
+	*lp++ = htonl(0x48000000 + 0x36fd00 - base - 20);	// FE0F opcode
 	for (int opcodeindex = 6; opcodeindex < 16; opcodeindex++) {
 		if (nanokernel2)
 			lp++;
@@ -1779,14 +1787,14 @@ static bool patch_nanokernel(void)
 
 	// Patch Mixed Mode trap
 	static const uint8 virt2phys_dat[] = {0x7d, 0x1b, 0x43, 0x78, 0x3b, 0xa1, 0x03, 0x20};
-	if ((base = find_rom_data(0x313000, 0x315000, virt2phys_dat, sizeof(virt2phys_dat))) == 0) return false;
+	if ((base = find_rom_data(0x313000, RomSearchBound(nanokernel2, 0x314000, 0x315000), virt2phys_dat, sizeof(virt2phys_dat))) == 0) return false;
 	D(bug("virt2phys %08lx\n", base + 8));
 	lp = (uint32 *)(ROMBaseHost + base + 8);	// Don't translate virtual->physical
 	lp[0] = htonl(0x7f7fdb78);					// mr		r31,r27
 	lp[2] = htonl(POWERPC_NOP);
 
 	static const uint8 ppc_excp_tbl_dat[] = {0x39, 0x01, 0x04, 0x20, 0x7d, 0x13, 0x43, 0xa6};
-	if ((base = find_rom_data(0x313000, 0x315000, ppc_excp_tbl_dat, sizeof(ppc_excp_tbl_dat))) == 0) return false;
+	if ((base = find_rom_data(0x313000, RomSearchBound(nanokernel2, 0x314000, 0x315000), ppc_excp_tbl_dat, sizeof(ppc_excp_tbl_dat))) == 0) return false;
 	D(bug("ppc_excp_tbl %08lx\n", base));
 	if (nanokernel2) {
 		if (!PatchNanoKernel2ContextTable(base, 0x36ff00, MODE_NATIVE, 0x420))
@@ -1893,15 +1901,15 @@ static bool patch_nanokernel(void)
 
 	// Leave the nanokernel's architectural return sequence intact
 	static const uint8 trap_return_dat[] = {0x80, 0xc1, 0x00, 0x18, 0x80, 0x21, 0x00, 0x04, 0x4c, 0x00, 0x00, 0x64};
-	if ((base = find_rom_data(0x312000, 0x330000, trap_return_dat, sizeof(trap_return_dat))) == 0) return false;
+	if ((base = find_rom_data(0x312000, RomSearchBound(nanokernel2, 0x320000, 0x330000), trap_return_dat, sizeof(trap_return_dat))) == 0) return false;
 	D(bug("trap_return %08lx\n", base + 8));
 
 	// Patch FEOA opcode, selector 0x0A (virtual->physical page index)
 	static const uint8 fe0a_0a_dat[] = {0x55, 0x23, 0xa3, 0x3e, 0x4b};
-	if ((base = find_rom_data(0x314000, 0x330000, fe0a_0a_dat, sizeof(fe0a_0a_dat))) == 0) return false;
+	if ((base = find_rom_data(0x314000, RomSearchBound(nanokernel2, 0x318000, 0x330000), fe0a_0a_dat, sizeof(fe0a_0a_dat))) == 0) return false;
 	loc = rom_powerpc_branch_target(base - 8);
 	static const uint8 fe0a_dat[] = {0x7e, 0x04, 0x48, 0x40, 0x81, 0xe1, 0x06, 0xb0, 0x54, 0x88, 0x10, 0x3a, 0x40, 0x90};
-	if (find_rom_data(loc, 0x330000, fe0a_dat, sizeof(fe0a_dat)) != loc) return false;
+	if (find_rom_data(loc, RomSearchBound(nanokernel2, 0x318000, 0x330000), fe0a_dat, sizeof(fe0a_dat)) != loc) return false;
 	D(bug("fe0a_0a %08lx\n", base - 8));
 	lp = (uint32 *)(ROMBaseHost + base - 8);
 	*lp++ = htonl(0x7c832378);					// mr	r3,r4
@@ -1910,9 +1918,9 @@ static bool patch_nanokernel(void)
 
 	// Disable FE0A opcode, selector 0x11 (init page tables?)
 	static const uint8 fe0a_11_dat[] = {0x56, 0x07, 0x06, 0x74, 0x2c, 0x07, 0x00, 0x60, 0x40};
-	if ((base = find_rom_data(0x314000, 0x330000, fe0a_11_dat, sizeof(fe0a_11_dat))) == 0) return false;
+	if ((base = find_rom_data(0x314000, RomSearchBound(nanokernel2, 0x318000, 0x330000), fe0a_11_dat, sizeof(fe0a_11_dat))) == 0) return false;
 	loc = rom_powerpc_branch_target(base - 4);
-	if (find_rom_data(0x314000, 0x330000, fe0a_dat, sizeof(fe0a_dat)) != loc) return false;
+	if (find_rom_data(0x314000, RomSearchBound(nanokernel2, 0x318000, 0x330000), fe0a_dat, sizeof(fe0a_dat)) != loc) return false;
 	D(bug("fe0a_11 %08lx\n", base - 4));
 	lp = (uint32 *)(ROMBaseHost + base - 4);
 	*lp++ = htonl(POWERPC_NOP);
@@ -1965,7 +1973,7 @@ static bool patch_68k(void)
 
 	// Remove 68k RESET instruction
 	static const uint8 reset_dat[] = {0x4e, 0x70};
-	if ((base = find_rom_data(0xb6, 0x120, reset_dat, sizeof(reset_dat))) == 0) return false;
+	if ((base = find_rom_data(RomSearchBound(nanokernel2, 0xc8, 0xb6), 0x120, reset_dat, sizeof(reset_dat))) == 0) return false;
 	D(bug("reset %08lx\n", base));
 	wp = (uint16 *)(ROMBaseHost + base);
 	*wp = htons(M68K_NOP);
@@ -2001,7 +2009,7 @@ static bool patch_68k(void)
 	// Patch UniversalInfo
 	if (ROMType == ROMTYPE_NEWWORLD) {
 		static const uint8 univ_info_dat[] = {0x3f, 0xff, 0x04, 0x00};
-		if ((base = find_rom_data(0xe000, 0x18000, univ_info_dat, sizeof(univ_info_dat))) == 0) return false;
+		if ((base = find_rom_data(RomSearchBound(nanokernel2, 0x14000, 0xe000), 0x18000, univ_info_dat, sizeof(univ_info_dat))) == 0) return false;
 		D(bug("universal_info %08lx\n", base));
 		lp = (uint32 *)(ROMBaseHost + base - 0x14);
 		lp[0x00 >> 2] = htonl(ADDR_MAP_PATCH_SPACE - (base - 0x14));
@@ -2067,19 +2075,19 @@ static bool patch_68k(void)
 
 	// Don't initialize VIA (via Universal)
 	static const uint8 via_init_dat[] = {0x08, 0x00, 0x00, 0x02, 0x67, 0x00, 0x00, 0x2c, 0x24, 0x68, 0x00, 0x08};
-	if ((base = find_rom_data(0x9000, 0x15000, via_init_dat, sizeof(via_init_dat))) == 0) return false;
+	if ((base = find_rom_data(RomSearchBound(nanokernel2, 0xe000, 0x9000), 0x15000, via_init_dat, sizeof(via_init_dat))) == 0) return false;
 	D(bug("via_init %08lx\n", base));
 	wp = (uint16 *)(ROMBaseHost + base + 4);
 	*wp = htons(0x6000);			// bra
 
 	static const uint8 via_init2_dat[] = {0x24, 0x68, 0x00, 0x08, 0x00, 0x12, 0x00, 0x30, 0x4e, 0x71};
-	if ((base = find_rom_data(0x9000, 0x10000, via_init2_dat, sizeof(via_init2_dat))) == 0) return false;
+	if ((base = find_rom_data(RomSearchBound(nanokernel2, 0xa000, 0x9000), 0x10000, via_init2_dat, sizeof(via_init2_dat))) == 0) return false;
 	D(bug("via_init2 %08lx\n", base));
 	wp = (uint16 *)(ROMBaseHost + base);
 	*wp = htons(0x4ed6);			// jmp	(a6)
 
 	static const uint8 via_init3_dat[] = {0x22, 0x68, 0x00, 0x08, 0x28, 0x3c, 0x20, 0x00, 0x01, 0x00};
-	if ((base = find_rom_data(0x9000, 0x10000, via_init3_dat, sizeof(via_init3_dat))) == 0) return false;
+	if ((base = find_rom_data(RomSearchBound(nanokernel2, 0xa000, 0x9000), 0x10000, via_init3_dat, sizeof(via_init3_dat))) == 0) return false;
 	D(bug("via_init3 %08lx\n", base));
 	wp = (uint16 *)(ROMBaseHost + base);
 	*wp = htons(0x4ed6);			// jmp	(a6)
@@ -2263,7 +2271,7 @@ static bool patch_68k(void)
 
 	// Don't EnableExtCache (via 0x1f6) and don't DisableIntSources(via 0x1fc)
 	static const uint8 ext_cache_dat[] = {0x4e, 0x7b, 0x00, 0x02};
-	if ((base = find_rom_data(0x180, 0x230, ext_cache_dat, sizeof(ext_cache_dat))) == 0) return false;
+	if ((base = find_rom_data(RomSearchBound(nanokernel2, 0x1d0, 0x180), 0x230, ext_cache_dat, sizeof(ext_cache_dat))) == 0) return false;
 	D(bug("ext_cache %08lx\n", base));
 	loc = ReadMacInt32(ROMBase + base + 6);
 	wp = (uint16 *)(ROMBaseHost + loc + base + 6);
@@ -2340,7 +2348,7 @@ static bool patch_68k(void)
 	if (nanokernel2) {
 		page_size_dat[4] = 0x68;
 	}
-	if ((base = find_rom_data(0x7000, 0x12000, page_size_dat, sizeof(page_size_dat))) == 0) return false;
+	if ((base = find_rom_data(RomSearchBound(nanokernel2, 0xb000, 0x7000), 0x12000, page_size_dat, sizeof(page_size_dat))) == 0) return false;
 	D(bug("page_size %08lx\n", base));
 	wp = (uint16 *)(ROMBaseHost + base);
 	*wp++ = htons(0x203c);			// move.l	#$1000,d0
@@ -2450,7 +2458,7 @@ static bool patch_68k(void)
 
 	// Don't initialize Cuda (via 0x274)
 	static const uint8 cuda_init_dat[] = {0x08, 0xa9, 0x00, 0x04, 0x16, 0x00, 0x4e, 0x71, 0x13, 0x7c, 0x00, 0x84, 0x1c, 0x00, 0x4e, 0x71};
-	if ((base = find_rom_data(0x9000, 0x12000, cuda_init_dat, sizeof(cuda_init_dat))) == 0) return false;
+	if ((base = find_rom_data(RomSearchBound(nanokernel2, 0xa000, 0x9000), 0x12000, cuda_init_dat, sizeof(cuda_init_dat))) == 0) return false;
 	D(bug("cuda_init %08lx\n", base));
 	wp = (uint16 *)(ROMBaseHost + base);
 	*wp++ = htons(M68K_NOP);
@@ -2510,7 +2518,7 @@ static bool patch_68k(void)
 
 	// Don't EnableExtCache (via 0x2b2)
 	static const uint8 ext_cache2_dat[] = {0x4f, 0xef, 0xff, 0xec, 0x20, 0x4f, 0x10, 0xbc, 0x00, 0x01, 0x11, 0x7c, 0x00, 0x1b};
-	if ((base = find_rom_data(0xd000, 0x20000, ext_cache2_dat, sizeof(ext_cache2_dat))) == 0) return false;
+	if ((base = find_rom_data(RomSearchBound(nanokernel2, 0x13000, 0xd000), 0x20000, ext_cache2_dat, sizeof(ext_cache2_dat))) == 0) return false;
 	D(bug("ext_cache2 %08lx\n", base));
 	wp = (uint16 *)(ROMBaseHost + base);
 	*wp = htons(M68K_RTS);
@@ -2524,7 +2532,7 @@ static bool patch_68k(void)
 		WriteMacInt16(ROMBase + base, M68K_RTS);
 	} else if (ROMType == ROMTYPE_NEWWORLD || ROMType == ROMTYPE_GOSSAMER) {
 		static const uint8 tm_task_dat[] = {0x30, 0x3c, 0x4e, 0x2b, 0xa9, 0xc9};
-		if ((base = find_rom_data(0x240, 0x320, tm_task_dat, sizeof(tm_task_dat))) == 0) return false;
+		if ((base = find_rom_data(RomSearchBound(nanokernel2, 0x2a0, 0x240), 0x320, tm_task_dat, sizeof(tm_task_dat))) == 0) return false;
 		D(bug("tm_task %08lx\n", base));
 		wp = (uint16 *)(ROMBaseHost + base + 28);
 		*wp++ = htons(M68K_NOP);
@@ -2591,7 +2599,7 @@ static bool patch_68k(void)
 
 	// Patch Name Registry
 	static const uint8 name_reg_dat[] = {0x70, 0xff, 0xab, 0xeb};
-	if ((base = find_rom_data(0x2e0, 0x380, name_reg_dat, sizeof(name_reg_dat))) == 0) return false;
+	if ((base = find_rom_data(RomSearchBound(nanokernel2, 0x300, 0x2e0), 0x380, name_reg_dat, sizeof(name_reg_dat))) == 0) return false;
 	D(bug("name_reg %08lx\n", base));
 	wp = (uint16 *)(ROMBaseHost + base);
 	*wp = htons(M68K_EMUL_OP_NAME_REGISTRY);
@@ -2645,8 +2653,8 @@ static bool patch_68k(void)
 	// Remove this if SCSI Manager works!!
 	static const uint8 scsi_mgr_a_dat[] = {0x4e, 0x56, 0x00, 0x00, 0x20, 0x3c, 0x00, 0x00, 0x04, 0x0c, 0xa7, 0x1e};
 	static const uint8 scsi_mgr_b_dat[] = {0x4e, 0x56, 0x00, 0x00, 0x2f, 0x0c, 0x20, 0x3c, 0x00, 0x00, 0x04, 0x0c, 0xa7, 0x1e};
-	if ((base = find_rom_data(0x18000, 0x28000, scsi_mgr_a_dat, sizeof(scsi_mgr_a_dat))) == 0) {
-		if ((base = find_rom_data(0x18000, 0x28000, scsi_mgr_b_dat, sizeof(scsi_mgr_b_dat))) == 0) return false;
+	if ((base = find_rom_data(RomSearchBound(nanokernel2, 0x1c000, 0x18000), 0x28000, scsi_mgr_a_dat, sizeof(scsi_mgr_a_dat))) == 0) {
+		if ((base = find_rom_data(RomSearchBound(nanokernel2, 0x1c000, 0x18000), 0x28000, scsi_mgr_b_dat, sizeof(scsi_mgr_b_dat))) == 0) return false;
 	}
 	D(bug("scsi_mgr %08lx\n", base));
 	wp = (uint16 *)(ROMBaseHost + base);
@@ -2673,20 +2681,17 @@ static bool patch_68k(void)
 	// Remove this if SCSI Manager works!!
 	if (ROMType == ROMTYPE_NEWWORLD) {
 		static const uint8 scsi_var_dat[] = {0x70, 0x01, 0xa0, 0x89, 0x4a, 0x6e, 0xfe, 0xac, 0x4f, 0xef, 0x00, 0x10, 0x66, 0x00};
-		if ((base = find_rom_data(0x19000, 0x1f700, scsi_var_dat, sizeof(scsi_var_dat))) != 0) {
+		if ((base = find_rom_data(RomSearchBound(nanokernel2, 0x1f500, 0x19000), RomSearchBound(nanokernel2, 0x1f600, 0x1f700), scsi_var_dat, sizeof(scsi_var_dat))) != 0) {
 			D(bug("scsi_var %08lx\n", base));
 			wp = (uint16 *)(ROMBaseHost + base + 12);
 			*wp = htons(0x6000);	// bra
 		}
 
 		static const uint8 scsi_var2_dat[] = {0x4e, 0x56, 0xfc, 0x58, 0x48, 0xe7, 0x1f, 0x38};
-		if ((base = find_rom_data(0x19000, 0x1fa00, scsi_var2_dat, sizeof(scsi_var2_dat))) != 0) {
+		if ((base = find_rom_data(RomSearchBound(nanokernel2, 0x1f700, 0x19000), RomSearchBound(nanokernel2, 0x1f800, 0x1fa00), scsi_var2_dat, sizeof(scsi_var2_dat))) != 0) {
 			D(bug("scsi_var2 %08lx\n", base));
 			wp = (uint16 *)(ROMBaseHost + base);
-			if (newworldv2)
-				*wp++ = htons(0x7001);
-			else
-				*wp++ = htons(0x7000);
+			*wp++ = htons(0x7000);	// moveq #0,d0
 			*wp = htons(M68K_RTS);
 		}
 	}
@@ -2718,21 +2723,21 @@ static bool patch_68k(void)
 
 	// Don't wait in ADBInit (via 0x36c)
 	static const uint8 adb_init_dat[] = {0x08, 0x2b, 0x00, 0x05, 0x01, 0x5d, 0x66, 0xf8};
-	if ((base = find_rom_data(0x2b000, 0x3d000, adb_init_dat, sizeof(adb_init_dat))) == 0) return false;
+	if ((base = find_rom_data(RomSearchBound(nanokernel2, 0x31000, 0x2b000), 0x3d000, adb_init_dat, sizeof(adb_init_dat))) == 0) return false;
 	D(bug("adb_init %08lx\n", base));
 	wp = (uint16 *)(ROMBaseHost + base + 6);
 	*wp = htons(M68K_NOP);
 
 	// Modify check in InitResources() so that addresses >0x80000000 work
 	static const uint8 init_res_dat[] = {0x4a, 0xb8, 0x0a, 0x50, 0x6e, 0x20};
-	if ((base = find_rom_data(0x64000, 0x8c000, init_res_dat, sizeof(init_res_dat))) == 0) return false;
+	if ((base = find_rom_data(RomSearchBound(nanokernel2, 0x78000, 0x64000), 0x8c000, init_res_dat, sizeof(init_res_dat))) == 0) return false;
 	D(bug("init_res %08lx\n", base));
 	bp = (uint8 *)(ROMBaseHost + base + 4);
 	*bp = 0x66;
 
 	// Modify vCheckLoad() so that we can patch resources (68k Resource Manager)
 	static const uint8 check_load_dat[] = {0x20, 0x78, 0x07, 0xf0, 0x4e, 0xd0};
-	if ((base = find_rom_data(0x64000, 0x8c000, check_load_dat, sizeof(check_load_dat))) == 0) return false;
+	if ((base = find_rom_data(RomSearchBound(nanokernel2, 0x78000, 0x64000), 0x8c000, check_load_dat, sizeof(check_load_dat))) == 0) return false;
 	D(bug("check_load %08lx\n", base));
 	wp = (uint16 *)(ROMBaseHost + base);
 	*wp++ = htons(M68K_JMP);
@@ -2823,7 +2828,7 @@ static bool patch_68k(void)
 
 	// Patch driver install routine
 	static const uint8 drvr_install_dat[] = {0xa7, 0x1e, 0x21, 0xc8, 0x01, 0x1c, 0x4e, 0x75};
-	if ((base = find_rom_data(0x900, 0xd00, drvr_install_dat, sizeof(drvr_install_dat))) == 0) return false;
+	if ((base = find_rom_data(RomSearchBound(nanokernel2, 0xb00, 0x900), 0xd00, drvr_install_dat, sizeof(drvr_install_dat))) == 0) return false;
 	D(bug("drvr_install %08lx\n", base));
 	wp = (uint16 *)(ROMBaseHost + base + 8);
 	*wp++ = htons(M68K_EMUL_OP_INSTALL_DRIVERS);
@@ -2893,19 +2898,35 @@ static bool patch_68k(void)
 
 	// Disable Egret Manager
 	static const uint8 egret_dat[] = {0x2f, 0x30, 0x81, 0xe2, 0x20, 0x10, 0x00, 0x18};
-	if ((base = find_rom_data(0x9000, 0x10000, egret_dat, sizeof(egret_dat))) == 0) return false;
+	if ((base = find_rom_data(RomSearchBound(nanokernel2, 0xa000, 0x9000), 0x10000, egret_dat, sizeof(egret_dat))) == 0) return false;
 	D(bug("egret %08lx\n", base));
 	wp = (uint16 *)(ROMBaseHost + base);
 	if (HasNanoKernel2() && ReadMacInt16(ROMBase + 0x310004) >= 0x0210) {
 		uint32 powerhandler = ROMBase + 0x36f6c0;
 		WriteMacInt32(powerhandler, 0x0c100001);
+		/* FIXME: The _WIN32 ifdefs are here because the RestartEmulator()
+		hack is only implementated on windows. */
+#ifdef _WIN32
+		WriteMacInt16(powerhandler + 4, 0x6616);
+#else
 		WriteMacInt16(powerhandler + 4, 0x660a);
+#endif
 		WriteMacInt32(powerhandler + 6, 0x0c28000a);
 		WriteMacInt16(powerhandler + 10, 0x0001);
 		WriteMacInt16(powerhandler + 12, 0x6602);
 		WriteMacInt16(powerhandler + 14, M68K_EMUL_RETURN);
+#ifdef _WIN32
+		WriteMacInt32(powerhandler + 16, 0x0c280011);
+		WriteMacInt16(powerhandler + 20, 0x0001);
+		WriteMacInt16(powerhandler + 22, 0x6604);
+		WriteMacInt16(powerhandler + 24, M68K_EMUL_OP_RESET);
+		WriteMacInt16(powerhandler + 26, M68K_RTS);
+		WriteMacInt16(powerhandler + 28, 0x7000);
+		WriteMacInt16(powerhandler + 30, M68K_RTS);
+#else
 		WriteMacInt16(powerhandler + 16, 0x7000);
 		WriteMacInt16(powerhandler + 18, M68K_RTS);
+#endif
 		*wp++ = htons(M68K_JMP);
 		*wp++ = htons(powerhandler >> 16);
 		*wp = htons(powerhandler & 0xffff);
@@ -2916,7 +2937,7 @@ static bool patch_68k(void)
 
 	// Don't call FE0A opcode in Shutdown Manager
 	static const uint8 shutdown_dat[] = {0x40, 0xe7, 0x00, 0x7c, 0x07, 0x00, 0x48, 0xe7, 0x3f, 0x00, 0x2c, 0x00, 0x2e, 0x01};
-	if ((base = find_rom_data(0x2b000, 0x40000, shutdown_dat, sizeof(shutdown_dat))) == 0) return false;
+	if ((base = find_rom_data(RomSearchBound(nanokernel2, 0x30000, 0x2b000), 0x40000, shutdown_dat, sizeof(shutdown_dat))) == 0) return false;
 	D(bug("shutdown %08lx\n", base));
 	wp = (uint16 *)(ROMBaseHost + base);
 	if (ROMType == ROMTYPE_ZANZIBAR)
@@ -2932,7 +2953,7 @@ static bool patch_68k(void)
 
 	// Patch VIA interrupt handler
 	static const uint8 via_int_dat[] = {0x70, 0x7f, 0xc0, 0x29, 0x1a, 0x00, 0xc0, 0x29, 0x1c, 0x00};
-	if ((base = find_rom_data(0xe000, 0x1c000, via_int_dat, sizeof(via_int_dat))) == 0) return false;
+	if ((base = find_rom_data(RomSearchBound(nanokernel2, 0x13000, 0xe000), 0x1c000, via_int_dat, sizeof(via_int_dat))) == 0) return false;
 	D(bug("via_int %08lx\n", base));
 	uint32 level1_int = ROMBase + base;
 	if (newworldv2) {
@@ -2954,8 +2975,8 @@ static bool patch_68k(void)
 		*wp++ = htons(M68K_NOP);
 		*wp = htons(M68K_NOP);
 	} else {
-		wp = (uint16 *)(ROMBaseHost + base);
-		*wp++ = htons(0x7002);
+		wp = (uint16 *)(ROMBaseHost + base);	// Level 1 handler
+		*wp++ = htons(0x7002);			// moveq	#2,d0 (60Hz interrupt)
 		*wp++ = htons(M68K_NOP);
 		*wp++ = htons(M68K_NOP);
 		*wp++ = htons(M68K_NOP);
@@ -2963,7 +2984,7 @@ static bool patch_68k(void)
 	}
 
 	static const uint8 via_int2_dat[] = {0x13, 0x7c, 0x00, 0x02, 0x1a, 0x00, 0x4e, 0x71, 0x52, 0xb8, 0x01, 0x6a};
-	if ((base = find_rom_data(0xb000, 0x18000, via_int2_dat, sizeof(via_int2_dat))) == 0) return false;
+	if ((base = find_rom_data(RomSearchBound(nanokernel2, 0x10000, 0xb000), 0x18000, via_int2_dat, sizeof(via_int2_dat))) == 0) return false;
 	D(bug("via_int2 %08lx\n", base));
 	wp = (uint16 *)(ROMBaseHost + base);	// 60Hz handler
 	*wp++ = htons(M68K_EMUL_OP_IRQ);
@@ -2977,12 +2998,12 @@ static bool patch_68k(void)
 		if (newworldv2) {
 			base = find_rom_data(0xe000, 0x19000, vectorpattern, sizeof(vectorpattern));
 		} else
-			base = find_rom_data(0xe000, 0x19000, via_int3_dat, sizeof(via_int3_dat));
+			base = find_rom_data(RomSearchBound(nanokernel2, 0x15000, 0xe000), 0x19000, via_int3_dat, sizeof(via_int3_dat));
 		if (base == 0)
 			return false;
 		while (base != 0) {
 			D(bug("via_int3 %08lx\n", base));
-			wp = (uint16 *)(ROMBaseHost + base);
+			wp = (uint16 *)(ROMBaseHost + base);	// CHRP level 1 handler
 			*wp++ = htons(M68K_JMP);
 			*wp++ = htons((level1_int - 12) >> 16);
 			*wp = htons((level1_int - 12) & 0xffff);
@@ -3076,7 +3097,7 @@ static bool patch_68k(void)
 	static const uint8 cursor_wipe_data[] = {0x28, 0x6a, 0x00, 0x04, 0x4a, 0x2c, 0x00, 0x14, 0x67, 0x1e, 0x42, 0xaa, 0x00, 0x70};
 	uint32 wipe_base = 0;
 #if CURSOR_WIPE_PATCH
-	wipe_base = find_rom_data(0x8000, 0x10000, cursor_wipe_data, sizeof(cursor_wipe_data));
+	wipe_base = find_rom_data(RomSearchBound(nanokernel2, 0xc000, 0x8000), 0x10000, cursor_wipe_data, sizeof(cursor_wipe_data));
 #endif
 	if (wipe_base != 0) {
 		D(bug("cursor_wipe %08lx\n", (unsigned long)wipe_base));
@@ -3087,8 +3108,8 @@ static bool patch_68k(void)
 	// Record every CursorDeviceMoveTo call and its caller in a ring buffer.
 	static const uint8 cursor_dispatch_data[] = {0xd0, 0x40, 0x41, 0xfa, 0x00, 0x08, 0xd0, 0xf0, 0x00, 0x00, 0x4e, 0xd0};
 	static const uint8 cursor_moveto_data[] = {0x24, 0x6e, 0x00, 0x10, 0x22, 0x6a, 0x00, 0x04, 0x70, 0x00, 0x20, 0x2e};
-	uint32 disp = find_rom_data(0x8000, 0x10000, cursor_dispatch_data, sizeof(cursor_dispatch_data));
-	uint32 mvto = find_rom_data(0x8000, 0x10000, cursor_moveto_data, sizeof(cursor_moveto_data));
+	uint32 disp = find_rom_data(RomSearchBound(nanokernel2, 0xc000, 0x8000), 0x10000, cursor_dispatch_data, sizeof(cursor_dispatch_data));
+	uint32 mvto = find_rom_data(RomSearchBound(nanokernel2, 0xc000, 0x8000), 0x10000, cursor_moveto_data, sizeof(cursor_moveto_data));
 	if (disp != 0 && mvto != 0
 			&& wipe_base != 0
 			&& check_rom_patch_space(CURSOR_LOG_SPACE, CURSOR_LOG_SIZE)) {

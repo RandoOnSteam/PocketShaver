@@ -72,6 +72,8 @@ typedef struct OsxNativeState {
 	uint8 *checkthunk;
 	uint8 *missthunk;
 	uint8 *finishthunk;
+	uint8 *fillthunk;
+	uint8 *timethunk;
 	uint32 thunkbytes;
 	uint64 compiled;
 	uint64 linked;
@@ -90,6 +92,14 @@ typedef struct OsxNativeEmitter {
 	uint8 *checkthunk;
 	uint8 *missthunk;
 	uint8 *finishthunk;
+	uint8 *fillthunk;
+	uint8 *timethunk;
+	int deterministic;
+	uint8 *fills[OSXJITLIMIT * 2][2];
+	uint8 *fillretries[OSXJITLIMIT * 2];
+	int fillcounts[OSXJITLIMIT * 2];
+	int fillkinds[OSXJITLIMIT * 2];
+	int fillcount;
 	uint8 *misses[OSXJITMISSES];
 	int misscounts[OSXJITMISSES];
 	int misscount;
@@ -292,6 +302,33 @@ static void EmitThunks(OsxNativeState *state)
 	Leave(&emitter, OSXJITDYNAMIC);
 	state->finishthunk = state->executebase + (emitter.cursor - emitter.start);
 	Leave(&emitter, OSXJITCONTINUE);
+	state->fillthunk = state->executebase + (emitter.cursor - emitter.start);
+	Byte(&emitter, 0x50);
+	Byte(&emitter, 0x41); Byte(&emitter, 0x52);
+	Byte(&emitter, 0x41); Byte(&emitter, 0x53);
+	Byte(&emitter, 0x48); Byte(&emitter, 0x83); Byte(&emitter, 0xec); Byte(&emitter, 0x20);
+	RegisterOp(&emitter, 0x89, 1, 3, 1);
+	RegisterOp(&emitter, 0x89, 2, 0, 0);
+	RegisterOp(&emitter, 0x89, 8, 9, 0);
+	Byte(&emitter, 0x48); Byte(&emitter, 0xb8);
+	Quad(&emitter, (uint64)(uintptr_t)OsxCpuFillTlb);
+	Byte(&emitter, 0xff); Byte(&emitter, 0xd0);
+	RegisterOp(&emitter, 0x89, 1, 0, 0);
+	Byte(&emitter, 0x48); Byte(&emitter, 0x83); Byte(&emitter, 0xc4); Byte(&emitter, 0x20);
+	Byte(&emitter, 0x41); Byte(&emitter, 0x5b);
+	Byte(&emitter, 0x41); Byte(&emitter, 0x5a);
+	Byte(&emitter, 0x58);
+	Byte(&emitter, 0xc3);
+	state->timethunk = state->executebase + (emitter.cursor - emitter.start);
+	Byte(&emitter, 0x41); Byte(&emitter, 0x53);
+	Byte(&emitter, 0x48); Byte(&emitter, 0x83); Byte(&emitter, 0xec); Byte(&emitter, 0x20);
+	RegisterOp(&emitter, 0x89, 1, 3, 1);
+	Byte(&emitter, 0x48); Byte(&emitter, 0xb8);
+	Quad(&emitter, (uint64)(uintptr_t)OsxCpuTimebase);
+	Byte(&emitter, 0xff); Byte(&emitter, 0xd0);
+	Byte(&emitter, 0x48); Byte(&emitter, 0x83); Byte(&emitter, 0xc4); Byte(&emitter, 0x20);
+	Byte(&emitter, 0x41); Byte(&emitter, 0x5b);
+	Byte(&emitter, 0xc3);
 	state->thunkbytes = ((uint32)(emitter.cursor - emitter.start) + 63) & ~63u;
 	state->used = state->thunkbytes;
 	FlushInstructionCache(GetCurrentProcess(), state->executebase, state->thunkbytes);
@@ -497,6 +534,15 @@ static void Address(OsxNativeEmitter *emitter, int base, int index, uint32 immed
 
 static void Translate(OsxNativeEmitter *emitter, int store, uint32 limit, int count)
 {
+	uint8 *retry;
+	int fill;
+	retry = emitter->cursor;
+	fill = emitter->fillcount++;
+	emitter->fillretries[fill] = retry;
+	emitter->fillcounts[fill] = count;
+	emitter->fillkinds[fill] = OSXTLBREAD;
+	if (store)
+		emitter->fillkinds[fill] = OSXTLBWRITE;
 	RegisterOp(emitter, 0x89, 1, 0, 0);
 	ImmediateOp(emitter, 4, 1, 0xfffff000);
 	RegisterOp(emitter, 0x89, 2, 0, 0);
@@ -509,13 +555,13 @@ static void Translate(OsxNativeEmitter *emitter, int store, uint32 limit, int co
 		CpuMemory(emitter, 0x8b, 8, OSXJITOFFSET(readtlb), 1);
 	RegisterOp(emitter, 0x01, 8, 2, 1);
 	Byte(emitter, 0x41); Byte(emitter, 0x39); Byte(emitter, 0x08);
-	Miss(emitter, 5, count);
+	emitter->fills[fill][0] = Jump(emitter, 5);
 	RegisterOp(emitter, 0x89, 2, 0, 0);
 	Shift(emitter, 5, 2, 28);
 	CpuMemory(emitter, 0x8b, 9, OSXJITOFFSET(datasr), 1);
 	Byte(emitter, 0x41); Byte(emitter, 0x8b); Byte(emitter, 0x14); Byte(emitter, 0x91);
 	Byte(emitter, 0x41); Byte(emitter, 0x39); Byte(emitter, 0x50); Byte(emitter, 4);
-	Miss(emitter, 5, count);
+	emitter->fills[fill][1] = Jump(emitter, 5);
 	ImmediateOp(emitter, 4, 0, 0xfff);
 	ImmediateOp(emitter, 7, 0, limit);
 	Miss(emitter, 7, count);
@@ -884,6 +930,7 @@ static int System(OsxNativeEmitter *emitter, uint32 instruction, uint32 extended
 	uint32 mask;
 	uint32 field;
 	uint8 *quiet;
+	uint8 *pending;
 	target = (instruction >> 21) & 31;
 	switch (extended) {
 	case 54: case 86: case 246: case 278: case 598: case 854:
@@ -921,6 +968,9 @@ static int System(OsxNativeEmitter *emitter, uint32 instruction, uint32 extended
 		CpuMemory(emitter, 0x89, 1, OSXJITOFFSET(msr), 0);
 		RegisterOp(emitter, 0x21, 2, 1, 0);
 		quiet = Jump(emitter, 4);
+		CpuMemory(emitter, 0x8b, 2, OSXJITOFFSET(externalline), 0);
+		CpuMemory(emitter, 0x0b, 2, OSXJITOFFSET(decpending), 0);
+		pending = Jump(emitter, 4);
 		Advance(emitter);
 		Account(emitter, count + 1);
 		Byte(emitter, 0xc7); Byte(emitter, 0x83);
@@ -928,10 +978,22 @@ static int System(OsxNativeEmitter *emitter, uint32 instruction, uint32 extended
 		Word(emitter, 0);
 		Leave(emitter, OSXJITCONTINUE);
 		Patch(quiet, emitter->cursor);
+		Patch(pending, emitter->cursor);
 		return 1;
 	case 595:
 		RequireSupervisorMode(emitter, count);
 		CpuMemory(emitter, 0x8b, 0, OSXJITOFFSET(sr) + ((instruction >> 16) & 15) * 4, 0);
+		CpuMemory(emitter, 0x89, 0, OSXJITGPR(target), 0);
+		return 1;
+	case 371:
+		number = ((instruction >> 16) & 31) | ((instruction >> 6) & 0x3e0);
+		if ((number != 268 && number != 269) || emitter->deterministic)
+			return 0;
+		Byte(emitter, 0xe8);
+		JumpTo(emitter, emitter->timethunk);
+		if (number == 269) {
+			Byte(emitter, 0x48); Byte(emitter, 0xc1); Byte(emitter, 0xe8); Byte(emitter, 32);
+		}
 		CpuMemory(emitter, 0x89, 0, OSXJITGPR(target), 0);
 		return 1;
 	case 339:
@@ -1382,6 +1444,10 @@ static void Compile(OsxCpu *cpu, OsxNativeState *state, OsxNativeBlock *block, u
 	emitter.checkthunk = state->checkthunk;
 	emitter.missthunk = state->missthunk;
 	emitter.finishthunk = state->finishthunk;
+	emitter.fillthunk = state->fillthunk;
+	emitter.timethunk = state->timethunk;
+	emitter.deterministic = cpu->deterministic != 0;
+	emitter.fillcount = 0;
 	emitter.misscount = 0;
 	Byte(&emitter, 0x53);
 	RegisterOp(&emitter, 0x89, 3, 1, 1);
@@ -1395,7 +1461,7 @@ static void Compile(OsxCpu *cpu, OsxNativeState *state, OsxNativeBlock *block, u
 		limit = OSXJITLIMIT;
 	count = 0;
 	status = 0;
-	while (count < limit && emitter.misscount < OSXJITMISSES - 128) {
+	while (count < limit && emitter.misscount < OSXJITMISSES - 128 && emitter.fillcount < OSXJITLIMIT * 2 - 4) {
 		memcpy(&word, cpu->ram + physical + count * 4, 4);
 		instruction = tswap32(word);
 		status = Emit(&emitter, instruction, count);
@@ -1410,6 +1476,18 @@ static void Compile(OsxCpu *cpu, OsxNativeState *state, OsxNativeBlock *block, u
 		Return(&emitter, count, OSXJITINTERPRET);
 	else if (status == 1)
 		Exit(&emitter, count, (physical & 4095) + (uint32)count * 4);
+	for (index = 0; index < emitter.fillcount; index++) {
+		Patch(emitter.fills[index][0], emitter.cursor);
+		Patch(emitter.fills[index][1], emitter.cursor);
+		Immediate(&emitter, 9, (uint32)emitter.fillkinds[index]);
+		Byte(&emitter, 0xe8);
+		JumpTo(&emitter, emitter.fillthunk);
+		RegisterOp(&emitter, 0x85, 1, 1, 0);
+		Miss(&emitter, 4, emitter.fillcounts[index]);
+		Byte(&emitter, 0xe9);
+		Word(&emitter, 0);
+		Patch(emitter.cursor - 4, emitter.fillretries[index]);
+	}
 	for (index = 0; index < emitter.misscount; index++) {
 		shared = 0;
 		while (shared < index && emitter.misscounts[shared] != emitter.misscounts[index])

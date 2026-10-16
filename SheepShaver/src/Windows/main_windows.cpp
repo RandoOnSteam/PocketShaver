@@ -48,6 +48,7 @@
 #include "usbhid.h"
 #include "usbuim.h"
 #include "util_windows.h"
+#include <mmsystem.h>
 //#include "kernel_windows.h"
 
 #define DEBUG 0
@@ -106,7 +107,7 @@ static EmulatorData *emulator_data;
 
 static uint8 last_xpram[XPRAM_SIZE];		// Buffer for monitoring XPRAM changes
 static bool nvram_thread_active = false;	// Flag: NVRAM watchdog installed
-static volatile bool nvram_thread_cancel;	// Flag: Cancel NVRAM thread
+static HANDLE nvramwakeup = NULL;
 static HANDLE nvram_thread = NULL;			// NVRAM watchdog
 static bool tick_thread_active = false;		// Flag: MacOS thread installed
 static volatile bool tick_thread_cancel;	// Flag: Cancel 60Hz thread
@@ -298,6 +299,11 @@ int main(int argc, char **argv)
 	ROMBase = ROM_BASE;
 	ROMBaseHost = Mac2HostAddr(ROMBase);
 	rom_area_mapped = true;
+	if (vm_mac_acquire(0xffff0000, 0x10000) < 0) {
+		sprintf(str, GetString(STR_RAM_MMAP_ERR), strerror(errno));
+		ErrorAlert(str);
+		goto quit;
+	}
 	D(bug("ROM area at %p (%08x)\n", ROMBaseHost, ROMBase));
 
 	if (RAMBase > ROMBase) {
@@ -479,6 +485,7 @@ int main(int argc, char **argv)
 
 
 	// Start 60Hz thread
+	timeBeginPeriod(1);
 	tick_thread_cancel = false;
 	tick_thread_active = ((tick_thread = create_thread(tick_func)) != NULL);
 	SetThreadPriority(tick_thread, THREAD_PRIORITY_ABOVE_NORMAL);
@@ -486,9 +493,13 @@ int main(int argc, char **argv)
 
 	// Start NVRAM watchdog thread
 	memcpy(last_xpram, XPRAM, XPRAM_SIZE);
-	nvram_thread_cancel = false;
-	nvram_thread_active = ((nvram_thread = create_thread(nvram_func, NULL)) != NULL);
-	SetThreadPriority(nvram_thread, THREAD_PRIORITY_BELOW_NORMAL);
+	nvramwakeup = CreateEvent(NULL, TRUE, FALSE, NULL);
+	if (nvramwakeup != NULL) {
+		nvram_thread = create_thread(nvram_func, nvramwakeup);
+		nvram_thread_active = nvram_thread != NULL;
+		if (nvram_thread_active)
+			SetThreadPriority(nvram_thread, THREAD_PRIORITY_BELOW_NORMAL);
+	}
 	D(bug("NVRAM thread installed (%ld)\n", nvram_thread));
 
 	// Get my thread ID and jump to ROM boot routine
@@ -514,12 +525,15 @@ static void Quit(bool restart)
 		tick_thread_cancel = true;
 		wait_thread(tick_thread);
 	}
+	timeEndPeriod(1);
 
 	// Stop NVRAM watchdog thread
 	if (nvram_thread_active) {
-		nvram_thread_cancel = true;
+		SetEvent(nvramwakeup);
 		wait_thread(nvram_thread);
 	}
+	if (nvramwakeup != NULL)
+		CloseHandle(nvramwakeup);
 
 	// Exit PowerPC emulation
 	exit_emul_ppc();
@@ -717,9 +731,7 @@ static void nvram_watchdog(void)
 
 static DWORD WINAPI nvram_func(void *arg)
 {
-	while (!nvram_thread_cancel) {
-		for (int i=0; i<60 && !nvram_thread_cancel; i++)
-			Delay_usec(999999);		// Only wait 1 second so we quit promptly when nvram_thread_cancel becomes true
+	while (WaitForSingleObject((HANDLE)arg, 60000) == WAIT_TIMEOUT) {
 		nvram_watchdog();
 	}
 	return 0;

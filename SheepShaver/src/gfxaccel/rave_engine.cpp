@@ -20,6 +20,7 @@
 #include "sysdeps.h"
 #include "cpu_emulation.h"
 #include "macos_util.h"
+#include "rom_patches.h"
 #include "thunks.h"
 #include "rave_engine.h"
 #include "rave_device_summary.h"
@@ -2987,10 +2988,13 @@ void RaveRegisterEngine(void)
 
 	uint32 qa_register = 0;
 	const char *found_rave_lib = NULL;
+	uint32 libraryloadoptions = 1;
+	if (HasNanoKernel2())
+		libraryloadoptions = 2;
 	for (int i = 0; rave_lib_names[i] != NULL; i++) {
 		RAVE_LOG("  trying library '%s' (len %d)",
 			   rave_lib_names[i] + 1, (unsigned char)rave_lib_names[i][0]);
-		qa_register = FindLibSymbol(rave_lib_names[i], "\020QARegisterEngine", 2);
+		qa_register = FindLibSymbol(rave_lib_names[i], "\020QARegisterEngine", libraryloadoptions);
 		QD3D_INIT_LOG("RaveRegisterEngine: QARegisterEngine lookup fragment[%d] '%.*s' -> 0x%08x",
 					  i, (unsigned char)rave_lib_names[i][0], rave_lib_names[i] + 1,
 					  qa_register);

@@ -491,8 +491,8 @@ void DoPatchNameRegistry(void)
 		// Create "video"
 		SheepRegEntryID video;
 		if (!RegistryCStrEntryCreate(device_tree.addr(), "video", video.addr())) {
-			RegistryPropertyCreateStr(video.addr(), "name", "video");
 			if (HasNanoKernel2() && ReadMacInt16(ROMBase + 0x310004) >= 0x0210) {
+				RegistryPropertyCreateStr(video.addr(), "name", "video");
 				u32.set_value(32);
 				RegistryPropertyCreate(video.addr(), "did", u32.addr(), 4);
 				u32.set_value(1);

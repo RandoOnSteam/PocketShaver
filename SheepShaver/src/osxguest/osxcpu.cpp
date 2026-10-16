@@ -21,6 +21,9 @@
 #include <math.h>
 #ifdef _WIN32
 #include <windows.h>
+#if defined(_MSC_VER)
+#include <intrin.h>
+#endif
 #else
 #include <time.h>
 #endif
@@ -79,10 +82,16 @@ static inline void StoreHostSized(uint8 *host, int size, uint32 value)
 
 static uint64 HostTicks(void)
 {
-#ifdef _WIN32
+#if defined(_WIN32)
+	/* QueryPerformanceCounter() takes up around 20%
+	of process time! Use rdtsc directly if possible. */
+#if defined(_MSC_VER)
+	return __rdtsc();
+#else
 	LARGE_INTEGER counter;
 	QueryPerformanceCounter(&counter);
 	return (uint64)counter.QuadPart;
+#endif
 #else
 	struct timespec now;
 	clock_gettime(CLOCK_MONOTONIC, &now);
@@ -90,12 +99,46 @@ static uint64 HostTicks(void)
 #endif
 }
 
-static uint64 HostFrequency(void)
+static uint64 MultiplyDivide(uint64 value, uint64 multiplier, uint64 divisor)
+{
+	return (value / divisor) * multiplier + ((value % divisor) * multiplier) / divisor;
+}
+
+static uint64 HostFrequency(uint64 ticks, uint64 counter)
 {
 #ifdef _WIN32
+	LARGE_INTEGER now;
 	LARGE_INTEGER frequency;
+	QueryPerformanceCounter(&now);
 	QueryPerformanceFrequency(&frequency);
-	return (uint64)frequency.QuadPart;
+	return MultiplyDivide(HostTicks() - ticks, (uint64)frequency.QuadPart, (uint64)now.QuadPart - counter);
+#else
+	return 1000000000ULL;
+#endif
+}
+
+static uint64 HostCounter(void)
+{
+#ifdef _WIN32
+	LARGE_INTEGER counter;
+	QueryPerformanceCounter(&counter);
+	return (uint64)counter.QuadPart;
+#else
+	return 0;
+#endif
+}
+
+static uint64 CalibrateHostFrequency(OsxCpu *cpu)
+{
+#ifdef _WIN32
+	DWORD megahertz;
+	DWORD length;
+	cpu->calibrationticks = HostTicks();
+	cpu->calibrationcounter = HostCounter();
+	length = sizeof(megahertz);
+	if (RegGetValueA(HKEY_LOCAL_MACHINE, "HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0", "~MHz", RRF_RT_REG_DWORD, NULL, &megahertz, &length) == ERROR_SUCCESS && megahertz != 0)
+		return (uint64)megahertz * 1000000ULL;
+	return 3000000000ULL;
 #else
 	return 1000000000ULL;
 #endif
@@ -126,7 +169,20 @@ uint64 OsxCpuTimebase(OsxCpu *cpu)
 	if (cpu->deterministic)
 		return cpu->instructions / cpu->deterministic + cpu->virtualticks;
 	elapsed = HostTicks() - cpu->hostbase;
-	return (elapsed / cpu->hostfrequency) * cpu->tbfrequency + ((elapsed % cpu->hostfrequency) * cpu->tbfrequency) / cpu->hostfrequency + cpu->tboffset;
+	return (elapsed >> 32) * cpu->hostscale + (((elapsed & 0xffffffffULL) * cpu->hostscale) >> 32) + cpu->tboffset;
+}
+
+void OsxCpuCalibrateTimebase(OsxCpu *cpu)
+{
+	uint64 current;
+	uint64 frequency;
+	if (cpu->deterministic || HostCounter() == cpu->calibrationcounter)
+		return;
+	frequency = HostFrequency(cpu->calibrationticks, cpu->calibrationcounter);
+	current = OsxCpuTimebase(cpu);
+	cpu->hostbase = HostTicks();
+	cpu->hostscale = (cpu->tbfrequency << 32) / frequency;
+	cpu->tboffset = current;
 }
 
 uint64 OsxCpuNextDeadline(OsxCpu *cpu)
@@ -222,8 +278,8 @@ void OsxCpuReset(OsxCpu *cpu, uint32 pvr, uint64 tbfrequency)
 	cpu->reservation = 0;
 	cpu->reservationvalid = 0;
 	cpu->tbfrequency = tbfrequency;
+	cpu->hostscale = (tbfrequency << 32) / CalibrateHostFrequency(cpu);
 	cpu->hostbase = HostTicks();
-	cpu->hostfrequency = HostFrequency();
 	cpu->tboffset = 0;
 	cpu->decvalue = 0xffffffff;
 	cpu->decstamp = 0;
@@ -475,21 +531,14 @@ static void WatchWrite(OsxCpu *cpu, uint32 physical, int size, uint32 value)
 	fprintf(cpu->watchfile, "%llu %llu pc %08x lr %08x pr %u sr %06x x %u y %u size %d value %08x\n", (unsigned long long)OsxCpuTimebase(cpu), (unsigned long long)cpu->instructions, cpu->pc, cpu->lr, (cpu->msr >> 14) & 1, cpu->sr[0] & 0xffffff, column, (physical - cpu->vrambase) / cpu->watchrowbytes, size, value);
 }
 
-static int AccessSlow(OsxCpu *cpu, uint32 address, int kind, uint8 **host, uint32 *physical)
+static void FillTlbEntry(OsxCpu *cpu, uint32 address, int kind, uint8 *host)
 {
 	OsxTlbEntry *entry;
 	uint32 *segments;
-	cpu->slowaccesses++;
-	if (!OsxCpuTranslate(cpu, address, kind, 1, physical))
-		return OSXACCESSFAULT;
-	if (!PhysicalHost(cpu, *physical, host))
-		return OSXACCESSBUS;
 	if (kind == OSXTLBFETCH) {
 		entry = &cpu->fetchtlb[(address >> 12) & OSXTLBMASK];
 		segments = cpu->fetchsr;
 	} else if (kind == OSXTLBWRITE) {
-		if (cpu->watchfile && *physical - cpu->vrambase < cpu->vramsize)
-			return OSXACCESSHOST;
 		entry = &cpu->writetlb[(address >> 12) & OSXTLBMASK];
 		segments = cpu->datasr;
 	} else {
@@ -498,8 +547,32 @@ static int AccessSlow(OsxCpu *cpu, uint32 address, int kind, uint8 **host, uint3
 	}
 	entry->page = address & OSXPAGEMASK;
 	entry->segment = segments[address >> 28];
-	entry->host = *host - (address & 0xfff);
+	entry->host = host - (address & 0xfff);
+}
+
+static int AccessSlow(OsxCpu *cpu, uint32 address, int kind, uint8 **host, uint32 *physical)
+{
+	cpu->slowaccesses++;
+	if (!OsxCpuTranslate(cpu, address, kind, 1, physical))
+		return OSXACCESSFAULT;
+	if (!PhysicalHost(cpu, *physical, host))
+		return OSXACCESSBUS;
+	if (kind == OSXTLBWRITE && cpu->watchfile && *physical - cpu->vrambase < cpu->vramsize)
+		return OSXACCESSHOST;
+	FillTlbEntry(cpu, address, kind, *host);
 	return OSXACCESSHOST;
+}
+
+int OsxCpuFillTlb(OsxCpu *cpu, uint32 address, int kind)
+{
+	uint8 *host;
+	uint32 physical;
+	if (!OsxCpuTranslate(cpu, address, kind, 0, &physical) || !PhysicalHost(cpu, physical, &host))
+		return 0;
+	if (kind == OSXTLBWRITE && cpu->watchfile && physical - cpu->vrambase < cpu->vramsize)
+		return 0;
+	FillTlbEntry(cpu, address, kind, host);
+	return 1;
 }
 
 static int ReadSlow(OsxCpu *cpu, uint32 address, int size, uint32 *value)
@@ -1003,8 +1076,10 @@ static int WriteSpr(OsxCpu *cpu, uint32 number, uint32 value)
 	case 19: cpu->dar = value; return 1;
 	case 22: WriteDecrementer(cpu, value); return 1;
 	case 25:
-		cpu->sdr1 = value;
-		OsxCpuFlushTlb(cpu);
+		if (cpu->sdr1 != value) {
+			cpu->sdr1 = value;
+			OsxCpuFlushTlb(cpu);
+		}
 		return 1;
 	case 26: cpu->srr0 = value; return 1;
 	case 27: cpu->srr1 = value; return 1;
@@ -1012,12 +1087,16 @@ static int WriteSpr(OsxCpu *cpu, uint32 number, uint32 value)
 	case 282: cpu->ear = value; return 1;
 	case 284: case 285: WriteTimebase(cpu, number, value); return 1;
 	case 528: case 529: case 530: case 531: case 532: case 533: case 534: case 535:
-		cpu->ibat[number - 528] = value;
-		OsxCpuFlushTlb(cpu);
+		if (cpu->ibat[number - 528] != value) {
+			cpu->ibat[number - 528] = value;
+			OsxCpuFlushTlb(cpu);
+		}
 		return 1;
 	case 536: case 537: case 538: case 539: case 540: case 541: case 542: case 543:
-		cpu->dbat[number - 536] = value;
-		OsxCpuFlushTlb(cpu);
+		if (cpu->dbat[number - 536] != value) {
+			cpu->dbat[number - 536] = value;
+			OsxCpuFlushTlb(cpu);
+		}
 		return 1;
 	case 952: cpu->mmcr[0] = value; return 1;
 	case 956: cpu->mmcr[1] = value; return 1;
@@ -1077,7 +1156,7 @@ static void WriteMsr(OsxCpu *cpu, uint32 value)
 		cpu->halted = 1;
 		cpu->slice = 0;
 	}
-	if ((changed & OSXMSREE) && (value & OSXMSREE))
+	if ((changed & OSXMSREE) && (value & OSXMSREE) && (cpu->externalline || cpu->decpending))
 		cpu->slice = 0;
 }
 
@@ -1325,7 +1404,8 @@ static void ExecuteGroup19(OsxCpu *cpu, uint32 instruction)
 			return;
 		cpu->nextpc = cpu->srr0 & ~3u;
 		WriteMsr(cpu, (cpu->srr1 & 0x0000ff73) | (cpu->msr & OSXMSRILE));
-		cpu->slice = 0;
+		if ((cpu->msr & OSXMSREE) && (cpu->externalline || cpu->decpending))
+			cpu->slice = 0;
 		return;
 	case 150:
 		return;
@@ -1974,9 +2054,9 @@ void OsxCpuExecuteInstruction(OsxCpu *cpu, uint32 instruction)
 	cpu->instructions++;
 }
 
-void OsxCpuCheckInterrupts(OsxCpu *cpu)
+void OsxCpuCheckInterrupts(OsxCpu *cpu, uint64 now)
 {
-	if (!cpu->decpending && cpu->decdeadline != OSXNEVER && OsxCpuTimebase(cpu) >= cpu->decdeadline) {
+	if (!cpu->decpending && cpu->decdeadline != OSXNEVER && now >= cpu->decdeadline) {
 		cpu->decpending = 1;
 		cpu->decdeadline = OSXNEVER;
 	}

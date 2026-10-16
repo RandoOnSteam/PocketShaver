@@ -33,6 +33,7 @@
 #endif
 
 #define OSXSLICE 20000
+#define OSXCLOCKINSTRUCTIONS 16384
 
 SDL_Surface *SDLSetVideoModeQuietly(int width, int height, int depth, Uint32 flags);
 #define OSXDEFAULTRAM (256 * 1024 * 1024)
@@ -978,6 +979,7 @@ static void RunMachine(OsxSession *session, void *monitor)
 	uint64 runtime;
 	uint64 slices;
 	uint64 stoptime;
+	uint64 clockinstructions;
 	int32 seconds;
 	machine = session->machine;
 	cpu = machine->cpu;
@@ -990,10 +992,11 @@ static void RunMachine(OsxSession *session, void *monitor)
 	stoptime = OSXNEVER;
 	if (seconds > 0)
 		stoptime = (uint64)seconds * OSXTIMEBASEFREQUENCY;
+	now = OsxCpuTimebase(cpu);
+	clockinstructions = cpu->instructions;
 	while (!machine->quit) {
-		OsxCpuCheckInterrupts(cpu);
+		OsxCpuCheckInterrupts(cpu, now);
 		if (cpu->halted) {
-			now = OsxCpuTimebase(cpu);
 			waitticks = frameticks;
 			if (cpu->decdeadline != OSXNEVER && cpu->decdeadline > now && cpu->decdeadline - now < waitticks)
 				waitticks = cpu->decdeadline - now;
@@ -1011,17 +1014,21 @@ static void RunMachine(OsxSession *session, void *monitor)
 				cpu->virtualticks += waitticks + 1;
 			else if (milliseconds > 0)
 				SDL_Delay(milliseconds);
+			now = OsxCpuTimebase(cpu);
 		} else {
-			runstart = OsxHostNanoseconds();
+			runstart = now;
 			OsxJitRun(cpu, OSXSLICE);
 			if (session->slicelog)
 				LogSlice(session->slicelog, cpu);
-			runtime += OsxHostNanoseconds() - runstart;
+			if (cpu->halted || cpu->instructions - clockinstructions >= OSXCLOCKINSTRUCTIONS) {
+				now = OsxCpuTimebase(cpu);
+				clockinstructions = cpu->instructions;
+			}
+			runtime += now - runstart;
 			if (session->samplecount < 8192)
 				session->samples[session->samplecount++] = cpu->pc | ((cpu->msr >> 14) & 1);
 			slices++;
 		}
-		now = OsxCpuTimebase(cpu);
 		OsxCudaPoll(machine, now);
 		OsxBmacPoll(machine, now);
 		OsxAtaPoll(machine, now);
@@ -1039,8 +1046,10 @@ static void RunMachine(OsxSession *session, void *monitor)
 			if ((cpu->decrementercount & 7) == 0)
 				DumpProcesses(session);
 			nextstatus = now + OSXTIMEBASEFREQUENCY * 2;
+			OsxCpuCalibrateTimebase(cpu);
+			now = OsxCpuTimebase(cpu);
 			if (machine->log) {
-				fprintf(machine->log, "status pc %08x lr %08x msr %08x instructions %llu halted %d dec %u ext %u slow %llu exceptions %llu runms %llu slices %llu\n", cpu->pc, cpu->lr, cpu->msr, (unsigned long long)cpu->instructions, cpu->halted, cpu->decrementercount, cpu->externalcount, (unsigned long long)cpu->slowaccesses, (unsigned long long)cpu->exceptions, (unsigned long long)(runtime / 1000000), (unsigned long long)slices);
+				fprintf(machine->log, "status pc %08x lr %08x msr %08x instructions %llu halted %d dec %u ext %u slow %llu exceptions %llu runms %llu slices %llu\n", cpu->pc, cpu->lr, cpu->msr, (unsigned long long)cpu->instructions, cpu->halted, cpu->decrementercount, cpu->externalcount, (unsigned long long)cpu->slowaccesses, (unsigned long long)cpu->exceptions, (unsigned long long)(runtime * 1000 / OSXTIMEBASEFREQUENCY), (unsigned long long)slices);
 				fflush(machine->log);
 			}
 		}
