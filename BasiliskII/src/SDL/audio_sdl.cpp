@@ -64,12 +64,12 @@ static int audio_channel_count_index = 0;
 static SDL_sem *audio_irq_done_sem = NULL;			// Signal from interrupt to streaming thread: data block read
 static uint8 silence_byte;							// Byte value to use to fill sound buffers with silence
 static uint8 *audio_mix_buf = NULL;
+static int audio_callback_bytes = 0;
 #ifndef USE_SDL1
 static uint8 *audio_fetch_buf = NULL;
 static SDL_AudioStream *audio_prefetch_stream = NULL;
 static SDL_Thread *audio_prefetch_thread = NULL;
 static SDL_atomic_t audio_prefetch_quit;
-static int audio_callback_bytes = 0;
 static int audio_fetch_bytes = 0;
 #else
 static atomic_sint audio_closing;
@@ -162,6 +162,7 @@ static bool open_sdl_audio(void)
 	audio_frames_per_block = audio_spec.samples;
 
 #ifdef USE_SDL1
+	audio_callback_bytes = audio_spec.size;
 	audio_mix_buf = (uint8*)malloc(audio_spec.size);
 	if (!audio_mix_buf) {
 		SDL_CloseAudio();
@@ -442,6 +443,8 @@ static void stream_func(void *arg, uint8 *stream, int stream_len)
 				(AudioStatus.sample_size >> 3) * AudioStatus.channels;
 			if (bytes > stream_len)
 				bytes = stream_len;
+			if (bytes > audio_callback_bytes)
+				bytes = audio_callback_bytes;
 			if (bytes > 0) {
 				bool double_mono_8 = AudioStatus.channels == 2 &&
 					ReadMacInt16(info + scd_numChannels) == 1 &&

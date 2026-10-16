@@ -1218,8 +1218,45 @@ void powerpc_cpu::EnableNativeJit()
 	nativejit = (NATIVEJITSTATE*)code;
 	nativejit->mCode = code + NATIVEJIT_STATE_SPACE;
 	nativejit->mFloat = NativeJitHasFloat() != 0;
+#if PPC_NATIVEJIT_VERIFY
+	nativeverifyblocks = 0;
+	nativeverifyskipped = 0;
+	nativeverifymismatches = 0;
+	nativeverifyuntranslatedcount = 0;
+#endif
 	NativeJitReset();
 }
+
+#if PPC_NATIVEJIT_VERIFY
+static int NativeJitVerifyPure(uint32 opcode)
+{
+	uint32 extended;
+	uint32 special;
+	extended = (opcode >> 1) & 0x3ff;
+	special = NATIVEJIT_OPCODE_RA(opcode) | (NATIVEJIT_OPCODE_RB(opcode) << 5);
+	if ((opcode >> 26) == 31)
+	{
+		switch (extended)
+		{
+		case 747: case 1003: case 971: case 83: case 20: case 150:
+		case 533: case 597: case 661: case 725:
+			return 1;
+		case 339:
+			return special != 22 && special != 268 && special != 269;
+		}
+		return 0;
+	}
+	if ((opcode >> 26) == 63)
+	{
+		switch (extended)
+		{
+		case 0: case 32: case 14: case 15: case 583: case 711: case 70: case 38: case 64:
+			return 1;
+		}
+	}
+	return 0;
+}
+#endif
 
 static void NativeJitDirectExit(NATIVEJITEMITTER* emitter, const NATIVEJITLAYOUT* layout, uint32 target,
 	uint32 blockpc, uint8* loopstart)
@@ -1227,9 +1264,33 @@ static void NativeJitDirectExit(NATIVEJITEMITTER* emitter, const NATIVEJITLAYOUT
 	uint8* site;
 	NativeJitStoreRegisterImmediate(emitter, layout->mPc, target);
 	site = NativeJitChainJump(emitter, target, layout->mFlags, layout->mState);
-	if (target == blockpc)
+	if (target == blockpc && !PPC_NATIVEJIT_VERIFY)
 		NativeJitChainLink(site, loopstart);
-	NativeJitEpilogue(emitter);
+}
+
+static powerpc_block_info::decode_info* NativeJitDecodeAllocate(NATIVEJITSTATE* state, NATIVEJITEMITTER* emitter,
+	const powerpc_block_info::decode_info* source, int count)
+{
+	powerpc_block_info::decode_info* entries;
+	uint8* top;
+	int index;
+	top = (uint8*)((uintptr)(state->mDecodeTop - count * sizeof(powerpc_block_info::decode_info)) & ~(uintptr)15);
+	if (top < emitter->mCode + NATIVEJIT_BLOCK_RESERVE)
+		return NULL;
+	entries = (powerpc_block_info::decode_info*)top;
+	for (index = 0; index < count; index++)
+		entries[index] = source[index];
+	state->mDecodeTop = top;
+	emitter->mLimit = top;
+	return entries;
+}
+
+static powerpc_block_info::decode_info* NativeJitDecodeEntry(NATIVEJITSTATE* state, NATIVEJITEMITTER* emitter,
+	powerpc_block_info::decode_info* decode, const powerpc_block_info::decode_info* olddecode, int index)
+{
+	if (decode != olddecode)
+		return &decode[index];
+	return NativeJitDecodeAllocate(state, emitter, &olddecode[index], 1);
 }
 
 void* powerpc_cpu::NativeJitCompileBlock(block_info* bi)
@@ -1250,7 +1311,12 @@ void* powerpc_cpu::NativeJitCompileBlock(block_info* bi)
 	int nativecount;
 	block_info::decode_info* olddecode;
 	block_info::decode_info* decode;
+	block_info::decode_info* decodeinfo;
 	uint8* codestart;
+#if PPC_NATIVEJIT_VERIFY
+	int verifiable;
+	verifiable = 1;
+#endif
 	base = (uint8*)regs_ptr();
 	nativecount = 0;
 	layout.mGpr = (int)((uint8*)&regs().gpr[0] - base);
@@ -1269,25 +1335,23 @@ void* powerpc_cpu::NativeJitCompileBlock(block_info* bi)
 	layout.mFpscr = (int)((uint8*)&regs().fpscr - base);
 	layout.mFloat = nativejit->mFloat;
 	layout.mState = nativejit;
-	decode = (block_info::decode_info*)(((uintptr)nativejit->mCursor + 15) & ~(uintptr)15);
-	codestart = (uint8*)(decode + bi->size);
-	if (codestart >= (uint8*)nativejit + NATIVEJIT_CODE_SIZE)
-	{
-		nativejit->mFull = 1;
-		return NULL;
-	}
-	NativeJitBegin(&emitter, codestart, (uint8*)nativejit + NATIVEJIT_CODE_SIZE,
-		layout.mCarry, layout.mSummaryOverflow);
+	codestart = nativejit->mCursor;
+	NativeJitBegin(&emitter, codestart, nativejit->mDecodeTop, layout.mCarry, layout.mSummaryOverflow);
 	if (!NativeJitHasRoom(&emitter))
 	{
 		nativejit->mFull = 1;
 		return NULL;
 	}
-	for (index = 0; index < bi->size; index++)
-		decode[index] = bi->di[index];
 	olddecode = bi->di;
-	bi->di = decode;
-	NativeJitPrologue(&emitter);
+	decode = olddecode;
+#if PPC_NATIVEJIT_VERIFY
+	decode = NativeJitDecodeAllocate(nativejit, &emitter, olddecode, bi->size);
+	if (decode == NULL)
+	{
+		nativejit->mFull = 1;
+		return NULL;
+	}
+#endif
 	loopstart = NativeJitLabel(&emitter);
 	translated = 0;
 	syncedpc = bi->pc;
@@ -1296,19 +1360,40 @@ void* powerpc_cpu::NativeJitCompileBlock(block_info* bi)
 	{
 		if (!NativeJitHasRoom(&emitter))
 		{
-			bi->di = olddecode;
 			nativejit->mFull = 1;
 			return NULL;
 		}
-		translated = NativeJitTranslate(&emitter, &layout, bi->di[index].opcode, address, NativeJitFprfLive(bi, index),
-			&bi->di[index]);
+		decodeinfo = NULL;
+		if (NativeJitIsFloatArithmetic(olddecode[index].opcode))
+		{
+			decodeinfo = NativeJitDecodeEntry(nativejit, &emitter, decode, olddecode, index);
+			if (decodeinfo == NULL)
+			{
+				nativejit->mFull = 1;
+				return NULL;
+			}
+		}
+		translated = NativeJitTranslate(&emitter, &layout, olddecode[index].opcode, address, NativeJitFprfLive(bi, index),
+			decodeinfo);
 		if (translated)
 			nativecount++;
 		if (translated == 0)
 		{
+#if PPC_NATIVEJIT_VERIFY
+			NativeJitVerifyNoteUntranslated(bi->di[index].opcode);
+			if (!NativeJitVerifyPure(bi->di[index].opcode))
+				verifiable = 0;
+#endif
+			if (decodeinfo == NULL)
+				decodeinfo = NativeJitDecodeEntry(nativejit, &emitter, decode, olddecode, index);
+			if (decodeinfo == NULL)
+			{
+				nativejit->mFull = 1;
+				return NULL;
+			}
 			if (syncedpc != address)
 				NativeJitStoreRegisterImmediate(&emitter, layout.mPc, address);
-			NativeJitCallHelper(&emitter, NativeJitInterpret, &bi->di[index]);
+			NativeJitCallHelper(&emitter, NativeJitInterpret, decodeinfo);
 			syncedpc = address + 4;
 		}
 		else if (translated == 4)
@@ -1318,11 +1403,8 @@ void* powerpc_cpu::NativeJitCompileBlock(block_info* bi)
 		address += 4;
 	}
 	if (nativecount == 0)
-	{
-		bi->di = olddecode;
 		return NULL;
-	}
-	lastopcode = bi->di[bi->size - 1].opcode;
+	lastopcode = olddecode[bi->size - 1].opcode;
 	exitcount = NativeJitStaticTargets(lastopcode, address - 4, targets);
 	if (translated == 3)
 	{
@@ -1344,17 +1426,23 @@ void* powerpc_cpu::NativeJitCompileBlock(block_info* bi)
 		for (index = 0; index < exitcount; index++)
 		{
 			site = NativeJitChainExit(&emitter, layout.mPc, targets[index], layout.mFlags, nativejit);
-			if (targets[index] == bi->pc)
+			if (targets[index] == bi->pc && !PPC_NATIVEJIT_VERIFY)
 				NativeJitChainLink(site, loopstart);
 		}
-		NativeJitIndirectExit(&emitter, layout.mPc, layout.mFlags, nativejit);
-		NativeJitEpilogue(&emitter);
+		NativeJitJumpToCode(&emitter, nativejit->mRetired);
 	}
 	NativeJitFlush(codestart, emitter.mCode - codestart);
 	nativejit->mPrologue = (int)(loopstart - codestart);
+#if PPC_NATIVEJIT_VERIFY
+	bi->nativecomplete = verifiable;
+#else
 	index = NATIVEJIT_LOOKUP_INDEX(bi->pc);
 	nativejit->mLookupPc[index] = bi->pc;
 	nativejit->mLookupEntry[index] = loopstart;
+#endif
+	bi->di = NULL;
+	if (decode != olddecode)
+		bi->di = decode;
 	nativejit->mCursor = emitter.mCode;
 	return codestart;
 }
@@ -1391,8 +1479,13 @@ void powerpc_cpu::NativeJitReset()
 	NativeJitBegin(&emitter, nativejit->mCode, (uint8*)nativejit + NATIVEJIT_CODE_SIZE, 0, 0);
 	NativeJitIndirectExit(&emitter, (int)((uint8*)&regs().pc - base), (int)((uint8*)&regs().spcflags - base), nativejit);
 	NativeJitEpilogue(&emitter);
+	nativejit->mReturnStub = emitter.mCode;
+	NativeJitReturnStub(&emitter, (int)((uint8*)&regs().pc - base), nativejit);
+	nativejit->mEntry = emitter.mCode;
+	NativeJitEntryStub(&emitter);
 	NativeJitFlush(nativejit->mCode, emitter.mCode - nativejit->mCode);
 	nativejit->mRetired = nativejit->mCode;
+	nativejit->mDecodeTop = (uint8*)nativejit + NATIVEJIT_CODE_SIZE;
 	nativejit->mCursor = emitter.mCode;
 	nativejit->mFull = 0;
 	nativejit->mChainSite = NULL;
@@ -1426,5 +1519,369 @@ void powerpc_cpu::NativeJitRetireBlock(void* cpu, block_info* bi)
 {
 	((powerpc_cpu*)cpu)->NativeJitRetire(bi);
 }
+
+#if PPC_NATIVEJIT_VERIFY
+#ifdef SHEEPSHAVER
+extern bool PPCGuestAddressValid(uint32 addr, uint32 len);
+extern bool MMIOIsWindow(void* host_addr);
+#endif
+
+#define NATIVEJITVERIFY_STORES 64
+#define NATIVEJITVERIFY_BYTES 4096
+#define NATIVEJITVERIFY_REPORTS 64
+#define NATIVEJITVERIFY_LOAD 1
+#define NATIVEJITVERIFY_STORE 2
+#define NATIVEJITVERIFY_FPRF 0x0001f000U
+
+typedef struct NATIVEJITVERIFYSTATE
+{
+	uint32 mGpr[32];
+	uint64 mFpr[32];
+	uint32 mCr;
+	uint32 mXer;
+	uint32 mFpscr;
+	uint32 mLr;
+	uint32 mCtr;
+	uint32 mPc;
+	uint32 mReserveValid;
+	uint32 mReserveAddress;
+} NATIVEJITVERIFYSTATE;
+
+typedef struct NATIVEJITVERIFYSTORE
+{
+	uint32 mAddress;
+	uint32 mSize;
+	uint32 mOffset;
+} NATIVEJITVERIFYSTORE;
+
+static void NativeJitVerifyCapture(NATIVEJITVERIFYSTATE* state, powerpc_registers* registers)
+{
+	int index;
+	for (index = 0; index < 32; index++)
+	{
+		state->mGpr[index] = registers->gpr[index];
+		state->mFpr[index] = registers->fpr[index].j;
+	}
+	state->mCr = registers->cr.get();
+	state->mXer = registers->xer.get();
+	state->mFpscr = registers->fpscr;
+	state->mLr = registers->lr;
+	state->mCtr = registers->ctr;
+	state->mPc = registers->pc;
+	state->mReserveValid = registers->reserve_valid;
+	state->mReserveAddress = registers->reserve_addr;
+}
+
+static void NativeJitVerifyRestore(const NATIVEJITVERIFYSTATE* state, powerpc_registers* registers)
+{
+	int index;
+	for (index = 0; index < 32; index++)
+	{
+		registers->gpr[index] = state->mGpr[index];
+		registers->fpr[index].j = state->mFpr[index];
+	}
+	registers->cr.set(state->mCr);
+	registers->xer.set(state->mXer);
+	registers->fpscr = state->mFpscr;
+	registers->lr = state->mLr;
+	registers->ctr = state->mCtr;
+	registers->pc = state->mPc;
+	registers->reserve_valid = state->mReserveValid;
+	registers->reserve_addr = state->mReserveAddress;
+}
+
+static int NativeJitVerifyExtendedAccess(uint32 extended, uint32* size)
+{
+	switch (extended)
+	{
+	case 23: case 55: case 534: case 535: case 567: case 20:
+		*size = 4;
+		return NATIVEJITVERIFY_LOAD;
+	case 150:
+		*size = 4;
+		return NATIVEJITVERIFY_STORE;
+	case 87: case 119:
+		*size = 1;
+		return NATIVEJITVERIFY_LOAD;
+	case 279: case 311: case 343: case 375: case 790:
+		*size = 2;
+		return NATIVEJITVERIFY_LOAD;
+	case 599: case 631:
+		*size = 8;
+		return NATIVEJITVERIFY_LOAD;
+	case 151: case 183: case 662: case 663: case 695: case 983:
+		*size = 4;
+		return NATIVEJITVERIFY_STORE;
+	case 215: case 247:
+		*size = 1;
+		return NATIVEJITVERIFY_STORE;
+	case 407: case 439: case 918:
+		*size = 2;
+		return NATIVEJITVERIFY_STORE;
+	case 727: case 759:
+		*size = 8;
+		return NATIVEJITVERIFY_STORE;
+	case 1014:
+		*size = 32;
+		return NATIVEJITVERIFY_STORE;
+	}
+	return 0;
+}
+
+static int NativeJitVerifyPrimaryAccess(uint32 opcode, uint32* size)
+{
+	switch (opcode >> 26)
+	{
+	case 32: case 33: case 48: case 49:
+		*size = 4;
+		return NATIVEJITVERIFY_LOAD;
+	case 34: case 35:
+		*size = 1;
+		return NATIVEJITVERIFY_LOAD;
+	case 40: case 41: case 42: case 43:
+		*size = 2;
+		return NATIVEJITVERIFY_LOAD;
+	case 50: case 51:
+		*size = 8;
+		return NATIVEJITVERIFY_LOAD;
+	case 46:
+		*size = 4 * (32 - NATIVEJIT_OPCODE_RD(opcode));
+		return NATIVEJITVERIFY_LOAD;
+	case 36: case 37: case 52: case 53:
+		*size = 4;
+		return NATIVEJITVERIFY_STORE;
+	case 38: case 39:
+		*size = 1;
+		return NATIVEJITVERIFY_STORE;
+	case 44: case 45:
+		*size = 2;
+		return NATIVEJITVERIFY_STORE;
+	case 54: case 55:
+		*size = 8;
+		return NATIVEJITVERIFY_STORE;
+	case 47:
+		*size = 4 * (32 - NATIVEJIT_OPCODE_RD(opcode));
+		return NATIVEJITVERIFY_STORE;
+	}
+	return 0;
+}
+
+static int NativeJitVerifyAccess(const powerpc_registers* registers, uint32 opcode, uint32* address, uint32* size)
+{
+	uint32 base;
+	int kind;
+	base = 0;
+	if (NATIVEJIT_OPCODE_RA(opcode))
+		base = registers->gpr[NATIVEJIT_OPCODE_RA(opcode)];
+	if ((opcode >> 26) == 31)
+	{
+		switch ((opcode >> 1) & 0x3ff)
+		{
+		case 597: case 725:
+			*address = base;
+			*size = NATIVEJIT_OPCODE_RB(opcode);
+			if (*size == 0)
+				*size = 32;
+			if (((opcode >> 1) & 0x3ff) == 597)
+				return NATIVEJITVERIFY_LOAD;
+			return NATIVEJITVERIFY_STORE;
+		case 533: case 661:
+			*address = base + registers->gpr[NATIVEJIT_OPCODE_RB(opcode)];
+			*size = registers->xer.get() & 0x7f;
+			if (*size == 0)
+				return 0;
+			if (((opcode >> 1) & 0x3ff) == 533)
+				return NATIVEJITVERIFY_LOAD;
+			return NATIVEJITVERIFY_STORE;
+		}
+		kind = NativeJitVerifyExtendedAccess((opcode >> 1) & 0x3ff, size);
+		*address = base + registers->gpr[NATIVEJIT_OPCODE_RB(opcode)];
+		if (((opcode >> 1) & 0x3ff) == 1014)
+			*address &= ~31U;
+		return kind;
+	}
+	kind = NativeJitVerifyPrimaryAccess(opcode, size);
+	*address = base + NATIVEJIT_OPCODE_SIMM(opcode);
+	return kind;
+}
+
+static int NativeJitVerifyUsable(uint32 address, uint32 size)
+{
+	if (address + size < address)
+		return 0;
+#ifdef SHEEPSHAVER
+	if (!PPCGuestAddressValid(address, size))
+		return 0;
+	if (MMIOIsWindow(vm_do_get_real_address(address)) || MMIOIsWindow(vm_do_get_real_address(address + size - 1)))
+		return 0;
+#endif
+	return 1;
+}
+
+static void NativeJitVerifyReportValue(const char* name, int index, uint64 before, uint64 interpreted, uint64 native)
+{
+	if (interpreted == native)
+		return;
+	fprintf(stderr, "  %s%d before %016llx interpreter %016llx native %016llx\n", name, index,
+		(unsigned long long)before, (unsigned long long)interpreted, (unsigned long long)native);
+}
+
+static int NativeJitVerifyCompare(const NATIVEJITVERIFYSTATE* interpreted, const NATIVEJITVERIFYSTATE* native)
+{
+	int index;
+	for (index = 0; index < 32; index++)
+	{
+		if (interpreted->mGpr[index] != native->mGpr[index] || interpreted->mFpr[index] != native->mFpr[index])
+			return 1;
+	}
+	if (interpreted->mCr != native->mCr || interpreted->mXer != native->mXer)
+		return 1;
+	if ((interpreted->mFpscr & ~NATIVEJITVERIFY_FPRF) != (native->mFpscr & ~NATIVEJITVERIFY_FPRF))
+		return 1;
+	return interpreted->mLr != native->mLr || interpreted->mCtr != native->mCtr || interpreted->mPc != native->mPc;
+}
+
+static void NativeJitVerifyReport(powerpc_block_info* bi, const NATIVEJITVERIFYSTATE* before,
+	const NATIVEJITVERIFYSTATE* interpreted, const NATIVEJITVERIFYSTATE* native)
+{
+	int index;
+	fprintf(stderr, "NATIVEJITVERIFY mismatch block %08x size %d\n", (unsigned)bi->pc, (int)bi->size);
+	for (index = 0; index < bi->size; index++)
+		fprintf(stderr, "  %08x: %08x\n", (unsigned)(bi->pc + 4 * index), (unsigned)bi->di[index].opcode);
+	for (index = 0; index < 32; index++)
+	{
+		NativeJitVerifyReportValue("r", index, before->mGpr[index], interpreted->mGpr[index], native->mGpr[index]);
+		NativeJitVerifyReportValue("f", index, before->mFpr[index], interpreted->mFpr[index], native->mFpr[index]);
+	}
+	NativeJitVerifyReportValue("cr", 0, before->mCr, interpreted->mCr, native->mCr);
+	NativeJitVerifyReportValue("xer", 0, before->mXer, interpreted->mXer, native->mXer);
+	NativeJitVerifyReportValue("fpscr", 0, before->mFpscr, interpreted->mFpscr, native->mFpscr);
+	NativeJitVerifyReportValue("lr", 0, before->mLr, interpreted->mLr, native->mLr);
+	NativeJitVerifyReportValue("ctr", 0, before->mCtr, interpreted->mCtr, native->mCtr);
+	NativeJitVerifyReportValue("pc", 0, before->mPc, interpreted->mPc, native->mPc);
+	fprintf(stderr, "  inputs");
+	for (index = 0; index < 32; index++)
+		fprintf(stderr, " %08x", (unsigned)before->mGpr[index]);
+	fprintf(stderr, " cr %08x xer %08x\n", (unsigned)before->mCr, (unsigned)before->mXer);
+}
+
+void powerpc_cpu::NativeJitVerifyNoteUntranslated(uint32 opcode)
+{
+	uint32 key;
+	int index;
+	key = opcode & 0xfc000000U;
+	if ((opcode >> 26) == 31 || (opcode >> 26) == 19 || (opcode >> 26) == 63 || (opcode >> 26) == 59)
+		key |= opcode & 0x7feU;
+	for (index = 0; index < nativeverifyuntranslatedcount; index++)
+	{
+		if (nativeverifyuntranslated[index] == key)
+			return;
+	}
+	if (nativeverifyuntranslatedcount == 256)
+		return;
+	nativeverifyuntranslated[nativeverifyuntranslatedcount++] = key;
+	fprintf(stderr, "NATIVEJITVERIFY untranslated primary %u extended %u first %08x\n",
+		(unsigned)(opcode >> 26), (unsigned)((key >> 1) & 0x3ff), (unsigned)opcode);
+	fflush(stderr);
+}
+
+void powerpc_cpu::NativeJitVerify(block_info* bi)
+{
+	NATIVEJITVERIFYSTATE before;
+	NATIVEJITVERIFYSTATE interpreted;
+	NATIVEJITVERIFYSTATE native;
+	NATIVEJITVERIFYSTORE stores[NATIVEJITVERIFY_STORES];
+	uint8 original[NATIVEJITVERIFY_BYTES];
+	uint8 expected[NATIVEJITVERIFY_BYTES];
+	powerpc_registers* registers;
+	uint32 address;
+	uint32 size;
+	uint32 used;
+	int storecount;
+	int usable;
+	int kind;
+	int index;
+	int mismatch;
+	registers = &regs();
+	if (!bi->nativecomplete)
+	{
+		((NATIVEJITENTRY)nativejit->mEntry)(this, regs_ptr(), (void*)VMBaseDiff, bi->nativeentry);
+		return;
+	}
+	NativeJitVerifyCapture(&before, registers);
+	storecount = 0;
+	used = 0;
+	usable = 1;
+	for (index = 0; index < bi->size && usable; index++)
+	{
+		kind = NativeJitVerifyAccess(registers, bi->di[index].opcode, &address, &size);
+		if (kind && !NativeJitVerifyUsable(address, size))
+			usable = 0;
+		else if (kind == NATIVEJITVERIFY_STORE)
+		{
+			if (storecount == NATIVEJITVERIFY_STORES || used + size > NATIVEJITVERIFY_BYTES)
+				usable = 0;
+			else
+			{
+				stores[storecount].mAddress = address;
+				stores[storecount].mSize = size;
+				stores[storecount].mOffset = used;
+				memcpy(original + used, vm_do_get_real_address(address), size);
+				used += size;
+				storecount++;
+			}
+		}
+		if (usable)
+			bi->di[index].execute(this, bi->di[index].opcode);
+	}
+	if (usable)
+	{
+		NativeJitVerifyCapture(&interpreted, registers);
+		for (index = 0; index < storecount; index++)
+			memcpy(expected + stores[index].mOffset, vm_do_get_real_address(stores[index].mAddress), stores[index].mSize);
+	}
+	for (index = storecount - 1; index >= 0; index--)
+	{
+		if (memcmp(vm_do_get_real_address(stores[index].mAddress), original + stores[index].mOffset, stores[index].mSize))
+			memcpy(vm_do_get_real_address(stores[index].mAddress), original + stores[index].mOffset, stores[index].mSize);
+	}
+	NativeJitVerifyRestore(&before, registers);
+	((NATIVEJITENTRY)nativejit->mEntry)(this, regs_ptr(), (void*)VMBaseDiff, bi->nativeentry);
+	if (!usable)
+	{
+		nativeverifyskipped++;
+		return;
+	}
+	nativeverifyblocks++;
+	NativeJitVerifyCapture(&native, registers);
+	mismatch = NativeJitVerifyCompare(&interpreted, &native);
+	for (index = 0; index < storecount; index++)
+	{
+		if (memcmp(vm_do_get_real_address(stores[index].mAddress), expected + stores[index].mOffset, stores[index].mSize))
+			mismatch = 1;
+	}
+	if (mismatch)
+	{
+		nativeverifymismatches++;
+		if (nativeverifymismatches <= NATIVEJITVERIFY_REPORTS)
+		{
+			NativeJitVerifyReport(bi, &before, &interpreted, &native);
+			for (index = 0; index < storecount; index++)
+			{
+				if (memcmp(vm_do_get_real_address(stores[index].mAddress), expected + stores[index].mOffset, stores[index].mSize))
+					fprintf(stderr, "  store %08x size %u differs\n", (unsigned)stores[index].mAddress, (unsigned)stores[index].mSize);
+			}
+			fflush(stderr);
+		}
+	}
+	if ((nativeverifyblocks & 0x3fffff) == 0)
+	{
+		fprintf(stderr, "NATIVEJITVERIFY verified %llu skipped %llu mismatches %llu\n",
+			(unsigned long long)nativeverifyblocks, (unsigned long long)nativeverifyskipped,
+			(unsigned long long)nativeverifymismatches);
+		fflush(stderr);
+	}
+}
+#endif
 
 #endif

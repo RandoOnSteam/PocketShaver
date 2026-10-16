@@ -113,6 +113,7 @@
 #include "vm_alloc.h"
 #include "sigsegv.h"
 #include "macio_escc.h"
+#include "usbhid.h"
 #include "sigregs.h"
 #include "rpc.h"
 #include "cpu/jit/jit-wx.hpp"
@@ -1119,7 +1120,7 @@ int main(int argc, char *argv[])
 	}
 #endif
 	if (!memory_mapped_from_zero) {
-#if !defined(PAGEZERO_HACK) && !defined(MEM_BULK)
+#if !defined(PAGEZERO_HACK) && !defined(MEM_BULK) && !DIRECT_ADDRESSING
 		// Create Low Memory area (0x0000..0x3000)
 		if (vm_mac_acquire_fixed(0, 0x3000) < 0) {
 			sprintf(str, GetString(STR_LOW_MEM_MMAP_ERR), strerror(errno));
@@ -1190,6 +1191,11 @@ int main(int argc, char *argv[])
 	}
 #endif
 	rom_area_mapped = true;
+	if (vm_mac_acquire_fixed(0xffff0000, 0x10000) < 0) {
+		sprintf(str, GetString(STR_RAM_MMAP_ERR), strerror(errno));
+		ErrorAlert(str);
+		goto quit;
+	}
 	D(bug("ROM area at %p (%08x)\n", ROMBaseHost, ROMBase));
 	
 	if (RAMBase > ROMBase) {
@@ -1203,7 +1209,10 @@ int main(int argc, char *argv[])
 		ErrorAlert(str);
 		goto quit;
 	}
+#ifdef ENABLE_USB
 	MacIOESCCInstall();
+	USBHIDInstall();
+#endif
 	
 	// Load Mac ROM
 	if (!load_mac_rom())
@@ -1393,12 +1402,13 @@ static void Quit(void)
 static bool kernel_data_init(void)
 {
 	int error_string = STR_KD_SHMGET_ERR;
-	uint32 kernel_area_size = (KERNEL_AREA_SIZE + SHMLBA - 1) & -SHMLBA;
+	const uint32 kernel_area_granule = 0x10000;
+	uint32 kernel_area_size = (KERNEL_AREA_SIZE + kernel_area_granule - 1) & -kernel_area_granule;
 	int kernel_area = shmget(IPC_PRIVATE, kernel_area_size, 0600);
 	if (kernel_area != -1) {
 		bool mapped =
-			shm_map_address(kernel_area, KERNEL_DATA_BASE & -SHMLBA) &&
-			shm_map_address(kernel_area, KERNEL_DATA2_BASE & -SHMLBA);
+			shm_map_address(kernel_area, KERNEL_DATA_BASE & -kernel_area_granule) &&
+			shm_map_address(kernel_area, KERNEL_DATA2_BASE & -kernel_area_granule);
 
 		// Mark the shared memory segment for removal. This is safe to do
 		// because the deletion is not performed while the memory is still

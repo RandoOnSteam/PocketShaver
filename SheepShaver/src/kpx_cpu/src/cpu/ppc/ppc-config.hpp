@@ -82,6 +82,10 @@
 #endif
 #endif
 
+#ifndef PPC_NATIVEJIT_VERIFY
+#define PPC_NATIVEJIT_VERIFY 0
+#endif
+
 
 /**
  *	PPC_JIT_GENERIC_ONLY

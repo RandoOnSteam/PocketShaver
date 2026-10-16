@@ -43,6 +43,9 @@ struct powerpc_block_info
 #endif
 #if PPC_NATIVE_JIT
 	void *				nativeentry;
+#if PPC_NATIVEJIT_VERIFY
+	int					nativecomplete;
+#endif
 #endif
 #if PPC_ENABLE_JIT
 	uint8 *				entry_point;
@@ -73,6 +76,9 @@ powerpc_block_info::init(uintptr start_pc)
 #endif
 #if PPC_NATIVE_JIT
 	nativeentry = NULL;
+#if PPC_NATIVEJIT_VERIFY
+	nativecomplete = 0;
+#endif
 #endif
 #if PPC_ENABLE_JIT
 #if DYNGEN_DIRECT_BLOCK_CHAINING

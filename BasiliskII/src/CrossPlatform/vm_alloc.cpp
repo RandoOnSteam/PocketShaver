@@ -400,9 +400,13 @@ static int vm_acquire_fixed_internal(void * addr, size_t size, int options)
 	}
 #elif defined(HAVE_MMAP_VM)
 	int fd = zero_fd;
+#ifdef MAP_FIXED_NOREPLACE
+	int the_map_flags = translate_map_flags(options) | map_flags | MAP_FIXED_NOREPLACE;
+#else
 	int the_map_flags = translate_map_flags(options) | map_flags | MAP_FIXED;
+#endif
 
-	if (mmap((caddr_t)addr, size, VM_PAGE_DEFAULT, the_map_flags, fd, 0) == (void *)MAP_FAILED)
+	if (mmap((caddr_t)addr, size, VM_PAGE_DEFAULT, the_map_flags, fd, 0) != (void *)addr)
 		return -1;
 #elif defined(HAVE_WIN32_VM)
 	// Windows cannot allocate Low Memory

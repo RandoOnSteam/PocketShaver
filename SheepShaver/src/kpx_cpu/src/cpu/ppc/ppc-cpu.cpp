@@ -636,7 +636,7 @@ bool powerpc_cpu::external_interrupt()
 
 bool powerpc_cpu::check_spcflags()
 {
-	if (spcflags().test(SPCFLAG_CPU_EXEC_RETURN)) {
+	if (spcflags().test(SPCFLAG_CPU_EXEC_RETURN | SPCFLAG_CPU_STOP)) {
 		spcflags().clear(SPCFLAG_CPU_EXEC_RETURN);
 		return false;
 	}
@@ -881,8 +881,12 @@ void powerpc_cpu::execute(uint32 entry)
 			for (;;) {
 #if PPC_NATIVE_JIT
 				if (bi->nativeentry) {
+#if PPC_NATIVEJIT_VERIFY
+					NativeJitVerify(bi);
+#else
 					NativeJitLinkTo(bi);
-					((NATIVEJITBLOCK)bi->nativeentry)(this, regs_ptr(), (void *)VMBaseDiff);
+					((NATIVEJITENTRY)nativejit->mEntry)(this, regs_ptr(), (void *)VMBaseDiff, bi->nativeentry);
+#endif
 				}
 				else
 #endif

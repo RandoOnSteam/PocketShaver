@@ -84,11 +84,11 @@ static int bincue_core_audio_callback(void);
 #ifdef USE_SDL_AUDIO
 #include "my_sdl.h"
 	#if defined(USE_SDL3)
-		#include <SDL3/SDL_Audio.h>
+		#include <SDL3/SDL_audio.h>
 	#elif defined(USE_SDL2)
-		#include <SDL2/SDL_Audio.h>
+		#include <SDL2/SDL_audio.h>
 	#else
-		#include <SDL_Audio.h>
+		#include <SDL_audio.h>
 	#endif
 #endif
 

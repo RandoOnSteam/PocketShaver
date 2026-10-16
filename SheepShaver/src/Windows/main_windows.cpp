@@ -127,27 +127,10 @@ static HHOOK keyboard_hook;					// Hook for intercepting windows key events
 // Prototypes
 static bool kernel_data_init(void);
 static void kernel_data_exit(void);
-static int RelaunchEmulator(void)
-{
-	STARTUPINFOA startup;
-	PROCESS_INFORMATION process;
-	char executable[MAX_PATH];
-	char *commandline = _strdup(GetCommandLineA());
-	int result = 1;
-	memset(&startup, 0, sizeof(startup));
-	startup.cb = sizeof(startup);
-	if (GetModuleFileNameA(NULL, executable, sizeof(executable)) && commandline &&
-		CreateProcessA(executable, commandline, NULL, NULL, FALSE, 0, NULL, NULL, &startup, &process)) {
-		CloseHandle(process.hThread);
-		CloseHandle(process.hProcess);
-		result = 0;
-	} else
-		fprintf(stderr, "Cannot restart emulator: %lu\n", GetLastError());
-	free(commandline);
-	return result;
-}
-
-static void Quit(bool restart = false);
+static bool ClassicMemoryInit(void);
+static bool ClassicStart(bool firstsession);
+static void ClassicStop(void);
+static void Quit(void);
 static DWORD WINAPI nvram_func(void *arg);
 static DWORD WINAPI tick_func(void *arg);
 
@@ -201,12 +184,6 @@ static void usage(const char *prg_name)
 int main(int argc, char **argv)
 {
 	char str[256];
-	int16 i16;
-	HANDLE rom_fh;
-	const char *rom_path;
-	uint32 rom_size;
-	DWORD actual;
-	uint8 *rom_tmp;
 
 	// Initialize variables
 	RAMBase = 0;
@@ -255,63 +232,6 @@ int main(int argc, char **argv)
 		}
 	}
 
-	if (OsxGuestRequested()) {
-		SysInit();
-		int result = OsxGuestMain();
-		if (result == 2)
-			result = RelaunchEmulator();
-		return result;
-	}
-
-	// #chenchijung 2024/2/21: move vm_init(), memory allocation for Mac RAM and Mac ROM here to avoid "cannot map RAM: no Error" bug.
-	//   caused by MSI afterburner (RIVA Tuner statistic tuner Server?). It is a workaround since I don't know why. But it works in my test env.
-	//
-	// ------------ Start of workaround --------------
-	int sdl_flags = 0;
-	// Initialize VM system
-	vm_init();
-
-	// Create area for Mac RAM
-	RAMSize = PrefsFindInt32("ramsize");
-	if (RAMSize <= 1000) {
-		RAMSize *= 1024 * 1024;
-	}
-	if (RAMSize < 16 * 1024 * 1024) {
-		WarningAlert(GetString(STR_SMALL_RAM_WARN));
-		RAMSize = 16 * 1024 * 1024;
-	}
-	RAMBase = 0;
-	if (vm_mac_acquire(RAMBase, RAMSize) < 0) {
-		sprintf(str, GetString(STR_RAM_MMAP_ERR), strerror(errno));
-		ErrorAlert(str);
-		goto quit;
-	}
-	RAMBaseHost = Mac2HostAddr(RAMBase);
-	ram_area_mapped = true;
-	D(bug("RAM area at %p (%08x)\n", RAMBaseHost, RAMBase));
-
-	// Create area for Mac ROM
-	if (vm_mac_acquire(ROM_BASE, ROM_AREA_SIZE) < 0) {
-		sprintf(str, GetString(STR_ROM_MMAP_ERR), strerror(errno));
-		ErrorAlert(str);
-		goto quit;
-	}
-	ROMBase = ROM_BASE;
-	ROMBaseHost = Mac2HostAddr(ROMBase);
-	rom_area_mapped = true;
-	if (vm_mac_acquire(0xffff0000, 0x10000) < 0) {
-		sprintf(str, GetString(STR_RAM_MMAP_ERR), strerror(errno));
-		ErrorAlert(str);
-		goto quit;
-	}
-	D(bug("ROM area at %p (%08x)\n", ROMBaseHost, ROMBase));
-
-	if (RAMBase > ROMBase) {
-		ErrorAlert(GetString(STR_RAM_HIGHER_THAN_ROM_ERR));
-		goto quit;
-	}
-	//#chenchijung ----------------- end of workaround --------------
-
 	// Check we are using a Windows NT kernel >= 4.0
 	OSVERSIONINFO osvi;
 	ZeroMemory(&osvi, sizeof(OSVERSIONINFO));
@@ -340,23 +260,6 @@ int main(int argc, char **argv)
 		keyboard_hook = SetWindowsHookEx(WH_KEYBOARD_LL, low_level_keyboard_hook, GetModuleHandle(NULL), 0);
 	}
 
-	// Initialize SDL system
-	sdl_flags = 0; // #chenchijungtw move variable definition forward to avoid complication error
-#ifdef USE_SDL_VIDEO
-	sdl_flags |= SDL_INIT_VIDEO;
-#endif
-#ifdef USE_SDL_AUDIO
-	sdl_flags |= SDL_INIT_AUDIO;
-#endif
-	assert(sdl_flags != 0);
-	if (SDL_Init(sdl_flags) == SDL_InitFAILURE) {
-		char str[256];
-		sprintf(str, "Could not initialize SDL: %s.\n", SDL_GetError());
-		ErrorAlert(str);
-		goto quit;
-	}
-	atexit(SDL_Quit);
-
 #ifdef ENABLE_MON
 	// Initialize mon
 	mon_init();
@@ -366,7 +269,7 @@ int main(int argc, char **argv)
 	if (!sigsegv_install_handler(sigsegv_handler)) {
 		sprintf(str, GetString(STR_SIGSEGV_INSTALL_ERR), strerror(errno));
 		ErrorAlert(str);
-		goto quit;
+		Quit();
 	}
 
 	// Get system info
@@ -381,18 +284,88 @@ int main(int argc, char **argv)
 		if (pref_cpu_clock) CPUClockSpeed = 1000000 * pref_cpu_clock;
 	}
 
-	// Init system routines
-	SysInit();
+	bool firstsession = true;
+	for (;;) {
+		if (OsxGuestRequested()) {
+			SysInit();
+			int result = OsxGuestMain();
+			SysExit();
+			if (result != 2) {
+				PrefsExit();
+				return result;
+			}
+			continue;
+		}
+		if (!ClassicStart(firstsession))
+			Quit();
+		firstsession = false;
+		ClassicStop();
+	}
+	return 0;
+}
 
-	// Show preferences editor
-	if (!PrefsFindBool("nogui"))
-		if (!PrefsEditor())
-			goto quit;
+
+/*
+ *  Map the classic core's memory areas (kept for the life of the process)
+ */
+
+static bool ClassicMemoryInit(void)
+{
+	char str[256];
+	if (ram_area_mapped)
+		return true;
+	// #chenchijung 2024/2/21: move vm_init(), memory allocation for Mac RAM and Mac ROM here to avoid "cannot map RAM: no Error" bug.
+	//   caused by MSI afterburner (RIVA Tuner statistic tuner Server?). It is a workaround since I don't know why. But it works in my test env.
+	//
+	// ------------ Start of workaround --------------
+	// Initialize VM system
+	vm_init();
+
+	// Create area for Mac RAM
+	RAMSize = PrefsFindInt32("ramsize");
+	if (RAMSize <= 1000) {
+		RAMSize *= 1024 * 1024;
+	}
+	if (RAMSize < 16 * 1024 * 1024) {
+		WarningAlert(GetString(STR_SMALL_RAM_WARN));
+		RAMSize = 16 * 1024 * 1024;
+	}
+	RAMBase = 0;
+	if (vm_mac_acquire(RAMBase, RAMSize) < 0) {
+		sprintf(str, GetString(STR_RAM_MMAP_ERR), strerror(errno));
+		ErrorAlert(str);
+		return false;
+	}
+	RAMBaseHost = Mac2HostAddr(RAMBase);
+	ram_area_mapped = true;
+	D(bug("RAM area at %p (%08x)\n", RAMBaseHost, RAMBase));
+
+	// Create area for Mac ROM
+	if (vm_mac_acquire(ROM_BASE, ROM_AREA_SIZE) < 0) {
+		sprintf(str, GetString(STR_ROM_MMAP_ERR), strerror(errno));
+		ErrorAlert(str);
+		return false;
+	}
+	ROMBase = ROM_BASE;
+	ROMBaseHost = Mac2HostAddr(ROMBase);
+	rom_area_mapped = true;
+	if (vm_mac_acquire(0xffff0000, 0x10000) < 0) {
+		sprintf(str, GetString(STR_RAM_MMAP_ERR), strerror(errno));
+		ErrorAlert(str);
+		return false;
+	}
+	D(bug("ROM area at %p (%08x)\n", ROMBaseHost, ROMBase));
+
+	if (RAMBase > ROMBase) {
+		ErrorAlert(GetString(STR_RAM_HIGHER_THAN_ROM_ERR));
+		return false;
+	}
+	//#chenchijung ----------------- end of workaround --------------
 
 #ifndef MEM_BULK
 	// Create areas for Kernel Data
 	if (!kernel_data_init())
-		goto quit;
+		return false;
 #endif
 	kernel_data = (KernelData *)Mac2HostAddr(KERNEL_DATA_BASE);
 	emulator_data = &kernel_data->ed;
@@ -404,13 +377,13 @@ int main(int argc, char **argv)
 	if (vm_mac_acquire(DR_EMULATOR_BASE, DR_EMULATOR_SIZE) < 0) {
 		sprintf(str, GetString(STR_DR_EMULATOR_MMAP_ERR), strerror(errno));
 		ErrorAlert(str);
-		goto quit;
+		return false;
 	}
 	dr_emulator_area_mapped = true;
 	if (vm_mac_acquire(DR_CACHE_BASE, DR_CACHE_SIZE) < 0) {
 		sprintf(str, GetString(STR_DR_CACHE_MMAP_ERR), strerror(errno));
 		ErrorAlert(str);
-		goto quit;
+		return false;
 	}
 	dr_cache_area_mapped = true;
 	DRCacheAddr = (uint32)Mac2HostAddr(DR_CACHE_BASE);
@@ -420,26 +393,70 @@ int main(int argc, char **argv)
 	if (!SheepMem::Init()) {
 		sprintf(str, GetString(STR_SHEEP_MEM_MMAP_ERR), strerror(errno));
 		ErrorAlert(str);
-		goto quit;
+		return false;
 	}
 #ifdef ENABLE_USB
 	MacIOESCCInstall();
 	USBHIDInstall();
 #endif /* ENABLE_USB */
+	return true;
+}
+
+
+/*
+ *  Start a classic core session, returns when the guest selects another core
+ */
+
+static bool ClassicStart(bool firstsession)
+{
+	char str[256];
+	HANDLE rom_fh;
+	const char *rom_path;
+	uint32 rom_size;
+	DWORD actual;
+	uint8 *rom_tmp;
+	if (!ClassicMemoryInit())
+		return false;
+
+	// Initialize SDL system
+	int sdl_flags = 0;
+#ifdef USE_SDL_VIDEO
+	sdl_flags |= SDL_INIT_VIDEO;
+#endif
+#ifdef USE_SDL_AUDIO
+	sdl_flags |= SDL_INIT_AUDIO;
+#endif
+	assert(sdl_flags != 0);
+	if (SDL_Init(sdl_flags) == SDL_InitFAILURE) {
+		sprintf(str, "Could not initialize SDL: %s.\n", SDL_GetError());
+		ErrorAlert(str);
+		return false;
+	}
+
+	// Init system routines
+	SysInit();
+
+	// Show preferences editor
+	if (firstsession && !PrefsFindBool("nogui"))
+		if (!PrefsEditor())
+			return false;
+
+	vm_protect(ROMBaseHost, ROM_AREA_SIZE, VM_PAGE_READ | VM_PAGE_WRITE);
+
 	// Load Mac ROM
 	rom_path = PrefsFindString("rom");
 	rom_fh = CreateFile(rom_path && *rom_path ? rom_path : ROM_FILE_NAME,
-						GENERIC_READ, 0, NULL, OPEN_EXISTING,
+						GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
 						FILE_ATTRIBUTE_NORMAL, NULL);
 
 	if (rom_fh == INVALID_HANDLE_VALUE) {
 		rom_fh = CreateFile(ROM_FILE_NAME2,
-							GENERIC_READ, 0, NULL, OPEN_EXISTING,
+							GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
 							FILE_ATTRIBUTE_NORMAL, NULL);
 
 		if (rom_fh == INVALID_HANDLE_VALUE) {
 			ErrorAlert(GetString(STR_NO_ROM_FILE_ERR));
-			goto quit;
+			return false;
 		}
 	}
 	printf(GetString(STR_READING_ROM_FILE));
@@ -452,10 +469,10 @@ int main(int argc, char **argv)
 	if (!DecodeROM(rom_tmp, actual)) {
 		if (rom_size != 4*1024*1024) {
 			ErrorAlert(GetString(STR_ROM_SIZE_ERR));
-			goto quit;
+			return false;
 		} else {
 			ErrorAlert(GetString(STR_ROM_FILE_READ_ERR));
-			goto quit;
+			return false;
 		}
 	}
 	delete[] rom_tmp;
@@ -465,14 +482,13 @@ int main(int argc, char **argv)
 
 	// Initialize everything
 	if (!InitAll(NULL))
-		goto quit;
+		return false;
 	D(bug("Initialization complete\n"));
 
 	if (PrefsFindInt32("osxcputest") > 0) {
 		init_emul_ppc();
 		OsxLockstepTest(RAMBaseHost, RAMSize, PrefsFindInt32("osxcputest"), "osxcputest.log");
 		Quit();
-		return 0;
 	}
 
 	// Write protect ROM if not in MSVC's debugger
@@ -507,23 +523,21 @@ int main(int argc, char **argv)
 	D(bug("Jumping to ROM\n"));
 	jump_to_rom(ROMBase + 0x310000);
 	D(bug("Returned from ROM\n"));
-
-quit:
-	Quit();
-	return 0;
+	return true;
 }
 
 
 /*
- *  Cleanup and quit
+ *  Stop a classic session
  */
 
-static void Quit(bool restart)
+static void ClassicStop(void)
 {
 	// Stop 60Hz thread
 	if (tick_thread_active) {
 		tick_thread_cancel = true;
 		wait_thread(tick_thread);
+		tick_thread_active = false;
 	}
 	timeEndPeriod(1);
 
@@ -531,15 +545,32 @@ static void Quit(bool restart)
 	if (nvram_thread_active) {
 		SetEvent(nvramwakeup);
 		wait_thread(nvram_thread);
+		nvram_thread_active = false;
 	}
-	if (nvramwakeup != NULL)
+	if (nvramwakeup != NULL) {
 		CloseHandle(nvramwakeup);
+		nvramwakeup = NULL;
+	}
 
 	// Exit PowerPC emulation
 	exit_emul_ppc();
 
 	// Deinitialize everything
 	ExitAll();
+
+	// Exit system routines
+	SysExit();
+	SDL_Quit();
+}
+
+
+/*
+ *  Cleanup and quit
+ */
+
+static void Quit(void)
+{
+	ClassicStop();
 
 	// Delete SheepShaver globals
 	SheepMem::Exit();
@@ -561,9 +592,6 @@ static void Quit(bool restart)
 	// Delete Kernel Data area
 	kernel_data_exit();
 
-	// Exit system routines
-	SysExit();
-
 	// Exit preferences
 	PrefsExit();
 
@@ -574,9 +602,6 @@ static void Quit(bool restart)
 	// Exit mon
 	mon_exit();
 #endif
-
-	if (restart)
-		RelaunchEmulator();
 
 	exit(0);
 }
@@ -653,12 +678,6 @@ void jump_to_rom(uint32 entry)
 /*
  *  Quit emulator (cause return from jump_to_rom)
  */
-
-void RestartEmulator(void)
-{
-	Quit(true);
-}
-
 
 void QuitEmulator(void)
 {

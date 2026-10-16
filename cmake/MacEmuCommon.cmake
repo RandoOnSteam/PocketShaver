@@ -92,6 +92,7 @@ function(macemu_detect_host)
 	check_include_file(sys/stropts.h HAVE_SYS_STROPTS_H)
 	check_include_file(pty.h HAVE_PTY_H)
 	check_include_file(util.h HAVE_UTIL_H)
+	check_include_file(byteswap.h HAVE_BYTESWAP_H)
 
 	include(CheckFunctionExists)
 	include(CheckSymbolExists)
@@ -116,6 +117,12 @@ function(macemu_detect_host)
 		set(HAVE_WIN32_EXCEPTIONS 1)
 		set(HAVE_SIGSEGV_SKIP_INSTRUCTION 1)
 	else()
+		if(HAVE_MMAP)
+			set(HAVE_MMAP_VM 1)
+		endif()
+		if(HAVE_MPROTECT_FUNC)
+			set(HAVE_MPROTECT 1)
+		endif()
 		if(CMAKE_SYSTEM_PROCESSOR MATCHES
 			 "^(i[3-6]86|x86|x86_64|amd64|AMD64|arm|ARM|aarch64|AARCH64|ppc|powerpc|ppc64|p
 pc64le|mips|mips64|sparc|sparc64|ia64)")
@@ -196,6 +203,7 @@ pc64le|mips|mips64|sparc|sparc64|ia64)")
 			HAVE_GETPAGESIZE HAVE_SIGACTION
 			USE_SDL USE_SDL_VIDEO USE_SDL_AUDIO HAVE_SLIRP
 			HAVE_WIN32_VM HAVE_WIN32_EXCEPTIONS HAVE_SIGSEGV_SKIP_INSTRUCTION
+			HAVE_MMAP_VM HAVE_MPROTECT
 			HAVE_SIGINFO_T HAVE_SIGCONTEXT_SUBTERFUGE
 			ENABLE_VOSF BINCUE)
 		if(DEFINED ${HOST_PROBE_VAR})

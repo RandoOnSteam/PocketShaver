@@ -845,6 +845,11 @@ bool HasNanoKernel2(void)
 	return version >= 0x0200 && version < 0x0300;
 }
 
+bool HasNewWorldV2Kernel(void)
+{
+	return HasNanoKernel2() && ReadMacInt16(ROMBase + 0x310004) >= 0x0210;
+}
+
 
 static uint32 RomSearchBound(bool nanokernel2, uint32 original, uint32 extended)
 {
@@ -1965,7 +1970,7 @@ static bool patch_nanokernel(void)
 static bool patch_68k(void)
 {
 	bool nanokernel2 = HasNanoKernel2();
-	bool newworldv2 = nanokernel2 && ReadMacInt16(ROMBase + 0x310004) >= 0x0210;
+	bool newworldv2 = HasNewWorldV2Kernel();
 	uint32 *lp;
 	uint16 *wp;
 	uint8 *bp;
@@ -2902,31 +2907,25 @@ static bool patch_68k(void)
 	D(bug("egret %08lx\n", base));
 	wp = (uint16 *)(ROMBaseHost + base);
 	if (HasNanoKernel2() && ReadMacInt16(ROMBase + 0x310004) >= 0x0210) {
-		uint32 powerhandler = ROMBase + 0x36f6c0;
+		uint32 powerhandler = ROMBase + 0x36f720;
+		for (uint32 handleroffset = 0; handleroffset < 36; handleroffset += 4) {
+			if (ReadMacInt32(powerhandler + handleroffset) != POWERPC_NOP)
+				return false;
+		}
 		WriteMacInt32(powerhandler, 0x0c100001);
-		/* FIXME: The _WIN32 ifdefs are here because the RestartEmulator()
-		hack is only implementated on windows. */
-#ifdef _WIN32
-		WriteMacInt16(powerhandler + 4, 0x6616);
-#else
-		WriteMacInt16(powerhandler + 4, 0x660a);
-#endif
+		WriteMacInt16(powerhandler + 4, 0x6612);
 		WriteMacInt32(powerhandler + 6, 0x0c28000a);
 		WriteMacInt16(powerhandler + 10, 0x0001);
 		WriteMacInt16(powerhandler + 12, 0x6602);
 		WriteMacInt16(powerhandler + 14, M68K_EMUL_RETURN);
-#ifdef _WIN32
 		WriteMacInt32(powerhandler + 16, 0x0c280011);
 		WriteMacInt16(powerhandler + 20, 0x0001);
-		WriteMacInt16(powerhandler + 22, 0x6604);
-		WriteMacInt16(powerhandler + 24, M68K_EMUL_OP_RESET);
+		WriteMacInt16(powerhandler + 22, 0x6704);
+		WriteMacInt16(powerhandler + 24, 0x7000);
 		WriteMacInt16(powerhandler + 26, M68K_RTS);
-		WriteMacInt16(powerhandler + 28, 0x7000);
-		WriteMacInt16(powerhandler + 30, M68K_RTS);
-#else
-		WriteMacInt16(powerhandler + 16, 0x7000);
-		WriteMacInt16(powerhandler + 18, M68K_RTS);
-#endif
+		WriteMacInt16(powerhandler + 28, M68K_EMUL_OP_RESET);
+		WriteMacInt16(powerhandler + 30, M68K_JMP);
+		WriteMacInt32(powerhandler + 32, ROMBase + 0x2a);
 		*wp++ = htons(M68K_JMP);
 		*wp++ = htons(powerhandler >> 16);
 		*wp = htons(powerhandler & 0xffff);

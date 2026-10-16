@@ -39,6 +39,7 @@ extern int ROMType;
 extern bool DecodeROM(uint8 *data, uint32 size);
 extern bool PatchROM(void);
 extern bool HasNanoKernel2(void);
+extern bool HasNewWorldV2Kernel(void);
 extern void InstallDrivers(void);
 extern bool InitFirmwareClockServices(void);
 extern void ReserveKernelRam(void);

@@ -31,6 +31,7 @@
 #include "osxguest.h"
 #include "timer.h"
 #include "adb.h"
+#include "joymanager.h"
 #include "sony.h"
 #include "disk.h"
 #include "cdrom.h"
@@ -310,6 +311,10 @@ void ExitAll(void)
 
 	// Exit ADB
 	ADBExit();
+
+#ifdef ENABLE_JOYMANAGER
+	JoyManagerReset();
+#endif
 
 	// Exit video
 	VideoExit();

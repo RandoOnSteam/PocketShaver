@@ -1918,7 +1918,10 @@ void VideoExit(void)
 		monitor->hostfocused = false;
 		monitor->ApplyGammaRamp();
 		monitor->video_close();
+		delete monitor;
 	}
+	VideoMonitors.clear();
+	VideoModes.clear();
 
 	// Destroy locks
 	if (frame_buffer_lock)

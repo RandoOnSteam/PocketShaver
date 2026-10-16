@@ -37,6 +37,7 @@
 /* #undef HAVE_SYS_STROPTS_H */
 /* #undef HAVE_PTY_H */
 /* #undef HAVE_UTIL_H */
+/* #undef HAVE_BYTESWAP_H */
 
 /* #undef HAVE_PTHREADS */
 /* #undef HAVE_PTHREAD_CANCEL */

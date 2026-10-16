@@ -37,6 +37,7 @@
 #cmakedefine HAVE_SYS_STROPTS_H @HAVE_SYS_STROPTS_H@
 #cmakedefine HAVE_PTY_H @HAVE_PTY_H@
 #cmakedefine HAVE_UTIL_H @HAVE_UTIL_H@
+#cmakedefine HAVE_BYTESWAP_H @HAVE_BYTESWAP_H@
 
 #cmakedefine HAVE_PTHREADS 1
 #cmakedefine HAVE_PTHREAD_CANCEL 1

@@ -158,6 +158,7 @@ static pthread_t slirp_thread;				// Slirp reception thread
 static bool slirp_thread_active = false;	// Flag: Slirp reception threadinstalled
 static int slirp_output_fd = -1;			// fd of slirp output pipe
 static int slirp_input_fds[2] = { -1, -1 };	// fds of slirp input pipe
+static int slirp_guest_fds[2] = { -1, -1 };
 #ifdef HAVE_LIBVDEPLUG
 static VDECONN *vde_conn;
 #endif
@@ -187,6 +188,7 @@ static int16 ether_do_del_multicast(uint8 *addr);
 static int16 ether_do_write(uint32 arg);
 static void ether_do_interrupt(void);
 static void slirp_add_redirs();
+void EtherSlirpClose(void);
 static int slirp_add_redir(const char *redir_str);
 
 #ifdef ENABLE_MACOSX_ETHERHELPER
@@ -357,6 +359,7 @@ bool ether_init(void)
 #ifdef HAVE_SLIRP
 	// Initialize slirp library
 	if (net_if_type == NET_IF_SLIRP) {
+		EtherSlirpClose();
 		if (slirp_init() < 0) {
 			sprintf(str, "%s", GetString(STR_SLIRP_NO_DNS_FOUND_WARN));
 			WarningAlert(str);
@@ -1017,7 +1020,87 @@ int slirp_can_output(void)
 
 void slirp_output(const uint8 *packet, int len)
 {
+	if (slirp_guest_fds[1] >= 0) {
+		write(slirp_guest_fds[1], &len, sizeof(len));
+		write(slirp_guest_fds[1], packet, len);
+		return;
+	}
 	write(slirp_output_fd, packet, len);
+}
+
+void EtherSlirpClose(void)
+{
+	if (slirp_guest_fds[0] >= 0)
+		close(slirp_guest_fds[0]);
+	if (slirp_guest_fds[1] >= 0)
+		close(slirp_guest_fds[1]);
+	slirp_guest_fds[0] = -1;
+	slirp_guest_fds[1] = -1;
+}
+
+void *EtherSlirpOpen(void)
+{
+	EtherSlirpClose();
+	if (slirp_init() < 0)
+		return NULL;
+	if (pipe(slirp_guest_fds) < 0) {
+		slirp_guest_fds[0] = -1;
+		slirp_guest_fds[1] = -1;
+		return NULL;
+	}
+	slirp_add_redirs();
+	return (void *)slirp_guest_fds;
+}
+
+int EtherSlirpReady(void *thread)
+{
+	if (thread == NULL)
+		return -1;
+	return 1;
+}
+
+void EtherSlirpPoll(void)
+{
+	fd_set readfds;
+	fd_set writefds;
+	fd_set exceptfds;
+	struct timeval timeout;
+	int count;
+	count = -1;
+	FD_ZERO(&readfds);
+	FD_ZERO(&writefds);
+	FD_ZERO(&exceptfds);
+	slirp_select_fill(&count, &readfds, &writefds, &exceptfds);
+	timeout.tv_sec = 0;
+	timeout.tv_usec = 0;
+	if (count >= 0 && select(count + 1, &readfds, &writefds, &exceptfds, &timeout) < 0)
+		return;
+	slirp_select_poll(&readfds, &writefds, &exceptfds);
+}
+
+int EtherSlirpReceive(uint8 *packet)
+{
+	fd_set readfds;
+	struct timeval timeout;
+	int length;
+	if (slirp_guest_fds[0] < 0)
+		return 0;
+	FD_ZERO(&readfds);
+	FD_SET(slirp_guest_fds[0], &readfds);
+	timeout.tv_sec = 0;
+	timeout.tv_usec = 0;
+	if (select(slirp_guest_fds[0] + 1, &readfds, NULL, NULL, &timeout) <= 0)
+		return 0;
+	if (read(slirp_guest_fds[0], &length, sizeof(length)) != sizeof(length))
+		return 0;
+	if (read(slirp_guest_fds[0], packet, length) != length)
+		return 0;
+	return length;
+}
+
+void EtherSlirpSend(const uint8 *packet, int length)
+{
+	slirp_input(packet, length);
 }
 
 void *slirp_receive_func(void *arg)

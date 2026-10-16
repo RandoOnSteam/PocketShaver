@@ -20,10 +20,12 @@
 #define NATIVEJITX64_ARG0 NATIVEJITX64_RCX
 #define NATIVEJITX64_ARG1 NATIVEJITX64_RDX
 #define NATIVEJITX64_ARG2 NATIVEJITX64_R8
+#define NATIVEJITX64_ARG3 9
 #else
 #define NATIVEJITX64_ARG0 NATIVEJITX64_RDI
 #define NATIVEJITX64_ARG1 NATIVEJITX64_RSI
 #define NATIVEJITX64_ARG2 NATIVEJITX64_RDX
+#define NATIVEJITX64_ARG3 NATIVEJITX64_RCX
 #endif
 
 static void NativeJitX64Byte(NATIVEJITEMITTER* pThis, uint32 value)
@@ -77,6 +79,12 @@ static void NativeJitX64RegsOperand(NATIVEJITEMITTER* pThis, int wide, uint32 op
 	if (opcode > 0xff)
 		NativeJitX64Byte(pThis, opcode >> 8);
 	NativeJitX64Byte(pThis, opcode);
+	if (offset >= -128 && offset <= 127)
+	{
+		NativeJitX64Byte(pThis, 0x40 | ((reg & 7) << 3) | (NATIVEJITX64_REGS & 7));
+		NativeJitX64Byte(pThis, (uint8)offset);
+		return;
+	}
 	NativeJitX64Byte(pThis, 0x80 | ((reg & 7) << 3) | (NATIVEJITX64_REGS & 7));
 	NativeJitX64Dword(pThis, (uint32)offset);
 }
@@ -205,6 +213,15 @@ void NativeJitPrologue(NATIVEJITEMITTER* pThis)
 	NativeJitX64Move64(pThis, NATIVEJITX64_CPU, NATIVEJITX64_ARG0);
 	NativeJitX64Move64(pThis, NATIVEJITX64_REGS, NATIVEJITX64_ARG1);
 	NativeJitX64Move64(pThis, NATIVEJITX64_MEMORY, NATIVEJITX64_ARG2);
+}
+
+void NativeJitEntryStub(NATIVEJITEMITTER* pThis)
+{
+	NativeJitPrologue(pThis);
+	if (NATIVEJITX64_ARG3 & 8)
+		NativeJitX64Byte(pThis, 0x41);
+	NativeJitX64Byte(pThis, 0xff);
+	NativeJitX64Byte(pThis, 0xe0 | (NATIVEJITX64_ARG3 & 7));
 }
 
 void NativeJitEpilogue(NATIVEJITEMITTER* pThis)
@@ -854,8 +871,23 @@ uint8* NativeJitChainJump(NATIVEJITEMITTER* pThis, uint32 pcvalue, int flagsoffs
 	NativeJitX64Byte(pThis, 0xe9);
 	NativeJitX64Dword(pThis, 0);
 	NativeJitX64Land(pThis, flagged);
-	NativeJitX64RecordSite(pThis, site, pcvalue, state);
+	NativeJitX64RipOperand(pThis, 1, 0x8d, NATIVEJITX64_R10, site, 0);
+	NativeJitJumpToCode(pThis, state->mReturnStub);
 	return site;
+}
+
+void NativeJitReturnStub(NATIVEJITEMITTER* pThis, int pcoffset, NATIVEJITSTATE* state)
+{
+	NativeJitX64RipOperand(pThis, 1, 0x89, NATIVEJITX64_R10, &state->mChainSite, 0);
+	NativeJitX64RegsOperand(pThis, 0, 0x8b, NATIVEJITX64_R11, pcoffset, 0);
+	NativeJitX64RipOperand(pThis, 0, 0x89, NATIVEJITX64_R11, &state->mChainPc, 0);
+	NativeJitEpilogue(pThis);
+}
+
+void NativeJitJumpToCode(NATIVEJITEMITTER* pThis, uint8* target)
+{
+	NativeJitX64Byte(pThis, 0xe9);
+	NativeJitX64Dword(pThis, (uint32)(target - (pThis->mCode + 4)));
 }
 
 void NativeJitIndirectExit(NATIVEJITEMITTER* pThis, int pcoffset, int flagsoffset, NATIVEJITSTATE* state)

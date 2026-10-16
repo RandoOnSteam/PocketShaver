@@ -17,6 +17,7 @@
 #define NATIVEJITX86_CPUSLOT 32
 #define NATIVEJITX86_REGSSLOT 36
 #define NATIVEJITX86_MEMORYSLOT 40
+#define NATIVEJITX86_CODESLOT 44
 #define NATIVEJITX86_TEMPSLOT 8
 
 static void NativeJitX86Byte(NATIVEJITEMITTER* pThis, uint32 value)
@@ -49,6 +50,12 @@ static void NativeJitX86RegReg(NATIVEJITEMITTER* pThis, uint32 opcode, int reg, 
 static void NativeJitX86RegsOperand(NATIVEJITEMITTER* pThis, uint32 opcode, int reg, int offset)
 {
 	NativeJitX86Opcode(pThis, opcode);
+	if (offset >= -128 && offset <= 127)
+	{
+		NativeJitX86Byte(pThis, 0x40 | (reg << 3) | NATIVEJITX86_REGS);
+		NativeJitX86Byte(pThis, (uint8)offset);
+		return;
+	}
 	NativeJitX86Byte(pThis, 0x80 | (reg << 3) | NATIVEJITX86_REGS);
 	NativeJitX86Dword(pThis, (uint32)offset);
 }
@@ -176,6 +183,15 @@ void NativeJitPrologue(NATIVEJITEMITTER* pThis)
 	NativeJitX86Byte(pThis, NATIVEJITX86_LOCALS);
 	NativeJitX86StackOperand(pThis, 0x8b, NATIVEJITX86_REGS, NATIVEJITX86_REGSSLOT);
 	NativeJitX86StackOperand(pThis, 0x8b, NATIVEJITX86_MEMORY, NATIVEJITX86_MEMORYSLOT);
+}
+
+void NativeJitEntryStub(NATIVEJITEMITTER* pThis)
+{
+	NativeJitPrologue(pThis);
+	NativeJitX86Byte(pThis, 0xff);
+	NativeJitX86Byte(pThis, 0x64);
+	NativeJitX86Byte(pThis, 0x24);
+	NativeJitX86Byte(pThis, NATIVEJITX86_CODESLOT);
 }
 
 void NativeJitEpilogue(NATIVEJITEMITTER* pThis)
@@ -831,9 +847,26 @@ uint8* NativeJitChainJump(NATIVEJITEMITTER* pThis, uint32 pcvalue, int flagsoffs
 	NativeJitX86Byte(pThis, 0xe9);
 	NativeJitX86Dword(pThis, 0);
 	NativeJitX86Land(pThis, flagged);
-	NativeJitX86StoreAbsolute(pThis, &state->mChainSite, (uint32)(uintptr)site);
-	NativeJitX86StoreAbsolute(pThis, &state->mChainPc, pcvalue);
+	NativeJitX86Byte(pThis, 0xb8 | NATIVEJITX86_EAX);
+	NativeJitX86Dword(pThis, (uint32)(uintptr)site);
+	NativeJitJumpToCode(pThis, state->mReturnStub);
 	return site;
+}
+
+void NativeJitReturnStub(NATIVEJITEMITTER* pThis, int pcoffset, NATIVEJITSTATE* state)
+{
+	NativeJitX86Byte(pThis, 0xa3);
+	NativeJitX86Dword(pThis, (uint32)(uintptr)&state->mChainSite);
+	NativeJitX86RegsOperand(pThis, 0x8b, NATIVEJITX86_EAX, pcoffset);
+	NativeJitX86Byte(pThis, 0xa3);
+	NativeJitX86Dword(pThis, (uint32)(uintptr)&state->mChainPc);
+	NativeJitEpilogue(pThis);
+}
+
+void NativeJitJumpToCode(NATIVEJITEMITTER* pThis, uint8* target)
+{
+	NativeJitX86Byte(pThis, 0xe9);
+	NativeJitX86Dword(pThis, (uint32)(target - (pThis->mCode + 4)));
 }
 
 void NativeJitIndirectExit(NATIVEJITEMITTER* pThis, int pcoffset, int flagsoffset, NATIVEJITSTATE* state)

@@ -284,37 +284,38 @@ elseif(APPLE)
 	list(APPEND SS_PLATFORM_INC "${SS_SYSDEPS}")
 else()
 	# Unix sources SheepShaver owns outright, then the ones shared with
-	# Basilisk II named by their real path there. clip_dummy.cpp used to be
+	# Basilisk II through this tree's symlinks so their sibling headers resolve
+	# to SheepShaver's sysdeps.h and user_strings_unix.h. clip_dummy.cpp used to be
 	# added inside the loop below, so it went in once per shared source.
 	set(SS_PLATFORM
 	"${SS_SRC}/Unix/main_unix.cpp"
 	"${SS_SRC}/Unix/about_window_unix.cpp"
 	"${SS_SRC}/Unix/prefs_unix.cpp"
 	"${SS_SRC}/Unix/user_strings_unix.cpp"
-	"${B2_SRC}/Unix/sys_unix.cpp"
-	"${B2_SRC}/Unix/xpram_unix.cpp"
-	"${B2_SRC}/Unix/timer_unix.cpp"
-	"${B2_SRC}/Unix/serial_unix.cpp"
-	"${B2_SRC}/Unix/ether_unix.cpp"
-	"${B2_SRC}/Unix/extfs_unix.cpp"
-	"${B2_SRC}/Unix/rpc_unix.cpp"
-	"${B2_SRC}/Unix/sshpty.c"
-	"${B2_SRC}/Unix/strlcpy.c"
-	"${B2_SRC}/Unix/tinyxml2.cpp"
-	"${B2_SRC}/Unix/disk_sparsebundle.cpp"
-	"${B2_SRC}/Unix/posix_sem.cpp"
+	"${SS_SRC}/Unix/sys_unix.cpp"
+	"${SS_SRC}/Unix/xpram_unix.cpp"
+	"${SS_SRC}/Unix/timer_unix.cpp"
+	"${SS_SRC}/Unix/serial_unix.cpp"
+	"${SS_SRC}/Unix/ether_unix.cpp"
+	"${SS_SRC}/Unix/extfs_unix.cpp"
+	"${SS_SRC}/Unix/rpc_unix.cpp"
+	"${SS_SRC}/Unix/sshpty.c"
+	"${SS_SRC}/Unix/strlcpy.c"
+	"${SS_SRC}/Unix/tinyxml2.cpp"
+	"${SS_SRC}/Unix/disk_sparsebundle.cpp"
+	"${SS_SRC}/Unix/posix_sem.cpp"
 	"${B2_SRC}/dummy/clip_dummy.cpp"
-	"${B2_SRC}/dummy/prefs_dummy.cpp"
+	"${SS_SRC}/dummy/prefs_dummy.cpp"
 	)
 	if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-		list(APPEND SS_PLATFORM "${B2_SRC}/Unix/Linux/scsi_linux.cpp")
+		list(APPEND SS_PLATFORM "${SS_SRC}/Unix/Linux/scsi_linux.cpp")
 	else()
 		list(APPEND SS_PLATFORM "${B2_SRC}/dummy/scsi_dummy.cpp")
 	endif()
 	if(ENABLE_GTK)
 	find_package(PkgConfig REQUIRED)
 	pkg_check_modules(GTK3 REQUIRED gtk+-3.0)
-	list(APPEND SS_PLATFORM "${B2_SRC}/Unix/prefs_editor_gtk3.cpp")
+	list(APPEND SS_PLATFORM "${SS_SRC}/Unix/prefs_editor_gtk3.cpp")
 	else()
 	list(APPEND SS_PLATFORM "${B2_SRC}/dummy/prefs_editor_dummy.cpp")
 	endif()
@@ -523,6 +524,12 @@ if(ENABLE_GFXACCEL)
 	else()
 		find_package(OpenGL REQUIRED)
 		list(APPEND SS_GFXACCEL_LIBS OpenGL::GL)
+		if(USE_SDL1)
+			find_package(PkgConfig REQUIRED)
+			pkg_check_modules(GDK3 REQUIRED gdk-3.0)
+			list(APPEND SS_GFXACCEL_INC ${GDK3_INCLUDE_DIRS})
+			list(APPEND SS_GFXACCEL_LIBS ${GDK3_LIBRARIES})
+		endif()
 	endif()
 	else()
 	message(FATAL_ERROR "Unknown GFXACCEL_BACKEND=${GFXACCEL_BACKEND}")
@@ -587,7 +594,8 @@ function(sheepshaver_configure_target SHEEPSHAVER_EXECUTABLE)
 	)
 	if(NOT WIN32 AND NOT APPLE)
 		target_compile_definitions(${SHEEPSHAVER_EXECUTABLE} PRIVATE
-			DATADIR="${CMAKE_INSTALL_FULL_DATADIR}/SheepShaver")
+			DATADIR="${CMAKE_INSTALL_FULL_DATADIR}/SheepShaver"
+			NATMEM_OFFSET=0x11000000)
 	endif()
 	if(WIN32)
 		target_compile_definitions(${SHEEPSHAVER_EXECUTABLE} PRIVATE CONFIG_WIN32=1 NATMEM_OFFSET=0x11000000)
@@ -683,6 +691,10 @@ else()
 	if(NOT WIN32)
 		find_package(X11 REQUIRED)
 		target_link_libraries(SheepShaver PRIVATE X11::X11 X11::Xext)
+		set_target_properties(SheepShaver PROPERTIES
+			CXX_STANDARD 14
+			CXX_STANDARD_REQUIRED ON
+			CXX_EXTENSIONS ON)
 	endif()
 	sheepshaver_configure_target(SheepShaver)
 	install(TARGETS SheepShaver RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

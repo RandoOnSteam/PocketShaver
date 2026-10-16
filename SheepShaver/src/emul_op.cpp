@@ -33,6 +33,7 @@
 #include "cdrom.h"
 #include "scsi.h"
 #include "video.h"
+#include "osxguest.h"
 #include "audio.h"
 #include "ether.h"
 #include "serial.h"
@@ -341,12 +342,14 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 				QuitEmulator();
 			break;
 
-		case OP_RESET:				// Early in MacOS reset
+		case OP_RESET: {			// Early in MacOS reset
+			int startupindex;
+			int startuppartition;
 			D(bug("*** RESET ***\n"));
-#ifdef _WIN32
-			if (VideoDriverInitialized())
-				RestartEmulator();
-#endif
+			if (VideoDriverInitialized() && OsxSelectBootImage(&startupindex, &startuppartition) == OSXBOOTNATIVE) {
+				StopEmulation();
+				break;
+			}
 			tick_inhibit = true;
 		#ifdef ENABLE_JOYMANAGER
 			JoyManagerReset();
@@ -377,6 +380,7 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 			}
 			tick_inhibit = false;
 			break;
+		}
 
 		case OP_IRQ:			// Level 1 interrupt
 			op_irq_entry_count++;

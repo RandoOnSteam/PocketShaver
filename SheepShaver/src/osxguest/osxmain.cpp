@@ -798,7 +798,7 @@ static void ParseDiskPatches(OsxMachine *machine)
 		colon = strchr(text, ':');
 		if (colon == NULL)
 			continue;
-		patches[count].offset = (uint64)_strtoui64(text, NULL, 16);
+		patches[count].offset = (uint64)strtoull(text, NULL, 16);
 		colon++;
 		while (colon[0] && colon[1] && patches[count].length < 16 && sscanf(colon, "%2x", &value) == 1) {
 			patches[count].bytes[patches[count].length++] = (uint8)value;

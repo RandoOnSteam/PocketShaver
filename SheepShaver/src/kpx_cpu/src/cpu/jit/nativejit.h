@@ -50,7 +50,7 @@
 #define NATIVEJIT_CODE_SIZE (8 * 1024 * 1024)
 #define NATIVEJIT_BLOCK_RESERVE 4096
 
-typedef void (*NATIVEJITBLOCK)(void* cpu, void* regs, void* membase);
+typedef void (*NATIVEJITENTRY)(void* cpu, void* regs, void* membase, void* code);
 typedef void (*NATIVEJITHELPER)(void* cpu, const void* argument);
 
 typedef struct NATIVEJITSTATE
@@ -65,6 +65,9 @@ typedef struct NATIVEJITSTATE
 	int mFull;
 	int mFloat;
 	uint8* mRetired;
+	uint8* mDecodeTop;
+	uint8* mReturnStub;
+	uint8* mEntry;
 } NATIVEJITSTATE;
 
 #define NATIVEJIT_STATE_SPACE ((sizeof(NATIVEJITSTATE) + 4095) & ~(size_t)4095)
@@ -86,6 +89,7 @@ void NativeJitBegin(NATIVEJITEMITTER* pThis, uint8* start, uint8* limit,
 	int carryoffset, int summaryoverflowoffset);
 int NativeJitHasRoom(const NATIVEJITEMITTER* pThis);
 void NativeJitPrologue(NATIVEJITEMITTER* pThis);
+void NativeJitEntryStub(NATIVEJITEMITTER* pThis);
 void NativeJitEpilogue(NATIVEJITEMITTER* pThis);
 
 void NativeJitLoadImmediate(NATIVEJITEMITTER* pThis, int target, uint32 value);
@@ -136,6 +140,8 @@ uint8* NativeJitChainExit(NATIVEJITEMITTER* pThis, int pcoffset, uint32 pcvalue,
 	NATIVEJITSTATE* state);
 uint8* NativeJitChainJump(NATIVEJITEMITTER* pThis, uint32 pcvalue, int flagsoffset, NATIVEJITSTATE* state);
 void NativeJitIndirectExit(NATIVEJITEMITTER* pThis, int pcoffset, int flagsoffset, NATIVEJITSTATE* state);
+void NativeJitReturnStub(NATIVEJITEMITTER* pThis, int pcoffset, NATIVEJITSTATE* state);
+void NativeJitJumpToCode(NATIVEJITEMITTER* pThis, uint8* target);
 void NativeJitChainLink(uint8* site, uint8* target);
 void NativeJitJumpTo(uint8* site, uint8* target);
 

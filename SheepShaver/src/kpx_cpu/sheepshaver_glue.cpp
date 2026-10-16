@@ -195,6 +195,10 @@ enum {
 	PPC_I(SHEEP_MAX)
 };
 
+#define NESTEDFRAMENONE 0
+#define NESTEDFRAME68K 1
+#define NESTEDFRAMEMACOS 2
+
 class sheepshaver_cpu
 	: public powerpc_cpu
 {
@@ -235,7 +239,13 @@ public:
 	// Hand a taken trap to the MacOS exception handler chain
 	const char *deliver_trap_exception(uint32 opcode);
 	bool DeliverSystemCall(void);
+	void StopExecution(void) { spcflags().set(SPCFLAG_CPU_STOP); }
 	bool nanokernel2;
+	bool newworldv2;
+	int nestedframekind;
+	uint32 emulatorstubstart;
+	uint32 emulatorstubend;
+	void FindEmulatorStubs(void);
 	bool kernelmemorymapped;
 	uint32 kernelmemorybase;
 	uint32 idlevectortable;
@@ -412,6 +422,12 @@ sheepshaver_cpu::sheepshaver_cpu()
 {
 	init_decoder();
 	nanokernel2 = HasNanoKernel2();
+	newworldv2 = HasNewWorldV2Kernel();
+	nestedframekind = NESTEDFRAMENONE;
+	emulatorstubstart = 0;
+	emulatorstubend = 0;
+	if (nanokernel2)
+		FindEmulatorStubs();
 	kernelmemorymapped = false;
 	kernelmemorybase = ((RAMSize + 0x0fffffff) & 0xf0000000) + 0x10000000;
 	idlevectortable = 0;
@@ -937,7 +953,10 @@ void sheepshaver_cpu::execute_68k(uint32 entry, M68kRegisters *r)
 	uint32 opcode = ReadMacInt16(gpr(24));
 	gpr(27) = (int32)(int16)ReadMacInt16(gpr(24) += 2);
 	gpr(29) += opcode * 8;
+	const int savedframekind = nestedframekind;
+	nestedframekind = NESTEDFRAME68K;
 	execute(gpr(29));
+	nestedframekind = savedframekind;
 
 #if GUEST_STALL_TRACE
 	exec_frame_pop();
@@ -1019,7 +1038,10 @@ uint32 sheepshaver_cpu::execute_macos_code(uint32 tvect, int nargs, uint32 const
 #if GUEST_STALL_TRACE
 	exec_frame_push(EXEC_FRAME_MACOS, tvect, proc);
 #endif
+	const int savedframekind = nestedframekind;
+	nestedframekind = NESTEDFRAMEMACOS;
 	execute(proc);
+	nestedframekind = savedframekind;
 #if GUEST_STALL_TRACE
 	exec_frame_pop();
 #endif
@@ -2224,6 +2246,27 @@ bool sheepshaver_cpu::decrementer_exception()
 }
 
 
+void sheepshaver_cpu::FindEmulatorStubs(void)
+{
+	uint32 address;
+	uint32 lowest;
+	uint32 highest;
+	lowest = 0xffffffffU;
+	highest = 0;
+	for (address = ROMBase + 0x46e000; address < ROMBase + 0x470000; address += 0x100) {
+		if (ReadMacInt32(address) != 0x7c2903a6 || ReadMacInt32(address + 4) != 0x80202818 ||
+				ReadMacInt32(address + 8) != 0x38210001)
+			continue;
+		if (address < lowest)
+			lowest = address;
+		highest = address;
+	}
+	if (highest == 0)
+		return;
+	emulatorstubstart = lowest;
+	emulatorstubend = highest + 0x100;
+}
+
 bool sheepshaver_cpu::external_interrupt()
 {
 	// The 68K and EMUL_OP modes deliberately retain their existing callbacks:
@@ -2239,7 +2282,7 @@ bool sheepshaver_cpu::external_interrupt()
 	// A native exception may context-switch and make its rfi continuation the
 	// CPU's new architectural state. That is valid only for the outer execution
 	// frame; returning through a nested host helper would restore stale state.
-	if (!nanokernel2 && current_execute_depth() != 1) {
+	if (!newworldv2 && current_execute_depth() != 1) {
 		external_interrupt_mode_deferred_count++;
 		return false;
 	}
@@ -2248,6 +2291,17 @@ bool sheepshaver_cpu::external_interrupt()
 		external_interrupt_nest_deferred_count++;
 		return false;
 	}
+
+	if (newworldv2 && nestedframekind == NESTEDFRAME68K) {
+		external_interrupt_mode_deferred_count++;
+		return false;
+	}
+
+	if (pc() >= emulatorstubstart && pc() < emulatorstubend) {
+		external_interrupt_mode_deferred_count++;
+		return false;
+	}
+
 
 #ifdef USE_SDL_VIDEO
 	// SDL requires event pumping on the thread which established video mode.
@@ -4030,6 +4084,11 @@ void sheepshaver_cpu::execute_native_op(uint32 selector)
  *  Offer a taken trap to the MacOS exception handler chain (see
  *  sheepshaver_cpu::deliver_trap_exception).  Called from the PowerPC core.
  */
+
+void StopEmulation(void)
+{
+	ppc_cpu->StopExecution();
+}
 
 bool DeliverSystemCall(void)
 {

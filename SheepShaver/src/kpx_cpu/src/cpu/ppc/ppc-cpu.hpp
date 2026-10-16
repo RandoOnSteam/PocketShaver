@@ -509,6 +509,15 @@ private:
 	void NativeJitReset();
 	void NativeJitRetire(block_info * bi);
 	static void NativeJitRetireBlock(void * cpu, block_info * bi);
+#if PPC_NATIVEJIT_VERIFY
+	uint64 nativeverifyblocks;
+	uint64 nativeverifyskipped;
+	uint64 nativeverifymismatches;
+	uint32 nativeverifyuntranslated[256];
+	int nativeverifyuntranslatedcount;
+	void NativeJitVerify(block_info * bi);
+	void NativeJitVerifyNoteUntranslated(uint32 opcode);
+#endif
 public:
 	static void NativeJitInterpret(void * cpu, const void * decodeinfo);
 	void EnableNativeJit();
