@@ -256,6 +256,12 @@ static void TraceStopHook(OsxCpu *cpu, void *context, uint32 address)
 	cpu->tracefile = NULL;
 }
 
+static void NewWorldEpochHook(OsxCpu *cpu, void *context, uint32 address)
+{
+	cpu->gpr[3] = 1;
+	cpu->nextpc = cpu->lr;
+}
+
 static void CallHook(OsxCpu *cpu, void *context, uint32 address)
 {
 	OsxSession *session;
@@ -429,6 +435,16 @@ static void KprintfHook(OsxCpu *cpu, void *context, uint32 address)
 	}
 }
 
+static int FindPointerSymbols(OsxSession *session, const char *suffix)
+{
+	char relative[160];
+	char absolute[160];
+	sprintf(relative, "__ZN11IOHIDSystem25relativePointerEventGatedEiii12UnsignedWide%s", suffix);
+	sprintf(absolute, "__ZN11IOHIDSystem25absolutePointerEventGatedEiP8IOGPointP9IOGBoundsbii12UnsignedWide%s", suffix);
+	return OsxKextSymbolOffset(session->machine, "com.apple.iokit.IOHIDFamily", relative, &session->pointeroffset) &&
+		OsxKextSymbolOffset(session->machine, "com.apple.iokit.IOHIDFamily", absolute, &session->absoluteoffset);
+}
+
 static void InstallPointerHook(OsxSession *session)
 {
 	OsxMachine *machine;
@@ -440,11 +456,12 @@ static void InstallPointerHook(OsxSession *session)
 	cpu = machine->cpu;
 	if (session->pointerhooked || (cpu->msr & OSXMSRPR) || !(cpu->msr & OSXMSRDR))
 		return;
-	if (session->pointeroffset == 0 &&
-		(!OsxKextSymbolOffset(machine, "com.apple.iokit.IOHIDFamily", "__ZN11IOHIDSystem25relativePointerEventGatedEiii12UnsignedWide", &session->pointeroffset) ||
-		 !OsxKextSymbolOffset(machine, "com.apple.iokit.IOHIDFamily", "__ZN11IOHIDSystem25absolutePointerEventGatedEiP8IOGPointP9IOGBoundsbii12UnsignedWide", &session->absoluteoffset))) {
-		session->pointerhooked = -1;
-		return;
+	if (session->pointeroffset == 0 && !FindPointerSymbols(session, "")) {
+		session->pointer.sender = 1;
+		if (!FindPointerSymbols(session, "P8OSObject")) {
+			session->pointerhooked = -1;
+			return;
+		}
 	}
 	if (!OsxKextTextAddress(machine, "com.apple.iokit.IOHIDFamily", &text))
 		return;
@@ -453,7 +470,8 @@ static void InstallPointerHook(OsxSession *session)
 	session->pointer.machine = machine;
 	session->pointer.absoluteaddress = text + session->absoluteoffset;
 	session->pointer.wheeladdress = 0;
-	if (OsxKextSymbolOffset(machine, "com.apple.iokit.IOHIDFamily", "__ZN11IOHIDSystem21scrollWheelEventGatedEsss12UnsignedWide", &wheeloffset))
+	if (OsxKextSymbolOffset(machine, "com.apple.iokit.IOHIDFamily", "__ZN11IOHIDSystem21scrollWheelEventGatedEsss12UnsignedWide", &wheeloffset) ||
+		OsxKextSymbolOffset(machine, "com.apple.iokit.IOHIDFamily", "__ZN11IOHIDSystem21scrollWheelEventGatedEsssllllllm12UnsignedWideP8OSObject", &wheeloffset))
 		session->pointer.wheeladdress = text + wheeloffset;
 	OsxCpuAddHook(cpu, physical, OsxPointerHook, &session->pointer);
 	machine->cuda.mouseabsolute = 1;
@@ -795,6 +813,10 @@ static void ParseDiskPatches(OsxMachine *machine)
 	count = 0;
 	patches = (OsxDiskPatch *)calloc(128, sizeof(OsxDiskPatch));
 	for (index = 0; (text = PrefsFindString("osxpatch", index)) != NULL && count < 128; index++) {
+		if (strncmp(text, "cdrom:", 6) == 0) {
+			patches[count].atapionly = 1;
+			text += 6;
+		}
 		colon = strchr(text, ':');
 		if (colon == NULL)
 			continue;
@@ -829,14 +851,28 @@ static int KernelRead32(OsxCpu *cpu, uint32 address, uint32 *value)
 	return result;
 }
 
+static uint32 AccessorOffset(OsxCpu *cpu, uint32 address, uint32 opcode, uint32 target)
+{
+	uint32 word;
+	int index;
+	for (index = 0; address != 0 && index < 48; index++) {
+		if (!KernelRead32(cpu, address + index * 4, &word))
+			return 0;
+		if ((word >> 26) == opcode && ((word >> 21) & 31) == target)
+			return word & 0xffff;
+	}
+	return 0;
+}
+
 static void DumpProcesses(OsxSession *session)
 {
 	OsxMachine *machine;
 	OsxCpu *cpu;
 	uint32 proc;
 	uint32 word;
-	uint32 state;
 	uint32 pid;
+	uint32 pidoffset;
+	uint32 nameoffset;
 	char name[20];
 	int guard;
 	int index;
@@ -844,21 +880,23 @@ static void DumpProcesses(OsxSession *session)
 	cpu = machine->cpu;
 	if (machine->log == NULL || !KernelRead32(cpu, OsxFindKernelSymbol(machine, "_allproc"), &proc))
 		return;
+	pidoffset = AccessorOffset(cpu, OsxFindKernelSymbol(machine, "_proc_pid"), 32, 3);
+	nameoffset = AccessorOffset(cpu, OsxFindKernelSymbol(machine, "_proc_name"), 14, 4);
+	if (pidoffset == 0 || nameoffset == 0)
+		return;
 	fprintf(machine->log, "ps");
 	for (guard = 0; proc != 0 && guard < 64; guard++) {
-		state = 0;
 		pid = 0;
-		KernelRead32(cpu, proc + 0x20, &state);
-		KernelRead32(cpu, proc + 0x24, &pid);
+		KernelRead32(cpu, proc + pidoffset, &pid);
 		for (index = 0; index < 16; index++) {
-			if (!KernelRead32(cpu, (proc + 0xc3 + index) & ~3u, &word))
+			if (!KernelRead32(cpu, (proc + nameoffset + index) & ~3u, &word))
 				break;
-			name[index] = (char)(word >> (24 - ((proc + 0xc3 + index) & 3) * 8));
+			name[index] = (char)(word >> (24 - ((proc + nameoffset + index) & 3) * 8));
 			if (name[index] == 0)
 				break;
 		}
 		name[index] = 0;
-		fprintf(machine->log, " %u:%u:%s", pid, state >> 24, name);
+		fprintf(machine->log, " %u:%s", pid, name);
 		if (!KernelRead32(cpu, proc, &proc))
 			break;
 	}
@@ -1158,6 +1196,8 @@ int OsxGuestMain(void)
 	cpu->syscallcontext = &session;
 	if (OsxFindKernelSymbol(machine, "_panic"))
 		OsxCpuAddHook(cpu, OsxFindKernelSymbol(machine, "_panic"), PanicHook, &session);
+	if (machine->ata[bootbus].drives[bootunit].atapi && OsxFindKernelSymbol(machine, "_PEGetPlatformEpoch"))
+		OsxCpuAddHook(cpu, OsxFindKernelSymbol(machine, "_PEGetPlatformEpoch"), NewWorldEpochHook, NULL);
 	cpu->pc = machine->kernelentry;
 	cpu->msr = 0;
 	cpu->gpr[1] = machine->scratch + 0x8000;

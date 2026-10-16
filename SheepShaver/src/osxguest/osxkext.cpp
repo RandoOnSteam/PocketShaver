@@ -170,6 +170,196 @@ static int ObjectSymbol(const uint8 *object, uint32 size, const char *symbol, ui
 	return 0;
 }
 
+static void StoreBig32(uint8 *data, uint32 value)
+{
+	data[0] = (uint8)(value >> 24);
+	data[1] = (uint8)(value >> 16);
+	data[2] = (uint8)(value >> 8);
+	data[3] = (uint8)value;
+}
+
+static int FindBundleEntry(const uint8 *mkext, uint32 size, const char *bundle)
+{
+	const uint8 *entry;
+	uint8 *plist;
+	uint32 count;
+	uint32 index;
+	int found;
+	if (mkext == NULL || size < 32)
+		return -1;
+	count = Big32(mkext + 20);
+	for (index = 0; index < count && 64 + index * 32 <= size; index++) {
+		entry = mkext + 32 + index * 32;
+		plist = ExtractEntry(mkext, size, Big32(entry), Big32(entry + 4), Big32(entry + 8));
+		if (plist == NULL)
+			continue;
+		plist[Big32(entry + 8)] = 0;
+		found = PlistHasBundle(plist, Big32(entry + 8), bundle);
+		free(plist);
+		if (found)
+			return (int)index;
+	}
+	return -1;
+}
+
+static int SymbolString(const uint8 *object, uint32 size, uint32 symoff, uint32 stroff, uint32 strsize, uint32 index, const char *name)
+{
+	uint32 strx;
+	strx = Big32(object + symoff + index * 12);
+	if (strx >= strsize || stroff + strx >= size)
+		return 0;
+	return strncmp((const char *)object + stroff + strx, name, size - stroff - strx) == 0;
+}
+
+static void ApplySymbolAliases(uint8 *object, uint32 size, const char *const *aliases, int aliascount)
+{
+	uint32 commands;
+	uint32 position;
+	uint32 symoff;
+	uint32 nsyms;
+	uint32 stroff;
+	uint32 strsize;
+	uint32 from;
+	uint32 to;
+	int alias;
+	if (size < 28 || Big32(object) != 0xfeedface)
+		return;
+	commands = Big32(object + 16);
+	position = 28;
+	nsyms = 0;
+	while (commands-- && position + 24 <= size && Big32(object + position) != 2)
+		position += Big32(object + position + 4);
+	if (position + 24 > size || Big32(object + position) != 2)
+		return;
+	symoff = Big32(object + position + 8);
+	nsyms = Big32(object + position + 12);
+	stroff = Big32(object + position + 16);
+	strsize = Big32(object + position + 20);
+	if (symoff + nsyms * 12 > size || stroff + strsize > size)
+		return;
+	for (alias = 0; alias < aliascount; alias++) {
+		for (from = 0; from < nsyms && !SymbolString(object, size, symoff, stroff, strsize, from, aliases[alias * 2]); from++)
+			;
+		for (to = 0; to < nsyms && !SymbolString(object, size, symoff, stroff, strsize, to, aliases[alias * 2 + 1]); to++)
+			;
+		if (from < nsyms && to < nsyms)
+			StoreBig32(object + symoff + from * 12, Big32(object + symoff + to * 12));
+	}
+}
+
+static uint32 StoredLength(const uint8 *field)
+{
+	if (Big32(field + 4))
+		return Big32(field + 4);
+	return Big32(field + 8);
+}
+
+uint32 OsxAdler32(const uint8 *data, uint32 length)
+{
+	uint32 low;
+	uint32 high;
+	uint32 index;
+	low = 1;
+	high = 0;
+	for (index = 0; index < length; index++) {
+		low = (low + data[index]) % 65521;
+		high = (high + low) % 65521;
+	}
+	return (high << 16) | low;
+}
+
+int OsxMkextHasBundle(const uint8 *mkext, uint32 size, const char *bundle)
+{
+	return FindBundleEntry(mkext, size, bundle) >= 0;
+}
+
+uint8 *OsxMkextAddBundles(const uint8 *base, uint32 basesize, const uint8 *donor, uint32 donorsize, const char *const *bundles, int bundlecount, const char *const *aliases, int aliascount, uint32 *size)
+{
+	uint8 *module;
+	const uint8 *source;
+	uint8 *output;
+	uint8 *target;
+	int *picked;
+	int pickedcount;
+	int index;
+	int entry;
+	uint32 basecount;
+	uint32 table;
+	uint32 shift;
+	uint32 total;
+	uint32 position;
+	uint32 length;
+	uint32 field;
+	basecount = Big32(base + 20);
+	table = 32 + 32 * basecount;
+	if (table > basesize)
+		return NULL;
+	picked = (int *)malloc(bundlecount * sizeof(int));
+	pickedcount = 0;
+	total = basesize;
+	for (index = 0; index < bundlecount; index++) {
+		if (FindBundleEntry(base, basesize, bundles[index]) >= 0)
+			continue;
+		entry = FindBundleEntry(donor, donorsize, bundles[index]);
+		if (entry < 0)
+			continue;
+		source = donor + 32 + entry * 32;
+		for (field = 0; field < 32; field += 16) {
+			length = StoredLength(source + field);
+			if (Big32(source + field + 8) && Big32(source + field) <= donorsize && length <= donorsize - Big32(source + field))
+				total += Big32(source + field + 8);
+		}
+		picked[pickedcount++] = entry;
+	}
+	if (pickedcount == 0) {
+		free(picked);
+		return NULL;
+	}
+	shift = 32 * (uint32)pickedcount;
+	total += shift;
+	output = (uint8 *)calloc(total, 1);
+	memcpy(output, base, table);
+	memcpy(output + table + shift, base + table, basesize - table);
+	for (index = 0; index < (int)basecount; index++) {
+		target = output + 32 + index * 32;
+		for (field = 0; field < 32; field += 16)
+			if (Big32(target + field + 8))
+				StoreBig32(target + field, Big32(target + field) + shift);
+	}
+	position = basesize + shift;
+	for (index = 0; index < pickedcount; index++) {
+		source = donor + 32 + picked[index] * 32;
+		target = output + table + index * 32;
+		memcpy(target, source, 32);
+		for (field = 0; field < 32; field += 16) {
+			length = StoredLength(source + field);
+			if (!Big32(source + field + 8) || Big32(source + field) > donorsize || length > donorsize - Big32(source + field)) {
+				memset(target + field, 0, 16);
+				continue;
+			}
+			module = ExtractEntry(donor, donorsize, Big32(source + field), Big32(source + field + 4), Big32(source + field + 8));
+			if (module == NULL) {
+				memset(target + field, 0, 16);
+				continue;
+			}
+			length = Big32(source + field + 8);
+			if (field == 16)
+				ApplySymbolAliases(module, length, aliases, aliascount);
+			memcpy(output + position, module, length);
+			free(module);
+			StoreBig32(target + field, position);
+			StoreBig32(target + field + 4, 0);
+			position += length;
+		}
+	}
+	StoreBig32(output + 8, total);
+	StoreBig32(output + 20, basecount + (uint32)pickedcount);
+	StoreBig32(output + 12, OsxAdler32(output + 16, total - 16));
+	*size = total;
+	free(picked);
+	return output;
+}
+
 int OsxKextSymbolOffset(OsxMachine *machine, const char *bundle, const char *symbol, uint32 *offset)
 {
 	const uint8 *mkext;

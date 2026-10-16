@@ -2067,6 +2067,9 @@ void VideoExit(void)
 	vector<monitor_desc *>::iterator i, end = VideoMonitors.end();
 	for (i = VideoMonitors.begin(); i != end; ++i)
 		dynamic_cast<SDL_monitor_desc *>(*i)->video_close();
+#if (defined(ENABLE_GFXACCEL) && defined(SHEEPSHAVER)) || TARGET_OS_IPHONE
+	dmc_shutdown();
+#endif
 
 	// Destroy locks
 	if (frame_buffer_lock)

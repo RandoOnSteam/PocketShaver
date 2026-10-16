@@ -38,6 +38,13 @@ void OsxNvramReadString(const uint8 *nvram, int index, char *output, int size)
 	output[length] = 0;
 }
 
+int OsxNvramWantsClassic(const char *device, const char *command)
+{
+	if (strstr(device, "AAPL,ROM") != NULL)
+		return 1;
+	return strstr(command, "mac-boot") != NULL && strstr(device, ":tbxi") == NULL;
+}
+
 static int SetFirmwareBoot(uint8 *nvram, const char *device, const char *command)
 {
 	uint8 block[0x800];
@@ -100,7 +107,7 @@ int OsxNvramPrepareBoot(OsxMachine *machine, int bus, int unit, int partition)
 	char command[256];
 	OsxNvramReadString(machine->nvram, 0, device, sizeof(device));
 	OsxNvramReadString(machine->nvram, 9, command, sizeof(command));
-	if (device[0] != 0 && strstr(device, "AAPL,ROM") == NULL && strstr(command, "mac-boot") == NULL)
+	if (device[0] != 0 && !OsxNvramWantsClassic(device, command))
 		return 1;
 	sprintf(device, "pci/mac-io@10/ata@%x/@%x:%d", 0x20000 + bus * 0x1000, unit, partition);
 	return SetFirmwareBoot(machine->nvram, device, "0 bootr");
@@ -112,7 +119,7 @@ void OsxNvramFinishBoot(OsxMachine *machine, const uint8 *startup)
 	char command[256];
 	OsxNvramReadString(machine->nvram, 0, device, sizeof(device));
 	OsxNvramReadString(machine->nvram, 9, command, sizeof(command));
-	if ((strstr(device, "AAPL,ROM") != NULL || strstr(command, "mac-boot") != NULL) &&
+	if (OsxNvramWantsClassic(device, command) &&
 		memcmp(machine->nvram + 0x1378, startup, 4) == 0)
 		memset(machine->nvram + 0x1378, 0, 4);
 }

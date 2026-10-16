@@ -64,6 +64,7 @@
 #define OSXATABUSES 2
 #define OSXATASECTOR 512
 #define OSXATAPISECTOR 2048
+#define OSXATAPICDSECTORS 405000
 #define OSXATABUFFER 65536
 #define OSXATADELAY 1500
 
@@ -138,6 +139,7 @@ typedef struct OsxAtaDrive {
 	int mediapresent;
 	int mediachanged;
 	int mediaindex;
+	int dvd;
 	uint64 insertdeadline;
 	uint8 sensekey;
 	uint8 asc;
@@ -149,6 +151,7 @@ typedef struct OsxDiskPatch {
 	uint64 offset;
 	uint8 bytes[16];
 	int length;
+	int atapionly;
 } OsxDiskPatch;
 
 typedef struct OsxAtaBus {
@@ -256,6 +259,7 @@ typedef struct OsxPointer {
 	uint32 absoluteaddress;
 	uint32 wheeladdress;
 	uint32 callstack;
+	int sender;
 	int pointerx;
 	int pointery;
 	int pointervalid;
@@ -361,6 +365,7 @@ uint32 OsxFlashRead(OsxMachine *machine, uint32 offset, int size);
 void OsxFlashWrite(OsxMachine *machine, uint32 offset, int size, uint32 value);
 void OsxFlashLoad(OsxMachine *machine, const char *path);
 void OsxNvramReadString(const uint8 *nvram, int index, char *output, int size);
+int OsxNvramWantsClassic(const char *device, const char *command);
 int OsxNvramPrepareBoot(OsxMachine *machine, int bus, int unit, int partition);
 void OsxNvramFinishBoot(OsxMachine *machine, const uint8 *startup);
 void OsxFlashSave(OsxMachine *machine);
@@ -378,6 +383,9 @@ void OsxPointerHook(OsxCpu *cpu, void *context, uint32 address);
 int OsxBootLoad(OsxMachine *machine, const char *imagepath, int bootbus, int bootunit, const char *commandline);
 uint32 OsxFindKernelSymbol(OsxMachine *machine, const char *name);
 int OsxKextSymbolOffset(OsxMachine *machine, const char *bundle, const char *symbol, uint32 *offset);
+uint32 OsxAdler32(const uint8 *data, uint32 length);
+int OsxMkextHasBundle(const uint8 *mkext, uint32 size, const char *bundle);
+uint8 *OsxMkextAddBundles(const uint8 *base, uint32 basesize, const uint8 *donor, uint32 donorsize, const char *const *bundles, int bundlecount, const char *const *aliases, int aliascount, uint32 *size);
 int OsxKextTextAddress(OsxMachine *machine, const char *bundle, uint32 *address);
 
 #endif

@@ -33,6 +33,10 @@
 #define BOOTMAXRANGES 64
 #define BOOTARGSSIZE 0x200
 #define TREENAMELENGTH 32
+#define BOOTMAXKEXTS 1024
+#define BOOTKEXTPATH 512
+#define BOOTKEXTNAME 128
+#define BOOTEXTENSIONS "/System/Library/Extensions"
 
 typedef struct OsxHfsExtent {
 	uint32 start;
@@ -47,6 +51,21 @@ typedef struct OsxHfsFork {
 	int extentcount;
 	OsxHfsExtent extents[HFSMAXEXTENTS];
 } OsxHfsFork;
+
+typedef struct OsxKextCandidate {
+	char path[BOOTKEXTPATH];
+	char identifier[BOOTKEXTNAME];
+	char executable[BOOTKEXTNAME];
+	uint8 *plist;
+	uint32 plistsize;
+	int contents;
+	int selected;
+} OsxKextCandidate;
+
+typedef struct OsxKextList {
+	OsxKextCandidate *kexts;
+	int count;
+} OsxKextList;
 
 typedef struct OsxHfsVolume {
 	void *file;
@@ -216,6 +235,8 @@ static void CompleteFork(OsxHfsVolume *volume, OsxHfsFork *fork)
 
 static uint32 FoldCharacter(uint32 character)
 {
+	if (character == 0)
+		return 0xffff;
 	if (character >= 'A' && character <= 'Z')
 		return character + 32;
 	return character;
@@ -249,10 +270,8 @@ static int CompareCatalogKey(const uint8 *key, uint32 parent, const uint16 *name
 	return 0;
 }
 
-static int FindCatalogRecord(OsxHfsVolume *volume, uint32 parent, const char *text, uint8 *record)
+static int DescendCatalog(OsxHfsVolume *volume, uint32 parent, const uint16 *name, uint32 namelength)
 {
-	uint16 name[HFSMAXNAME];
-	uint32 namelength;
 	uint32 node;
 	uint32 records;
 	uint32 index;
@@ -263,11 +282,6 @@ static int FindCatalogRecord(OsxHfsVolume *volume, uint32 parent, const char *te
 	int kind;
 	int found;
 	uint8 *data;
-	namelength = 0;
-	while (text[namelength] && namelength < HFSMAXNAME) {
-		name[namelength] = (uint8)text[namelength];
-		namelength++;
-	}
 	node = volume->catalogroot;
 	for (depth = 0; depth < 16; depth++) {
 		if (!ReadFork(volume, &volume->catalog, (uint64)node * volume->catalognodesize, volume->node, volume->catalognodesize))
@@ -275,17 +289,8 @@ static int FindCatalogRecord(OsxHfsVolume *volume, uint32 parent, const char *te
 		data = volume->node;
 		kind = (int)(signed char)data[8];
 		records = Big16(data + 10);
-		if (kind == -1) {
-			for (index = 0; index < records; index++) {
-				offset = Big16(data + volume->catalognodesize - 2 * (index + 1));
-				if (CompareCatalogKey(data + offset, parent, name, namelength) == 0) {
-					keylength = Big16(data + offset);
-					memcpy(record, data + offset + 2 + keylength, 248);
-					return 1;
-				}
-			}
-			return 0;
-		}
+		if (kind == -1)
+			return 1;
 		if (kind != 0)
 			return 0;
 		child = 0;
@@ -305,12 +310,85 @@ static int FindCatalogRecord(OsxHfsVolume *volume, uint32 parent, const char *te
 	return 0;
 }
 
+static int FindCatalogRecord(OsxHfsVolume *volume, uint32 parent, const char *text, uint8 *record)
+{
+	uint16 name[HFSMAXNAME];
+	uint32 namelength;
+	uint32 records;
+	uint32 index;
+	uint32 offset;
+	uint8 *data;
+	namelength = 0;
+	while (text[namelength] && namelength < HFSMAXNAME) {
+		name[namelength] = (uint8)text[namelength];
+		namelength++;
+	}
+	if (!DescendCatalog(volume, parent, name, namelength))
+		return 0;
+	data = volume->node;
+	records = Big16(data + 10);
+	for (index = 0; index < records; index++) {
+		offset = Big16(data + volume->catalognodesize - 2 * (index + 1));
+		if (CompareCatalogKey(data + offset, parent, name, namelength) == 0) {
+			memcpy(record, data + offset + 2 + Big16(data + offset), 248);
+			return 1;
+		}
+	}
+	return 0;
+}
+
+static int ListKextFolders(OsxHfsVolume *volume, uint32 parent, char *names, int maximum)
+{
+	uint32 records;
+	uint32 index;
+	uint32 offset;
+	uint32 length;
+	uint32 character;
+	uint32 position;
+	int count;
+	int ascii;
+	uint8 *data;
+	uint8 *key;
+	count = 0;
+	if (!DescendCatalog(volume, parent, NULL, 0))
+		return 0;
+	for (;;) {
+		data = volume->node;
+		records = Big16(data + 10);
+		for (index = 0; index < records; index++) {
+			offset = Big16(data + volume->catalognodesize - 2 * (index + 1));
+			key = data + offset;
+			if (Big32(key + 2) < parent)
+				continue;
+			if (Big32(key + 2) > parent)
+				return count;
+			length = Big16(key + 6);
+			if (Big16(key + 2 + Big16(key)) != HFSFOLDERRECORD || length < 6 || length >= BOOTKEXTNAME || count >= maximum)
+				continue;
+			ascii = 1;
+			for (position = 0; position < length; position++) {
+				character = Big16(key + 8 + position * 2);
+				if (character == 0 || character > 0x7e)
+					ascii = 0;
+				names[count * BOOTKEXTNAME + position] = (char)character;
+			}
+			names[count * BOOTKEXTNAME + length] = 0;
+			if (ascii && strcmp(names + count * BOOTKEXTNAME + length - 5, ".kext") == 0)
+				count++;
+		}
+		offset = Big32(data);
+		if (offset == 0 || !ReadFork(volume, &volume->catalog, (uint64)offset * volume->catalognodesize, volume->node, volume->catalognodesize))
+			return count;
+	}
+}
+
 static int LocateVolume(OsxHfsVolume *volume, void *file, int partition, uint8 *block)
 {
 	uint32 index;
 	uint32 allocationblock;
 	uint32 firstblock;
 	uint32 embedstart;
+	uint32 mapblock;
 	int found = 0;
 	volume->file = file;
 	volume->base = 0;
@@ -319,12 +397,15 @@ static int LocateVolume(OsxHfsVolume *volume, void *file, int partition, uint8 *
 	if (Sys_read(file, block, 0, 512) != 512)
 		return 0;
 	if (block[0] == 'E' && block[1] == 'R') {
+		mapblock = Big16(block + 2);
+		if (mapblock != 2048)
+			mapblock = 512;
 		for (index = 1; index < 64; index++) {
-			if (Sys_read(file, block, (loff_t)index * 512, 512) != 512 || block[0] != 'P' || block[1] != 'M')
+			if (Sys_read(file, block, (loff_t)index * mapblock, 512) != 512 || block[0] != 'P' || block[1] != 'M')
 				return 0;
 			if (strncmp((const char *)block + 48, "Apple_HFS", 32) == 0 &&
 				(partition < 0 || partition == (int)index)) {
-				volume->base = (loff_t)Big32(block + 8) * 512;
+				volume->base = (loff_t)Big32(block + 8) * mapblock;
 				volume->partition = (int)index;
 				found = 1;
 				break;
@@ -445,7 +526,7 @@ int OsxSelectBootImage(int *diskindex, int *partition)
 	*partition = -1;
 	OsxNvramReadString(XPRAM, 0, device, sizeof(device));
 	OsxNvramReadString(XPRAM, 9, command, sizeof(command));
-	wantclassic = strstr(device, "AAPL,ROM") != NULL || strstr(command, "mac-boot") != NULL;
+	wantclassic = OsxNvramWantsClassic(device, command);
 	address = strstr(device, "/ata@");
 	if (address != NULL) {
 		controller = strtoul(address + 5, NULL, 16);
@@ -545,12 +626,9 @@ int OsxSelectBootImage(int *diskindex, int *partition)
 	return fallback;
 }
 
-static uint8 *ReadFile(OsxHfsVolume *volume, const char *path, uint32 *size)
+static int LookupPath(OsxHfsVolume *volume, const char *path, uint8 *record)
 {
-	uint8 record[248];
 	char component[HFSMAXNAME + 1];
-	OsxHfsFork *fork;
-	uint8 *data;
 	uint32 parent;
 	uint32 length;
 	const char *cursor;
@@ -570,10 +648,18 @@ static uint8 *ReadFile(OsxHfsVolume *volume, const char *path, uint32 *size)
 		if (length == 0)
 			break;
 		if (!FindCatalogRecord(volume, parent, component, record))
-			return NULL;
+			return 0;
 		parent = Big32(record + 8);
 	}
-	if (Big16(record) != HFSFILERECORD)
+	return 1;
+}
+
+static uint8 *ReadFile(OsxHfsVolume *volume, const char *path, uint32 *size)
+{
+	uint8 record[248];
+	OsxHfsFork *fork;
+	uint8 *data;
+	if (!LookupPath(volume, path, record) || Big16(record) != HFSFILERECORD)
 		return NULL;
 	fork = (OsxHfsFork *)malloc(sizeof(OsxHfsFork));
 	ParseFork(record + 88, Big32(record + 8), 0, fork);
@@ -584,9 +670,211 @@ static uint8 *ReadFile(OsxHfsVolume *volume, const char *path, uint32 *size)
 		free(fork);
 		return NULL;
 	}
+	data[fork->logical] = 0;
 	*size = (uint32)fork->logical;
 	free(fork);
 	return data;
+}
+
+static int ThinPowerPC(uint8 *data, uint32 *size)
+{
+	uint32 count;
+	uint32 index;
+	uint32 offset;
+	uint32 length;
+	if (data == NULL || *size < 8 || Big32(data) != 0xcafebabe)
+		return 1;
+	count = Big32(data + 4);
+	for (index = 0; index < count && 8 + index * 20 + 20 <= *size; index++) {
+		offset = Big32(data + 8 + index * 20 + 8);
+		length = Big32(data + 8 + index * 20 + 12);
+		if (Big32(data + 8 + index * 20) == 18 && offset <= *size && length <= *size - offset) {
+			memmove(data, data + offset, length);
+			*size = length;
+			return 1;
+		}
+	}
+	return 0;
+}
+
+static int PlistString(const uint8 *plist, const char *key, char *output, uint32 size)
+{
+	char pattern[BOOTKEXTNAME];
+	const char *found;
+	const char *end;
+	sprintf(pattern, "<key>%s</key>", key);
+	found = strstr((const char *)plist, pattern);
+	if (found == NULL)
+		return 0;
+	found += strlen(pattern);
+	while (*found == ' ' || *found == '\t' || *found == '\r' || *found == '\n')
+		found++;
+	if (strncmp(found, "<string>", 8) != 0)
+		return 0;
+	found += 8;
+	end = strstr(found, "</string>");
+	if (end == NULL || (uint32)(end - found) >= size)
+		return 0;
+	memcpy(output, found, end - found);
+	output[end - found] = 0;
+	return 1;
+}
+
+static void CollectKexts(OsxHfsVolume *volume, const char *folder, OsxKextList *list, int depth)
+{
+	uint8 record[248];
+	char path[BOOTKEXTPATH];
+	char required[BOOTKEXTNAME];
+	char *names;
+	OsxKextCandidate *kext;
+	int count;
+	int index;
+	if (depth > 3 || !LookupPath(volume, folder, record) || Big16(record) != HFSFOLDERRECORD)
+		return;
+	names = (char *)malloc(BOOTMAXKEXTS * BOOTKEXTNAME);
+	count = ListKextFolders(volume, Big32(record + 8), names, BOOTMAXKEXTS);
+	for (index = 0; index < count && list->count < BOOTMAXKEXTS; index++) {
+		kext = &list->kexts[list->count];
+		memset(kext, 0, sizeof(*kext));
+		if (strlen(folder) + strlen(names + index * BOOTKEXTNAME) + 32 >= BOOTKEXTPATH)
+			continue;
+		sprintf(kext->path, "%s/%s", folder, names + index * BOOTKEXTNAME);
+		sprintf(path, "%s/Contents/Info.plist", kext->path);
+		kext->plist = ReadFile(volume, path, &kext->plistsize);
+		kext->contents = kext->plist != NULL;
+		if (kext->plist == NULL) {
+			sprintf(path, "%s/Info.plist", kext->path);
+			kext->plist = ReadFile(volume, path, &kext->plistsize);
+		}
+		if (kext->plist == NULL || !PlistString(kext->plist, "CFBundleIdentifier", kext->identifier, BOOTKEXTNAME)) {
+			free(kext->plist);
+			continue;
+		}
+		PlistString(kext->plist, "CFBundleExecutable", kext->executable, BOOTKEXTNAME);
+		kext->selected = PlistString(kext->plist, "OSBundleRequired", required, BOOTKEXTNAME) && strcmp(required, "Safe Boot") != 0;
+		list->count++;
+		sprintf(path, "%s/PlugIns", kext->path);
+		if (kext->contents)
+			sprintf(path, "%s/Contents/PlugIns", kext->path);
+		CollectKexts(volume, path, list, depth + 1);
+	}
+	free(names);
+}
+
+static int SelectLibraries(OsxKextList *list, OsxKextCandidate *kext)
+{
+	char identifier[BOOTKEXTNAME];
+	const char *cursor;
+	const char *end;
+	const char *name;
+	int changed;
+	int index;
+	changed = 0;
+	cursor = strstr((const char *)kext->plist, "<key>OSBundleLibraries</key>");
+	if (cursor == NULL)
+		return 0;
+	end = strstr(cursor, "</dict>");
+	cursor = strstr(cursor, "<dict>");
+	while (cursor != NULL && end != NULL && (cursor = strstr(cursor, "<key>")) != NULL && cursor < end) {
+		cursor += 5;
+		name = strstr(cursor, "</key>");
+		if (name == NULL || name - cursor >= BOOTKEXTNAME)
+			return changed;
+		memcpy(identifier, cursor, name - cursor);
+		identifier[name - cursor] = 0;
+		for (index = 0; index < list->count; index++)
+			if (!list->kexts[index].selected && strcmp(list->kexts[index].identifier, identifier) == 0) {
+				list->kexts[index].selected = 1;
+				changed = 1;
+			}
+	}
+	return changed;
+}
+
+static uint8 *BuildDriverPackage(OsxHfsVolume *volume, uint32 *size)
+{
+	OsxKextList list;
+	OsxKextCandidate *kext;
+	char path[BOOTKEXTPATH];
+	uint8 **modules;
+	uint32 *modulesizes;
+	uint8 *package;
+	uint8 *entry;
+	uint32 total;
+	uint32 position;
+	int selected;
+	int changed;
+	int index;
+	list.kexts = (OsxKextCandidate *)malloc(BOOTMAXKEXTS * sizeof(OsxKextCandidate));
+	list.count = 0;
+	CollectKexts(volume, BOOTEXTENSIONS, &list, 0);
+	do {
+		changed = 0;
+		for (index = 0; index < list.count; index++)
+			if (list.kexts[index].selected && SelectLibraries(&list, &list.kexts[index]))
+				changed = 1;
+	} while (changed);
+	modules = (uint8 **)calloc(list.count + 1, sizeof(uint8 *));
+	modulesizes = (uint32 *)calloc(list.count + 1, sizeof(uint32));
+	total = 32;
+	selected = 0;
+	for (index = 0; index < list.count; index++) {
+		kext = &list.kexts[index];
+		if (!kext->selected)
+			continue;
+		if (kext->executable[0]) {
+			sprintf(path, "%s/%s", kext->path, kext->executable);
+			if (kext->contents)
+				sprintf(path, "%s/Contents/MacOS/%s", kext->path, kext->executable);
+			modules[index] = ReadFile(volume, path, &modulesizes[index]);
+			if (!ThinPowerPC(modules[index], &modulesizes[index])) {
+				free(modules[index]);
+				modules[index] = NULL;
+				modulesizes[index] = 0;
+			}
+		}
+		total += 32 + kext->plistsize + 1 + modulesizes[index];
+		selected++;
+	}
+	package = NULL;
+	if (selected) {
+		package = (uint8 *)calloc(total, 1);
+		StoreBig32(package, 0x4d4b5854);
+		StoreBig32(package + 4, 0x4d4f5358);
+		StoreBig32(package + 8, total);
+		StoreBig32(package + 16, 0x01008000);
+		StoreBig32(package + 20, (uint32)selected);
+		StoreBig32(package + 24, 0xffffffff);
+		StoreBig32(package + 28, 0xffffffff);
+		entry = package + 32;
+		position = 32 + 32 * (uint32)selected;
+		for (index = 0; index < list.count; index++) {
+			kext = &list.kexts[index];
+			if (!kext->selected)
+				continue;
+			StoreBig32(entry, position);
+			StoreBig32(entry + 8, kext->plistsize + 1);
+			memcpy(package + position, kext->plist, kext->plistsize);
+			position += kext->plistsize + 1;
+			if (modules[index]) {
+				StoreBig32(entry + 16, position);
+				StoreBig32(entry + 24, modulesizes[index]);
+				memcpy(package + position, modules[index], modulesizes[index]);
+				position += modulesizes[index];
+			}
+			entry += 32;
+		}
+		StoreBig32(package + 12, OsxAdler32(package + 16, total - 16));
+		*size = total;
+	}
+	for (index = 0; index < list.count; index++) {
+		free(list.kexts[index].plist);
+		free(modules[index]);
+	}
+	free(modules);
+	free(modulesizes);
+	free(list.kexts);
+	return package;
 }
 
 static void AddRange(OsxBootState *state, const char *name, uint32 address, uint32 length)
@@ -972,6 +1260,10 @@ static OsxTreeNode *BuildTree(OsxBootState *state, OsxTreeNode **memorymap)
 	AddString(chosen, "rootpath", state->rootpath);
 	*memorymap = NewNode(chosen, "memory-map");
 
+	node = NewNode(root, "openprom");
+	AddString(node, "device_type", "BootROM");
+	AddString(node, "model", "Open Firmware, 2.4");
+
 	node = NewNode(root, "options");
 	AddString(node, "boot-args", "");
 	AddString(node, "auto-boot?", "true");
@@ -1130,6 +1422,53 @@ static void InstallBootArgs(OsxBootState *state, const char *commandline, uint32
 	StoreBig32(args + 0x1f8, state->nextfree);
 }
 
+static uint8 *AddOldWorldDrivers(uint8 *mkext, uint32 *size, const char *bootpath)
+{
+	static const char *const bundles[] = {
+		"com.apple.driver.AppleGossamerPE",
+		"com.apple.driver.AppleGracklePCI",
+		"com.apple.platform.AppleHeathrow",
+		"com.apple.driver.HeathrowATA",
+		"com.apple.driver.AppleCuda",
+		"com.apple.driver.AppleBMacEthernet",
+		"com.apple.driver.AppleADBMouse",
+		"com.apple.driver.AppleADBButtons"
+	};
+	static const char *const aliases[] = {
+		"__ZN14IOPMrootDomain27registerPMSettingControllerEPFiiiPvES0_", "__ZN9IOService15getPMRootDomainEv"
+	};
+	static const char *const lists[2] = { "disk", "cdrom" };
+	OsxHfsVolume donor;
+	const char *path;
+	void *file;
+	uint8 *donorkext;
+	uint8 *merged;
+	uint32 donorsize;
+	int list;
+	int index;
+	if (OsxMkextHasBundle(mkext, *size, bundles[0]))
+		return mkext;
+	merged = NULL;
+	for (list = 0; list < 2 && merged == NULL; list++) {
+		for (index = 0; merged == NULL && (path = PrefsFindString(lists[list], index)) != NULL; index++) {
+			if (strcmp(path, bootpath) == 0 || (file = Sys_open(path, true, false)) == NULL)
+				continue;
+			if (OpenVolume(&donor, file, -1)) {
+				donorkext = ReadFile(&donor, "/System/Library/Extensions.mkext", &donorsize);
+				if (donorkext && ThinPowerPC(donorkext, &donorsize) && OsxMkextHasBundle(donorkext, donorsize, bundles[0]))
+					merged = OsxMkextAddBundles(mkext, *size, donorkext, donorsize, bundles, 8, aliases, 1, size);
+				free(donorkext);
+			}
+			CloseVolume(&donor);
+			Sys_close(file);
+		}
+	}
+	if (merged == NULL)
+		return mkext;
+	free(mkext);
+	return merged;
+}
+
 int OsxBootLoad(OsxMachine *machine, const char *imagepath, int bootbus, int bootunit, const char *commandline)
 {
 	OsxBootState state;
@@ -1158,12 +1497,20 @@ int OsxBootLoad(OsxMachine *machine, const char *imagepath, int bootbus, int boo
 	}
 	sprintf(state.rootpath, "/pci@80000000/mac-io@10/ata@%x/@%d:%d", 0x20000 + bootbus * 0x1000, bootunit, volume.partition);
 	kernel = ReadFile(&volume, "/mach_kernel", &kernelsize);
-	if (kernel == NULL || !LoadKernel(&state, kernel, kernelsize)) {
+	if (kernel == NULL || !ThinPowerPC(kernel, &kernelsize) || !LoadKernel(&state, kernel, kernelsize)) {
 		fprintf(stderr, "osx: cannot load /mach_kernel\n");
 		CloseVolume(&volume);
 		return 0;
 	}
 	mkext = ReadFile(&volume, "/System/Library/Extensions.mkext", &mkextsize);
+	if (mkext != NULL && !ThinPowerPC(mkext, &mkextsize)) {
+		free(mkext);
+		mkext = NULL;
+	}
+	if (mkext == NULL)
+		mkext = BuildDriverPackage(&volume, &mkextsize);
+	if (mkext)
+		mkext = AddOldWorldDrivers(mkext, &mkextsize, imagepath);
 	if (mkext) {
 		address = Allocate(&state, mkextsize);
 		memcpy(machine->ram + address, mkext, mkextsize);

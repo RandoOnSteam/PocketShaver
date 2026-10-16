@@ -60,7 +60,7 @@ prefs_desc common_prefs_items[] = {
 	{"osxlogcalls", TYPE_STRING, false, "kernel symbols whose calls are logged"},
 	{"osxdump", TYPE_STRING, false,     "file that receives Mac OS X guest RAM on exit"},
 	{"osxlogkext", TYPE_STRING, false,  "kext bundle:symbol+offset locations whose execution is logged"},
-	{"osxpatch", TYPE_STRING, true,     "disk image byte patch, hexoffset:hexbytes, applied to guest reads"},
+	{"osxpatch", TYPE_STRING, true,     "disk image byte patch, [cdrom:]hexoffset:hexbytes, applied to guest reads"},
 	{"osxlogxml", TYPE_STRING, false,   "kernel address of the IOKit property copyout helper to log"},
 	{"osxbacktracekey", TYPE_STRING, false, "syscall key whose user backtraces are logged"},
 	{"osxcputest", TYPE_INT32, false,   "run the Mac OS X CPU lockstep test for this many instructions"},

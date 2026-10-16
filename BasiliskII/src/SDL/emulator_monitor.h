@@ -30,13 +30,6 @@
 
 #ifdef _WIN32
 #include <winsock2.h>
-#if !SDL_VERSION_ATLEAST(3, 0, 0)
-#if defined(USE_SDL2)
-#include <SDL2/SDL_syswm.h>
-#else
-#include <SDL_syswm.h>
-#endif
-#endif
 #else
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -912,99 +905,8 @@ private:
 			SaveSurface(view.hostsurface, request);
 			return;
 		}
-#if defined(_WIN32)
-		CaptureWindow(view, request);
-#else
 		SetError(request, "host surface unavailable");
-#endif
 	}
-
-#if defined(_WIN32)
-	static HWND GetWindowHandle(const EmulatorMonitorView &view)
-	{
-#if SDL_VERSION_ATLEAST(3, 0, 0)
-		if (view.window == NULL)
-			return NULL;
-		return (HWND)SDL_GetPointerProperty(SDL_GetWindowProperties((SDL_Window *)view.window),
-			SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL);
-#elif SDL_VERSION_ATLEAST(2, 0, 0)
-		SDL_SysWMinfo windowinfo;
-		if (view.window == NULL)
-			return NULL;
-		SDL_VERSION(&windowinfo.version);
-		if (!SDL_GetWindowWMInfo((SDL_Window *)view.window, &windowinfo))
-			return NULL;
-		return windowinfo.info.win.window;
-#else
-		SDL_SysWMinfo windowinfo;
-		(void)view;
-		SDL_VERSION(&windowinfo.version);
-		if (SDL_GetWMInfo(&windowinfo) <= 0)
-			return NULL;
-		return windowinfo.window;
-#endif
-	}
-
-	static void CaptureWindow(const EmulatorMonitorView &view, Request *request)
-	{
-		HWND windowhandle = GetWindowHandle(view);
-		RECT clientrect;
-		BITMAPINFO bitmapinfo;
-		void *bits = NULL;
-		HDC windowdc;
-		HDC memorydc;
-		HBITMAP bitmap;
-		HGDIOBJ previousbitmap;
-		SDL_Surface *surface;
-
-		if (windowhandle == NULL || !GetClientRect(windowhandle, &clientrect) ||
-			clientrect.right <= 0 || clientrect.bottom <= 0) {
-			SetError(request, "host window unavailable");
-			return;
-		}
-		memset(&bitmapinfo, 0, sizeof(bitmapinfo));
-		bitmapinfo.bmiHeader.biSize = sizeof(bitmapinfo.bmiHeader);
-		bitmapinfo.bmiHeader.biWidth = clientrect.right;
-		bitmapinfo.bmiHeader.biHeight = -clientrect.bottom;
-		bitmapinfo.bmiHeader.biPlanes = 1;
-		bitmapinfo.bmiHeader.biBitCount = 32;
-		bitmapinfo.bmiHeader.biCompression = BI_RGB;
-		windowdc = GetDC(windowhandle);
-		memorydc = CreateCompatibleDC(windowdc);
-		bitmap = CreateDIBSection(windowdc, &bitmapinfo, DIB_RGB_COLORS, &bits, NULL, 0);
-		if (bitmap == NULL || bits == NULL) {
-			SetError(request, "unable to allocate capture bitmap");
-			DeleteDC(memorydc);
-			ReleaseDC(windowhandle, windowdc);
-			return;
-		}
-		previousbitmap = SelectObject(memorydc, bitmap);
-		if (PrintWindow(windowhandle, memorydc, PW_CLIENTONLY | PW_RENDERFULLCONTENT)) {
-			GdiFlush();
-#if SDL_VERSION_ATLEAST(3, 0, 0)
-			surface = SDL_CreateSurfaceFrom(clientrect.right, clientrect.bottom,
-				SDL_PIXELFORMAT_XRGB8888, bits, clientrect.right * 4);
-#else
-			surface = SDL_CreateRGBSurfaceFrom(bits, clientrect.right, clientrect.bottom,
-				32, clientrect.right * 4, 0x00ff0000, 0x0000ff00, 0x000000ff, 0);
-#endif
-			if (surface != NULL) {
-				SaveSurface(surface, request);
-#if SDL_VERSION_ATLEAST(3, 0, 0)
-				SDL_DestroySurface(surface);
-#else
-				SDL_FreeSurface(surface);
-#endif
-			} else
-				SetError(request, SDL_GetError());
-		} else
-			SetError(request, "PrintWindow failed");
-		SelectObject(memorydc, previousbitmap);
-		DeleteObject(bitmap);
-		DeleteDC(memorydc);
-		ReleaseDC(windowhandle, windowdc);
-	}
-#endif
 
 	static bool IsPngPath(const char *path)
 	{

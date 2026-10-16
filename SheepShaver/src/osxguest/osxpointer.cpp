@@ -38,17 +38,35 @@ static void ScrollWheel(OsxCpu *cpu, OsxPointer *pointer, int delta)
 	uint32 stack;
 	uint32 timehigh;
 	uint32 timelow;
+	uint32 sender;
+	uint32 offset;
 	stack = (cpu->gpr[1] - 0x60) & ~15u;
 	timehigh = cpu->gpr[7];
 	timelow = cpu->gpr[8];
+	sender = cpu->gpr[9];
 	if (pointer->wheeladdress == 0 || !OsxCpuWriteVirtual(cpu, stack, cpu->gpr[1]))
 		return;
+	if (pointer->sender) {
+		for (offset = 0x38; offset < 0x44; offset += 4)
+			if (!OsxCpuWriteVirtual(cpu, stack + offset, 0))
+				return;
+		if (!OsxCpuWriteVirtual(cpu, stack + 0x44, timehigh) ||
+			!OsxCpuWriteVirtual(cpu, stack + 0x48, timelow) ||
+			!OsxCpuWriteVirtual(cpu, stack + 0x4c, sender))
+			return;
+	}
 	CallGuest(cpu, pointer, stack, pointer->wheeladdress);
 	cpu->gpr[4] = (uint32)(int32)(int16)delta;
 	cpu->gpr[5] = 0;
 	cpu->gpr[6] = 0;
 	cpu->gpr[7] = timehigh;
 	cpu->gpr[8] = timelow;
+	if (pointer->sender) {
+		cpu->gpr[7] = (uint32)((int32)(int16)delta << 16);
+		cpu->gpr[8] = 0;
+		cpu->gpr[9] = 0;
+		cpu->gpr[10] = (uint32)(int32)(int16)delta;
+	}
 }
 
 void OsxPointerHook(OsxCpu *cpu, void *context, uint32 address)
@@ -60,6 +78,7 @@ void OsxPointerHook(OsxCpu *cpu, void *context, uint32 address)
 	uint32 location;
 	uint32 timehigh;
 	uint32 timelow;
+	uint32 sender;
 	uint32 buttons;
 	int pressed;
 	pointer = (OsxPointer *)context;
@@ -101,8 +120,10 @@ void OsxPointerHook(OsxCpu *cpu, void *context, uint32 address)
 	location = ((uint32)pointer->pointerx << 16) | ((uint32)pointer->pointery & 0xffff);
 	timehigh = cpu->gpr[7];
 	timelow = cpu->gpr[8];
+	sender = cpu->gpr[9];
 	if (!OsxCpuWriteVirtual(cpu, stack, cpu->gpr[1]) ||
 		!OsxCpuWriteVirtual(cpu, stack + 0x38, timelow) ||
+		!OsxCpuWriteVirtual(cpu, stack + 0x3c, sender) ||
 		!OsxCpuWriteVirtual(cpu, stack + 0x40, location) ||
 		!OsxCpuWriteVirtual(cpu, stack + 0x44, pointer->machine->width) ||
 		!OsxCpuWriteVirtual(cpu, stack + 0x48, pointer->machine->height))

@@ -244,6 +244,7 @@ static int OpenMedia(OsxAtaDrive *drive, const char *path, int atapi)
 		drive->sectors = (uint64)size / OSXATAPISECTOR;
 	else
 		drive->sectors = (uint64)size / OSXATASECTOR;
+	drive->dvd = atapi && drive->sectors > OSXATAPICDSECTORS;
 	drive->mediapresent = 1;
 	return 1;
 }
@@ -338,13 +339,15 @@ static void AtapiFail(OsxMachine *machine, OsxAtaBus *bus, OsxAtaDrive *drive, u
 	AtapiComplete(machine, bus, drive, 1);
 }
 
-static void ApplyPatches(OsxAtaBus *bus, uint8 *data, uint64 start, uint32 length)
+static void ApplyPatches(OsxAtaBus *bus, OsxAtaDrive *drive, uint8 *data, uint64 start, uint32 length)
 {
 	OsxDiskPatch *patch;
 	int index;
 	int byte;
 	for (index = 0; index < bus->patchcount; index++) {
 		patch = &bus->patches[index];
+		if (patch->atapionly && !drive->atapi)
+			continue;
 		for (byte = 0; byte < patch->length; byte++)
 			if (patch->offset + byte >= start && patch->offset + byte < start + length)
 				data[patch->offset + byte - start] = patch->bytes[byte];
@@ -363,7 +366,7 @@ static int FillBuffer(OsxAtaBus *bus, OsxAtaDrive *drive)
 		return 0;
 	if (Sys_read(drive->file, bus->buffer, (loff_t)(bus->lba * bus->sectorsize), bytes) != bytes)
 		return 0;
-	ApplyPatches(bus, bus->buffer, bus->lba * bus->sectorsize, bytes);
+	ApplyPatches(bus, drive, bus->buffer, bus->lba * bus->sectorsize, bytes);
 	bus->lba += sectors;
 	bus->remaining -= sectors;
 	bus->bufferlength = bytes;
@@ -654,7 +657,7 @@ static uint32 BuildModePages(uint8 *data, uint32 page)
 		memset(data + length, 0, 28);
 		data[length] = 0x2a;
 		data[length + 1] = 0x1a;
-		data[length + 2] = 0x03;
+		data[length + 2] = 0x0b;
 		data[length + 4] = 0x71;
 		data[length + 5] = 0x60;
 		data[length + 6] = 0x29;
@@ -667,20 +670,25 @@ static uint32 BuildModePages(uint8 *data, uint32 page)
 	return length;
 }
 
-static uint32 BuildConfiguration(uint8 *data)
+static uint32 BuildConfiguration(OsxAtaDrive *drive, uint8 *data)
 {
 	uint32 length;
-	memset(data, 0, 64);
+	memset(data, 0, 96);
 	length = 8;
 	data[6] = 0x00;
 	data[7] = 0x08;
+	if (drive->dvd)
+		data[7] = 0x10;
 	data[length + 1] = 0x00;
 	data[length + 2] = 0x03;
-	data[length + 3] = 4;
+	data[length + 3] = 8;
 	data[length + 4] = 0x00;
-	data[length + 5] = 0x08;
-	data[length + 6] = 0x01;
-	length += 8;
+	data[length + 5] = 0x10;
+	data[length + 6] = (uint8)drive->dvd;
+	data[length + 8] = 0x00;
+	data[length + 9] = 0x08;
+	data[length + 10] = (uint8)!drive->dvd;
+	length += 12;
 	data[length + 1] = 0x01;
 	data[length + 2] = 0x0b;
 	data[length + 3] = 8;
@@ -704,11 +712,34 @@ static uint32 BuildConfiguration(uint8 *data)
 	PutBig16(data + length + 8, 1);
 	length += 12;
 	data[length + 1] = 0x1e;
-	data[length + 2] = 0x09;
+	data[length + 2] = 0x08 | (uint8)!drive->dvd;
 	data[length + 3] = 4;
 	length += 8;
+	data[length + 1] = 0x1f;
+	data[length + 2] = (uint8)drive->dvd;
+	length += 4;
 	PutBig32(data, length - 4);
 	return length;
+}
+
+static uint32 BuildDvdStructure(OsxAtaDrive *drive, uint8 *data, uint32 format)
+{
+	if (format == 0) {
+		memset(data, 0, 4 + 2048);
+		PutBig16(data, 2048 + 2);
+		data[4] = 0x01;
+		data[5] = 0x02;
+		data[6] = 0x01;
+		PutBig32(data + 8, 0x30000);
+		PutBig32(data + 12, 0x30000 + (uint32)drive->sectors - 1);
+		return 4 + 2048;
+	}
+	if (format == 1) {
+		memset(data, 0, 8);
+		PutBig16(data, 6);
+		return 8;
+	}
+	return 0;
 }
 
 static uint8 ToBcd(uint32 value)
@@ -901,7 +932,7 @@ static void AtapiExecute(OsxMachine *machine, OsxAtaBus *bus)
 		BeginBufferIn(machine, bus, Allocation(((uint32)packet[7] << 8) | packet[8], 4), length, dma);
 		return;
 	case 0x46:
-		count = BuildConfiguration(data);
+		count = BuildConfiguration(drive, data);
 		BeginBufferIn(machine, bus, Allocation(((uint32)packet[7] << 8) | packet[8], count), length, dma);
 		return;
 	case 0x4a:
@@ -956,6 +987,16 @@ static void AtapiExecute(OsxMachine *machine, OsxAtaBus *bus)
 		data[6] = 0x01;
 		PutBig32(data + 24, (uint32)drive->sectors);
 		BeginBufferIn(machine, bus, Allocation(((uint32)packet[7] << 8) | packet[8], 36), length, dma);
+		return;
+	case 0xad:
+		count = 0;
+		if (drive->dvd)
+			count = BuildDvdStructure(drive, data, packet[7]);
+		if (count == 0) {
+			AtapiFail(machine, bus, drive, SENSEILLEGALREQUEST, 0x30);
+			return;
+		}
+		BeginBufferIn(machine, bus, Allocation(((uint32)packet[8] << 8) | packet[9], count), length, dma);
 		return;
 	case 0xbd:
 		memset(data, 0, 8);

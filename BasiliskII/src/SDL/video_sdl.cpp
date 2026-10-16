@@ -1910,6 +1910,7 @@ void VideoExit(void)
 		NQDMetalCleanup();
 	gfxaccel_resources_shutdown();
 	MetalCompositorShutdown();
+	dmc_shutdown();
 #endif
 	// Close displays
 	vector<monitor_desc *>::iterator i, end = VideoMonitors.end();
