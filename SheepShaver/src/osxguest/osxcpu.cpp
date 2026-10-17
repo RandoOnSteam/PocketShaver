@@ -241,6 +241,12 @@ void OsxCpuUpdateModes(OsxCpu *cpu)
 	cpu->fetchtag = 0;
 }
 
+void OsxCpuSetModel(OsxCpu *cpu, uint32 pvr)
+{
+	cpu->pvr = pvr;
+	cpu->altivec = (pvr >> 16) == 0x000c;
+}
+
 void OsxCpuReset(OsxCpu *cpu, uint32 pvr, uint64 tbfrequency)
 {
 	memset(cpu->gpr, 0, sizeof(cpu->gpr));
@@ -268,7 +274,12 @@ void OsxCpuReset(OsxCpu *cpu, uint32 pvr, uint64 tbfrequency)
 	cpu->sdr1 = 0;
 	cpu->hid0 = 0;
 	cpu->hid1 = 0;
-	cpu->pvr = pvr;
+	OsxCpuSetModel(cpu, pvr);
+	memset(cpu->vr, 0, sizeof(cpu->vr));
+	cpu->vscr = 0x00010000;
+	cpu->vrsave = 0;
+	cpu->msscr[0] = 0;
+	cpu->msscr[1] = 0;
 	cpu->l2cr = 0;
 	cpu->ictc = 0;
 	cpu->iabr = 0;
@@ -306,7 +317,7 @@ void OsxCpuRaiseException(OsxCpu *cpu, uint32 vector, uint32 srr1bits, uint32 sr
 	uint32 newmsr;
 	cpu->exceptions++;
 	cpu->srr0 = srr0;
-	cpu->srr1 = (cpu->msr & 0x0000ff73) | srr1bits;
+	cpu->srr1 = (cpu->msr & OSXMSRSAVED) | srr1bits;
 	newmsr = cpu->msr & (OSXMSRILE | OSXMSRME | OSXMSRIP);
 	if (newmsr & OSXMSRILE)
 		newmsr |= OSXMSRLE;
@@ -700,6 +711,15 @@ static inline int Write16(OsxCpu *cpu, uint32 address, uint32 value)
 	return WriteSlow(cpu, address, 2, value);
 }
 
+int OsxCpuReadData(OsxCpu *cpu, uint32 address, int size, uint32 *value)
+{
+	if (size == 4)
+		return Read32(cpu, address, value);
+	if (size == 2)
+		return Read16(cpu, address, value);
+	return Read8(cpu, address, value);
+}
+
 static inline int Write8(OsxCpu *cpu, uint32 address, uint32 value)
 {
 	uint8 *host;
@@ -710,6 +730,16 @@ static inline int Write8(OsxCpu *cpu, uint32 address, uint32 value)
 	}
 	return WriteSlow(cpu, address, 1, value);
 }
+
+int OsxCpuWriteData(OsxCpu *cpu, uint32 address, int size, uint32 value)
+{
+	if (size == 4)
+		return Write32(cpu, address, value);
+	if (size == 2)
+		return Write16(cpu, address, value);
+	return Write8(cpu, address, value);
+}
+
 
 static int Read64(OsxCpu *cpu, uint32 address, uint64 *value)
 {
@@ -1036,6 +1066,7 @@ static int ReadSpr(OsxCpu *cpu, uint32 number, uint32 *value)
 	case 268: case 269: *value = ReadTimebaseRegister(cpu, number); return 1;
 	case 272: case 273: case 274: case 275: *value = cpu->sprg[number - 272]; return 1;
 	case 282: *value = cpu->ear; return 1;
+	case 256: *value = cpu->vrsave; return 1;
 	case 287: *value = cpu->pvr; return 1;
 	case 528: case 529: case 530: case 531: case 532: case 533: case 534: case 535:
 		*value = cpu->ibat[number - 528];
@@ -1054,6 +1085,7 @@ static int ReadSpr(OsxCpu *cpu, uint32 number, uint32 *value)
 	case 1009: *value = cpu->hid1; return 1;
 	case 1010: *value = cpu->iabr; return 1;
 	case 1013: *value = cpu->dabr; return 1;
+	case 1014: case 1015: *value = cpu->msscr[number - 1014]; return 1;
 	case 1017: *value = cpu->l2cr & ~1u; return 1;
 	case 1019: *value = cpu->ictc; return 1;
 	case 1020: case 1021:
@@ -1084,6 +1116,7 @@ static int WriteSpr(OsxCpu *cpu, uint32 number, uint32 value)
 	case 26: cpu->srr0 = value; return 1;
 	case 27: cpu->srr1 = value; return 1;
 	case 272: case 273: case 274: case 275: cpu->sprg[number - 272] = value; return 1;
+	case 256: cpu->vrsave = value; return 1;
 	case 282: cpu->ear = value; return 1;
 	case 284: case 285: WriteTimebase(cpu, number, value); return 1;
 	case 528: case 529: case 530: case 531: case 532: case 533: case 534: case 535:
@@ -1109,6 +1142,7 @@ static int WriteSpr(OsxCpu *cpu, uint32 number, uint32 value)
 	case 1009: cpu->hid1 = value; return 1;
 	case 1010: cpu->iabr = value; return 1;
 	case 1013: cpu->dabr = value; return 1;
+	case 1014: case 1015: cpu->msscr[number - 1014] = value; return 1;
 	case 1017: cpu->l2cr = value & ~0x00200000u; return 1;
 	case 1019: cpu->ictc = value; return 1;
 	case 1020: case 1021: case 1022: cpu->thrm[number - 1020] = value; return 1;
@@ -1124,7 +1158,7 @@ static void MoveFromSpr(OsxCpu *cpu, uint32 instruction)
 	if ((number & 0x10) && !RequireSupervisor(cpu))
 		return;
 	if (!ReadSpr(cpu, number, &value)) {
-		if (cpu->logfile)
+		if (cpu->logfile && !(cpu->msr & OSXMSRPR))
 			fprintf(cpu->logfile, "mfspr unknown %u at %08x\n", number, cpu->pc);
 		cpu->unknownspr = number;
 		value = 0;
@@ -1139,7 +1173,7 @@ static void MoveToSpr(OsxCpu *cpu, uint32 instruction)
 	if ((number & 0x10) && !RequireSupervisor(cpu))
 		return;
 	if (!WriteSpr(cpu, number, cpu->gpr[(instruction >> 21) & 31])) {
-		if (cpu->logfile)
+		if (cpu->logfile && !(cpu->msr & OSXMSRPR))
 			fprintf(cpu->logfile, "mtspr unknown %u at %08x\n", number, cpu->pc);
 		cpu->unknownspr = number;
 	}
@@ -1403,7 +1437,7 @@ static void ExecuteGroup19(OsxCpu *cpu, uint32 instruction)
 		if (!RequireSupervisor(cpu))
 			return;
 		cpu->nextpc = cpu->srr0 & ~3u;
-		WriteMsr(cpu, (cpu->srr1 & 0x0000ff73) | (cpu->msr & OSXMSRILE));
+		WriteMsr(cpu, (cpu->srr1 & OSXMSRSAVED) | (cpu->msr & OSXMSRILE));
 		if ((cpu->msr & OSXMSREE) && (cpu->externalline || cpu->decpending))
 			cpu->slice = 0;
 		return;
@@ -1700,7 +1734,7 @@ static void ExecuteGroup31(OsxCpu *cpu, uint32 instruction)
 		if (!RequireSupervisor(cpu))
 			return;
 		return;
-	case 54: case 86: case 246: case 278: case 598: case 854:
+	case 54: case 86: case 246: case 278: case 598: case 758: case 854:
 		return;
 	case 982:
 		cpu->fetchtag = 0;
@@ -1868,7 +1902,8 @@ static void ExecuteGroup31(OsxCpu *cpu, uint32 instruction)
 		Write32(cpu, address, source);
 		return;
 	default:
-		IllegalInstruction(cpu, instruction);
+		if (!OsxCpuExecuteVectorMemory(cpu, instruction, extended, address))
+			IllegalInstruction(cpu, instruction);
 		return;
 	}
 	if (setcr)
@@ -2020,6 +2055,9 @@ static void Execute(OsxCpu *cpu, uint32 instruction)
 		result = cpu->gpr[rd] & (immediate << 16);
 		cpu->gpr[ra] = result;
 		SetCr0(cpu, result);
+		return;
+	case 4:
+		OsxCpuExecuteVector(cpu, instruction);
 		return;
 	case 31:
 		ExecuteGroup31(cpu, instruction);

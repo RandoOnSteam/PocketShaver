@@ -96,6 +96,7 @@
 
 #include "sysdeps.h"
 #include "main.h"
+#include "osxguest.h"
 #include "version.h"
 #include "prefs.h"
 #include "prefs_editor.h"
@@ -289,6 +290,8 @@ static bool kernel_data_init(void);
 static bool shm_map_address(int kernel_area, uint32 addr);
 #endif
 static void Quit(void);
+static bool ClassicSessionStart(const char *vmdir);
+static void ClassicSessionStop(void);
 static void *emul_func(void *arg);
 static void *nvram_func(void *arg);
 static void *tick_func(void *arg);
@@ -1214,13 +1217,43 @@ int main(int argc, char *argv[])
 	USBHIDInstall();
 #endif
 	
+	for (;;) {
+		if (OsxGuestRequested()) {
+			int result = OsxGuestMain();
+			if (result != 2) {
+				PrefsExit();
+				return result;
+			}
+			continue;
+		}
+		if (!ClassicSessionStart(vmdir))
+			break;
+		ClassicSessionStop();
+	}
+	
+quit:
+	Quit();
+	return 0;
+}
+
+}	// extern "C"
+
+
+/*
+ *  Start a classic core session, returns when the guest selects another core
+ */
+
+static bool ClassicSessionStart(const char *vmdir)
+{
+	char str[256];
+	vm_protect(ROMBaseHost, ROM_AREA_SIZE, VM_PAGE_READ | VM_PAGE_WRITE | VM_PAGE_EXECUTE);
 	// Load Mac ROM
 	if (!load_mac_rom())
-		goto quit;
+		return false;
 	
 	// Initialize everything
 	if (!InitAll(vmdir))
-		goto quit;
+		return false;
 	D(bug("Initialization complete\n"));
 	
 #if TARGET_OS_IPHONE
@@ -1263,7 +1296,7 @@ int main(int argc, char *argv[])
 	if (sigaction(SIGILL, &sigill_action, NULL) < 0) {
 		sprintf(str, GetString(STR_SIG_INSTALL_ERR), "SIGILL", strerror(errno));
 		ErrorAlert(str);
-		goto quit;
+		return false;
 	}
 #endif
 	
@@ -1278,7 +1311,7 @@ int main(int argc, char *argv[])
 	if (sigaction(SIGUSR2, &sigusr2_action, NULL) < 0) {
 		sprintf(str, GetString(STR_SIG_INSTALL_ERR), "SIGUSR2", strerror(errno));
 		ErrorAlert(str);
-		goto quit;
+		return false;
 	}
 #endif
 	
@@ -1286,13 +1319,33 @@ int main(int argc, char *argv[])
 	emul_thread = pthread_self();
 	D(bug("MacOS thread is %ld\n", emul_thread));
 	emul_func(NULL);
-	
-quit:
-	Quit();
-	return 0;
+	return true;
 }
 
-}	// extern "C"
+
+/*
+ *  Stop a classic core session
+ */
+
+static void ClassicSessionStop(void)
+{
+#if EMULATED_PPC
+	exit_emul_ppc();
+#endif
+	if (tick_thread_active) {
+		tick_thread_cancel = true;
+		pthread_cancel(tick_thread);
+		pthread_join(tick_thread, NULL);
+		tick_thread_active = false;
+	}
+	if (nvram_thread_active) {
+		nvram_thread_cancel = true;
+		pthread_cancel(nvram_thread);
+		pthread_join(nvram_thread, NULL);
+		nvram_thread_active = false;
+	}
+	ExitAll();
+}
 
 /*
  *  Cleanup and quit

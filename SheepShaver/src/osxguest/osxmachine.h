@@ -23,6 +23,8 @@
 #include "osxcpu.h"
 
 #define OSXPVR 0x00080202
+#define OSXPVRG4 0x000c0209
+#define OSXCPUFREQUENCYG4 1000000000
 #define OSXCPUFREQUENCY 266000000
 #define OSXBUSFREQUENCY 66666666
 #define OSXTIMEBASEFREQUENCY 16666666
@@ -281,6 +283,7 @@ struct OsxMachine {
 	OsxCpu *cpu;
 	uint8 *ram;
 	uint32 ramsize;
+	uint32 pvr;
 	uint8 *vram;
 	uint32 width;
 	uint32 height;
@@ -366,6 +369,8 @@ void OsxFlashWrite(OsxMachine *machine, uint32 offset, int size, uint32 value);
 void OsxFlashLoad(OsxMachine *machine, const char *path);
 void OsxNvramReadString(const uint8 *nvram, int index, char *output, int size);
 int OsxNvramWantsClassic(const char *device, const char *command);
+int OsxNvramIsNewWorld(const uint8 *nvram);
+void OsxNvramMakeNewWorld(uint8 *nvram);
 int OsxNvramPrepareBoot(OsxMachine *machine, int bus, int unit, int partition);
 void OsxNvramFinishBoot(OsxMachine *machine, const uint8 *startup);
 void OsxFlashSave(OsxMachine *machine);

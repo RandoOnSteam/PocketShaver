@@ -26,16 +26,142 @@
 #define FLASHPROGRAMSETUP 3
 #define FLASHREADY 0x80
 
+#define NVRAMSIZE 0x2000
+#define NVRAMXPRAMHEADER 0x12f0
+#define NVRAMCOMMONHEADER 0x1400
+
+static int FindPartition(const uint8 *nvram, const char *name, uint32 *start, uint32 *length)
+{
+	uint32 offset;
+	uint32 size;
+	offset = 0;
+	while (offset + 16 <= NVRAMSIZE && nvram[offset] != 0) {
+		size = (((uint32)nvram[offset + 2] << 8) | nvram[offset + 3]) * 16;
+		if (size < 16 || offset + size > NVRAMSIZE)
+			return 0;
+		if (strncmp((const char *)nvram + offset + 4, name, 12) == 0) {
+			*start = offset + 16;
+			*length = size - 16;
+			return 1;
+		}
+		offset += size;
+	}
+	return 0;
+}
+
+static const char *VariableName(int index)
+{
+	if (index == 9)
+		return "boot-command";
+	return "boot-device";
+}
+
+static void ReadCommonString(const uint8 *nvram, const char *name, char *output, int size)
+{
+	uint32 start;
+	uint32 length;
+	uint32 cursor;
+	uint32 namelength;
+	const char *entry;
+	output[0] = 0;
+	if (!FindPartition(nvram, "common", &start, &length))
+		return;
+	namelength = (uint32)strlen(name);
+	for (cursor = start; cursor < start + length && nvram[cursor] != 0; cursor += (uint32)strlen(entry) + 1) {
+		entry = (const char *)nvram + cursor;
+		if (strncmp(entry, name, namelength) == 0 && entry[namelength] == '=' && strlen(entry + namelength + 1) < (size_t)size) {
+			strcpy(output, entry + namelength + 1);
+			return;
+		}
+	}
+}
+
+int OsxNvramIsNewWorld(const uint8 *nvram)
+{
+	uint32 start;
+	uint32 length;
+	return FindPartition(nvram, "common", &start, &length);
+}
+
 void OsxNvramReadString(const uint8 *nvram, int index, char *output, int size)
 {
 	uint32 header = 0x1834 + index * 4;
 	uint32 offset = ((uint32)nvram[header] << 8) | nvram[header + 1];
 	uint32 length = ((uint32)nvram[header + 2] << 8) | nvram[header + 3];
 	output[0] = 0;
+	if (OsxNvramIsNewWorld(nvram)) {
+		ReadCommonString(nvram, VariableName(index), output, size);
+		return;
+	}
 	if (offset < 0x185c || offset + length > 0x2000 || length >= (uint32)size)
 		return;
 	memcpy(output, nvram + offset, length);
 	output[length] = 0;
+}
+
+static void WritePartitionHeader(uint8 *nvram, uint32 offset, uint8 signature, uint32 size, const char *name)
+{
+	uint32 sum;
+	int index;
+	memset(nvram + offset, 0, 16);
+	nvram[offset] = signature;
+	nvram[offset + 2] = (uint8)((size / 16) >> 8);
+	nvram[offset + 3] = (uint8)(size / 16);
+	strncpy((char *)nvram + offset + 4, name, 12);
+	sum = signature;
+	for (index = 2; index < 16; index++) {
+		sum += nvram[offset + index];
+		if (sum > 0xff)
+			sum = (sum + 1) & 0xff;
+	}
+	nvram[offset + 1] = (uint8)sum;
+}
+
+static int SetCommonBoot(uint8 *nvram, const char *device, const char *command)
+{
+	uint8 data[NVRAMSIZE];
+	uint32 start;
+	uint32 length;
+	uint32 cursor;
+	uint32 used;
+	uint32 entrylength;
+	const char *entry;
+	if (!FindPartition(nvram, "common", &start, &length))
+		return 0;
+	used = 0;
+	used += (uint32)sprintf((char *)data + used, "boot-device=%s", device) + 1;
+	used += (uint32)sprintf((char *)data + used, "boot-command=%s", command) + 1;
+	for (cursor = start; cursor < start + length && nvram[cursor] != 0; cursor += entrylength + 1) {
+		entry = (const char *)nvram + cursor;
+		entrylength = (uint32)strlen(entry);
+		if (strncmp(entry, "boot-device=", 12) == 0 || strncmp(entry, "boot-command=", 13) == 0)
+			continue;
+		if (used + entrylength + 1 >= length)
+			return 0;
+		memcpy(data + used, entry, entrylength + 1);
+		used += entrylength + 1;
+	}
+	if (used >= length)
+		return 0;
+	memset(nvram + start, 0, length);
+	memcpy(nvram + start, data, used);
+	return 1;
+}
+
+void OsxNvramMakeNewWorld(uint8 *nvram)
+{
+	char device[256];
+	char command[256];
+	if (OsxNvramIsNewWorld(nvram))
+		return;
+	OsxNvramReadString(nvram, 0, device, sizeof(device));
+	OsxNvramReadString(nvram, 9, command, sizeof(command));
+	memset(nvram, 0, NVRAMXPRAMHEADER);
+	WritePartitionHeader(nvram, 0, 0x7f, NVRAMXPRAMHEADER, "wwwwwwwwwwww");
+	WritePartitionHeader(nvram, NVRAMXPRAMHEADER, 0x5a, NVRAMCOMMONHEADER - NVRAMXPRAMHEADER, "APL,MacOS75");
+	memset(nvram + NVRAMCOMMONHEADER, 0, NVRAMSIZE - NVRAMCOMMONHEADER);
+	WritePartitionHeader(nvram, NVRAMCOMMONHEADER, 0x70, NVRAMSIZE - NVRAMCOMMONHEADER, "common");
+	SetCommonBoot(nvram, device, command);
 }
 
 int OsxNvramWantsClassic(const char *device, const char *command)
@@ -57,6 +183,8 @@ static int SetFirmwareBoot(uint8 *nvram, const char *device, const char *command
 	uint32 cursor = 0x2000;
 	uint32 checksum = 0;
 	uint32 start = ((uint32)nvram[0x1806] << 8) | nvram[0x1807];
+	if (OsxNvramIsNewWorld(nvram))
+		return SetCommonBoot(nvram, device, command);
 	if (start < 0x185c || start > 0x2000)
 		return 0;
 	memcpy(block, nvram + 0x1800, sizeof(block));

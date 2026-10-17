@@ -71,6 +71,7 @@ typedef struct OsxSession {
 	int kextstates[16];
 	int kextcount;
 	int pointerhooked;
+	int powerhooked;
 	uint32 pointeroffset;
 	uint32 absoluteoffset;
 	OsxPointer pointer;
@@ -260,6 +261,17 @@ static void NewWorldEpochHook(OsxCpu *cpu, void *context, uint32 address)
 {
 	cpu->gpr[3] = 1;
 	cpu->nextpc = cpu->lr;
+}
+
+static void ReturnHook(OsxCpu *cpu, void *context, uint32 address)
+{
+	cpu->nextpc = cpu->lr;
+}
+
+static void HookKernelSymbol(OsxMachine *machine, const char *name, OsxHookFunction function)
+{
+	if (OsxFindKernelSymbol(machine, name))
+		OsxCpuAddHook(machine->cpu, OsxFindKernelSymbol(machine, name), function, NULL);
 }
 
 static void CallHook(OsxCpu *cpu, void *context, uint32 address)
@@ -478,6 +490,33 @@ static void InstallPointerHook(OsxSession *session)
 	session->pointerhooked = 1;
 	if (machine->log)
 		fprintf(machine->log, "pointer hook at %08x physical %08x\n", text + session->pointeroffset, physical);
+}
+
+static void PowerRegisterHook(OsxCpu *cpu, void *context, uint32 address)
+{
+	if (cpu->gpr[4] == cpu->gpr[5])
+		cpu->gpr[4] = 0;
+}
+
+static void InstallPowerHook(OsxSession *session)
+{
+	OsxMachine *machine;
+	OsxCpu *cpu;
+	uint32 offset;
+	uint32 text;
+	uint32 physical;
+	machine = session->machine;
+	cpu = machine->cpu;
+	if (session->powerhooked || (cpu->msr & OSXMSRPR) || !(cpu->msr & OSXMSRDR))
+		return;
+	if (!OsxKextSymbolOffset(machine, "com.apple.driver.AppleGossamerPE", "__ZN10GossamerPE16PMRegisterDeviceEP9IOServiceS1_", &offset)) {
+		session->powerhooked = -1;
+		return;
+	}
+	if (!OsxKextTextAddress(machine, "com.apple.driver.AppleGossamerPE", &text) || !OsxCpuTranslate(cpu, text + offset, OSXTLBREAD, 0, &physical))
+		return;
+	OsxCpuAddHook(cpu, physical, PowerRegisterHook, NULL);
+	session->powerhooked = 1;
 }
 
 static void MovePointer(OsxSession *session, int x, int y)
@@ -1078,6 +1117,7 @@ static void RunMachine(OsxSession *session, void *monitor)
 		}
 		if (now >= nextstatus) {
 			InstallPointerHook(session);
+			InstallPowerHook(session);
 			InstallKextHooks(session);
 			DumpSamples(session);
 			DumpSyscalls(session);
@@ -1196,8 +1236,13 @@ int OsxGuestMain(void)
 	cpu->syscallcontext = &session;
 	if (OsxFindKernelSymbol(machine, "_panic"))
 		OsxCpuAddHook(cpu, OsxFindKernelSymbol(machine, "_panic"), PanicHook, &session);
-	if (machine->ata[bootbus].drives[bootunit].atapi && OsxFindKernelSymbol(machine, "_PEGetPlatformEpoch"))
-		OsxCpuAddHook(cpu, OsxFindKernelSymbol(machine, "_PEGetPlatformEpoch"), NewWorldEpochHook, NULL);
+	if (machine->pvr == OSXPVRG4) {
+		OsxNvramMakeNewWorld(machine->nvram);
+		HookKernelSymbol(machine, "__ZN16IOPlatformExpert14getBootROMTypeEv", NewWorldEpochHook);
+	}
+	HookKernelSymbol(machine, "_PE_Determine_Clock_Speeds", ReturnHook);
+	if (machine->pvr == OSXPVRG4 || machine->ata[bootbus].drives[bootunit].atapi)
+		HookKernelSymbol(machine, "_PEGetPlatformEpoch", NewWorldEpochHook);
 	cpu->pc = machine->kernelentry;
 	cpu->msr = 0;
 	cpu->gpr[1] = machine->scratch + 0x8000;

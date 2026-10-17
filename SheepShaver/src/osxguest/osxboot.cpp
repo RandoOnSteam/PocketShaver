@@ -1219,8 +1219,13 @@ static OsxTreeNode *BuildTree(OsxBootState *state, OsxTreeNode **memorymap)
 	uint32 cells[16];
 	machine = state->machine;
 	root = NewNode(NULL, "device-tree");
-	AddString(root, "model", "AAPL,Gossamer");
-	AddStrings(root, "compatible", "AAPL,Gossamer", "MacRISC");
+	if (state->machine->pvr == OSXPVRG4) {
+		AddString(root, "model", "PowerMac1,2");
+		AddStrings(root, "compatible", "PowerMac1,2", "MacRISC");
+	} else {
+		AddString(root, "model", "PowerMac1,1");
+		AddStrings(root, "compatible", "PowerMac1,1", "MacRISC");
+	}
 	AddCell(root, "#address-cells", 1);
 	AddCell(root, "#size-cells", 1);
 	AddCell(root, "clock-frequency", OSXBUSFREQUENCY);
@@ -1229,11 +1234,19 @@ static OsxTreeNode *BuildTree(OsxBootState *state, OsxTreeNode **memorymap)
 	node = NewNode(root, "cpus");
 	AddCell(node, "#address-cells", 1);
 	AddCell(node, "#size-cells", 0);
-	node = NewNode(node, "PowerPC,750");
+	if (state->machine->pvr == OSXPVRG4) {
+		node = NewNode(node, "PowerPC,G4");
+		AddProperty(node, "altivec", "", 0);
+	} else {
+		node = NewNode(node, "PowerPC,750");
+	}
 	AddString(node, "device_type", "cpu");
 	AddCell(node, "reg", 0);
-	AddCell(node, "cpu-version", OSXPVR);
-	AddCell(node, "clock-frequency", OSXCPUFREQUENCY);
+	AddCell(node, "cpu-version", state->machine->pvr);
+	if (state->machine->pvr == OSXPVRG4)
+		AddCell(node, "clock-frequency", OSXCPUFREQUENCYG4);
+	else
+		AddCell(node, "clock-frequency", OSXCPUFREQUENCY);
 	AddCell(node, "bus-frequency", OSXBUSFREQUENCY);
 	AddCell(node, "timebase-frequency", OSXTIMEBASEFREQUENCY);
 	AddCell(node, "d-cache-size", 0x8000);
@@ -1259,6 +1272,18 @@ static OsxTreeNode *BuildTree(OsxBootState *state, OsxTreeNode **memorymap)
 	AddString(chosen, "bootpath", state->rootpath);
 	AddString(chosen, "rootpath", state->rootpath);
 	*memorymap = NewNode(chosen, "memory-map");
+
+	node = NewNode(root, "rom");
+	cells[0] = 0xff800000;
+	cells[1] = 0x00800000;
+	AddCells(node, "reg", cells, 2);
+	node = NewNode(node, "boot-rom");
+	cells[0] = 0xfff00000;
+	cells[1] = 0x00100000;
+	AddCells(node, "reg", cells, 2);
+	cells[2] = 0x00033000;
+	AddCells(node, "info", cells, 3);
+	AddString(node, "BootROM-version", "$0003.30f1");
 
 	node = NewNode(root, "openprom");
 	AddString(node, "device_type", "BootROM");
@@ -1341,6 +1366,12 @@ static OsxTreeNode *BuildTree(OsxBootState *state, OsxTreeNode **memorymap)
 	cells[1] = OSXNVRAMSIZE * 16;
 	AddCells(node, "reg", cells, 2);
 
+	node = NewNode(macio, "escc");
+	AddString(node, "device_type", "escc");
+	cells[0] = 0x13000;
+	cells[1] = 0x1000;
+	AddCells(node, "reg", cells, 2);
+
 	cuda = NewNode(macio, "via-cuda");
 	AddString(cuda, "device_type", "via-cuda");
 	cells[0] = 0x16000;
@@ -1411,7 +1442,7 @@ static void InstallBootArgs(OsxBootState *state, const char *commandline, uint32
 	StoreBig32(args + 0x104, 0);
 	StoreBig32(args + 0x108, machine->ramsize);
 	StoreBig32(args + 0x1d4, OSXVRAMBASE);
-	StoreBig32(args + 0x1d8, 1);
+	StoreBig32(args + 0x1d8, strstr(commandline, "-v") == NULL);
 	StoreBig32(args + 0x1dc, machine->rowbytes);
 	StoreBig32(args + 0x1e0, machine->width);
 	StoreBig32(args + 0x1e4, machine->height);
@@ -1420,6 +1451,29 @@ static void InstallBootArgs(OsxBootState *state, const char *commandline, uint32
 	StoreBig32(args + 0x1f0, tree);
 	StoreBig32(args + 0x1f4, treelength);
 	StoreBig32(args + 0x1f8, state->nextfree);
+}
+
+static int NeedsVectorCpu(OsxHfsVolume *volume)
+{
+	uint8 *dyld;
+	uint32 size;
+	uint32 count;
+	uint32 index;
+	int compatible;
+	dyld = ReadFile(volume, "/usr/lib/dyld", &size);
+	if (dyld == NULL)
+		return 0;
+	compatible = 0;
+	if (size >= 8 && Big32(dyld) == 0xcafebabe) {
+		count = Big32(dyld + 4);
+		for (index = 0; index < count && 8 + index * 20 + 20 <= size; index++)
+			if (Big32(dyld + 8 + index * 20) == 18 && Big32(dyld + 8 + index * 20 + 4) <= 9)
+				compatible = 1;
+	} else if (size < 12 || Big32(dyld) != 0xfeedface || Big32(dyld + 8) <= 9) {
+		compatible = 1;
+	}
+	free(dyld);
+	return !compatible;
 }
 
 static uint8 *AddOldWorldDrivers(uint8 *mkext, uint32 *size, const char *bootpath)
@@ -1496,6 +1550,10 @@ int OsxBootLoad(OsxMachine *machine, const char *imagepath, int bootbus, int boo
 		return 0;
 	}
 	sprintf(state.rootpath, "/pci@80000000/mac-io@10/ata@%x/@%d:%d", 0x20000 + bootbus * 0x1000, bootunit, volume.partition);
+	machine->pvr = OSXPVR;
+	if (NeedsVectorCpu(&volume))
+		machine->pvr = OSXPVRG4;
+	OsxCpuSetModel(machine->cpu, machine->pvr);
 	kernel = ReadFile(&volume, "/mach_kernel", &kernelsize);
 	if (kernel == NULL || !ThinPowerPC(kernel, &kernelsize) || !LoadKernel(&state, kernel, kernelsize)) {
 		fprintf(stderr, "osx: cannot load /mach_kernel\n");

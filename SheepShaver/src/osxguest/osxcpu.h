@@ -35,7 +35,9 @@
 #define OSXMODEREAL 2
 #define OSXMODES 3
 
+#define OSXMSRVEC 0x02000000
 #define OSXMSRPOW 0x00040000
+#define OSXMSRSAVED 0x0200ff73
 #define OSXMSRILE 0x00010000
 #define OSXMSREE 0x00008000
 #define OSXMSRPR 0x00004000
@@ -66,6 +68,7 @@
 #define OSXVECTORDECREMENTER 0x0900
 #define OSXVECTORSYSCALL 0x0c00
 #define OSXVECTORTRACE 0x0d00
+#define OSXVECTORALTIVEC 0x0f20
 
 #define OSXPROGRAMFP 0x00100000
 #define OSXPROGRAMILLEGAL 0x00080000
@@ -134,6 +137,11 @@ struct OsxCpu {
 	uint32 ctr;
 	uint32 msr;
 	uint32 fpscr;
+	uint32 vr[32][4];
+	uint32 vscr;
+	uint32 vrsave;
+	uint32 msscr[2];
+	int altivec;
 	uint32 srr0;
 	uint32 srr1;
 	uint32 sprg[4];
@@ -216,6 +224,11 @@ struct OsxCpu {
 };
 
 void OsxCpuReset(OsxCpu *cpu, uint32 pvr, uint64 tbfrequency);
+void OsxCpuSetModel(OsxCpu *cpu, uint32 pvr);
+int OsxCpuReadData(OsxCpu *cpu, uint32 address, int size, uint32 *value);
+int OsxCpuWriteData(OsxCpu *cpu, uint32 address, int size, uint32 value);
+void OsxCpuExecuteVector(OsxCpu *cpu, uint32 instruction);
+int OsxCpuExecuteVectorMemory(OsxCpu *cpu, uint32 instruction, uint32 extended, uint32 address);
 void OsxCpuRun(OsxCpu *cpu, int32 count);
 int OsxCpuFetchPage(OsxCpu *cpu);
 void OsxCpuExecuteInstruction(OsxCpu *cpu, uint32 instruction);

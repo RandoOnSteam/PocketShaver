@@ -580,7 +580,7 @@ uint32 OsxHeathrowRead(OsxMachine *machine, uint32 offset, int size)
 		return OsxAtaRead(machine, (offset >> 12) & 1, offset & 0xfff, size);
 	if (offset >= 0x60000)
 		return machine->nvram[((offset - 0x60000) >> 4) & (OSXNVRAMSIZE - 1)];
-	if (offset >= 0x13000 && offset < 0x14000)
+	if (offset >= 0x12000 && offset < 0x14000)
 		return 0x04;
 	machine->unknownreads++;
 	if (machine->log && machine->unknownreads < 200)
@@ -624,7 +624,7 @@ void OsxHeathrowWrite(OsxMachine *machine, uint32 offset, int size, uint32 value
 		machine->nvram[((offset - 0x60000) >> 4) & (OSXNVRAMSIZE - 1)] = (uint8)value;
 		return;
 	}
-	if (offset >= 0x13000 && offset < 0x14000)
+	if (offset >= 0x12000 && offset < 0x14000)
 		return;
 	machine->unknownwrites++;
 	if (machine->log && machine->unknownwrites < 200)

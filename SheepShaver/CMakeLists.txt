@@ -143,6 +143,7 @@ set(SS_CORE
 	"${SS_SRC}/osxguest/osxcpu.cpp"
 	"${SS_SRC}/osxguest/osxjit.cpp"
 	"${SS_SRC}/osxguest/osxfpu.cpp"
+	"${SS_SRC}/osxguest/osxvec.cpp"
 	"${SS_SRC}/osxguest/osxtest.cpp"
 	"${SS_SRC}/osxguest/osxbus.cpp"
 	"${SS_SRC}/osxguest/osxata.cpp"
@@ -547,6 +548,7 @@ if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 8 AND ENABLE_OSX_GUEST_TESTS)
 		"${SS_SRC}/../../tools/tests/osxjit.cpp"
 		"${SS_SRC}/osxguest/osxcpu.cpp"
 		"${SS_SRC}/osxguest/osxfpu.cpp"
+		"${SS_SRC}/osxguest/osxvec.cpp"
 		"${SS_SRC}/osxguest/osxjit.cpp")
 	target_include_directories(OsxJitTest PRIVATE
 		${SS_PLATFORM_INC} "${SS_SRC}/include" "${SS_SRC}/osxguest"
@@ -560,6 +562,7 @@ if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 8 AND ENABLE_OSX_GUEST_TESTS)
 		"${SS_SRC}/osxguest/osxpointer.cpp"
 		"${SS_SRC}/osxguest/osxcpu.cpp"
 		"${SS_SRC}/osxguest/osxfpu.cpp"
+		"${SS_SRC}/osxguest/osxvec.cpp"
 		"${SS_SRC}/osxguest/osxjit.cpp")
 	target_include_directories(OsxInputTest PRIVATE
 		${SS_PLATFORM_INC} "${SS_SRC}/include" "${SS_SRC}/osxguest"
