@@ -107,6 +107,7 @@ typedef struct OsxNativeEmitter {
 	uint32 enabled;
 	uint32 vectorvalue;
 	int shuffle;
+	int bytemask;
 	const uint32 (*vectorconstants)[4];
 	uint8 *fills[OSXJITLIMIT * 2][2];
 	uint8 *fillretries[OSXJITLIMIT * 2];
@@ -354,28 +355,27 @@ static void EmitThunks(OsxNativeState *state)
 	Byte(&emitter, 0x50);
 	Byte(&emitter, 0x41); Byte(&emitter, 0x52);
 	Byte(&emitter, 0x41); Byte(&emitter, 0x53);
-	Byte(&emitter, 0x48); Byte(&emitter, 0x83); Byte(&emitter, 0xec); Byte(&emitter, 0x20);
+	Byte(&emitter, 0x48); Byte(&emitter, 0x83); Byte(&emitter, 0xec); Byte(&emitter, 0x30);
+	Byte(&emitter, 0x0f); Byte(&emitter, 0x29); Byte(&emitter, 0x6c); Byte(&emitter, 0x24); Byte(&emitter, 0x20);
 	RegisterOp(&emitter, 0x89, 1, 3, 1);
 	RegisterOp(&emitter, 0x89, 2, 0, 0);
 	RegisterOp(&emitter, 0x89, 8, 9, 0);
 	Byte(&emitter, 0x48); Byte(&emitter, 0xb8);
 	Quad(&emitter, (uint64)(uintptr_t)OsxCpuFillTlb);
 	Byte(&emitter, 0xff); Byte(&emitter, 0xd0);
+	Byte(&emitter, 0x0f); Byte(&emitter, 0x28); Byte(&emitter, 0x6c); Byte(&emitter, 0x24); Byte(&emitter, 0x20);
 	RegisterOp(&emitter, 0x89, 1, 0, 0);
-	Byte(&emitter, 0x48); Byte(&emitter, 0x83); Byte(&emitter, 0xc4); Byte(&emitter, 0x20);
+	Byte(&emitter, 0x48); Byte(&emitter, 0x83); Byte(&emitter, 0xc4); Byte(&emitter, 0x30);
 	Byte(&emitter, 0x41); Byte(&emitter, 0x5b);
 	Byte(&emitter, 0x41); Byte(&emitter, 0x5a);
 	Byte(&emitter, 0x58);
 	Byte(&emitter, 0xc3);
 	state->timethunk = state->executebase + (emitter.cursor - emitter.start);
-	Byte(&emitter, 0x41); Byte(&emitter, 0x53);
 	Byte(&emitter, 0x48); Byte(&emitter, 0x83); Byte(&emitter, 0xec); Byte(&emitter, 0x20);
-	RegisterOp(&emitter, 0x89, 1, 3, 1);
 	Byte(&emitter, 0x48); Byte(&emitter, 0xb8);
-	Quad(&emitter, (uint64)(uintptr_t)OsxCpuTimebase);
+	Quad(&emitter, (uint64)(uintptr_t)OsxCpuHostTicks);
 	Byte(&emitter, 0xff); Byte(&emitter, 0xd0);
 	Byte(&emitter, 0x48); Byte(&emitter, 0x83); Byte(&emitter, 0xc4); Byte(&emitter, 0x20);
-	Byte(&emitter, 0x41); Byte(&emitter, 0x5b);
 	Byte(&emitter, 0xc3);
 	state->thunkbytes = ((uint32)(emitter.cursor - emitter.start) + 63) & ~63u;
 	state->used = state->thunkbytes;
@@ -612,6 +612,7 @@ static void Translate(OsxNativeEmitter *emitter, int store, uint32 limit, int co
 
 static void CallHelper(OsxNativeEmitter *emitter, uint64 function)
 {
+	emitter->bytemask = 0;
 	CpuMemory(emitter, 0x89, 11, OSXJITOFFSET(pc), 0);
 	Byte(emitter, 0x48); Byte(emitter, 0x83); Byte(emitter, 0xec); Byte(emitter, 0x20);
 	Byte(emitter, 0x48); Byte(emitter, 0xb8);
@@ -690,6 +691,7 @@ static void VectorSaturated(OsxNativeEmitter *emitter, int reg)
 
 static void VectorMultiply(OsxNativeEmitter *emitter, uint32 instruction)
 {
+	emitter->bytemask = 0;
 	VectorOperation(emitter, 0x6f, 2, 0);
 	VectorOperation(emitter, 0xd5, 2, 1);
 	VectorOperation(emitter, 0xe5, 0, 1);
@@ -867,16 +869,19 @@ static void VectorQuad(OsxNativeEmitter *emitter, uint32 instruction, int count)
 	ImmediateOp(emitter, 4, 0, 0xfffffff0);
 	Translate(emitter, store, 0xff0, count);
 	if (emitter->shuffle) {
-		VectorConstant(emitter, 1, 0);
+		if (!emitter->bytemask) {
+			emitter->bytemask = 1;
+			VectorConstant(emitter, 5, 0);
+		}
 		if (store) {
 			VectorMemory(emitter, 0, 0, vector);
-			VectorOperation(emitter, 0x3800, 0, 1);
+			VectorOperation(emitter, 0x3800, 0, 5);
 			Byte(emitter, 0xf3); Byte(emitter, 0x41); Byte(emitter, 0x0f); Byte(emitter, 0x7f);
 			Byte(emitter, 0x04); Byte(emitter, 0x00);
 		} else {
 			Byte(emitter, 0xf3); Byte(emitter, 0x41); Byte(emitter, 0x0f); Byte(emitter, 0x6f);
 			Byte(emitter, 0x04); Byte(emitter, 0x00);
-			VectorOperation(emitter, 0x3800, 0, 1);
+			VectorOperation(emitter, 0x3800, 0, 5);
 			VectorMemory(emitter, 1, 0, vector);
 		}
 		return;
@@ -1347,8 +1352,23 @@ static int System(OsxNativeEmitter *emitter, uint32 instruction, uint32 extended
 		number = ((instruction >> 16) & 31) | ((instruction >> 6) & 0x3e0);
 		if ((number != 268 && number != 269) || emitter->deterministic)
 			return 0;
+		emitter->bytemask = 0;
 		Byte(emitter, 0xe8);
 		JumpTo(emitter, emitter->timethunk);
+		CpuMemory(emitter, 0x2b, 0, OSXJITOFFSET(hostbase), 1);
+		RegisterOp(emitter, 0x89, 2, 0, 1);
+		Byte(emitter, 0x48); Byte(emitter, 0xc1); Byte(emitter, 0xea); Byte(emitter, 32);
+		Byte(emitter, 0x48); Byte(emitter, 0x0f); Byte(emitter, 0xaf);
+		Byte(emitter, 0x83 | (2 << 3));
+		Word(emitter, OSXJITOFFSET(hostscale));
+		RegisterOp(emitter, 0x89, 1, 0, 0);
+		Byte(emitter, 0x48); Byte(emitter, 0x0f); Byte(emitter, 0xaf);
+		Byte(emitter, 0x83 | (1 << 3));
+		Word(emitter, OSXJITOFFSET(hostscale));
+		Byte(emitter, 0x48); Byte(emitter, 0xc1); Byte(emitter, 0xe9); Byte(emitter, 32);
+		RegisterOp(emitter, 0x01, 2, 1, 1);
+		CpuMemory(emitter, 0x03, 2, OSXJITOFFSET(tboffset), 1);
+		RegisterOp(emitter, 0x89, 0, 2, 1);
 		if (number == 269) {
 			Byte(emitter, 0x48); Byte(emitter, 0xc1); Byte(emitter, 0xe8); Byte(emitter, 32);
 		}
@@ -1541,6 +1561,7 @@ static void Callout(OsxNativeEmitter *emitter, uint32 instruction, int count)
 	uint8 *resume;
 	uint8 *running;
 	emitter->enabled = 0;
+	emitter->bytemask = 0;
 	CpuMemory(emitter, 0x89, 11, OSXJITOFFSET(pc), 0);
 	RegisterOp(emitter, 0x89, 1, 3, 1);
 	Immediate(emitter, 2, instruction);
@@ -1576,6 +1597,7 @@ static int Emit(OsxNativeEmitter *emitter, uint32 instruction, int count)
 	int target;
 	int base;
 	int index;
+	OsxVectorFunction handler;
 	opcode = instruction >> 26;
 	if (opcode != 4)
 		emitter->vectorvalue = 0;
@@ -1596,12 +1618,15 @@ static int Emit(OsxNativeEmitter *emitter, uint32 instruction, int count)
 		VectorQuad(emitter, instruction, count);
 		return 1;
 	}
-	if (opcode == 4 && OsxCpuVectorHandler(instruction)) {
-		if (VectorNative(emitter, instruction, count))
+	if (opcode == 4) {
+		handler = OsxCpuVectorHandler(instruction);
+		if (handler) {
+			if (VectorNative(emitter, instruction, count))
+				return 1;
+			emitter->vectorvalue = 0;
+			VectorCall(emitter, instruction, handler, count);
 			return 1;
-		emitter->vectorvalue = 0;
-		VectorCall(emitter, instruction, OsxCpuVectorHandler(instruction), count);
-		return 1;
+		}
 	}
 	if (Interpretable(instruction)) {
 		Callout(emitter, instruction, count);
@@ -1933,6 +1958,7 @@ static void Compile(OsxCpu *cpu, OsxNativeState *state, OsxNativeBlock *block, u
 	emitter.enabled = 0;
 	emitter.vectorvalue = 0;
 	emitter.shuffle = state->shuffle;
+	emitter.bytemask = 0;
 	emitter.vectorconstants = state->vectorconstants;
 	emitter.fillcount = 0;
 	emitter.misscount = 0;

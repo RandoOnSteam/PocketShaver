@@ -40,6 +40,7 @@
 SDL_Surface *SDLSetVideoModeQuietly(int width, int height, int depth, Uint32 flags);
 #define OSXDEFAULTRAM (256 * 1024 * 1024)
 #define OSXFRAMERATE 60
+#define OSXPRESENTRUNS 16
 
 typedef struct OsxKeyMapping {
 	int sdlkey;
@@ -679,35 +680,59 @@ static void PresentFrame(OsxSession *session)
 	uint32 *target;
 	uint32 row;
 	uint32 rowbytes;
-	uint32 firstrow;
-	uint32 lastrow;
+	uint32 runstart[OSXPRESENTRUNS];
+	uint32 runend[OSXPRESENTRUNS];
+	int runs;
+	int open;
+	uint32 openrow;
+	int index;
 	machine = session->machine;
 	rowbytes = machine->rowbytes;
-	firstrow = machine->height;
-	lastrow = 0;
+	runs = 0;
+	open = 0;
+	openrow = 0;
 	if (SDL_LockSurface(session->screen) != 0)
 		return;
 	for (row = 0; row < machine->height; row++) {
 		source = machine->vram + row * rowbytes;
 		shadowrow = session->shadow + row * rowbytes;
-		if (memcmp(source, shadowrow, machine->width * 4) == 0)
+		if (memcmp(source, shadowrow, machine->width * 4) == 0) {
+			if (open) {
+				if (runs < OSXPRESENTRUNS) {
+					runstart[runs] = openrow;
+					runend[runs] = row - 1;
+					runs++;
+				} else
+					runend[runs - 1] = row - 1;
+				open = 0;
+			}
 			continue;
+		}
 		memcpy(shadowrow, source, machine->width * 4);
 #if OSXPROFILE
 		session->tmprows++;
 #endif
 		target = (uint32 *)((uint8 *)session->screen->pixels + row * session->screen->pitch);
 		ConvertPixels(target, source, machine->width, session->pixelshuffle);
-		if (row < firstrow)
-			firstrow = row;
-		lastrow = row;
+		if (!open) {
+			openrow = row;
+			open = 1;
+		}
+	}
+	if (open) {
+		if (runs < OSXPRESENTRUNS) {
+			runstart[runs] = openrow;
+			runend[runs] = machine->height - 1;
+			runs++;
+		} else
+			runend[runs - 1] = machine->height - 1;
 	}
 	SDL_UnlockSurface(session->screen);
 #if OSXPROFILE
-	session->tmpframes += firstrow < machine->height;
+	session->tmpframes += runs != 0;
 #endif
-	if (firstrow < machine->height)
-		SDL_UpdateRect(session->screen, 0, firstrow, machine->width, lastrow - firstrow + 1);
+	for (index = 0; index < runs; index++)
+		SDL_UpdateRect(session->screen, 0, runstart[index], machine->width, runend[index] - runstart[index] + 1);
 }
 
 static void HandleEvents(OsxSession *session, void *monitor)
@@ -1184,6 +1209,8 @@ static void RunMachine(OsxSession *session, void *monitor)
 	uint64 eventticks;
 	uint64 waitticks;
 	uint64 cudadeadline;
+	uint64 bmacdeadline;
+	uint64 atadeadline;
 	uint32 milliseconds;
 	uint64 nextstatus;
 	uint64 runstart;
@@ -1224,14 +1251,24 @@ static void RunMachine(OsxSession *session, void *monitor)
 			if (cpu->decdeadline != OSXNEVER && cpu->decdeadline > now && cpu->decdeadline - now < waitticks)
 				waitticks = cpu->decdeadline - now;
 			cudadeadline = OsxCudaNextDeadline(machine);
-			if (OsxBmacNextDeadline(machine) < cudadeadline)
-				cudadeadline = OsxBmacNextDeadline(machine);
+			bmacdeadline = OsxBmacNextDeadline(machine);
+			if (bmacdeadline < cudadeadline)
+				cudadeadline = bmacdeadline;
+			atadeadline = 0;
+			if (machine->ata[0].irqdeadline)
+				atadeadline = machine->ata[0].irqdeadline;
+			if (machine->ata[1].irqdeadline && (atadeadline == 0 || machine->ata[1].irqdeadline < atadeadline))
+				atadeadline = machine->ata[1].irqdeadline;
 			if (cudadeadline <= now)
 				waitticks = 0;
 			else if (cudadeadline - now < waitticks)
 				waitticks = cudadeadline - now;
-			if (machine->ata[0].irqdeadline || machine->ata[1].irqdeadline)
-				waitticks = 0;
+			if (atadeadline != 0) {
+				if (atadeadline <= now)
+					waitticks = 0;
+				else if (atadeadline - now < waitticks)
+					waitticks = atadeadline - now;
+			}
 			milliseconds = (uint32)(waitticks * 1000 / OSXTIMEBASEFREQUENCY);
 			if (cpu->deterministic)
 				cpu->virtualticks += waitticks + 1;

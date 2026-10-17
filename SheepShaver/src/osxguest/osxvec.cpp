@@ -422,18 +422,41 @@ static void ShiftBits(uint32 *result, const uint32 *source, uint32 amount, int l
 
 static void ShiftOctets(uint32 *result, const uint32 *source, uint32 amount, int left)
 {
-	uint8 bytes[16];
-	uint8 shifted[16];
+	uint32 padded[8];
 	uint32 index;
-	UnpackBytes(source, bytes);
-	for (index = 0; index < 16; index++) {
-		shifted[index] = 0;
-		if (left && index + amount < 16)
-			shifted[index] = bytes[index + amount];
-		if (!left && index >= amount)
-			shifted[index] = bytes[index - amount];
+	uint32 word;
+	uint32 shift;
+	word = amount >> 2;
+	shift = (amount & 3) * 8;
+	if (left) {
+		for (index = 0; index < 4; index++)
+			padded[index] = source[index];
+		padded[4] = 0;
+		padded[5] = 0;
+		padded[6] = 0;
+		padded[7] = 0;
+		if (shift == 0) {
+			for (index = 0; index < 4; index++)
+				result[index] = padded[index + word];
+		} else {
+			for (index = 0; index < 4; index++)
+				result[index] = (padded[index + word] << shift) | (padded[index + word + 1] >> (32 - shift));
+		}
+		return;
 	}
-	PackBytes(result, shifted);
+	for (index = 0; index < 4; index++)
+		padded[index + 4] = source[index];
+	padded[0] = 0;
+	padded[1] = 0;
+	padded[2] = 0;
+	padded[3] = 0;
+	if (shift == 0) {
+		for (index = 0; index < 4; index++)
+			result[index] = padded[index - word + 4];
+	} else {
+		for (index = 0; index < 4; index++)
+			result[index] = (padded[index - word + 4] >> shift) | (padded[index - word + 3] << (32 - shift));
+	}
 }
 
 static void CompareVector(OsxCpu *cpu, uint32 *result, const uint32 *left, const uint32 *right, uint32 size, int operation, int record)
@@ -751,15 +774,19 @@ static void MultiplyHigh(OsxCpu *cpu, uint32 *result, const uint32 *a, const uin
 	Unpack(a, 2, first);
 	Unpack(b, 2, second);
 	Unpack(c, 2, third);
-	for (index = 0; index < 8; index++) {
-		if (kind == 34) {
+	if (kind == 34) {
+		for (index = 0; index < 8; index++)
 			r[index] = (uint32)((uint64)first[index] * second[index] + third[index]) & 0xffff;
-			continue;
+	} else if (kind == 33) {
+		for (index = 0; index < 8; index++) {
+			product = (int64)Signed(first[index], 2) * Signed(second[index], 2) + 0x4000;
+			r[index] = SaturateSigned(cpu, (product >> 15) + Signed(third[index], 2), 2);
 		}
-		product = (int64)Signed(first[index], 2) * Signed(second[index], 2);
-		if (kind == 33)
-			product += 0x4000;
-		r[index] = SaturateSigned(cpu, (product >> 15) + Signed(third[index], 2), 2);
+	} else {
+		for (index = 0; index < 8; index++) {
+			product = (int64)Signed(first[index], 2) * Signed(second[index], 2);
+			r[index] = SaturateSigned(cpu, (product >> 15) + Signed(third[index], 2), 2);
+		}
 	}
 	Pack(result, 2, r);
 }
@@ -768,14 +795,16 @@ static void Permute(uint32 *result, const uint32 *a, const uint32 *b, const uint
 {
 	uint8 source[32];
 	uint8 select[16];
-	uint8 bytes[16];
 	uint32 index;
 	UnpackBytes(a, source);
 	UnpackBytes(b, source + 16);
 	UnpackBytes(c, select);
-	for (index = 0; index < 16; index++)
-		bytes[index] = source[select[index] & 31];
-	PackBytes(result, bytes);
+	for (index = 0; index < 4; index++) {
+		result[index] = ((uint32)source[select[index * 4] & 31] << 24)
+			| ((uint32)source[select[index * 4 + 1] & 31] << 16)
+			| ((uint32)source[select[index * 4 + 2] & 31] << 8)
+			| source[select[index * 4 + 3] & 31];
+	}
 }
 
 static void ShiftDouble(uint32 *result, const uint32 *a, const uint32 *b, uint32 shift)
@@ -834,9 +863,14 @@ static void Fill(uint32 *result, uint32 value, uint32 size)
 
 static void Splat(uint32 *result, const uint32 *source, uint32 size, uint32 field)
 {
-	uint32 elements[16];
-	Unpack(source, size, elements);
-	Fill(result, elements[field & (16 / size - 1)], size);
+	uint32 value;
+	if (size == 4)
+		value = source[field & 3];
+	else if (size == 2)
+		value = GetHalf(source, field & 7);
+	else
+		value = GetByte(source, field & 15);
+	Fill(result, value, size);
 }
 
 static int ExecuteVectorX(OsxCpu *cpu, uint32 *result, const uint32 *a, const uint32 *b, uint32 instruction)
@@ -1077,20 +1111,29 @@ static void VectorLogical(OsxCpu *cpu, uint32 instruction)
 	const uint32 *b;
 	uint32 *d;
 	uint32 index;
-	uint32 value;
 	a = VectorA(cpu, instruction);
 	b = VectorB(cpu, instruction);
 	d = VectorD(cpu, instruction);
-	for (index = 0; index < 4; index++) {
-		switch (instruction & 0x7ff) {
-		case 1028: value = a[index] & b[index]; break;
-		case 1092: value = a[index] & ~b[index]; break;
-		case 1156: value = a[index] | b[index]; break;
-		case 1220: value = a[index] ^ b[index]; break;
-		default: value = ~(a[index] | b[index]); break;
-		}
-		d[index] = value;
+	switch (instruction & 0x7ff) {
+	case 1028:
+		for (index = 0; index < 4; index++)
+			d[index] = a[index] & b[index];
+		return;
+	case 1092:
+		for (index = 0; index < 4; index++)
+			d[index] = a[index] & ~b[index];
+		return;
+	case 1156:
+		for (index = 0; index < 4; index++)
+			d[index] = a[index] | b[index];
+		return;
+	case 1220:
+		for (index = 0; index < 4; index++)
+			d[index] = a[index] ^ b[index];
+		return;
 	}
+	for (index = 0; index < 4; index++)
+		d[index] = ~(a[index] | b[index]);
 }
 
 static void VectorModular(OsxCpu *cpu, uint32 instruction)
@@ -1108,10 +1151,11 @@ static void VectorModular(OsxCpu *cpu, uint32 instruction)
 	if (instruction & 0x40)
 		high = 0x80008000u;
 	low = ~high;
-	for (index = 0; index < 4; index++) {
-		if (instruction & 0x400)
+	if (instruction & 0x400) {
+		for (index = 0; index < 4; index++)
 			d[index] = ((a[index] | high) - (b[index] & low)) ^ ((a[index] ^ ~b[index]) & high);
-		else
+	} else {
+		for (index = 0; index < 4; index++)
 			d[index] = ((a[index] & low) + (b[index] & low)) ^ ((a[index] ^ b[index]) & high);
 	}
 }
@@ -1125,10 +1169,11 @@ static void VectorModularWord(OsxCpu *cpu, uint32 instruction)
 	a = VectorA(cpu, instruction);
 	b = VectorB(cpu, instruction);
 	d = VectorD(cpu, instruction);
-	for (index = 0; index < 4; index++) {
-		if (instruction & 0x400)
+	if (instruction & 0x400) {
+		for (index = 0; index < 4; index++)
 			d[index] = a[index] - b[index];
-		else
+	} else {
+		for (index = 0; index < 4; index++)
 			d[index] = a[index] + b[index];
 	}
 }

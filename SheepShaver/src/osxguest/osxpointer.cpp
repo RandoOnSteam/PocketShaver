@@ -83,7 +83,6 @@ void OsxPointerHook(OsxCpu *cpu, void *context, uint32 address)
 	int pressed;
 	int delta;
 	pointer = (OsxPointer *)context;
-	if (pointer->machine->log) fprintf(pointer->machine->log, "TMPPTR tb %llu r1 %08x call %08x r4 %08x r5 %08x r6 %08x mq %d/%d pq %d/%d\n", (unsigned long long)OsxCpuTimebase(cpu), cpu->gpr[1], pointer->callstack, cpu->gpr[4], cpu->gpr[5], cpu->gpr[6], pointer->machine->cuda.mouseread, pointer->machine->cuda.mousewrite, pointer->machine->cuda.pointerread, pointer->machine->cuda.pointerwrite);
 	if (pointer->callstack == cpu->gpr[1] && pointer->callstack != 0) {
 		memcpy(cpu->gpr, pointer->registers, sizeof(pointer->registers));
 		cpu->lr = pointer->lr;
@@ -108,7 +107,6 @@ void OsxPointerHook(OsxCpu *cpu, void *context, uint32 address)
 		cuda->pointerread = (cuda->pointerread + 1) % OSXMOUSEQUEUE;
 	}
 	if (delta) {
-		if (pointer->machine->log) fprintf(pointer->machine->log, "TMPPTR wheel %d address %08x sender %d\n", delta, pointer->wheeladdress, pointer->sender);
 		ScrollWheel(cpu, pointer, delta);
 		return;
 	}

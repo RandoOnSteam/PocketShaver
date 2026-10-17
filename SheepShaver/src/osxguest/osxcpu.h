@@ -261,6 +261,7 @@ void OsxCpuUpdateModes(OsxCpu *cpu);
 void OsxCpuFlushTlb(OsxCpu *cpu);
 void OsxCpuWatch(OsxCpu *cpu, FILE *file, uint32 rowbytes, uint32 left, uint32 top, uint32 right, uint32 bottom);
 uint64 OsxCpuTimebase(OsxCpu *cpu);
+uint64 OsxCpuHostTicks(void);
 void OsxCpuCalibrateTimebase(OsxCpu *cpu);
 uint64 OsxCpuNextDeadline(OsxCpu *cpu);
 uint64 OsxHostNanoseconds(void);
