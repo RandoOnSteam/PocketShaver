@@ -65,6 +65,7 @@ typedef struct OsxKextCandidate {
 typedef struct OsxKextList {
 	OsxKextCandidate *kexts;
 	int count;
+	int safeboot;
 } OsxKextList;
 
 typedef struct OsxHfsVolume {
@@ -111,6 +112,7 @@ typedef struct OsxBootState {
 	uint32 nextfree;
 	uint32 phandle;
 	char rootpath[128];
+	int ignorendrv;
 } OsxBootState;
 
 static uint32 Big32(const uint8 *data)
@@ -751,7 +753,7 @@ static void CollectKexts(OsxHfsVolume *volume, const char *folder, OsxKextList *
 			continue;
 		}
 		PlistString(kext->plist, "CFBundleExecutable", kext->executable, BOOTKEXTNAME);
-		kext->selected = PlistString(kext->plist, "OSBundleRequired", required, BOOTKEXTNAME) && strcmp(required, "Safe Boot") != 0;
+		kext->selected = PlistString(kext->plist, "OSBundleRequired", required, BOOTKEXTNAME) && (list->safeboot || strcmp(required, "Safe Boot") != 0);
 		list->count++;
 		sprintf(path, "%s/PlugIns", kext->path);
 		if (kext->contents)
@@ -791,7 +793,47 @@ static int SelectLibraries(OsxKextList *list, OsxKextCandidate *kext)
 	return changed;
 }
 
-static uint8 *BuildDriverPackage(OsxHfsVolume *volume, uint32 *size)
+static int ContainsBytes(const uint8 *data, uint32 size, const char *pattern)
+{
+	uint32 length;
+	uint32 index;
+	length = (uint32)strlen(pattern);
+	for (index = 0; data != NULL && index + length <= size; index++)
+		if (data[index] == (uint8)pattern[0] && memcmp(data + index, pattern, length) == 0)
+			return 1;
+	return 0;
+}
+
+static void UseBootFramebuffer(OsxKextCandidate *kext)
+{
+	char *found;
+	found = (char *)kext->plist;
+	while ((found = strstr(found, "<string>IONDRVFramebuffer</string>")) != NULL)
+		memcpy(found + 8, "IOBoot", 6);
+}
+
+static uint32 LiteralLength(uint32 length)
+{
+	return length + (length + 7) / 8;
+}
+
+static uint8 *StoreEntry(uint8 *package, uint8 *field, uint32 position, const uint8 *data, uint32 length)
+{
+	uint8 *output;
+	uint32 index;
+	StoreBig32(field, position);
+	StoreBig32(field + 4, LiteralLength(length));
+	StoreBig32(field + 8, length);
+	output = package + position;
+	for (index = 0; index < length; index++) {
+		if ((index & 7) == 0)
+			*output++ = 0xff;
+		*output++ = data[index];
+	}
+	return output;
+}
+
+static uint8 *BuildDriverPackage(OsxHfsVolume *volume, int safeboot, uint32 *size)
 {
 	OsxKextList list;
 	OsxKextCandidate *kext;
@@ -807,6 +849,7 @@ static uint8 *BuildDriverPackage(OsxHfsVolume *volume, uint32 *size)
 	int index;
 	list.kexts = (OsxKextCandidate *)malloc(BOOTMAXKEXTS * sizeof(OsxKextCandidate));
 	list.count = 0;
+	list.safeboot = safeboot;
 	CollectKexts(volume, BOOTEXTENSIONS, &list, 0);
 	do {
 		changed = 0;
@@ -833,7 +876,9 @@ static uint8 *BuildDriverPackage(OsxHfsVolume *volume, uint32 *size)
 				modulesizes[index] = 0;
 			}
 		}
-		total += 32 + kext->plistsize + 1 + modulesizes[index];
+		if (strcmp(kext->identifier, "com.apple.iokit.IONDRVSupport") == 0 && !ContainsBytes(modules[index], modulesizes[index], "IOBootNDRV"))
+			UseBootFramebuffer(kext);
+		total += 32 + LiteralLength(kext->plistsize + 1) + LiteralLength(modulesizes[index]);
 		selected++;
 	}
 	package = NULL;
@@ -852,16 +897,9 @@ static uint8 *BuildDriverPackage(OsxHfsVolume *volume, uint32 *size)
 			kext = &list.kexts[index];
 			if (!kext->selected)
 				continue;
-			StoreBig32(entry, position);
-			StoreBig32(entry + 8, kext->plistsize + 1);
-			memcpy(package + position, kext->plist, kext->plistsize);
-			position += kext->plistsize + 1;
-			if (modules[index]) {
-				StoreBig32(entry + 16, position);
-				StoreBig32(entry + 24, modulesizes[index]);
-				memcpy(package + position, modules[index], modulesizes[index]);
-				position += modulesizes[index];
-			}
+			position = (uint32)(StoreEntry(package, entry, position, kext->plist, kext->plistsize + 1) - package);
+			if (modules[index])
+				position = (uint32)(StoreEntry(package, entry + 16, position, modules[index], modulesizes[index]) - package);
 			entry += 32;
 		}
 		StoreBig32(package + 12, OsxAdler32(package + 16, total - 16));
@@ -1462,6 +1500,8 @@ static OsxTreeNode *BuildTree(OsxBootState *state, OsxTreeNode **memorymap)
 	AddCell(node, "linebytes", machine->rowbytes);
 	AddCell(node, "depth", machine->depth);
 	AddProperty(node, "AAPL,boot-display", "", 0);
+	if (state->ignorendrv)
+		AddProperty(node, "AAPL,iokit-ignore-ndrv", "", 0);
 	AddString(node, "AAPL,unit-string", "12");
 	return root;
 }
@@ -1599,13 +1639,16 @@ int OsxBootLoad(OsxMachine *machine, const char *imagepath, int bootbus, int boo
 		CloseVolume(&volume);
 		return 0;
 	}
-	mkext = ReadFile(&volume, "/System/Library/Extensions.mkext", &mkextsize);
+	state.ignorendrv = ContainsBytes(kernel, kernelsize, "Darwin Kernel Version 1.");
+	mkext = NULL;
+	if (!state.ignorendrv)
+		mkext = ReadFile(&volume, "/System/Library/Extensions.mkext", &mkextsize);
 	if (mkext != NULL && !ThinPowerPC(mkext, &mkextsize)) {
 		free(mkext);
 		mkext = NULL;
 	}
 	if (mkext == NULL)
-		mkext = BuildDriverPackage(&volume, &mkextsize);
+		mkext = BuildDriverPackage(&volume, state.ignorendrv, &mkextsize);
 	if (mkext)
 		mkext = AddOldWorldDrivers(mkext, &mkextsize, imagepath);
 	if (mkext) {

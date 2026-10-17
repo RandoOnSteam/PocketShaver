@@ -74,6 +74,8 @@ typedef struct OsxSession {
 	int powerhooked;
 	uint32 pointeroffset;
 	uint32 absoluteoffset;
+	uint32 wheeloffset;
+	const char *pointerbundle;
 	OsxPointer pointer;
 	uint32 backtraces[16][6];
 	int backtracecount;
@@ -263,9 +265,29 @@ static void NewWorldEpochHook(OsxCpu *cpu, void *context, uint32 address)
 	cpu->nextpc = cpu->lr;
 }
 
+static void RefuseSleepHook(OsxCpu *cpu, void *context, uint32 address)
+{
+	cpu->gpr[3] = 0;
+	cpu->nextpc = cpu->lr;
+}
+
 static void ReturnHook(OsxCpu *cpu, void *context, uint32 address)
 {
 	cpu->nextpc = cpu->lr;
+}
+
+static void AllowStalledClassLookup(OsxMachine *machine)
+{
+	uint8 *code;
+	uint32 address;
+	uint32 index;
+	address = OsxFindKernelSymbol(machine, "_getMetaClassWithName__11OSMetaClassPC8OSSymbol");
+	if (address == 0 || address + 0x100 > machine->ramsize)
+		return;
+	code = machine->ram + address;
+	for (index = 4; index < 0x100 && memcmp(code + index - 4, "\x4e\x80\x00\x20", 4) != 0; index += 4)
+		if ((code[index - 4] >> 2) == 16 && memcmp(code + index, "\x3b\xa0\x00\x00", 4) == 0)
+			memcpy(code + index, "\x60\x00\x00\x00", 4);
 }
 
 static void HookKernelSymbol(OsxMachine *machine, const char *name, OsxHookFunction function)
@@ -447,14 +469,47 @@ static void KprintfHook(OsxCpu *cpu, void *context, uint32 address)
 	}
 }
 
-static int FindPointerSymbols(OsxSession *session, const char *suffix)
+static int FindPointerSymbol(OsxSession *session, const char *name, uint32 *offset)
 {
-	char relative[160];
-	char absolute[160];
-	sprintf(relative, "__ZN11IOHIDSystem25relativePointerEventGatedEiii12UnsignedWide%s", suffix);
-	sprintf(absolute, "__ZN11IOHIDSystem25absolutePointerEventGatedEiP8IOGPointP9IOGBoundsbii12UnsignedWide%s", suffix);
-	return OsxKextSymbolOffset(session->machine, "com.apple.iokit.IOHIDFamily", relative, &session->pointeroffset) &&
-		OsxKextSymbolOffset(session->machine, "com.apple.iokit.IOHIDFamily", absolute, &session->absoluteoffset);
+	if (session->pointerbundle)
+		return OsxKextSymbolOffset(session->machine, session->pointerbundle, name, offset);
+	*offset = OsxFindKernelSymbol(session->machine, name);
+	return *offset != 0;
+}
+
+static int FindPointerSymbols(OsxSession *session)
+{
+	static const char *const bundles[4] = { "com.apple.iokit.IOHIDFamily", "com.apple.iokit.IOHIDFamily", "com.apple.iokit.IOHIDSystem", NULL };
+	static const char *const relatives[4] = {
+		"__ZN11IOHIDSystem25relativePointerEventGatedEiii12UnsignedWide",
+		"__ZN11IOHIDSystem25relativePointerEventGatedEiii12UnsignedWideP8OSObject",
+		"__relativePointerEvent__11IOHIDSystemPB0in2G12UnsignedWide",
+		"__relativePointerEvent__11IOHIDSystemPB0in2G12UnsignedWide"
+	};
+	static const char *const absolutes[4] = {
+		"__ZN11IOHIDSystem25absolutePointerEventGatedEiP8IOGPointP9IOGBoundsbii12UnsignedWide",
+		"__ZN11IOHIDSystem25absolutePointerEventGatedEiP8IOGPointP9IOGBoundsbii12UnsignedWideP8OSObject",
+		"__absolutePointerEvent__11IOHIDSystemPB0iP8IOGPointP9IOGBoundsbiiG12UnsignedWide",
+		"__absolutePointerEvent__11IOHIDSystemPB0iP8IOGPointP9IOGBoundsbiiG12UnsignedWide"
+	};
+	static const char *const wheels[4] = {
+		"__ZN11IOHIDSystem21scrollWheelEventGatedEsss12UnsignedWide",
+		"__ZN11IOHIDSystem21scrollWheelEventGatedEsssllllllm12UnsignedWideP8OSObject",
+		"__scrollWheelEvent__11IOHIDSystemPB0sn2G12UnsignedWide",
+		"__scrollWheelEvent__11IOHIDSystemPB0sn2G12UnsignedWide"
+	};
+	int index;
+	for (index = 0; index < 4; index++) {
+		session->pointerbundle = bundles[index];
+		session->pointer.sender = index == 1;
+		if (FindPointerSymbol(session, relatives[index], &session->pointeroffset) && FindPointerSymbol(session, absolutes[index], &session->absoluteoffset)) {
+			if (!FindPointerSymbol(session, wheels[index], &session->wheeloffset))
+				session->wheeloffset = 0;
+			return 1;
+		}
+	}
+	session->pointeroffset = 0;
+	return 0;
 }
 
 static void InstallPointerHook(OsxSession *session)
@@ -463,28 +518,24 @@ static void InstallPointerHook(OsxSession *session)
 	OsxCpu *cpu;
 	uint32 text;
 	uint32 physical;
-	uint32 wheeloffset;
 	machine = session->machine;
 	cpu = machine->cpu;
 	if (session->pointerhooked || (cpu->msr & OSXMSRPR) || !(cpu->msr & OSXMSRDR))
 		return;
-	if (session->pointeroffset == 0 && !FindPointerSymbols(session, "")) {
-		session->pointer.sender = 1;
-		if (!FindPointerSymbols(session, "P8OSObject")) {
-			session->pointerhooked = -1;
-			return;
-		}
+	if (session->pointeroffset == 0 && !FindPointerSymbols(session)) {
+		session->pointerhooked = -1;
+		return;
 	}
-	if (!OsxKextTextAddress(machine, "com.apple.iokit.IOHIDFamily", &text))
+	text = 0;
+	if (session->pointerbundle && !OsxKextTextAddress(machine, session->pointerbundle, &text))
 		return;
 	if (!OsxCpuTranslate(cpu, text + session->pointeroffset, OSXTLBREAD, 0, &physical))
 		return;
 	session->pointer.machine = machine;
 	session->pointer.absoluteaddress = text + session->absoluteoffset;
 	session->pointer.wheeladdress = 0;
-	if (OsxKextSymbolOffset(machine, "com.apple.iokit.IOHIDFamily", "__ZN11IOHIDSystem21scrollWheelEventGatedEsss12UnsignedWide", &wheeloffset) ||
-		OsxKextSymbolOffset(machine, "com.apple.iokit.IOHIDFamily", "__ZN11IOHIDSystem21scrollWheelEventGatedEsssllllllm12UnsignedWideP8OSObject", &wheeloffset))
-		session->pointer.wheeladdress = text + wheeloffset;
+	if (session->wheeloffset)
+		session->pointer.wheeladdress = text + session->wheeloffset;
 	OsxCpuAddHook(cpu, physical, OsxPointerHook, &session->pointer);
 	machine->cuda.mouseabsolute = 1;
 	session->pointerhooked = 1;
@@ -1213,6 +1264,7 @@ int OsxGuestMain(void)
 		bootargs = "-v";
 	if (!OsxBootLoad(machine, bootimage, bootbus, bootunit, bootargs))
 		return 1;
+	AllowStalledClassLookup(machine);
 	if (OsxFindKernelSymbol(machine, "_conslog_putc"))
 		OsxCpuAddHook(cpu, OsxFindKernelSymbol(machine, "_conslog_putc"), ConsoleHook, &session);
 	if (OsxFindKernelSymbol(machine, "_kmputc"))
@@ -1241,6 +1293,10 @@ int OsxGuestMain(void)
 	memcpy(machine->nvramclassic, machine->nvram, OSXNVRAMSIZE);
 	OsxNvramMakeNewWorld(machine->nvram);
 	HookKernelSymbol(machine, "__ZN16IOPlatformExpert14getBootROMTypeEv", NewWorldEpochHook);
+	HookKernelSymbol(machine, "_getBootROMType__16IOPlatformExpert", NewWorldEpochHook);
+	HookKernelSymbol(machine, "_sleepSystem__14IOPMrootDomain", RefuseSleepHook);
+	HookKernelSymbol(machine, "_handleSleepTimerExpiration__14IOPMrootDomain", ReturnHook);
+	HookKernelSymbol(machine, "_sleepKernel__16IOPlatformExpert", ReturnHook);
 	HookKernelSymbol(machine, "_PE_Determine_Clock_Speeds", ReturnHook);
 	if (machine->pvr == OSXPVRG4 || machine->ata[bootbus].drives[bootunit].atapi)
 		HookKernelSymbol(machine, "_PEGetPlatformEpoch", NewWorldEpochHook);
