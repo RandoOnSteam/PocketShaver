@@ -26,14 +26,16 @@
 #include "osxguest.h"
 #ifdef _WIN32
 #include <mmsystem.h>
+#if defined(_M_X64) || defined(__x86_64__)
+#include <tmmintrin.h>
+#endif
 #pragma comment(lib, "winmm.lib")
 #endif
 #ifdef ENABLE_EMULATOR_MONITOR
 #include "../../../BasiliskII/src/SDL/emulator_monitor.h"
 #endif
 
-#define OSXSLICE 20000
-#define OSXCLOCKINSTRUCTIONS 16384
+#define OSXSLICE 262144
 
 SDL_Surface *SDLSetVideoModeQuietly(int width, int height, int depth, Uint32 flags);
 #define OSXDEFAULTRAM (256 * 1024 * 1024)
@@ -48,6 +50,9 @@ typedef struct OsxSession {
 	OsxMachine *machine;
 	SDL_Surface *screen;
 	uint8 *shadow;
+	int nvramready;
+	int sdlready;
+	int pixelshuffle;
 	FILE *slicelog;
 	FILE *script;
 	FILE *msglog;
@@ -87,6 +92,11 @@ typedef struct OsxSession {
 	uint32 samples[8192];
 	int samplecount;
 	int trapcount;
+#if OSXPROFILE
+	FILE *tmpsamplefile;
+	uint32 tmpframes;
+	uint32 tmprows;
+#endif
 } OsxSession;
 
 int OsxGuestRequested(void)
@@ -409,8 +419,11 @@ static void InstallKextHooks(OsxSession *session)
 	}
 }
 
+static void InstallPowerHook(OsxSession *session);
+
 static void KmodStartHook(OsxCpu *cpu, void *context, uint32 address)
 {
+	InstallPowerHook((OsxSession *)context);
 	InstallKextHooks((OsxSession *)context);
 }
 
@@ -638,6 +651,26 @@ static void MonitorInput(void *context, int operation, int first, int second)
 }
 #endif
 
+static void ConvertPixels(uint32 *target, const uint8 *source, uint32 width, int shuffle)
+{
+	uint32 column;
+	column = 0;
+#if defined(_WIN32) && (defined(_M_X64) || defined(__x86_64__))
+	if (shuffle) {
+		__m128i order;
+		__m128i pixels;
+		order = _mm_setr_epi8(3, 2, 1, -128, 7, 6, 5, -128, 11, 10, 9, -128, 15, 14, 13, -128);
+		for (; column + 4 <= width; column += 4) {
+			pixels = _mm_loadu_si128((const __m128i *)(source + column * 4));
+			pixels = _mm_shuffle_epi8(pixels, order);
+			_mm_storeu_si128((__m128i *)(target + column), pixels);
+		}
+	}
+#endif
+	for (; column < width; column++)
+		target[column] = ((uint32)source[column * 4 + 1] << 16) | ((uint32)source[column * 4 + 2] << 8) | source[column * 4 + 3];
+}
+
 static void PresentFrame(OsxSession *session)
 {
 	OsxMachine *machine;
@@ -645,13 +678,13 @@ static void PresentFrame(OsxSession *session)
 	uint8 *shadowrow;
 	uint32 *target;
 	uint32 row;
-	uint32 column;
-	uint32 pixel;
 	uint32 rowbytes;
-	int changed;
+	uint32 firstrow;
+	uint32 lastrow;
 	machine = session->machine;
 	rowbytes = machine->rowbytes;
-	changed = 0;
+	firstrow = machine->height;
+	lastrow = 0;
 	if (SDL_LockSurface(session->screen) != 0)
 		return;
 	for (row = 0; row < machine->height; row++) {
@@ -660,16 +693,21 @@ static void PresentFrame(OsxSession *session)
 		if (memcmp(source, shadowrow, machine->width * 4) == 0)
 			continue;
 		memcpy(shadowrow, source, machine->width * 4);
+#if OSXPROFILE
+		session->tmprows++;
+#endif
 		target = (uint32 *)((uint8 *)session->screen->pixels + row * session->screen->pitch);
-		for (column = 0; column < machine->width; column++) {
-			pixel = ((uint32)source[column * 4 + 1] << 16) | ((uint32)source[column * 4 + 2] << 8) | source[column * 4 + 3];
-			target[column] = pixel;
-		}
-		changed = 1;
+		ConvertPixels(target, source, machine->width, session->pixelshuffle);
+		if (row < firstrow)
+			firstrow = row;
+		lastrow = row;
 	}
 	SDL_UnlockSurface(session->screen);
-	if (changed)
-		SDL_UpdateRect(session->screen, 0, 0, 0, 0);
+#if OSXPROFILE
+	session->tmpframes += firstrow < machine->height;
+#endif
+	if (firstrow < machine->height)
+		SDL_UpdateRect(session->screen, 0, firstrow, machine->width, lastrow - firstrow + 1);
 }
 
 static void HandleEvents(OsxSession *session, void *monitor)
@@ -680,10 +718,11 @@ static void HandleEvents(OsxSession *session, void *monitor)
 #ifdef ENABLE_EMULATOR_MONITOR
 		if (monitor) {
 			EmulatorMonitorView view;
-			memset(&view, 0, sizeof(view));
 			view.inputfunction = MonitorInput;
 			view.inputcontext = session;
 			view.framebuffer = session->machine->vram;
+			view.palette = NULL;
+			view.window = NULL;
 			view.width = (int)session->machine->width;
 			view.height = (int)session->machine->height;
 			view.depth = 32;
@@ -1092,6 +1131,48 @@ static void LogSlice(FILE *slicelog, OsxCpu *cpu)
 	fprintf(slicelog, "%llu %08x %08x\n", (unsigned long long)cpu->instructions, cpu->pc, hash);
 }
 
+#if OSXPROFILE
+static void TmpDumpForms(FILE *log, OsxCpu *cpu)
+{
+	static const char *const names[3] = { "callout", "dispatch", "sampled" };
+	uint32 *counts;
+	uint32 best;
+	uint32 total;
+	int path;
+	int rank;
+	int index;
+	int chosen;
+	for (path = 0; path < 3; path++) {
+		counts = cpu->tmpform[path];
+		total = 0;
+		for (index = 0; index < 131072; index++)
+			total += counts[index];
+		fprintf(log, "TMPFORMS %s total %u", names[path], total);
+		for (rank = 0; rank < 40; rank++) {
+			best = 0;
+			chosen = -1;
+			for (index = 0; index < 131072; index++)
+				if (counts[index] > best) {
+					best = counts[index];
+					chosen = index;
+				}
+			if (chosen < 0)
+				break;
+			fprintf(log, " %d/%d:%u", chosen >> 11, chosen & 2047, best);
+			counts[chosen] = 0;
+		}
+		fprintf(log, "\n");
+		memset(counts, 0, sizeof(cpu->tmpform[path]));
+	}
+	fprintf(log, "TMPEXCEPTIONS");
+	for (index = 0; index < 64; index++)
+		if (cpu->tmpexception[index])
+			fprintf(log, " %03x:%u", index << 8, cpu->tmpexception[index]);
+	fprintf(log, "\n");
+	memset(cpu->tmpexception, 0, sizeof(cpu->tmpexception));
+}
+#endif
+
 static void RunMachine(OsxSession *session, void *monitor)
 {
 	OsxMachine *machine;
@@ -1099,6 +1180,8 @@ static void RunMachine(OsxSession *session, void *monitor)
 	uint64 now;
 	uint64 nextframe;
 	uint64 frameticks;
+	uint64 nextevent;
+	uint64 eventticks;
 	uint64 waitticks;
 	uint64 cudadeadline;
 	uint32 milliseconds;
@@ -1107,12 +1190,20 @@ static void RunMachine(OsxSession *session, void *monitor)
 	uint64 runtime;
 	uint64 slices;
 	uint64 stoptime;
-	uint64 clockinstructions;
+	uint64 runinstructions;
+	uint64 sliceticks;
+	int32 slicesize;
 	int32 seconds;
+#if OSXPROFILE
+	uint32 tmpword;
+	uint32 tmprecord[3];
+#endif
 	machine = session->machine;
 	cpu = machine->cpu;
 	frameticks = OSXTIMEBASEFREQUENCY / OSXFRAMERATE;
+	eventticks = OSXTIMEBASEFREQUENCY / 500;
 	nextframe = 0;
+	nextevent = 0;
 	nextstatus = OSXTIMEBASEFREQUENCY;
 	runtime = 0;
 	slices = 0;
@@ -1121,11 +1212,15 @@ static void RunMachine(OsxSession *session, void *monitor)
 	if (seconds > 0)
 		stoptime = (uint64)seconds * OSXTIMEBASEFREQUENCY;
 	now = OsxCpuTimebase(cpu);
-	clockinstructions = cpu->instructions;
+	slicesize = 20000;
 	while (!machine->quit) {
 		OsxCpuCheckInterrupts(cpu, now);
 		if (cpu->halted) {
 			waitticks = frameticks;
+			if (nextevent <= now)
+				waitticks = 0;
+			else if (nextevent - now < waitticks)
+				waitticks = nextevent - now;
 			if (cpu->decdeadline != OSXNEVER && cpu->decdeadline > now && cpu->decdeadline - now < waitticks)
 				waitticks = cpu->decdeadline - now;
 			cudadeadline = OsxCudaNextDeadline(machine);
@@ -1145,16 +1240,32 @@ static void RunMachine(OsxSession *session, void *monitor)
 			now = OsxCpuTimebase(cpu);
 		} else {
 			runstart = now;
-			OsxJitRun(cpu, OSXSLICE);
+			runinstructions = cpu->instructions;
+			OsxJitRun(cpu, slicesize);
 			if (session->slicelog)
 				LogSlice(session->slicelog, cpu);
-			if (cpu->halted || cpu->instructions - clockinstructions >= OSXCLOCKINSTRUCTIONS) {
-				now = OsxCpuTimebase(cpu);
-				clockinstructions = cpu->instructions;
+			now = OsxCpuTimebase(cpu);
+			if (!cpu->deterministic && cpu->instructions - runinstructions >= (uint32)slicesize && now > runstart) {
+				sliceticks = (cpu->instructions - runinstructions) * (OSXTIMEBASEFREQUENCY / 4000) / (now - runstart);
+				if (sliceticks < 256)
+					sliceticks = 256;
+				if (sliceticks > OSXSLICE)
+					sliceticks = OSXSLICE;
+				slicesize = (int32)sliceticks;
 			}
 			runtime += now - runstart;
 			if (session->samplecount < 8192)
 				session->samples[session->samplecount++] = cpu->pc | ((cpu->msr >> 14) & 1);
+#if OSXPROFILE
+			if (!cpu->halted && OsxCpuReadVirtual(cpu, cpu->pc, &tmpword))
+				cpu->tmpform[2][OsxCpuTmpFormKey(tmpword)]++;
+			if (session->tmpsamplefile) {
+				tmprecord[0] = cpu->pc;
+				tmprecord[1] = cpu->sr[0] & 0xffffff;
+				tmprecord[2] = ((cpu->msr >> 14) & 1) | ((uint32)cpu->halted << 1) | ((uint32)(OsxCpuTimebase(cpu) / (OSXTIMEBASEFREQUENCY / 1000)) << 2);
+				fwrite(tmprecord, sizeof(tmprecord), 1, session->tmpsamplefile);
+			}
+#endif
 			slices++;
 		}
 		OsxCudaPoll(machine, now);
@@ -1162,10 +1273,13 @@ static void RunMachine(OsxSession *session, void *monitor)
 		OsxAtaPoll(machine, now);
 		OsxAudioPoll(machine, now);
 		RunScript(session, now);
+		if (now >= nextevent) {
+			nextevent = now + eventticks;
+			HandleEvents(session, monitor);
+		}
 		if (now >= nextframe) {
 			nextframe = now + frameticks;
 			PresentFrame(session);
-			HandleEvents(session, monitor);
 		}
 		if (now >= nextstatus) {
 			InstallPointerHook(session);
@@ -1180,6 +1294,14 @@ static void RunMachine(OsxSession *session, void *monitor)
 			now = OsxCpuTimebase(cpu);
 			if (machine->log) {
 				fprintf(machine->log, "status pc %08x lr %08x msr %08x instructions %llu halted %d dec %u ext %u slow %llu exceptions %llu runms %llu slices %llu\n", cpu->pc, cpu->lr, cpu->msr, (unsigned long long)cpu->instructions, cpu->halted, cpu->decrementercount, cpu->externalcount, (unsigned long long)cpu->slowaccesses, (unsigned long long)cpu->exceptions, (unsigned long long)(runtime * 1000 / OSXTIMEBASEFREQUENCY), (unsigned long long)slices);
+#if OSXPROFILE
+				TmpDumpForms(machine->log, cpu);
+				fprintf(machine->log, "TMPRENDER frames %u rows %u\n", session->tmpframes, session->tmprows);
+				session->tmpframes = 0;
+				session->tmprows = 0;
+				if (session->tmpsamplefile)
+					fflush(session->tmpsamplefile);
+#endif
 				fflush(machine->log);
 			}
 		}
@@ -1188,25 +1310,94 @@ static void RunMachine(OsxSession *session, void *monitor)
 	}
 }
 
-int OsxGuestMain(void)
+static uint8 *AllocateMemory(uint32 size)
 {
-	OsxSession session;
+#ifdef _WIN32
+	return (uint8 *)VirtualAlloc(NULL, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+#else
+	return (uint8 *)calloc(1, size);
+#endif
+}
+
+static void ReleaseMemory(uint8 *memory)
+{
+#ifdef _WIN32
+	VirtualFree(memory, 0, MEM_RELEASE);
+#else
+	free(memory);
+#endif
+}
+
+static void DestroySession(OsxSession *session)
+{
+	OsxMachine *machine;
+	int busindex;
+	int unitindex;
+	machine = session->machine;
+	if (machine) {
+		OsxAudioExit(machine);
+		if (machine->cpu) {
+			OsxJitDestroy(machine->cpu);
+			if (machine->cpu->watchfile)
+				fclose(machine->cpu->watchfile);
+			free(machine->cpu);
+		}
+		for (busindex = 0; busindex < OSXATABUSES; busindex++) {
+			for (unitindex = 0; unitindex < 2; unitindex++) {
+				if (machine->ata[busindex].drives[unitindex].file)
+					Sys_close(machine->ata[busindex].drives[unitindex].file);
+			}
+			free(machine->ata[busindex].buffer);
+		}
+		free(machine->ata[0].patches);
+		free(machine->kernelimage);
+		free(machine->mkext);
+		ReleaseMemory(machine->ram);
+		ReleaseMemory(machine->vram);
+		if (machine->log)
+			fclose(machine->log);
+		if (machine->console)
+			fclose(machine->console);
+		free(machine);
+	}
+	if (session->script)
+		fclose(session->script);
+	if (session->slicelog)
+		fclose(session->slicelog);
+	if (session->msglog)
+		fclose(session->msglog);
+	if (session->trace)
+		fclose(session->trace);
+#if OSXPROFILE
+	if (session->tmpsamplefile)
+		fclose(session->tmpsamplefile);
+#endif
+	free(session->shadow);
+	if (session->sdlready)
+		SDL_Quit();
+	if (session->nvramready)
+		XPRAMExit();
+}
+
+static int RunSession(OsxSession *session)
+{
 	OsxMachine *machine;
 	OsxCpu *cpu;
 	const char *bootimage;
 	const char *bootargs;
 	int bootbus;
 	int bootunit;
-	int busindex;
-	int unitindex;
 	FILE *dump;
 	void *monitor;
 	int32 ramsize;
-	memset(&session, 0, sizeof(session));
 	machine = (OsxMachine *)calloc(1, sizeof(OsxMachine));
+	session->machine = machine;
+	if (machine == NULL)
+		return 1;
 	cpu = (OsxCpu *)calloc(1, sizeof(OsxCpu));
-	session.machine = machine;
 	machine->cpu = cpu;
+	if (cpu == NULL)
+		return 1;
 	machine->log = fopen("osxguest.log", "w");
 	machine->console = fopen("osxconsole.log", "w");
 	ramsize = PrefsFindInt32("ramsize");
@@ -1215,8 +1406,8 @@ int OsxGuestMain(void)
 	if (ramsize < 128 * 1024 * 1024)
 		ramsize = OSXDEFAULTRAM;
 	machine->ramsize = (uint32)ramsize & ~0xfffffu;
-	machine->ram = (uint8 *)calloc(1, machine->ramsize);
-	machine->vram = (uint8 *)calloc(1, OSXVRAMSIZE);
+	machine->ram = AllocateMemory(machine->ramsize);
+	machine->vram = AllocateMemory(OSXVRAMSIZE);
 	if (machine->ram == NULL || machine->vram == NULL) {
 		fprintf(stderr, "osx: cannot allocate guest memory\n");
 		return 1;
@@ -1225,12 +1416,12 @@ int OsxGuestMain(void)
 	OsxCpuReset(cpu, OSXPVR, OSXTIMEBASEFREQUENCY);
 	if (PrefsFindInt32("osxdeterministic") > 0) {
 		cpu->deterministic = (uint32)PrefsFindInt32("osxdeterministic");
-		session.slicelog = fopen("osxslices.log", "w");
+		session->slicelog = fopen("osxslices.log", "w");
 	}
 	if (PrefsFindString("osxinputscript")) {
-		session.script = fopen(PrefsFindString("osxinputscript"), "r");
-		if (session.script)
-			NextScriptLine(&session);
+		session->script = fopen(PrefsFindString("osxinputscript"), "r");
+		if (session->script)
+			NextScriptLine(session);
 	}
 	cpu->ram = machine->ram;
 	cpu->ramsize = machine->ramsize;
@@ -1247,6 +1438,7 @@ int OsxGuestMain(void)
 	OsxBmacReset(machine);
 	OsxAudioReset(machine);
 	XPRAMInit(NULL);
+	session->nvramready = 1;
 	memcpy(machine->nvram, XPRAM, OSXNVRAMSIZE);
 	OsxFlashLoad(machine, "osx_nvram.bin");
 	AttachDisks(machine, &bootimage, &bootbus, &bootunit);
@@ -1266,30 +1458,30 @@ int OsxGuestMain(void)
 		return 1;
 	AllowStalledClassLookup(machine);
 	if (OsxFindKernelSymbol(machine, "_conslog_putc"))
-		OsxCpuAddHook(cpu, OsxFindKernelSymbol(machine, "_conslog_putc"), ConsoleHook, &session);
+		OsxCpuAddHook(cpu, OsxFindKernelSymbol(machine, "_conslog_putc"), ConsoleHook, session);
 	if (OsxFindKernelSymbol(machine, "_kmputc"))
-		OsxCpuAddHook(cpu, OsxFindKernelSymbol(machine, "_kmputc"), TerminalHook, &session);
+		OsxCpuAddHook(cpu, OsxFindKernelSymbol(machine, "_kmputc"), TerminalHook, session);
 	if (OsxFindKernelSymbol(machine, "_kprintf"))
-		OsxCpuAddHook(cpu, OsxFindKernelSymbol(machine, "_kprintf"), KprintfHook, &session);
+		OsxCpuAddHook(cpu, OsxFindKernelSymbol(machine, "_kprintf"), KprintfHook, session);
 	if (OsxFindKernelSymbol(machine, "_trap"))
-		OsxCpuAddHook(cpu, OsxFindKernelSymbol(machine, "_trap"), TrapHook, &session);
+		OsxCpuAddHook(cpu, OsxFindKernelSymbol(machine, "_trap"), TrapHook, session);
 	if (PrefsFindString("osxtracestart") && OsxFindKernelSymbol(machine, PrefsFindString("osxtracestart")))
-		OsxCpuAddHook(cpu, OsxFindKernelSymbol(machine, PrefsFindString("osxtracestart")), TraceStartHook, &session);
+		OsxCpuAddHook(cpu, OsxFindKernelSymbol(machine, PrefsFindString("osxtracestart")), TraceStartHook, session);
 	if (PrefsFindString("osxtracestop") && OsxFindKernelSymbol(machine, PrefsFindString("osxtracestop")))
-		OsxCpuAddHook(cpu, OsxFindKernelSymbol(machine, PrefsFindString("osxtracestop")), TraceStopHook, &session);
-	InstallCallHooks(&session);
+		OsxCpuAddHook(cpu, OsxFindKernelSymbol(machine, PrefsFindString("osxtracestop")), TraceStopHook, session);
+	InstallCallHooks(session);
 	if (PrefsFindString("osxlogxml"))
-		OsxCpuAddHook(cpu, (uint32)strtoul(PrefsFindString("osxlogxml"), NULL, 16), XmlHook, &session);
-	ParseKextHooks(&session);
-	if (session.kextcount && OsxFindKernelSymbol(machine, "_kmod_start_or_stop"))
-		OsxCpuAddHook(cpu, OsxFindKernelSymbol(machine, "_kmod_start_or_stop"), KmodStartHook, &session);
-	session.backtracekey = 0xffe10afeu;
+		OsxCpuAddHook(cpu, (uint32)strtoul(PrefsFindString("osxlogxml"), NULL, 16), XmlHook, session);
+	ParseKextHooks(session);
+	if (OsxFindKernelSymbol(machine, "_kmod_start_or_stop"))
+		OsxCpuAddHook(cpu, OsxFindKernelSymbol(machine, "_kmod_start_or_stop"), KmodStartHook, session);
+	session->backtracekey = 0xffe10afeu;
 	if (PrefsFindString("osxbacktracekey"))
-		session.backtracekey = (uint32)strtoul(PrefsFindString("osxbacktracekey"), NULL, 16);
+		session->backtracekey = (uint32)strtoul(PrefsFindString("osxbacktracekey"), NULL, 16);
 	cpu->syscallobserver = SyscallObserver;
-	cpu->syscallcontext = &session;
+	cpu->syscallcontext = session;
 	if (OsxFindKernelSymbol(machine, "_panic"))
-		OsxCpuAddHook(cpu, OsxFindKernelSymbol(machine, "_panic"), PanicHook, &session);
+		OsxCpuAddHook(cpu, OsxFindKernelSymbol(machine, "_panic"), PanicHook, session);
 	memcpy(machine->nvramclassic, machine->nvram, OSXNVRAMSIZE);
 	OsxNvramMakeNewWorld(machine->nvram);
 	HookKernelSymbol(machine, "__ZN16IOPlatformExpert14getBootROMTypeEv", NewWorldEpochHook);
@@ -1316,15 +1508,21 @@ int OsxGuestMain(void)
 		fprintf(stderr, "osx: SDL_Init failed: %s\n", SDL_GetError());
 		return 1;
 	}
+	session->sdlready = 1;
+#if defined(_WIN32) && (defined(_M_X64) || defined(__x86_64__))
+	session->pixelshuffle = IsProcessorFeaturePresent(36) != 0;
+#endif
 	SDL_WM_SetCaption("SheepShaver - Mac OS X", "SheepShaver");
-	session.screen = SDLSetVideoModeQuietly((int)machine->width, (int)machine->height, 32, SDL_SWSURFACE);
-	if (session.screen == NULL) {
+	session->screen = SDLSetVideoModeQuietly((int)machine->width, (int)machine->height, 32, SDL_SWSURFACE);
+	if (session->screen == NULL) {
 		fprintf(stderr, "osx: SDL_SetVideoMode failed: %s\n", SDL_GetError());
 		return 1;
 	}
 	SDL_ShowCursor(SDL_DISABLE);
-	session.shadow = (uint8 *)calloc(1, machine->rowbytes * machine->height);
-	memset(session.shadow, 0xff, machine->rowbytes * machine->height);
+	session->shadow = (uint8 *)malloc(machine->rowbytes * machine->height);
+	if (session->shadow == NULL)
+		return 1;
+	memset(session->shadow, 0xff, machine->rowbytes * machine->height);
 	monitor = NULL;
 #ifdef ENABLE_EMULATOR_MONITOR
 	monitor = new EmulatorMonitor();
@@ -1336,21 +1534,19 @@ int OsxGuestMain(void)
 #ifdef _WIN32
 	timeBeginPeriod(1);
 #endif
-	RunMachine(&session, monitor);
+#if OSXPROFILE
+	session->tmpsamplefile = fopen("osxsamples.bin", "wb");
+#endif
+	RunMachine(session, monitor);
 #ifdef _WIN32
 	timeEndPeriod(1);
 #endif
 	OsxNvramFinishBoot(machine, XPRAM + 0x1378);
 	OsxNvramRestoreOldWorld(machine->nvram, machine->nvramclassic);
 	memcpy(XPRAM, machine->nvram, OSXNVRAMSIZE);
-	XPRAMExit();
 	OsxFlashSave(machine);
-	OsxAudioExit(machine);
-	OsxJitDestroy(cpu);
-	if (machine->log) {
+	if (machine->log)
 		OsxCpuDump(cpu, machine->log);
-		fclose(machine->log);
-	}
 	if (PrefsFindString("osxdump")) {
 		dump = fopen(PrefsFindString("osxdump"), "wb");
 		if (dump) {
@@ -1362,16 +1558,17 @@ int OsxGuestMain(void)
 	if (monitor)
 		delete (EmulatorMonitor *)monitor;
 #endif
-	if (machine->console)
-		fclose(machine->console);
-	for (busindex = 0; busindex < 2; busindex++) {
-		for (unitindex = 0; unitindex < 2; unitindex++) {
-			if (machine->ata[busindex].drives[unitindex].file)
-				Sys_close(machine->ata[busindex].drives[unitindex].file);
-		}
-	}
-	SDL_Quit();
 	if (machine->quit == 2)
 		return 2;
 	return 0;
+}
+
+int OsxGuestMain(void)
+{
+	OsxSession session;
+	int result;
+	memset(&session, 0, sizeof(session));
+	result = RunSession(&session);
+	DestroySession(&session);
+	return result;
 }

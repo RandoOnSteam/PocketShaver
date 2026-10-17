@@ -112,9 +112,13 @@ typedef struct OsxFaultRecord {
 	int instruction;
 } OsxFaultRecord;
 
+#define OSXPROFILE 0
+#define OSXPROFILEJIT 0
+
 typedef struct OsxCpu OsxCpu;
 
 typedef void (*OsxHookFunction)(OsxCpu *cpu, void *context, uint32 address);
+typedef void (*OsxVectorFunction)(OsxCpu *cpu, uint32 instruction);
 typedef void (*OsxSyscallFunction)(OsxCpu *cpu, void *context);
 typedef uint32 (*OsxBusReadFunction)(void *context, uint32 address, int size);
 typedef void (*OsxBusWriteFunction)(void *context, uint32 address, int size, uint32 value);
@@ -139,6 +143,12 @@ struct OsxCpu {
 	uint32 fpscr;
 	uint32 vr[32][4];
 	uint32 vscr;
+	uint32 jitscratch;
+	int jitflush;
+#if OSXPROFILE
+	uint32 tmpform[3][131072];
+	uint32 tmpexception[64];
+#endif
 	uint32 vrsave;
 	uint32 msscr[2];
 	int altivec;
@@ -227,8 +237,16 @@ void OsxCpuReset(OsxCpu *cpu, uint32 pvr, uint64 tbfrequency);
 void OsxCpuSetModel(OsxCpu *cpu, uint32 pvr);
 int OsxCpuReadData(OsxCpu *cpu, uint32 address, int size, uint32 *value);
 int OsxCpuWriteData(OsxCpu *cpu, uint32 address, int size, uint32 value);
+int OsxCpuReadQuad(OsxCpu *cpu, uint32 address, uint32 *words);
+#if OSXPROFILE
+uint32 OsxCpuTmpFormKey(uint32 instruction);
+#endif
+uint64 OsxCpuSingleToDouble(uint32 word);
+uint32 OsxCpuDoubleToSingle(uint64 bits);
+int OsxCpuWriteQuad(OsxCpu *cpu, uint32 address, const uint32 *words);
 void OsxCpuExecuteVector(OsxCpu *cpu, uint32 instruction);
 int OsxCpuExecuteVectorMemory(OsxCpu *cpu, uint32 instruction, uint32 extended, uint32 address);
+OsxVectorFunction OsxCpuVectorHandler(uint32 instruction);
 void OsxCpuRun(OsxCpu *cpu, int32 count);
 int OsxCpuFetchPage(OsxCpu *cpu);
 void OsxCpuExecuteInstruction(OsxCpu *cpu, uint32 instruction);
@@ -236,7 +254,7 @@ int OsxCpuExecuteInline(OsxCpu *cpu, uint32 instruction);
 int OsxJitCreate(OsxCpu *cpu);
 void OsxJitDestroy(OsxCpu *cpu);
 void OsxJitRun(OsxCpu *cpu, int32 count);
-void OsxJitInvalidate(OsxCpu *cpu, uint32 address, uint32 length);
+int OsxJitInvalidate(OsxCpu *cpu, uint32 address, uint32 length);
 void OsxCpuCheckInterrupts(OsxCpu *cpu, uint64 now);
 void OsxCpuRaiseException(OsxCpu *cpu, uint32 vector, uint32 srr1bits, uint32 srr0);
 void OsxCpuUpdateModes(OsxCpu *cpu);

@@ -270,16 +270,14 @@ void OsxNvramFinishBoot(OsxMachine *machine, const uint8 *startup)
 void OsxFlashLoad(OsxMachine *machine, const char *path)
 {
 	FILE *file;
-	memset(machine->flash, 0, OSXFLASHSIZE);
 	strncpy(machine->nvrampath, path, sizeof(machine->nvrampath) - 1);
 	machine->flashmode = FLASHREADARRAY;
 	machine->flashdirty = 0;
 	file = fopen(path, "rb");
-	if (file == NULL)
-		return;
-	if (fread(machine->flash, 1, OSXFLASHSIZE, file) != OSXFLASHSIZE)
+	if (file == NULL || fread(machine->flash, 1, OSXFLASHSIZE, file) != OSXFLASHSIZE)
 		memset(machine->flash, 0, OSXFLASHSIZE);
-	fclose(file);
+	if (file)
+		fclose(file);
 }
 
 void OsxFlashSave(OsxMachine *machine)

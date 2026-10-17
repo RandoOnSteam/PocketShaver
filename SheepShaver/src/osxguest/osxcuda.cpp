@@ -733,9 +733,16 @@ void OsxCudaWheel(OsxMachine *machine, int delta)
 	OsxCuda *cuda;
 	OsxMouseEvent *event;
 	int next;
+	int previous;
 	cuda = &machine->cuda;
 	if (!cuda->mouseabsolute)
 		return;
+	previous = (cuda->mousewrite + OSXMOUSEQUEUE - 1) % OSXMOUSEQUEUE;
+	if (cuda->mouseread != cuda->mousewrite && cuda->mousequeue[previous].wheel &&
+		(cuda->mousequeue[previous].wheel > 0) == (delta > 0)) {
+		cuda->mousequeue[previous].wheel += delta;
+		return;
+	}
 	next = (cuda->mousewrite + 1) % OSXMOUSEQUEUE;
 	if (next == cuda->mouseread)
 		return;

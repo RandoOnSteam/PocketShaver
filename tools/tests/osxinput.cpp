@@ -226,6 +226,9 @@ static void TestAbsolute(OsxInputTest *test, OsxMachine *machine)
 	OsxPointerHook(cpu, &pointer, 0x2000);
 	Check(test, cpu->gpr[4] == 0 && machine->cuda.pointerread == machine->cuda.pointerwrite, "middle button release");
 	OsxPointerHook(cpu, &pointer, 0x2000);
+	cpu->nextpc = 0x2004;
+	OsxPointerHook(cpu, &pointer, 0x2000);
+	Check(test, cpu->nextpc == 0x4000 && pointer.callstack == 0, "consumed packet does not replay pointer event");
 	pointer.wheeladdress = 0x3800;
 	OsxCudaWheel(machine, 1);
 	OsxCudaWheel(machine, -1);

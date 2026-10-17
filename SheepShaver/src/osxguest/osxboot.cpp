@@ -636,7 +636,8 @@ static int LookupPath(OsxHfsVolume *volume, const char *path, uint8 *record)
 	const char *cursor;
 	parent = HFSROOTFOLDER;
 	cursor = path;
-	memset(record, 0, sizeof(record));
+	record[0] = 0;
+	record[1] = 0;
 	while (*cursor) {
 		while (*cursor == '/')
 			cursor++;
@@ -737,7 +738,7 @@ static void CollectKexts(OsxHfsVolume *volume, const char *folder, OsxKextList *
 	count = ListKextFolders(volume, Big32(record + 8), names, BOOTMAXKEXTS);
 	for (index = 0; index < count && list->count < BOOTMAXKEXTS; index++) {
 		kext = &list->kexts[list->count];
-		memset(kext, 0, sizeof(*kext));
+		kext->executable[0] = 0;
 		if (strlen(folder) + strlen(names + index * BOOTKEXTNAME) + 32 >= BOOTKEXTPATH)
 			continue;
 		sprintf(kext->path, "%s/%s", folder, names + index * BOOTKEXTNAME);
@@ -921,7 +922,6 @@ static void AddRange(OsxBootState *state, const char *name, uint32 address, uint
 	if (state->rangecount >= BOOTMAXRANGES)
 		return;
 	range = &state->ranges[state->rangecount++];
-	memset(range->name, 0, sizeof(range->name));
 	strncpy(range->name, name, TREENAMELENGTH - 1);
 	range->address = address;
 	range->length = length;
@@ -971,8 +971,8 @@ static int LoadKernel(OsxBootState *state, const uint8 *image, uint32 size)
 		command = Big32(image + offset);
 		commandsize = Big32(image + offset + 4);
 		if (command == 1) {
-			memset(segment, 0, sizeof(segment));
 			memcpy(segment, image + offset + 8, 16);
+			segment[16] = 0;
 			vmaddr = Big32(image + offset + 24);
 			vmsize = Big32(image + offset + 28);
 			fileoffset = Big32(image + offset + 32);
@@ -1016,6 +1016,22 @@ static int LoadKernel(OsxBootState *state, const uint8 *image, uint32 size)
 		memcpy(target + 24, image + symoffset, symcount * 12);
 		memcpy(target + 24 + symcount * 12, image + stroffset, strsize);
 		AddRange(state, "Kernel-__SYMTAB", address, total);
+		machine->kernelsize = 52 + symcount * 12 + strsize;
+		machine->kernelimage = (uint8 *)malloc(machine->kernelsize);
+		if (machine->kernelimage == NULL)
+			return 0;
+		target = machine->kernelimage;
+		memcpy(target, image, 28);
+		StoreBig32(target + 16, 1);
+		StoreBig32(target + 20, 24);
+		StoreBig32(target + 28, 2);
+		StoreBig32(target + 32, 24);
+		StoreBig32(target + 36, 52);
+		StoreBig32(target + 40, symcount);
+		StoreBig32(target + 44, 52 + symcount * 12);
+		StoreBig32(target + 48, strsize);
+		memcpy(target + 52, image + symoffset, symcount * 12);
+		memcpy(target + 52 + symcount * 12, image + stroffset, strsize);
 	}
 	return machine->kernelentry != 0;
 }
@@ -1636,6 +1652,7 @@ int OsxBootLoad(OsxMachine *machine, const char *imagepath, int bootbus, int boo
 	kernel = ReadFile(&volume, "/mach_kernel", &kernelsize);
 	if (kernel == NULL || !ThinPowerPC(kernel, &kernelsize) || !LoadKernel(&state, kernel, kernelsize)) {
 		fprintf(stderr, "osx: cannot load /mach_kernel\n");
+		free(kernel);
 		CloseVolume(&volume);
 		return 0;
 	}
@@ -1692,7 +1709,6 @@ int OsxBootLoad(OsxMachine *machine, const char *imagepath, int bootbus, int boo
 		for (index = 0; index < state.rangecount; index++)
 			fprintf(machine->log, "  %-24s %08x %08x\n", state.ranges[index].name, state.ranges[index].address, state.ranges[index].length);
 	}
-	machine->kernelimage = kernel;
-	machine->kernelsize = kernelsize;
+	free(kernel);
 	return 1;
 }

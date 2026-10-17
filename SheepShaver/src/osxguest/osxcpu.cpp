@@ -312,9 +312,29 @@ void OsxCpuReset(OsxCpu *cpu, uint32 pvr, uint64 tbfrequency)
 	OsxCpuUpdateModes(cpu);
 }
 
+#if OSXPROFILE
+uint32 OsxCpuTmpFormKey(uint32 instruction)
+{
+	uint32 opcode;
+	uint32 sub;
+	opcode = instruction >> 26;
+	sub = 0;
+	if (opcode == 4 && (instruction & 0x3f) >= 32)
+		sub = instruction & 0x3f;
+	else if (opcode == 4)
+		sub = instruction & 0x7ff;
+	else if (opcode == 19 || opcode == 31 || opcode == 59 || opcode == 63)
+		sub = (instruction >> 1) & 0x3ff;
+	return opcode * 2048 + sub;
+}
+#endif
+
 void OsxCpuRaiseException(OsxCpu *cpu, uint32 vector, uint32 srr1bits, uint32 srr0)
 {
 	uint32 newmsr;
+#if OSXPROFILE
+	cpu->tmpexception[(vector >> 8) & 63]++;
+#endif
 	cpu->exceptions++;
 	cpu->srr0 = srr0;
 	cpu->srr1 = (cpu->msr & OSXMSRSAVED) | srr1bits;
@@ -740,6 +760,44 @@ int OsxCpuWriteData(OsxCpu *cpu, uint32 address, int size, uint32 value)
 	return Write8(cpu, address, value);
 }
 
+int OsxCpuReadQuad(OsxCpu *cpu, uint32 address, uint32 *words)
+{
+	uint8 *host;
+	uint32 values[4];
+	int index;
+	host = ReadHost(cpu, address, 0xff0);
+	if (host) {
+		words[0] = LoadHost32(host);
+		words[1] = LoadHost32(host + 4);
+		words[2] = LoadHost32(host + 8);
+		words[3] = LoadHost32(host + 12);
+		return 1;
+	}
+	for (index = 0; index < 4; index++)
+		if (!Read32(cpu, address + index * 4, &values[index]))
+			return 0;
+	for (index = 0; index < 4; index++)
+		words[index] = values[index];
+	return 1;
+}
+
+int OsxCpuWriteQuad(OsxCpu *cpu, uint32 address, const uint32 *words)
+{
+	uint8 *host;
+	int index;
+	host = WriteHost(cpu, address, 0xff0);
+	if (host) {
+		StoreHost32(host, words[0]);
+		StoreHost32(host + 4, words[1]);
+		StoreHost32(host + 8, words[2]);
+		StoreHost32(host + 12, words[3]);
+		return 1;
+	}
+	for (index = 0; index < 4; index++)
+		if (!Write32(cpu, address + index * 4, words[index]))
+			return 0;
+	return 1;
+}
 
 static int Read64(OsxCpu *cpu, uint32 address, uint64 *value)
 {
@@ -1184,14 +1242,19 @@ static void WriteMsr(OsxCpu *cpu, uint32 value)
 	uint32 changed;
 	changed = cpu->msr ^ value;
 	cpu->msr = value;
-	if (changed & (OSXMSRPR | OSXMSRIR | OSXMSRDR))
+	if (changed & (OSXMSRPR | OSXMSRIR | OSXMSRDR)) {
 		OsxCpuUpdateModes(cpu);
+		cpu->jitflush = 1;
+	}
 	if ((value & OSXMSRPOW) && (cpu->hid0 & (OSXHID0DOZE | OSXHID0NAP | OSXHID0SLEEP))) {
 		cpu->halted = 1;
 		cpu->slice = 0;
+		cpu->jitflush = 1;
 	}
-	if ((changed & OSXMSREE) && (value & OSXMSREE) && (cpu->externalline || cpu->decpending))
+	if ((changed & OSXMSREE) && (value & OSXMSREE) && (cpu->externalline || cpu->decpending)) {
 		cpu->slice = 0;
+		cpu->jitflush = 1;
+	}
 }
 
 static void StoreString(OsxCpu *cpu, uint32 address, int first, uint32 count)
@@ -1224,11 +1287,13 @@ static void LoadString(OsxCpu *cpu, uint32 address, int first, uint32 count)
 	reg = first;
 	shift = 24;
 	used = 0;
-	memset(values, 0, sizeof(values));
 	for (index = 0; index < count; index++) {
 		if (!Read8(cpu, address + index, &byte))
 			return;
-		values[used] |= byte << shift;
+		if (shift == 24)
+			values[used] = byte << 24;
+		else
+			values[used] |= byte << shift;
 		if (shift == 0) {
 			shift = 24;
 			used++;
@@ -1310,6 +1375,16 @@ static uint32 DoubleToSingle(uint64 bits)
 		adjusted++;
 	}
 	return ((uint32)(bits >> 32) & 0x80000000u) | (uint32)((fraction >> 29) & 0x7fffff);
+}
+
+uint64 OsxCpuSingleToDouble(uint32 word)
+{
+	return SingleToDouble(word);
+}
+
+uint32 OsxCpuDoubleToSingle(uint64 bits)
+{
+	return DoubleToSingle(bits);
 }
 
 static void ExecuteLoadStore(OsxCpu *cpu, uint32 instruction, uint32 opcode, uint32 address, int update)
@@ -1709,12 +1784,16 @@ static void ExecuteGroup31(OsxCpu *cpu, uint32 instruction)
 			return;
 		cpu->sr[ra & 15] = source;
 		cpu->fetchtag = 0;
+		if ((uint32)(ra & 15) == cpu->pc >> 28)
+			cpu->jitflush = 1;
 		return;
 	case 242:
 		if (!RequireSupervisor(cpu))
 			return;
 		cpu->sr[operand >> 28] = source;
 		cpu->fetchtag = 0;
+		if (operand >> 28 == cpu->pc >> 28)
+			cpu->jitflush = 1;
 		return;
 	case 306:
 		if (!RequireSupervisor(cpu))
@@ -1738,8 +1817,8 @@ static void ExecuteGroup31(OsxCpu *cpu, uint32 instruction)
 		return;
 	case 982:
 		cpu->fetchtag = 0;
-		if (cpu->nativejit && OsxCpuTranslate(cpu, address, OSXTLBREAD, 1, &value))
-			OsxJitInvalidate(cpu, value & ~31u, 32);
+		if (cpu->nativejit && OsxCpuTranslate(cpu, address, OSXTLBREAD, 1, &value) && OsxJitInvalidate(cpu, value & ~31u, 32))
+			cpu->jitflush = 1;
 		return;
 	case 1014:
 		ZeroCacheBlock(cpu, address);
@@ -1912,6 +1991,45 @@ static void ExecuteGroup31(OsxCpu *cpu, uint32 instruction)
 
 static void Execute(OsxCpu *cpu, uint32 instruction);
 
+static void ExecuteVectorQuad(OsxCpu *cpu, uint32 instruction)
+{
+	uint32 *vector;
+	uint32 address;
+	uint8 *host;
+	int ra;
+	ra = (instruction >> 16) & 31;
+	address = cpu->gpr[(instruction >> 11) & 31];
+	if (ra)
+		address += cpu->gpr[ra];
+	if (!cpu->altivec || !(cpu->msr & OSXMSRVEC)) {
+		OsxCpuExecuteVectorMemory(cpu, instruction, (instruction >> 1) & 0x3ff, address);
+		return;
+	}
+	address &= ~15u;
+	vector = cpu->vr[(instruction >> 21) & 31];
+	if (instruction & 0x100) {
+		host = WriteHost(cpu, address, 0xff0);
+		if (host) {
+			StoreHost32(host, vector[0]);
+			StoreHost32(host + 4, vector[1]);
+			StoreHost32(host + 8, vector[2]);
+			StoreHost32(host + 12, vector[3]);
+			return;
+		}
+		OsxCpuWriteQuad(cpu, address, vector);
+		return;
+	}
+	host = ReadHost(cpu, address, 0xff0);
+	if (host) {
+		vector[0] = LoadHost32(host);
+		vector[1] = LoadHost32(host + 4);
+		vector[2] = LoadHost32(host + 8);
+		vector[3] = LoadHost32(host + 12);
+		return;
+	}
+	OsxCpuReadQuad(cpu, address, vector);
+}
+
 static void ExecuteHook(OsxCpu *cpu, uint32 instruction)
 {
 	uint32 index;
@@ -2060,6 +2178,10 @@ static void Execute(OsxCpu *cpu, uint32 instruction)
 		OsxCpuExecuteVector(cpu, instruction);
 		return;
 	case 31:
+		if ((instruction & 0x7fe) == 0xce || (instruction & 0x7fe) == 0x1ce) {
+			ExecuteVectorQuad(cpu, instruction);
+			return;
+		}
 		ExecuteGroup31(cpu, instruction);
 		return;
 	case 32: case 34: case 36: case 38: case 40: case 42: case 44: case 48: case 50: case 52: case 54:
@@ -2088,17 +2210,24 @@ int OsxCpuExecuteInline(OsxCpu *cpu, uint32 instruction)
 {
 	uint32 expected;
 	expected = cpu->pc + 4;
+#if OSXPROFILE
+	cpu->tmpform[0][OsxCpuTmpFormKey(instruction)]++;
+#endif
 	cpu->nextpc = expected;
+	cpu->jitflush = 0;
 	Execute(cpu, instruction);
-	if (cpu->nextpc == expected)
+	if (cpu->nextpc == expected && !cpu->jitflush)
 		return 0;
+	cpu->jitflush = 0;
 	cpu->pc = cpu->nextpc;
-	cpu->instructions++;
 	return 1;
 }
 
 void OsxCpuExecuteInstruction(OsxCpu *cpu, uint32 instruction)
 {
+#if OSXPROFILE
+	cpu->tmpform[1][OsxCpuTmpFormKey(instruction)]++;
+#endif
 	cpu->nextpc = cpu->pc + 4;
 	Execute(cpu, instruction);
 	cpu->pc = cpu->nextpc;

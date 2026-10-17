@@ -105,6 +105,8 @@ static void Compare(OsxJitTest *test, const char *name, uint32 instruction)
 	native = test->native;
 	matches = memcmp(reference->gpr, native->gpr, sizeof(reference->gpr)) == 0;
 	matches &= memcmp(reference->fpr, native->fpr, sizeof(reference->fpr)) == 0;
+	matches &= memcmp(reference->vr, native->vr, sizeof(reference->vr)) == 0;
+	matches &= reference->vscr == native->vscr;
 	matches &= reference->pc == native->pc && reference->nextpc == native->nextpc;
 	matches &= reference->cr == native->cr && reference->xer == native->xer;
 	matches &= reference->lr == native->lr && reference->ctr == native->ctr;
@@ -221,6 +223,137 @@ static void MemoryInstructions(OsxJitTest *test)
 	}
 }
 
+static uint64 FloatBits(OsxJitTest *test)
+{
+	static const uint64 specials[] = {
+		0, 0x8000000000000000ULL, 0x7ff0000000000000ULL, 0xfff0000000000000ULL, 0x7ff8000000000000ULL,
+		0x7ff4000000000001ULL, 0x0000000000000001ULL, 0x000fffffffffffffULL, 0x3ff0000000000000ULL,
+		0x3810000000000000ULL, 0x3800000000000000ULL, 0x36a0000000000000ULL, 0x47efffffe0000000ULL,
+		0x47f0000000000000ULL, 0xc7efffffffffffffULL, 0x3fd5555555555555ULL
+	};
+	if (Random(test) & 1)
+		return specials[Random(test) % (sizeof(specials) / sizeof(specials[0]))];
+	return ((uint64)Random(test) << 32) | Random(test);
+}
+
+static void FloatVectorMemory(OsxJitTest *test)
+{
+	static const uint32 indexed[] = {535, 567, 599, 631, 663, 695, 727, 759, 103, 231, 359, 487};
+	OsxCpu *cpu;
+	uint32 instruction;
+	uint32 address;
+	uint32 opcode;
+	uint32 base;
+	uint32 target;
+	uint32 extended;
+	uint32 word;
+	uint64 bits;
+	int iteration;
+	int index;
+	int kind;
+	int reg;
+	for (iteration = 0; iteration < 60000; iteration++) {
+		Reset(test);
+		base = 1 + Random(test) % 31;
+		target = Random(test) % 32;
+		address = TESTDATA + Random(test) % TESTBYTES;
+		if ((iteration & 7) == 0)
+			address = TESTDATA + 4096 - 4 * (Random(test) % 4);
+		if (iteration % 3 == 0) {
+			extended = indexed[Random(test) % 12];
+			instruction = (31u << 26) | (extended << 1) | (target << 21) | (base << 16) | (31u << 11);
+		} else {
+			opcode = 48 + Random(test) % 8;
+			instruction = (opcode << 26) | (target << 21) | (base << 16) | (Random(test) & 0x3c);
+		}
+		for (reg = 0; reg < 32; reg++) {
+			bits = FloatBits(test);
+			test->reference->fpr[reg].bits = bits;
+			test->native->fpr[reg].bits = bits;
+			for (word = 0; word < 4; word++) {
+				test->reference->vr[reg][word] = Random(test);
+				test->native->vr[reg][word] = test->reference->vr[reg][word];
+			}
+		}
+		for (word = 0; word < TESTBYTES; word += 4) {
+			bits = FloatBits(test);
+			test->reference->ram[TESTDATA + word] = (uint8)(bits >> 56);
+			test->reference->ram[TESTDATA + word + 1] = (uint8)(bits >> 48);
+			test->reference->ram[TESTDATA + word + 2] = (uint8)(bits >> 40);
+			test->reference->ram[TESTDATA + word + 3] = (uint8)(bits >> 32);
+		}
+		memcpy(test->native->ram + TESTDATA, test->reference->ram + TESTDATA, TESTBYTES);
+		for (index = 0; index < 2; index++) {
+			if (index == 0)
+				cpu = test->reference;
+			else
+				cpu = test->native;
+			cpu->altivec = 1;
+			cpu->msr = OSXMSRFP | OSXMSRVEC;
+			if ((iteration % 17) == 0)
+				cpu->msr = OSXMSRVEC;
+			if ((iteration % 19) == 0)
+				cpu->msr = OSXMSRFP;
+			cpu->gpr[base] = address;
+			cpu->gpr[31] = 0;
+			if ((iteration & 3) != 0) {
+				for (kind = 0; kind < 2; kind++) {
+					cpu->tlb[OSXMODEREAL][kind][(address >> 12) & OSXTLBMASK].page = address & 0xfffff000;
+					cpu->tlb[OSXMODEREAL][kind][(address >> 12) & OSXTLBMASK].segment = 0;
+					cpu->tlb[OSXMODEREAL][kind][(address >> 12) & OSXTLBMASK].host = cpu->ram + (address & 0xfffff000);
+				}
+			}
+			OsxCpuUpdateModes(cpu);
+		}
+		Run(test, instruction, 1, "float/vector memory");
+	}
+}
+
+static void VectorInstructions(OsxJitTest *test)
+{
+	OsxCpu *cpu;
+	uint32 instruction;
+	uint32 kind;
+	uint32 word;
+	uint32 vscr;
+	uint64 bits;
+	int iteration;
+	int index;
+	int reg;
+	for (iteration = 0; iteration < 120000; iteration++) {
+		Reset(test);
+		kind = Random(test) & 0x7ff;
+		if (iteration & 1)
+			kind = 32 + Random(test) % 16;
+		instruction = (4u << 26) | ((Random(test) & 31) << 21) | ((Random(test) & 31) << 16) | ((Random(test) & 31) << 11) | kind;
+		if (kind < 64 && kind >= 32)
+			instruction |= (Random(test) & 31) << 6;
+		vscr = Random(test) & 0x00010001u;
+		for (reg = 0; reg < 32; reg++) {
+			for (word = 0; word < 4; word += 2) {
+				bits = FloatBits(test);
+				test->reference->vr[reg][word] = (uint32)(bits >> 32);
+				test->reference->vr[reg][word + 1] = Random(test);
+				test->native->vr[reg][word] = test->reference->vr[reg][word];
+				test->native->vr[reg][word + 1] = test->reference->vr[reg][word + 1];
+			}
+		}
+		for (index = 0; index < 2; index++) {
+			if (index == 0)
+				cpu = test->reference;
+			else
+				cpu = test->native;
+			cpu->altivec = 1;
+			cpu->vscr = vscr;
+			cpu->msr = OSXMSRFP | OSXMSRVEC;
+			if ((iteration % 23) == 0)
+				cpu->msr = OSXMSRFP;
+			OsxCpuUpdateModes(cpu);
+		}
+		Run(test, instruction, 1, "vector");
+	}
+}
+
 static void ExtendedMemory(OsxJitTest *test)
 {
 	OsxCpu *cpu;
@@ -317,6 +450,48 @@ static void MachineState(OsxJitTest *test)
 		OsxCpuRun(test->reference, 2);
 		OsxJitRun(test->native, 2);
 		Compare(test, "machine state", instruction);
+	}
+}
+
+static void InlineStops(OsxJitTest *test)
+{
+	OsxCpu *cpu;
+	uint32 instruction;
+	int scenario;
+	int prefix;
+	int index;
+	int step;
+	instruction = (31u << 26) | (5u << 21) | (146u << 1);
+	for (scenario = 0; scenario < 3; scenario++) {
+		for (prefix = 0; prefix < 8; prefix++) {
+			Reset(test);
+			for (index = 0; index < 2; index++) {
+				if (index == 0)
+					cpu = test->reference;
+				else
+					cpu = test->native;
+				cpu->gpr[5] = OSXMSREE;
+				if (scenario == 0) {
+					cpu->gpr[5] = OSXMSRPOW;
+					cpu->hid0 = OSXHID0NAP;
+				} else {
+					cpu->gpr[5] |= OSXMSRDR;
+					if (scenario == 1)
+						cpu->externalline = 1;
+					else
+						cpu->decpending = 1;
+				}
+				for (step = 0; step < prefix; step++)
+					Put(cpu, TESTENTRY + (uint32)step * 4, 0x60000000);
+				Put(cpu, TESTENTRY + (uint32)prefix * 4, instruction);
+				Put(cpu, TESTENTRY + (uint32)(prefix + 1) * 4, 0x38c60001);
+				Put(cpu, TESTENTRY + (uint32)(prefix + 2) * 4, 0);
+			}
+			OsxJitInvalidate(test->native, TESTENTRY, 4096);
+			OsxCpuRun(test->reference, prefix + 3);
+			OsxJitRun(test->native, prefix + 3);
+			Compare(test, "inline CPU stop", instruction);
+		}
 	}
 }
 
@@ -716,6 +891,56 @@ static void Floating(OsxJitTest *test)
 	}
 }
 
+static void VectorSequences(OsxJitTest *test)
+{
+	static const uint32 kinds[] = {
+		0, 64, 128, 1024, 1088, 1152, 1028, 1092, 1156, 1220, 1284,
+		12, 76, 140, 268, 332, 396, 524, 588, 652, 32, 33, 42, 43, 44, 270
+	};
+	OsxCpu *cpu;
+	uint32 instruction;
+	uint32 kind;
+	uint32 value;
+	int scenario;
+	int step;
+	int index;
+	int reg;
+	int word;
+	for (scenario = 0; scenario < 192; scenario++) {
+		Reset(test);
+		for (reg = 0; reg < 32; reg++) {
+			for (word = 0; word < 4; word++) {
+				value = Random(test);
+				test->reference->vr[reg][word] = value;
+				test->native->vr[reg][word] = value;
+			}
+		}
+		for (step = 0; step < 32; step++) {
+			kind = kinds[Random(test) % (sizeof(kinds) / sizeof(kinds[0]))];
+			instruction = (4u << 26) | ((Random(test) & 31) << 21) | ((Random(test) & 31) << 16) | ((Random(test) & 31) << 11) | kind;
+			if (kind >= 32 && kind <= 44)
+				instruction |= (Random(test) & 31) << 6;
+			if (step == 16 && (scenario & 1))
+				instruction = (31u << 26) | (5u << 21) | (146u << 1);
+			Put(test->reference, TESTENTRY + (uint32)step * 4, instruction);
+			Put(test->native, TESTENTRY + (uint32)step * 4, instruction);
+		}
+		for (index = 0; index < 2; index++) {
+			if (index == 0)
+				cpu = test->reference;
+			else
+				cpu = test->native;
+			cpu->altivec = 1;
+			cpu->msr = OSXMSRVEC | OSXMSRFP;
+			cpu->gpr[5] = OSXMSRFP;
+		}
+		OsxJitInvalidate(test->native, TESTENTRY, 4096);
+		OsxCpuRun(test->reference, 32);
+		OsxJitRun(test->native, 32);
+		Compare(test, "vector sequences and enable changes", 0);
+	}
+}
+
 static void Benchmark(OsxJitTest *test)
 {
 	OsxCpu *cpu;
@@ -763,14 +988,18 @@ int main(void)
 		return 2;
 	RandomInstructions(&test);
 	MemoryInstructions(&test);
+	FloatVectorMemory(&test);
+	VectorInstructions(&test);
 	ExtendedMemory(&test);
 	MachineState(&test);
+	InlineStops(&test);
 	SprInstructions(&test);
 	Sequences(&test);
 	Mmu(&test);
 	Invalidation(&test);
 	Contexts(&test);
 	Floating(&test);
+	VectorSequences(&test);
 	Benchmark(&test);
 	printf("checks %d failures %d\n", test.checks, test.failures);
 	result = test.failures != 0;

@@ -101,7 +101,6 @@ static void OpenHost(OsxMachine *machine)
 		audio->disabled = 1;
 		return;
 	}
-	memset(&spec, 0, sizeof(spec));
 	spec.freq = (int)audio->rate;
 	spec.format = AUDIO_S16MSB;
 	spec.channels = 2;
