@@ -2084,6 +2084,19 @@ static void Execute(OsxCpu *cpu, uint32 instruction)
 	IllegalInstruction(cpu, instruction);
 }
 
+int OsxCpuExecuteInline(OsxCpu *cpu, uint32 instruction)
+{
+	uint32 expected;
+	expected = cpu->pc + 4;
+	cpu->nextpc = expected;
+	Execute(cpu, instruction);
+	if (cpu->nextpc == expected)
+		return 0;
+	cpu->pc = cpu->nextpc;
+	cpu->instructions++;
+	return 1;
+}
+
 void OsxCpuExecuteInstruction(OsxCpu *cpu, uint32 instruction)
 {
 	cpu->nextpc = cpu->pc + 4;

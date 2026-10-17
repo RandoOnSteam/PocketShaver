@@ -229,6 +229,21 @@ static int SetFirmwareBoot(uint8 *nvram, const char *device, const char *command
 	return 1;
 }
 
+void OsxNvramRestoreOldWorld(uint8 *nvram, const uint8 *classic)
+{
+	char device[256];
+	char command[256];
+	uint8 xpram[OSXPRAMSIZE];
+	if (OsxNvramIsNewWorld(classic) || !OsxNvramIsNewWorld(nvram))
+		return;
+	OsxNvramReadString(nvram, 0, device, sizeof(device));
+	OsxNvramReadString(nvram, 9, command, sizeof(command));
+	memcpy(xpram, nvram + OSXPRAMOFFSET, OSXPRAMSIZE);
+	memcpy(nvram, classic, NVRAMSIZE);
+	memcpy(nvram + OSXPRAMOFFSET, xpram, OSXPRAMSIZE);
+	SetFirmwareBoot(nvram, device, command);
+}
+
 int OsxNvramPrepareBoot(OsxMachine *machine, int bus, int unit, int partition)
 {
 	char device[256];

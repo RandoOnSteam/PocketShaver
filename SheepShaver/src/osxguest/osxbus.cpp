@@ -576,6 +576,8 @@ uint32 OsxHeathrowRead(OsxMachine *machine, uint32 offset, int size)
 		return OsxCudaRead(machine, (offset >> 9) & 15);
 	if (offset - OSXBMACOFFSET < OSXBMACSIZE)
 		return SwapForSize(OsxBmacRead(machine, offset - OSXBMACOFFSET), size);
+	if (offset - OSXAUDIOOFFSET < OSXAUDIOSIZE)
+		return SwapForSize(OsxAudioRead(machine, offset - OSXAUDIOOFFSET), size);
 	if (offset >= 0x20000 && offset < 0x22000)
 		return OsxAtaRead(machine, (offset >> 12) & 1, offset & 0xfff, size);
 	if (offset >= 0x60000)
@@ -614,6 +616,10 @@ void OsxHeathrowWrite(OsxMachine *machine, uint32 offset, int size, uint32 value
 	}
 	if (offset - OSXBMACOFFSET < OSXBMACSIZE) {
 		OsxBmacWrite(machine, offset - OSXBMACOFFSET, SwapForSize(value, size));
+		return;
+	}
+	if (offset - OSXAUDIOOFFSET < OSXAUDIOSIZE) {
+		OsxAudioWrite(machine, offset - OSXAUDIOOFFSET, SwapForSize(value, size));
 		return;
 	}
 	if (offset >= 0x20000 && offset < 0x22000) {

@@ -232,6 +232,7 @@ int OsxCpuExecuteVectorMemory(OsxCpu *cpu, uint32 instruction, uint32 extended, 
 void OsxCpuRun(OsxCpu *cpu, int32 count);
 int OsxCpuFetchPage(OsxCpu *cpu);
 void OsxCpuExecuteInstruction(OsxCpu *cpu, uint32 instruction);
+int OsxCpuExecuteInline(OsxCpu *cpu, uint32 instruction);
 int OsxJitCreate(OsxCpu *cpu);
 void OsxJitDestroy(OsxCpu *cpu);
 void OsxJitRun(OsxCpu *cpu, int32 count);

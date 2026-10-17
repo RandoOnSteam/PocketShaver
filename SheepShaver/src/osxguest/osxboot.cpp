@@ -1207,6 +1207,44 @@ static void AddBmacNode(OsxTreeNode *macio)
 	AddProperty(node, "local-mac-address", address, sizeof(address));
 }
 
+static void AddAudioNode(OsxTreeNode *macio)
+{
+	OsxTreeNode *node;
+	uint32 cells[6];
+	const char objects[] =
+		"detect bit-mask 4 bit-match 4 device 16 index 0 model InSenseBitsDetect\0"
+		"detect bit-mask 8 bit-match 0 device 32 index 1 model InSenseBitsDetect\0"
+		"detect bit-mask 1 bit-match 1 device 2 index 2 model InSenseBitsDetect\0"
+		"input icon-id -16526 index 0 name-id -20520 port-connection 6 port-type 0x656D6963 zero-gain 0 model ExternalMic\0"
+		"input index 1 model NoInput\0"
+		"output device-mask 6 device-match 0 icon-id -16563 index 0 name-id -20525 port-connection 2 port-type 0x6973706B model OutputPort\0"
+		"output device-mask 2 device-match 2 icon-id -16563 index 1 name-id -20524 port-connection 1 port-type 0x6864706E model OutputPort\0";
+	node = NewNode(macio, "awacs");
+	AddString(node, "device_type", "sound");
+	AddString(node, "compatible", "awacs");
+	cells[0] = OSXAUDIOOFFSET;
+	cells[1] = OSXAUDIOSIZE;
+	cells[2] = 0x8000 + OSXDBDMAAUDIOOUT * 0x100;
+	cells[3] = 0x100;
+	cells[4] = 0x8000 + OSXDBDMAAUDIOIN * 0x100;
+	cells[5] = 0x100;
+	AddCells(node, "reg", cells, 6);
+	cells[0] = OSXIRQAUDIO;
+	cells[1] = OSXIRQAUDIOOUTDMA;
+	cells[2] = OSXIRQAUDIOINDMA;
+	AddCells(node, "AAPL,interrupts", cells, 3);
+	AddCells(node, "interrupts", cells, 3);
+	node = NewNode(node, "sound");
+	AddString(node, "device_type", "sound");
+	AddProperty(node, "model", "343S0184", 8);
+	AddCell(node, "#-detects", 3);
+	AddCell(node, "#-features", 0);
+	AddCell(node, "#-inputs", 2);
+	AddCell(node, "#-outputs", 2);
+	AddCell(node, "device-id", 0);
+	AddProperty(node, "sound-objects", objects, sizeof(objects));
+}
+
 static OsxTreeNode *BuildTree(OsxBootState *state, OsxTreeNode **memorymap)
 {
 	OsxMachine *machine;
@@ -1391,6 +1429,7 @@ static OsxTreeNode *BuildTree(OsxBootState *state, OsxTreeNode **memorymap)
 	AddAtaNode(macio, "ata", 0x20000, 0x8b00, OSXIRQIDE0, OSXIRQIDE0DMA);
 	AddAtaNode(macio, "ata", 0x21000, 0x8c00, OSXIRQIDE1, OSXIRQIDE1DMA);
 	AddBmacNode(macio);
+	AddAudioNode(macio);
 
 	node = NewNode(pci, "display");
 	AddString(node, "device_type", "display");

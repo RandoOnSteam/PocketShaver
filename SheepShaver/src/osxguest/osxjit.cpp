@@ -196,9 +196,8 @@ static void Miss(OsxNativeEmitter *emitter, int condition, int count)
 	emitter->misscounts[emitter->misscount++] = count;
 }
 
-static void Account(OsxNativeEmitter *emitter, int count)
+static void Charge(OsxNativeEmitter *emitter, int count)
 {
-	CpuMemory(emitter, 0x89, 11, OSXJITOFFSET(pc), 0);
 	if (count == 0)
 		return;
 	Byte(emitter, 0x48); Byte(emitter, 0x81); Byte(emitter, 0x83);
@@ -207,6 +206,12 @@ static void Account(OsxNativeEmitter *emitter, int count)
 	Byte(emitter, 0x81); Byte(emitter, 0xab);
 	Word(emitter, OSXJITOFFSET(slice));
 	Word(emitter, (uint32)count);
+}
+
+static void Account(OsxNativeEmitter *emitter, int count)
+{
+	CpuMemory(emitter, 0x89, 11, OSXJITOFFSET(pc), 0);
+	Charge(emitter, count);
 }
 
 static void Leave(OsxNativeEmitter *emitter, uint32 code)
@@ -1156,6 +1161,43 @@ static int ConditionLogical(OsxNativeEmitter *emitter, uint32 instruction)
 	return 1;
 }
 
+static int Interpretable(uint32 instruction)
+{
+	uint32 opcode;
+	uint32 extended;
+	opcode = instruction >> 26;
+	if (opcode == 4 || opcode == 59)
+		return 1;
+	if (opcode != 31)
+		return 0;
+	extended = (instruction >> 1) & 0x3ff;
+	switch (extended) {
+	case 6: case 7: case 38: case 39: case 71: case 103: case 135: case 167: case 199: case 231:
+	case 342: case 359: case 374: case 487: case 534: case 662: case 758: case 790: case 792: case 822: case 918:
+		return 1;
+	}
+	return 0;
+}
+
+static void Callout(OsxNativeEmitter *emitter, uint32 instruction, int count)
+{
+	uint8 *resume;
+	CpuMemory(emitter, 0x89, 11, OSXJITOFFSET(pc), 0);
+	RegisterOp(emitter, 0x89, 1, 3, 1);
+	Immediate(emitter, 2, instruction);
+	Byte(emitter, 0x48); Byte(emitter, 0x83); Byte(emitter, 0xec); Byte(emitter, 0x20);
+	Byte(emitter, 0x48); Byte(emitter, 0xb8);
+	Quad(emitter, (uint64)(uintptr_t)OsxCpuExecuteInline);
+	Byte(emitter, 0xff); Byte(emitter, 0xd0);
+	Byte(emitter, 0x48); Byte(emitter, 0x83); Byte(emitter, 0xc4); Byte(emitter, 0x20);
+	RegisterOp(emitter, 0x85, 0, 0, 0);
+	resume = Jump(emitter, 4);
+	Charge(emitter, count);
+	Leave(emitter, OSXJITCONTINUE);
+	Patch(resume, emitter->cursor);
+	CpuMemory(emitter, 0x8b, 11, OSXJITOFFSET(pc), 0);
+}
+
 static int Emit(OsxNativeEmitter *emitter, uint32 instruction, int count)
 {
 	uint32 opcode;
@@ -1182,13 +1224,19 @@ static int Emit(OsxNativeEmitter *emitter, uint32 instruction, int count)
 		return ConditionLogical(emitter, instruction);
 	if (opcode == 46 || opcode == 47)
 		return Multiple(emitter, instruction, opcode, count);
+	if (Interpretable(instruction)) {
+		Callout(emitter, instruction, count);
+		return 1;
+	}
 	if ((opcode >= 32 && opcode <= 45) || opcode == 50 || opcode == 51 || opcode == 54 || opcode == 55) {
 		Memory(emitter, instruction, opcode, -1, count);
 		return 1;
 	}
 	switch (opcode) {
 	case 63:
-		return Float(emitter, instruction, count);
+		if (!Float(emitter, instruction, count))
+			Callout(emitter, instruction, count);
+		return 1;
 	case 8:
 		Immediate(emitter, 0, (uint32)(int32)(int16)immediate);
 		CpuMemory(emitter, 0x2b, 0, OSXJITGPR(base), 0);

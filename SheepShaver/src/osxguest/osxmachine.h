@@ -54,12 +54,22 @@
 #define OSXIRQBMACTXDMA 8
 #define OSXIRQBMACRXDMA 9
 #define OSXIRQBMAC 42
+#define OSXIRQAUDIOOUTDMA 10
+#define OSXIRQAUDIOINDMA 11
+#define OSXIRQAUDIO 17
 
 #define OSXDBDMACHANNELS 16
 #define OSXDBDMAIDE0 11
 #define OSXDBDMAIDE1 12
 #define OSXDBDMABMACTX 2
 #define OSXDBDMABMACRX 3
+#define OSXDBDMAAUDIOOUT 8
+#define OSXDBDMAAUDIOIN 9
+#define OSXDBDMASTATUSACTIVE 0x0400
+#define OSXAUDIOOFFSET 0x14000
+#define OSXAUDIOSIZE 0x1000
+#define OSXAUDIORING 65536
+#define OSXAUDIOBLOCK 4096
 #define OSXBMACOFFSET 0x11000
 #define OSXBMACSIZE 0x1000
 
@@ -109,6 +119,25 @@ typedef struct OsxDbdma {
 	uint32 waitselect;
 	int irq;
 } OsxDbdma;
+
+typedef struct OsxAudio {
+	uint32 control;
+	uint32 codeccontrol;
+	uint32 codec[8];
+	uint32 readback;
+	uint32 byteswap;
+	uint32 rate;
+	uint32 openrate;
+	int opened;
+	int disabled;
+	int32 leftgain;
+	int32 rightgain;
+	uint32 head;
+	uint32 tail;
+	uint64 lasttime;
+	uint8 ring[OSXAUDIORING];
+	uint8 block[OSXAUDIOBLOCK];
+} OsxAudio;
 
 typedef struct OsxBmac {
 	uint16 registers[0x100];
@@ -297,7 +326,9 @@ struct OsxMachine {
 	OsxAtaBus ata[OSXATABUSES];
 	OsxCuda cuda;
 	OsxBmac bmac;
+	OsxAudio audio;
 	uint8 nvram[OSXNVRAMSIZE];
+	uint8 nvramclassic[OSXNVRAMSIZE];
 	char nvrampath[512];
 	uint8 flash[OSXFLASHSIZE];
 	int flashmode;
@@ -358,6 +389,12 @@ void OsxBmacReceive(OsxMachine *machine);
 void OsxBmacPoll(OsxMachine *machine, uint64 now);
 uint64 OsxBmacNextDeadline(OsxMachine *machine);
 
+void OsxAudioReset(OsxMachine *machine);
+uint32 OsxAudioRead(OsxMachine *machine, uint32 offset);
+void OsxAudioWrite(OsxMachine *machine, uint32 offset, uint32 value);
+void OsxAudioPoll(OsxMachine *machine, uint64 now);
+void OsxAudioExit(OsxMachine *machine);
+
 void *EtherSlirpOpen(void);
 int EtherSlirpReady(void *thread);
 void EtherSlirpPoll(void);
@@ -371,6 +408,7 @@ void OsxNvramReadString(const uint8 *nvram, int index, char *output, int size);
 int OsxNvramWantsClassic(const char *device, const char *command);
 int OsxNvramIsNewWorld(const uint8 *nvram);
 void OsxNvramMakeNewWorld(uint8 *nvram);
+void OsxNvramRestoreOldWorld(uint8 *nvram, const uint8 *classic);
 int OsxNvramPrepareBoot(OsxMachine *machine, int bus, int unit, int partition);
 void OsxNvramFinishBoot(OsxMachine *machine, const uint8 *startup);
 void OsxFlashSave(OsxMachine *machine);

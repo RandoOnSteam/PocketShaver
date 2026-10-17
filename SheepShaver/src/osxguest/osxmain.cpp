@@ -1109,6 +1109,7 @@ static void RunMachine(OsxSession *session, void *monitor)
 		OsxCudaPoll(machine, now);
 		OsxBmacPoll(machine, now);
 		OsxAtaPoll(machine, now);
+		OsxAudioPoll(machine, now);
 		RunScript(session, now);
 		if (now >= nextframe) {
 			nextframe = now + frameticks;
@@ -1193,6 +1194,7 @@ int OsxGuestMain(void)
 	OsxAtaReset(machine);
 	OsxCudaReset(machine);
 	OsxBmacReset(machine);
+	OsxAudioReset(machine);
 	XPRAMInit(NULL);
 	memcpy(machine->nvram, XPRAM, OSXNVRAMSIZE);
 	OsxFlashLoad(machine, "osx_nvram.bin");
@@ -1236,10 +1238,9 @@ int OsxGuestMain(void)
 	cpu->syscallcontext = &session;
 	if (OsxFindKernelSymbol(machine, "_panic"))
 		OsxCpuAddHook(cpu, OsxFindKernelSymbol(machine, "_panic"), PanicHook, &session);
-	if (machine->pvr == OSXPVRG4) {
-		OsxNvramMakeNewWorld(machine->nvram);
-		HookKernelSymbol(machine, "__ZN16IOPlatformExpert14getBootROMTypeEv", NewWorldEpochHook);
-	}
+	memcpy(machine->nvramclassic, machine->nvram, OSXNVRAMSIZE);
+	OsxNvramMakeNewWorld(machine->nvram);
+	HookKernelSymbol(machine, "__ZN16IOPlatformExpert14getBootROMTypeEv", NewWorldEpochHook);
 	HookKernelSymbol(machine, "_PE_Determine_Clock_Speeds", ReturnHook);
 	if (machine->pvr == OSXPVRG4 || machine->ata[bootbus].drives[bootunit].atapi)
 		HookKernelSymbol(machine, "_PEGetPlatformEpoch", NewWorldEpochHook);
@@ -1284,9 +1285,11 @@ int OsxGuestMain(void)
 	timeEndPeriod(1);
 #endif
 	OsxNvramFinishBoot(machine, XPRAM + 0x1378);
+	OsxNvramRestoreOldWorld(machine->nvram, machine->nvramclassic);
 	memcpy(XPRAM, machine->nvram, OSXNVRAMSIZE);
 	XPRAMExit();
 	OsxFlashSave(machine);
+	OsxAudioExit(machine);
 	OsxJitDestroy(cpu);
 	if (machine->log) {
 		OsxCpuDump(cpu, machine->log);
