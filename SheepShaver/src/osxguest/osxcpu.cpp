@@ -163,11 +163,6 @@ uint64 OsxHostNanoseconds(void)
 #endif
 }
 
-uint64 OsxCpuHostTicks(void)
-{
-	return HostTicks();
-}
-
 uint64 OsxCpuTimebase(OsxCpu *cpu)
 {
 	uint64 elapsed;

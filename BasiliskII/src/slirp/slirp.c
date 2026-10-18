@@ -611,7 +611,7 @@ void arp_input(const uint8_t *pkt, int pkt_len)
     switch(ar_op) {
     case ARPOP_REQUEST:
         if (!memcmp(ah->ar_tip, &special_addr, 3)) {
-            if (ah->ar_tip[3] == CTL_DNS || ah->ar_tip[3] == CTL_ALIAS) 
+            if (ah->ar_tip[3] == CTL_DNS || ah->ar_tip[3] == CTL_ALIAS || ah->ar_tip[3] == CTL_LOCAL)
                 goto arp_ok;
             for (ex_ptr = exec_list; ex_ptr; ex_ptr = ex_ptr->ex_next) {
                 if (ex_ptr->ex_addr == ah->ar_tip[3])

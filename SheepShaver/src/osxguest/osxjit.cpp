@@ -371,11 +371,14 @@ static void EmitThunks(OsxNativeState *state)
 	Byte(&emitter, 0x58);
 	Byte(&emitter, 0xc3);
 	state->timethunk = state->executebase + (emitter.cursor - emitter.start);
+	Byte(&emitter, 0x41); Byte(&emitter, 0x53);
 	Byte(&emitter, 0x48); Byte(&emitter, 0x83); Byte(&emitter, 0xec); Byte(&emitter, 0x20);
+	RegisterOp(&emitter, 0x89, 1, 3, 1);
 	Byte(&emitter, 0x48); Byte(&emitter, 0xb8);
-	Quad(&emitter, (uint64)(uintptr_t)OsxCpuHostTicks);
+	Quad(&emitter, (uint64)(uintptr_t)OsxCpuTimebase);
 	Byte(&emitter, 0xff); Byte(&emitter, 0xd0);
 	Byte(&emitter, 0x48); Byte(&emitter, 0x83); Byte(&emitter, 0xc4); Byte(&emitter, 0x20);
+	Byte(&emitter, 0x41); Byte(&emitter, 0x5b);
 	Byte(&emitter, 0xc3);
 	state->thunkbytes = ((uint32)(emitter.cursor - emitter.start) + 63) & ~63u;
 	state->used = state->thunkbytes;
@@ -1355,20 +1358,6 @@ static int System(OsxNativeEmitter *emitter, uint32 instruction, uint32 extended
 		emitter->bytemask = 0;
 		Byte(emitter, 0xe8);
 		JumpTo(emitter, emitter->timethunk);
-		CpuMemory(emitter, 0x2b, 0, OSXJITOFFSET(hostbase), 1);
-		RegisterOp(emitter, 0x89, 2, 0, 1);
-		Byte(emitter, 0x48); Byte(emitter, 0xc1); Byte(emitter, 0xea); Byte(emitter, 32);
-		Byte(emitter, 0x48); Byte(emitter, 0x0f); Byte(emitter, 0xaf);
-		Byte(emitter, 0x83 | (2 << 3));
-		Word(emitter, OSXJITOFFSET(hostscale));
-		RegisterOp(emitter, 0x89, 1, 0, 0);
-		Byte(emitter, 0x48); Byte(emitter, 0x0f); Byte(emitter, 0xaf);
-		Byte(emitter, 0x83 | (1 << 3));
-		Word(emitter, OSXJITOFFSET(hostscale));
-		Byte(emitter, 0x48); Byte(emitter, 0xc1); Byte(emitter, 0xe9); Byte(emitter, 32);
-		RegisterOp(emitter, 0x01, 2, 1, 1);
-		CpuMemory(emitter, 0x03, 2, OSXJITOFFSET(tboffset), 1);
-		RegisterOp(emitter, 0x89, 0, 2, 1);
 		if (number == 269) {
 			Byte(emitter, 0x48); Byte(emitter, 0xc1); Byte(emitter, 0xe8); Byte(emitter, 32);
 		}
