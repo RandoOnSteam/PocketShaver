@@ -146,7 +146,7 @@ struct OsxCpu {
 	uint32 jitscratch;
 	int jitflush;
 #if OSXPROFILE
-	uint32 tmpform[3][131072];
+	uint32 tmpform[4][131072];
 	uint32 tmpexception[64];
 #endif
 	uint32 vrsave;
@@ -255,6 +255,9 @@ int OsxJitCreate(OsxCpu *cpu);
 void OsxJitDestroy(OsxCpu *cpu);
 void OsxJitRun(OsxCpu *cpu, int32 count);
 int OsxJitInvalidate(OsxCpu *cpu, uint32 address, uint32 length);
+#if OSXPROFILEJIT
+void OsxJitTmpStats(OsxCpu *cpu, FILE *log);
+#endif
 void OsxCpuCheckInterrupts(OsxCpu *cpu, uint64 now);
 void OsxCpuRaiseException(OsxCpu *cpu, uint32 vector, uint32 srr1bits, uint32 srr0);
 void OsxCpuUpdateModes(OsxCpu *cpu);

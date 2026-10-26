@@ -1159,7 +1159,7 @@ static void LogSlice(FILE *slicelog, OsxCpu *cpu)
 #if OSXPROFILE
 static void TmpDumpForms(FILE *log, OsxCpu *cpu)
 {
-	static const char *const names[3] = { "callout", "dispatch", "sampled" };
+	static const char *const names[4] = { "callout", "dispatch", "sampled", "generic" };
 	uint32 *counts;
 	uint32 best;
 	uint32 total;
@@ -1167,7 +1167,7 @@ static void TmpDumpForms(FILE *log, OsxCpu *cpu)
 	int rank;
 	int index;
 	int chosen;
-	for (path = 0; path < 3; path++) {
+	for (path = 0; path < 4; path++) {
 		counts = cpu->tmpform[path];
 		total = 0;
 		for (index = 0; index < 131072; index++)
@@ -1331,6 +1331,9 @@ static void RunMachine(OsxSession *session, void *monitor)
 			now = OsxCpuTimebase(cpu);
 			if (machine->log) {
 				fprintf(machine->log, "status pc %08x lr %08x msr %08x instructions %llu halted %d dec %u ext %u slow %llu exceptions %llu runms %llu slices %llu\n", cpu->pc, cpu->lr, cpu->msr, (unsigned long long)cpu->instructions, cpu->halted, cpu->decrementercount, cpu->externalcount, (unsigned long long)cpu->slowaccesses, (unsigned long long)cpu->exceptions, (unsigned long long)(runtime * 1000 / OSXTIMEBASEFREQUENCY), (unsigned long long)slices);
+#if OSXPROFILEJIT
+				OsxJitTmpStats(cpu, machine->log);
+#endif
 #if OSXPROFILE
 				TmpDumpForms(machine->log, cpu);
 				fprintf(machine->log, "TMPRENDER frames %u rows %u\n", session->tmpframes, session->tmprows);

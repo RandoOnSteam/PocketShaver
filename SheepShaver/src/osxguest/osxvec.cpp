@@ -1004,6 +1004,9 @@ static void VectorGeneric(OsxCpu *cpu, uint32 instruction)
 	int vd;
 	int va;
 	int vb;
+#if OSXPROFILE
+	cpu->tmpform[3][OsxCpuTmpFormKey(instruction)]++;
+#endif
 	vd = (instruction >> 21) & 31;
 	va = (instruction >> 16) & 31;
 	vb = (instruction >> 11) & 31;

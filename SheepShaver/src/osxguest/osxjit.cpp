@@ -31,6 +31,7 @@
 #define OSXJITRECORDS (256 * 1024)
 #define OSXJITBYTES (64 * 1024 * 1024)
 #define OSXJITLIMIT 32
+#define OSXJITSLOWPATH 0
 #define OSXJITRESERVE 65536
 #define OSXJITMISSES 1024
 #define OSXJITENTRY 25
@@ -81,9 +82,10 @@ typedef struct OsxNativeState {
 	uint64 linked;
 	uint64 interpreted;
 	int shuffle;
-	uint32 vectorconstants[5][4];
+	uint32 vectorconstants[9][4];
 #if OSXPROFILEJIT
 	FILE *tmpmap;
+	uint64 tmpstats[16];
 #endif
 	uint8 victims[OSXJITSETS];
 	OsxNativeBlock front[OSXJITFRONT];
@@ -117,6 +119,16 @@ typedef struct OsxNativeEmitter {
 	uint8 *misses[OSXJITMISSES];
 	int misscounts[OSXJITMISSES];
 	int misscount;
+#if OSXJITSLOWPATH
+	int slowactive;
+	uint8 *slowjumps[OSXJITLIMIT * 8];
+	int slowowners[OSXJITLIMIT * 8];
+	int slowjumpcount;
+	uint32 slowinstructions[OSXJITLIMIT];
+	int slowcounts[OSXJITLIMIT];
+	uint8 *slowresumes[OSXJITLIMIT];
+	int slowcount;
+#endif
 } OsxNativeEmitter;
 
 static void Byte(OsxNativeEmitter *emitter, uint32 value)
@@ -219,6 +231,13 @@ static void Patch(uint8 *patch, uint8 *target)
 
 static void Miss(OsxNativeEmitter *emitter, int condition, int count)
 {
+#if OSXJITSLOWPATH
+	if (emitter->slowactive) {
+		emitter->slowjumps[emitter->slowjumpcount] = Jump(emitter, condition);
+		emitter->slowowners[emitter->slowjumpcount++] = emitter->slowcount;
+		return;
+	}
+#endif
 	emitter->misses[emitter->misscount] = Jump(emitter, condition);
 	emitter->misscounts[emitter->misscount++] = count;
 }
@@ -307,6 +326,11 @@ static void EmitThunks(OsxNativeState *state)
 	emitter.cursor = emitter.start;
 	emitter.executestart = state->executebase;
 	emitter.misscount = 0;
+#if OSXJITSLOWPATH
+	emitter.slowactive = 0;
+	emitter.slowjumpcount = 0;
+	emitter.slowcount = 0;
+#endif
 	state->checkthunk = state->executebase;
 	Byte(&emitter, 0x45); Byte(&emitter, 0x3b); Byte(&emitter, 0x1a);
 	misses[0] = Jump(&emitter, 5);
@@ -485,51 +509,191 @@ static void FloatExponent(OsxNativeEmitter *emitter, int reg, int count, int nor
 	}
 }
 
+static void Setcc(OsxNativeEmitter *emitter, uint32 condition, int reg)
+{
+	Byte(emitter, 0x0f);
+	Byte(emitter, 0x90 | condition);
+	Byte(emitter, 0xc0 | reg);
+}
+
+static void FloatClass(OsxNativeEmitter *emitter, int target, int count, int single)
+{
+	uint8 *zero;
+	uint8 *merge;
+	Byte(emitter, 0x66); Byte(emitter, 0x48); Byte(emitter, 0x0f); Byte(emitter, 0x7e); Byte(emitter, 0xc0);
+	FloatExponent(emitter, 0, count, 0);
+	RegisterOp(emitter, 0x85, 2, 2, 0);
+	zero = Jump(emitter, 4);
+	if (single) {
+		ImmediateOp(emitter, 7, 2, 897);
+		Miss(emitter, 2, count);
+	}
+	RegisterOp(emitter, 0x89, 2, 0, 1);
+	Byte(emitter, 0x48); Byte(emitter, 0xc1); Byte(emitter, 0xea); Byte(emitter, 63);
+	ImmediateOp(emitter, 0, 2, 1);
+	Shift(emitter, 4, 2, 14);
+	Byte(emitter, 0xe9);
+	merge = emitter->cursor;
+	Word(emitter, 0);
+	Patch(zero, emitter->cursor);
+	RegisterOp(emitter, 0x89, 2, 0, 1);
+	RegisterOp(emitter, 0x01, 2, 2, 1);
+	Miss(emitter, 5, count);
+	RegisterOp(emitter, 0x89, 2, 0, 1);
+	Byte(emitter, 0x48); Byte(emitter, 0xc1); Byte(emitter, 0xea); Byte(emitter, 63);
+	Shift(emitter, 4, 2, 16);
+	ImmediateOp(emitter, 1, 2, 0x2000);
+	Patch(merge, emitter->cursor);
+	CpuMemory(emitter, 0x89, 0, OSXJITFPR(target), 1);
+	CpuMemory(emitter, 0x8b, 0, OSXJITOFFSET(fpscr), 0);
+	ImmediateOp(emitter, 4, 0, ~0x1f000u);
+	RegisterOp(emitter, 0x09, 0, 2, 0);
+	CpuMemory(emitter, 0x89, 0, OSXJITOFFSET(fpscr), 0);
+}
+
+static void FloatLoad(OsxNativeEmitter *emitter, int vector, int reg)
+{
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x10); Byte(emitter, 0x83 | (vector << 3));
+	Word(emitter, OSXJITFPR(reg));
+}
+
+static void FloatRounding(OsxNativeEmitter *emitter, int count)
+{
+	Byte(emitter, 0xf7); Byte(emitter, 0x83);
+	Word(emitter, OSXJITOFFSET(fpscr));
+	Word(emitter, 3);
+	Miss(emitter, 5, count);
+}
+
+static void FloatNarrow(OsxNativeEmitter *emitter)
+{
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x5a); Byte(emitter, 0xc0);
+	Byte(emitter, 0xf3); Byte(emitter, 0x0f); Byte(emitter, 0x5a); Byte(emitter, 0xc0);
+}
+
+static void FloatCompare(OsxNativeEmitter *emitter, int field, int left, int right, int count)
+{
+	uint32 shift;
+	CpuMemory(emitter, 0x8b, 0, OSXJITFPR(left), 1);
+	FloatExponent(emitter, 0, count, 0);
+	CpuMemory(emitter, 0x8b, 0, OSXJITFPR(right), 1);
+	FloatExponent(emitter, 0, count, 0);
+	RegisterOp(emitter, 0x31, 0, 0, 0);
+	RegisterOp(emitter, 0x31, 1, 1, 0);
+	RegisterOp(emitter, 0x31, 2, 2, 0);
+	FloatLoad(emitter, 0, left);
+	Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x2e); Byte(emitter, 0x83);
+	Word(emitter, OSXJITFPR(right));
+	Setcc(emitter, 2, 0);
+	Setcc(emitter, 7, 1);
+	Setcc(emitter, 4, 2);
+	Shift(emitter, 4, 0, 3);
+	Shift(emitter, 4, 1, 2);
+	RegisterOp(emitter, 0x01, 2, 2, 0);
+	RegisterOp(emitter, 0x09, 0, 1, 0);
+	RegisterOp(emitter, 0x09, 0, 2, 0);
+	RegisterOp(emitter, 0x89, 1, 0, 0);
+	Shift(emitter, 4, 1, 12);
+	CpuMemory(emitter, 0x8b, 2, OSXJITOFFSET(fpscr), 0);
+	ImmediateOp(emitter, 4, 2, ~0xf000u);
+	RegisterOp(emitter, 0x09, 2, 1, 0);
+	CpuMemory(emitter, 0x89, 2, OSXJITOFFSET(fpscr), 0);
+	shift = (uint32)(7 - field) * 4;
+	Shift(emitter, 4, 0, shift);
+	CpuMemory(emitter, 0x8b, 1, OSXJITOFFSET(cr), 0);
+	ImmediateOp(emitter, 4, 1, ~(0xfu << shift));
+	RegisterOp(emitter, 0x09, 1, 0, 0);
+	CpuMemory(emitter, 0x89, 1, OSXJITOFFSET(cr), 0);
+}
+
+static void FloatTruncate(OsxNativeEmitter *emitter, int target, int right, int count)
+{
+	uint8 *exact;
+	FloatLoad(emitter, 0, right);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x2c); Byte(emitter, 0xc0);
+	ImmediateOp(emitter, 7, 0, 0x80000000u);
+	Miss(emitter, 4, count);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x2a); Byte(emitter, 0xc8);
+	Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x2e); Byte(emitter, 0xc8);
+	exact = Jump(emitter, 4);
+	Byte(emitter, 0x81); Byte(emitter, 0x8b);
+	Word(emitter, OSXJITOFFSET(fpscr));
+	Word(emitter, 0x82000000u);
+	Patch(exact, emitter->cursor);
+	CpuMemory(emitter, 0x89, 0, OSXJITFPR(target), 0);
+	Byte(emitter, 0xc7); Byte(emitter, 0x83);
+	Word(emitter, OSXJITFPR(target) + 4);
+	Word(emitter, 0xfff80000u);
+}
+
 static int Float(OsxNativeEmitter *emitter, uint32 instruction, int count)
 {
 	uint32 extended;
 	int target;
 	int left;
 	int right;
+	int single;
 	extended = (instruction >> 1) & 0x3ff;
 	target = (instruction >> 21) & 31;
 	left = (instruction >> 16) & 31;
 	right = (instruction >> 11) & 31;
-	if (extended == 40 || extended == 72 || extended == 136 || extended == 264) {
-		RequireFloat(emitter, count);
-		CpuMemory(emitter, 0x8b, 0, OSXJITFPR(right), 1);
-		if (extended != 72) {
-			Byte(emitter, 0x48); Byte(emitter, 0x0f); Byte(emitter, 0xba);
-			if (extended == 40)
-				Byte(emitter, 0xf8);
-			else if (extended == 136)
-				Byte(emitter, 0xe8);
-			else
-				Byte(emitter, 0xf0);
-			Byte(emitter, 63);
+	single = (instruction >> 26) == 59;
+	if (!single && !(instruction & 0x20)) {
+		switch (extended) {
+		case 40: case 72: case 136: case 264:
+			RequireFloat(emitter, count);
+			CpuMemory(emitter, 0x8b, 0, OSXJITFPR(right), 1);
+			if (extended != 72) {
+				Byte(emitter, 0x48); Byte(emitter, 0x0f); Byte(emitter, 0xba);
+				if (extended == 40)
+					Byte(emitter, 0xf8);
+				else if (extended == 136)
+					Byte(emitter, 0xe8);
+				else
+					Byte(emitter, 0xf0);
+				Byte(emitter, 63);
+			}
+			CpuMemory(emitter, 0x89, 0, OSXJITFPR(target), 1);
+			break;
+		case 0: case 32:
+			RequireFloat(emitter, count);
+			FloatCompare(emitter, target >> 2, left, right, count);
+			return 1;
+		case 12:
+			RequireFloat(emitter, count);
+			FloatRounding(emitter, count);
+			CpuMemory(emitter, 0x8b, 0, OSXJITFPR(right), 1);
+			FloatExponent(emitter, 0, count, 0);
+			FloatLoad(emitter, 0, right);
+			FloatNarrow(emitter);
+			FloatClass(emitter, target, count, 1);
+			break;
+		case 15:
+			RequireFloat(emitter, count);
+			FloatTruncate(emitter, target, right, count);
+			break;
+		default:
+			return 0;
 		}
-		CpuMemory(emitter, 0x89, 0, OSXJITFPR(target), 1);
 		RecordFloat(emitter, instruction);
 		return 1;
 	}
 	extended &= 31;
-	if (extended != 20 && extended != 21 && extended != 25)
+	if (extended != 18 && extended != 20 && extended != 21 && extended != 25)
 		return 0;
 	if (extended == 25)
 		right = (instruction >> 6) & 31;
 	RequireFloat(emitter, count);
-	Byte(emitter, 0xf7); Byte(emitter, 0x83);
-	Word(emitter, OSXJITOFFSET(fpscr));
-	Word(emitter, 3);
-	Miss(emitter, 5, count);
+	FloatRounding(emitter, count);
 	CpuMemory(emitter, 0x8b, 0, OSXJITFPR(left), 1);
 	FloatExponent(emitter, 0, count, 0);
 	CpuMemory(emitter, 0x8b, 0, OSXJITFPR(right), 1);
-	FloatExponent(emitter, 0, count, 0);
-	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x10); Byte(emitter, 0x83);
-	Word(emitter, OSXJITFPR(left));
+	FloatExponent(emitter, 0, count, extended == 18);
+	FloatLoad(emitter, 0, left);
 	Byte(emitter, 0xf2); Byte(emitter, 0x0f);
-	if (extended == 20)
+	if (extended == 18)
+		Byte(emitter, 0x5e);
+	else if (extended == 20)
 		Byte(emitter, 0x5c);
 	else if (extended == 21)
 		Byte(emitter, 0x58);
@@ -537,17 +701,9 @@ static int Float(OsxNativeEmitter *emitter, uint32 instruction, int count)
 		Byte(emitter, 0x59);
 	Byte(emitter, 0x83);
 	Word(emitter, OSXJITFPR(right));
-	Byte(emitter, 0x66); Byte(emitter, 0x48); Byte(emitter, 0x0f); Byte(emitter, 0x7e); Byte(emitter, 0xc0);
-	FloatExponent(emitter, 0, count, 1);
-	CpuMemory(emitter, 0x89, 0, OSXJITFPR(target), 1);
-	RegisterOp(emitter, 0x89, 2, 0, 1);
-	Byte(emitter, 0x48); Byte(emitter, 0xc1); Byte(emitter, 0xea); Byte(emitter, 63);
-	ImmediateOp(emitter, 0, 2, 1);
-	Shift(emitter, 4, 2, 14);
-	CpuMemory(emitter, 0x8b, 0, OSXJITOFFSET(fpscr), 0);
-	ImmediateOp(emitter, 4, 0, ~0x1f000u);
-	RegisterOp(emitter, 0x09, 0, 2, 0);
-	CpuMemory(emitter, 0x89, 0, OSXJITOFFSET(fpscr), 0);
+	if (single)
+		FloatNarrow(emitter);
+	FloatClass(emitter, target, count, single);
 	RecordFloat(emitter, instruction);
 	return 1;
 }
@@ -860,6 +1016,254 @@ static int VectorNative(OsxNativeEmitter *emitter, uint32 instruction, int count
 	return 1;
 }
 
+static void VectorLanes(OsxNativeEmitter *emitter, uint32 kind, uint32 target, uint32 left, uint32 right)
+{
+	uint32 lanes;
+	uint32 width;
+	uint32 lane;
+	uint32 offset;
+	uint32 operation;
+	width = 4;
+	if ((kind & 0xc0) == 0x40)
+		width = 2;
+	else if ((kind & 0xc0) == 0)
+		width = 1;
+	operation = 0xe0;
+	if ((kind & 0x3ff) == 0x204 || (kind & 0x3ff) == 0x244 || (kind & 0x3ff) == 0x284)
+		operation = 0xe8;
+	else if ((kind & 0x3ff) == 0x304 || (kind & 0x3ff) == 0x344 || (kind & 0x3ff) == 0x384)
+		operation = 0xf8;
+	lanes = 16 / width;
+	for (lane = 0; lane < lanes; lane++) {
+		offset = lane * width;
+		if (width == 4) {
+			CpuMemory(emitter, 0x8b, 0, left + offset, 0);
+			CpuMemory(emitter, 0x8b, 1, right + offset, 0);
+		} else {
+			Byte(emitter, 0x0f);
+			if (width == 2 && operation == 0xf8)
+				Byte(emitter, 0xbf);
+			else if (width == 2)
+				Byte(emitter, 0xb7);
+			else if (operation == 0xf8)
+				Byte(emitter, 0xbe);
+			else
+				Byte(emitter, 0xb6);
+			Byte(emitter, 0x83);
+			Word(emitter, left + offset);
+			Byte(emitter, 0x0f);
+			if (width == 2)
+				Byte(emitter, 0xb7);
+			else
+				Byte(emitter, 0xb6);
+			Byte(emitter, 0x8b);
+			Word(emitter, right + offset);
+		}
+		ImmediateOp(emitter, 4, 1, width * 8 - 1);
+		Byte(emitter, 0xd3); Byte(emitter, operation);
+		if (width == 2)
+			Byte(emitter, 0x66);
+		if (width == 1)
+			Byte(emitter, 0x88);
+		else
+			Byte(emitter, 0x89);
+		Byte(emitter, 0x83);
+		Word(emitter, target + offset);
+	}
+}
+
+static void VectorSumAcross(OsxNativeEmitter *emitter, uint32 target, uint32 left, uint32 right)
+{
+	uint32 word;
+	uint8 *inside;
+	Byte(emitter, 0x48); Byte(emitter, 0x63); Byte(emitter, 0x83);
+	Word(emitter, right + 12);
+	for (word = 0; word < 4; word++) {
+		Byte(emitter, 0x48); Byte(emitter, 0x63); Byte(emitter, 0x8b);
+		Word(emitter, left + word * 4);
+		RegisterOp(emitter, 0x01, 0, 1, 1);
+	}
+	Byte(emitter, 0x48); Byte(emitter, 0x63); Byte(emitter, 0xc8);
+	RegisterOp(emitter, 0x39, 1, 0, 1);
+	inside = Jump(emitter, 4);
+	Byte(emitter, 0x48); Byte(emitter, 0xc1); Byte(emitter, 0xf8); Byte(emitter, 63);
+	ImmediateOp(emitter, 6, 0, 0x7fffffffu);
+	Byte(emitter, 0x83); Byte(emitter, 0x8b);
+	Word(emitter, OSXJITOFFSET(vscr));
+	Byte(emitter, 1);
+	Patch(inside, emitter->cursor);
+	CpuMemory(emitter, 0x89, 0, target + 12, 0);
+	for (word = 0; word < 3; word++) {
+		Byte(emitter, 0xc7); Byte(emitter, 0x83);
+		Word(emitter, target + word * 4);
+		Word(emitter, 0);
+	}
+}
+
+static void VectorAllOnes(OsxNativeEmitter *emitter, int reg)
+{
+	VectorOperation(emitter, 0x75, reg, reg);
+}
+
+static int VectorExtra(OsxNativeEmitter *emitter, uint32 instruction, int count)
+{
+	uint32 kind;
+	uint32 form;
+	uint32 target;
+	uint32 left;
+	uint32 right;
+	uint32 value;
+	uint32 word;
+	uint32 saturate;
+	uint32 modular;
+	uint32 simple;
+	kind = instruction & 0x7ff;
+	form = instruction & 0x3f;
+	target = OSXJITOFFSET(vr) + ((instruction >> 21) & 31) * 16;
+	left = OSXJITOFFSET(vr) + ((instruction >> 16) & 31) * 16;
+	right = OSXJITOFFSET(vr) + ((instruction >> 11) & 31) * 16;
+	saturate = 0;
+	modular = 0;
+	simple = 0;
+	if (form >= 32) {
+		if (form != 34 && form != 40)
+			return 0;
+	} else {
+		switch (kind) {
+		case 512: saturate = 0xdc; modular = 0xfc; break;
+		case 576: saturate = 0xdd; modular = 0xfd; break;
+		case 768: saturate = 0xec; modular = 0xfc; break;
+		case 832: saturate = 0xed; modular = 0xfd; break;
+		case 1536: saturate = 0xd8; modular = 0xf8; break;
+		case 1600: saturate = 0xd9; modular = 0xf9; break;
+		case 1792: saturate = 0xe8; modular = 0xf8; break;
+		case 1856: saturate = 0xe9; modular = 0xf9; break;
+		case 2: simple = 0xde; break;
+		case 514: simple = 0xda; break;
+		case 322: simple = 0xee; break;
+		case 834: simple = 0xea; break;
+		case 1026: simple = 0xe0; break;
+		case 1090: simple = 0xe3; break;
+		case 386: case 898: case 1346: case 8: case 520: case 264: case 776:
+			break;
+		case 526: case 654: case 590: case 718:
+			if (!emitter->shuffle)
+				return 0;
+			break;
+		case 780: case 844: case 908:
+		case 260: case 324: case 388: case 516: case 580: case 644: case 772: case 836: case 900:
+		case 1928:
+			VectorEnabled(emitter, count);
+			emitter->vectorvalue = 0;
+			if (kind == 1928) {
+				VectorSumAcross(emitter, target, left, right);
+				return 1;
+			}
+			if (kind == 780 || kind == 844 || kind == 908) {
+				value = (uint32)((int32)(((instruction >> 16) & 31) << 27) >> 27);
+				if (kind == 780)
+					value = (value & 0xff) * 0x01010101u;
+				else if (kind == 844)
+					value = (value & 0xffff) * 0x00010001u;
+				for (word = 0; word < 4; word++) {
+					Byte(emitter, 0xc7); Byte(emitter, 0x83);
+					Word(emitter, target + word * 4);
+					Word(emitter, value);
+				}
+				return 1;
+			}
+			VectorLanes(emitter, kind, target, left, right);
+			return 1;
+		default:
+			return 0;
+		}
+	}
+	VectorEnabled(emitter, count);
+	if (emitter->vectorvalue == right)
+		VectorOperation(emitter, 0x6f, 1, 0);
+	else
+		VectorMemory(emitter, 0, 1, right);
+	if (emitter->vectorvalue != left)
+		VectorMemory(emitter, 0, 0, left);
+	if (form == 40 || form == 34) {
+		if (form == 40)
+			VectorOperation(emitter, 0xf5, 0, 1);
+		else
+			VectorOperation(emitter, 0xd5, 0, 1);
+		VectorMemory(emitter, 0, 2, OSXJITOFFSET(vr) + ((instruction >> 6) & 31) * 16);
+		if (form == 40)
+			VectorOperation(emitter, 0xfe, 0, 2);
+		else
+			VectorOperation(emitter, 0xfd, 0, 2);
+	} else if (saturate) {
+		VectorOperation(emitter, 0x6f, 2, 0);
+		VectorOperation(emitter, modular, 2, 1);
+		VectorOperation(emitter, saturate, 0, 1);
+		if (modular == 0xfc || modular == 0xf8)
+			VectorOperation(emitter, 0x74, 2, 0);
+		else
+			VectorOperation(emitter, 0x75, 2, 0);
+		VectorSaturated(emitter, 2);
+	} else if (simple) {
+		VectorOperation(emitter, simple, 0, 1);
+	} else if (kind == 386) {
+		VectorOperation(emitter, 0x6f, 2, 0);
+		VectorOperation(emitter, 0x66, 2, 1);
+		VectorOperation(emitter, 0xdb, 0, 2);
+		VectorOperation(emitter, 0xdf, 2, 1);
+		VectorOperation(emitter, 0xeb, 0, 2);
+	} else if (kind == 898) {
+		VectorOperation(emitter, 0x6f, 2, 1);
+		VectorOperation(emitter, 0x66, 2, 0);
+		VectorOperation(emitter, 0xdb, 0, 2);
+		VectorOperation(emitter, 0xdf, 2, 1);
+		VectorOperation(emitter, 0xeb, 0, 2);
+	} else if (kind == 1346) {
+		VectorAllOnes(emitter, 2);
+		VectorShift(emitter, 0x71, 6, 2, 15);
+		VectorOperation(emitter, 0xef, 0, 2);
+		VectorOperation(emitter, 0xef, 1, 2);
+		VectorOperation(emitter, 0xe3, 0, 1);
+		VectorOperation(emitter, 0xef, 0, 2);
+	} else if (kind == 520) {
+		VectorShift(emitter, 0x71, 2, 0, 8);
+		VectorShift(emitter, 0x71, 2, 1, 8);
+		VectorOperation(emitter, 0xd5, 0, 1);
+	} else if (kind == 8) {
+		VectorAllOnes(emitter, 2);
+		VectorShift(emitter, 0x71, 2, 2, 8);
+		VectorOperation(emitter, 0xdb, 0, 2);
+		VectorOperation(emitter, 0xdb, 1, 2);
+		VectorOperation(emitter, 0xd5, 0, 1);
+	} else if (kind == 776 || kind == 264) {
+		if (kind == 264) {
+			VectorShift(emitter, 0x71, 6, 0, 8);
+			VectorShift(emitter, 0x71, 6, 1, 8);
+		}
+		VectorShift(emitter, 0x71, 4, 0, 8);
+		VectorShift(emitter, 0x71, 4, 1, 8);
+		VectorOperation(emitter, 0xd5, 0, 1);
+	} else {
+		if (kind == 526)
+			VectorConstant(emitter, 2, 5);
+		else if (kind == 654)
+			VectorConstant(emitter, 2, 6);
+		else if (kind == 590)
+			VectorConstant(emitter, 2, 7);
+		else
+			VectorConstant(emitter, 2, 8);
+		VectorOperation(emitter, 0x6f, 0, 1);
+		VectorOperation(emitter, 0x3800, 0, 2);
+		if (kind == 526 || kind == 654)
+			VectorShift(emitter, 0x71, 4, 0, 8);
+		else
+			VectorShift(emitter, 0x72, 4, 0, 16);
+	}
+	VectorMemory(emitter, 1, 0, target);
+	emitter->vectorvalue = target;
+	return 1;
+}
+
 static void VectorQuad(OsxNativeEmitter *emitter, uint32 instruction, int count)
 {
 	uint32 vector;
@@ -899,6 +1303,45 @@ static void VectorQuad(OsxNativeEmitter *emitter, uint32 instruction, int count)
 			Byte(emitter, 0x0f); Byte(emitter, 0xca);
 			CpuMemory(emitter, 0x89, 2, vector + word * 4, 0);
 		}
+	}
+}
+
+static void VectorElement(OsxNativeEmitter *emitter, uint32 instruction, uint32 extended, int count)
+{
+	uint32 vector;
+	uint32 word;
+	vector = OSXJITOFFSET(vr) + ((instruction >> 21) & 31) * 16;
+	VectorEnabled(emitter, count);
+	Address(emitter, (instruction >> 16) & 31, (instruction >> 11) & 31, 0, 0);
+	if (extended == 6 || extended == 38) {
+		ImmediateOp(emitter, 4, 0, 15);
+		if (extended == 38) {
+			Byte(emitter, 0xf7); Byte(emitter, 0xd8);
+			ImmediateOp(emitter, 0, 0, 16);
+		}
+		Byte(emitter, 0x69); Byte(emitter, 0xc0);
+		Word(emitter, 0x01010101u);
+		for (word = 0; word < 4; word++) {
+			Byte(emitter, 0x8d); Byte(emitter, 0x90);
+			Word(emitter, 0x00010203u + word * 0x04040404u);
+			CpuMemory(emitter, 0x89, 2, vector + word * 4, 0);
+		}
+		return;
+	}
+	ImmediateOp(emitter, 4, 0, 0xfffffffcu);
+	Translate(emitter, extended == 199, 0xffc, count);
+	RegisterOp(emitter, 0x89, 1, 0, 0);
+	ImmediateOp(emitter, 4, 1, 12);
+	if (extended == 199) {
+		Byte(emitter, 0x8b); Byte(emitter, 0x94); Byte(emitter, 0x0b);
+		Word(emitter, vector);
+		Byte(emitter, 0x0f); Byte(emitter, 0xca);
+		Byte(emitter, 0x41); Byte(emitter, 0x89); Byte(emitter, 0x14); Byte(emitter, 0x00);
+	} else {
+		Byte(emitter, 0x41); Byte(emitter, 0x8b); Byte(emitter, 0x14); Byte(emitter, 0x00);
+		Byte(emitter, 0x0f); Byte(emitter, 0xca);
+		Byte(emitter, 0x89); Byte(emitter, 0x94); Byte(emitter, 0x0b);
+		Word(emitter, vector);
 	}
 }
 
@@ -1071,13 +1514,6 @@ static int Branch(OsxNativeEmitter *emitter, uint32 instruction, int count)
 	return 2;
 }
 
-static void Setcc(OsxNativeEmitter *emitter, uint32 condition, int reg)
-{
-	Byte(emitter, 0x0f);
-	Byte(emitter, 0x90 | condition);
-	Byte(emitter, 0xc0 | reg);
-}
-
 static void LoadCarry(OsxNativeEmitter *emitter)
 {
 	Byte(emitter, 0x0f); Byte(emitter, 0xba); Byte(emitter, 0xa3);
@@ -1237,6 +1673,23 @@ static int Logical(OsxNativeEmitter *emitter, uint32 instruction, uint32 extende
 		ImmediateOp(emitter, 6, 0, 31);
 		CpuMemory(emitter, 0x89, 0, OSXJITGPR(target), 0);
 		break;
+	case 792:
+		CpuMemory(emitter, 0x8b, 1, OSXJITGPR(amount), 0);
+		ImmediateOp(emitter, 4, 1, 63);
+		Byte(emitter, 0x48); Byte(emitter, 0x63); Byte(emitter, 0x83);
+		Word(emitter, OSXJITGPR(source));
+		RegisterOp(emitter, 0x89, 2, 0, 1);
+		Byte(emitter, 0x48); Byte(emitter, 0xd3); Byte(emitter, 0xf8);
+		CpuMemory(emitter, 0x89, 0, OSXJITGPR(target), 0);
+		RegisterOp(emitter, 0x89, 9, 0, 1);
+		Byte(emitter, 0x49); Byte(emitter, 0xd3); Byte(emitter, 0xe1);
+		RegisterOp(emitter, 0x39, 9, 2, 1);
+		Setcc(emitter, 5, 1);
+		RegisterOp(emitter, 0x85, 2, 2, 1);
+		Setcc(emitter, 8, 2);
+		Byte(emitter, 0x20); Byte(emitter, 0xca);
+		StoreCarry(emitter);
+		break;
 	case 824:
 		CpuMemory(emitter, 0x8b, 0, OSXJITGPR(source), 0);
 		if (amount == 0) {
@@ -1362,6 +1815,32 @@ static int System(OsxNativeEmitter *emitter, uint32 instruction, uint32 extended
 			Byte(emitter, 0x48); Byte(emitter, 0xc1); Byte(emitter, 0xe8); Byte(emitter, 32);
 		}
 		CpuMemory(emitter, 0x89, 0, OSXJITGPR(target), 0);
+		return 1;
+	case 210:
+	case 242:
+#if OSXJITSLOWPATH
+		emitter->slowactive = 1;
+#endif
+		RequireSupervisorMode(emitter, count);
+		if (extended == 210)
+			Immediate(emitter, 0, (instruction >> 16) & 15);
+		else {
+			CpuMemory(emitter, 0x8b, 0, OSXJITGPR((instruction >> 11) & 31), 0);
+			Shift(emitter, 5, 0, 28);
+		}
+		RegisterOp(emitter, 0x89, 1, 11, 0);
+		Shift(emitter, 5, 1, 28);
+		RegisterOp(emitter, 0x39, 1, 0, 0);
+		Miss(emitter, 4, count);
+#if OSXJITSLOWPATH
+		emitter->slowactive = 0;
+#endif
+		CpuMemory(emitter, 0x8b, 2, OSXJITGPR(target), 0);
+		Byte(emitter, 0x89); Byte(emitter, 0x94); Byte(emitter, 0x83);
+		Word(emitter, OSXJITOFFSET(sr));
+		Byte(emitter, 0xc7); Byte(emitter, 0x83);
+		Word(emitter, OSXJITOFFSET(fetchtag));
+		Word(emitter, 0);
 		return 1;
 	case 339:
 	case 467:
@@ -1532,14 +2011,14 @@ static int Interpretable(uint32 instruction)
 	uint32 opcode;
 	uint32 extended;
 	opcode = instruction >> 26;
-	if (opcode == 4 || opcode == 59)
+	if (opcode == 4)
 		return 1;
 	if (opcode != 31)
 		return 0;
 	extended = (instruction >> 1) & 0x3ff;
 	switch (extended) {
-	case 6: case 7: case 38: case 39: case 71: case 135: case 167: case 199:
-	case 342: case 374: case 534: case 662: case 758: case 790: case 792: case 822: case 918: case 982: case 210: case 242:
+	case 7: case 39: case 135: case 167:
+	case 342: case 374: case 534: case 662: case 758: case 790: case 822: case 918: case 982:
 		return 1;
 	}
 	return 0;
@@ -1586,6 +2065,7 @@ static int Emit(OsxNativeEmitter *emitter, uint32 instruction, int count)
 	int target;
 	int base;
 	int index;
+	int status;
 	OsxVectorFunction handler;
 	opcode = instruction >> 26;
 	if (opcode != 4)
@@ -1610,10 +2090,17 @@ static int Emit(OsxNativeEmitter *emitter, uint32 instruction, int count)
 	if (opcode == 4) {
 		handler = OsxCpuVectorHandler(instruction);
 		if (handler) {
-			if (VectorNative(emitter, instruction, count))
+			if (VectorExtra(emitter, instruction, count) || VectorNative(emitter, instruction, count))
 				return 1;
 			emitter->vectorvalue = 0;
 			VectorCall(emitter, instruction, handler, count);
+			return 1;
+		}
+	}
+	if (opcode == 31) {
+		extended = (instruction >> 1) & 0x3ff;
+		if (extended == 6 || extended == 38 || extended == 71 || extended == 199) {
+			VectorElement(emitter, instruction, extended, count);
 			return 1;
 		}
 	}
@@ -1626,8 +2113,16 @@ static int Emit(OsxNativeEmitter *emitter, uint32 instruction, int count)
 		return 1;
 	}
 	switch (opcode) {
+	case 59:
 	case 63:
-		if (!Float(emitter, instruction, count))
+#if OSXJITSLOWPATH
+		emitter->slowactive = 1;
+		status = Float(emitter, instruction, count);
+		emitter->slowactive = 0;
+#else
+		status = Float(emitter, instruction, count);
+#endif
+		if (!status)
 			Callout(emitter, instruction, count);
 		return 1;
 	case 8:
@@ -1728,6 +2223,8 @@ static int Emit(OsxNativeEmitter *emitter, uint32 instruction, int count)
 				offset = OSXJITOFFSET(lr);
 			else if (number == 9)
 				offset = OSXJITOFFSET(ctr);
+			else if (number == 256)
+				offset = OSXJITOFFSET(vrsave);
 			else
 				return System(emitter, instruction, extended, count);
 			if (extended == 339) {
@@ -1803,6 +2300,25 @@ static int Emit(OsxNativeEmitter *emitter, uint32 instruction, int count)
 	return 0;
 }
 
+static uint32 VectorByte(uint32 element)
+{
+	return (element & ~3u) + 3 - (element & 3);
+}
+
+static void UnpackMask(uint8 *mask, uint32 first, int wide)
+{
+	uint32 element;
+	memset(mask, 0x80, 16);
+	for (element = 0; element < 8; element++) {
+		if (!wide)
+			mask[VectorByte(element * 2)] = (uint8)VectorByte(first + element);
+		else if (element < 4) {
+			mask[VectorByte(element * 4)] = (uint8)VectorByte((first + element) * 2);
+			mask[VectorByte(element * 4 + 1)] = (uint8)VectorByte((first + element) * 2 + 1);
+		}
+	}
+}
+
 int OsxJitCreate(OsxCpu *cpu)
 {
 	OsxNativeState *state;
@@ -1819,6 +2335,10 @@ int OsxJitCreate(OsxCpu *cpu)
 		state->vectorconstants[3][index] = 0x0f0f0f0fu;
 		state->vectorconstants[4][index] = 0x00004000u;
 	}
+	UnpackMask((uint8 *)state->vectorconstants[5], 0, 0);
+	UnpackMask((uint8 *)state->vectorconstants[6], 8, 0);
+	UnpackMask((uint8 *)state->vectorconstants[7], 0, 1);
+	UnpackMask((uint8 *)state->vectorconstants[8], 4, 1);
 	state->versions = (uint32 *)calloc(state->pagecount, sizeof(uint32));
 	state->compiledpages = (uint8 *)calloc(state->pagecount, 1);
 	state->records = (OsxNativeRecord *)malloc(OSXJITRECORDS * sizeof(OsxNativeRecord));
@@ -1884,6 +2404,9 @@ int OsxJitInvalidate(OsxCpu *cpu, uint32 address, uint32 length)
 		state->compiledpages[first] = 0;
 		state->versions[first]++;
 		invalidated = 1;
+#if OSXPROFILEJIT
+		state->tmpstats[14]++;
+#endif
 	}
 	return invalidated;
 }
@@ -1915,6 +2438,12 @@ static void Compile(OsxCpu *cpu, OsxNativeState *state, OsxNativeBlock *block, u
 	int index;
 	uint8 *sliceshort;
 	uint8 *stubs[OSXJITMISSES];
+#if OSXJITSLOWPATH
+	uint8 *slowstub;
+	uint8 *resume;
+	int slowjumps;
+	int jump;
+#endif
 	int shared;
 	uint32 pendingpc;
 #if OSXPROFILEJIT
@@ -1925,6 +2454,9 @@ static void Compile(OsxCpu *cpu, OsxNativeState *state, OsxNativeBlock *block, u
 	uint32 tmpexit;
 #endif
 	if (state->used + OSXJITRESERVE >= OSXJITBYTES) {
+#if OSXPROFILEJIT
+		state->tmpstats[0]++;
+#endif
 		memset(state->records, 0xff, OSXJITRECORDS * sizeof(OsxNativeRecord));
 		memset(state->blocks, 0, sizeof(state->blocks));
 		memset(state->front, 0, sizeof(state->front));
@@ -1951,6 +2483,11 @@ static void Compile(OsxCpu *cpu, OsxNativeState *state, OsxNativeBlock *block, u
 	emitter.vectorconstants = state->vectorconstants;
 	emitter.fillcount = 0;
 	emitter.misscount = 0;
+#if OSXJITSLOWPATH
+	emitter.slowactive = 0;
+	emitter.slowjumpcount = 0;
+	emitter.slowcount = 0;
+#endif
 	Byte(&emitter, 0x53);
 	Byte(&emitter, 0x41); Byte(&emitter, 0x54);
 	Byte(&emitter, 0x41); Byte(&emitter, 0x55);
@@ -1966,7 +2503,11 @@ static void Compile(OsxCpu *cpu, OsxNativeState *state, OsxNativeBlock *block, u
 	count = 0;
 	status = 0;
 	pendingpc = 0;
+#if OSXJITSLOWPATH
+	while (count < limit && emitter.misscount < OSXJITMISSES - 128 && emitter.fillcount < OSXJITLIMIT * 2 - 4 && emitter.slowjumpcount < OSXJITLIMIT * 8 - 16) {
+#else
 	while (count < limit && emitter.misscount < OSXJITMISSES - 128 && emitter.fillcount < OSXJITLIMIT * 2 - 4) {
+#endif
 		memcpy(&word, cpu->ram + physical + count * 4, 4);
 		instruction = tswap32(word);
 		if (pendingpc && NeedsPc(instruction)) {
@@ -1977,7 +2518,19 @@ static void Compile(OsxCpu *cpu, OsxNativeState *state, OsxNativeBlock *block, u
 		tmpoffsets[count] = (uint32)(emitter.cursor - emitter.start);
 		tmpwords[count] = instruction;
 #endif
+#if OSXJITSLOWPATH
+		slowjumps = emitter.slowjumpcount;
 		status = Emit(&emitter, instruction, count);
+		if (emitter.slowjumpcount != slowjumps) {
+			emitter.slowinstructions[emitter.slowcount] = instruction;
+			emitter.slowcounts[emitter.slowcount] = count;
+			emitter.slowresumes[emitter.slowcount] = emitter.cursor;
+			emitter.slowcount++;
+			emitter.bytemask = 0;
+		}
+#else
+		status = Emit(&emitter, instruction, count);
+#endif
 		if (status == 0)
 			break;
 		count++;
@@ -1996,6 +2549,19 @@ static void Compile(OsxCpu *cpu, OsxNativeState *state, OsxNativeBlock *block, u
 		Exit(&emitter, count, (physical & 4095) + (uint32)count * 4);
 #if OSXPROFILEJIT
 	tmpexit = (uint32)(emitter.cursor - emitter.start);
+#endif
+#if OSXJITSLOWPATH
+	for (index = 0; index < emitter.slowcount; index++) {
+		slowstub = emitter.cursor;
+		for (jump = 0; jump < emitter.slowjumpcount; jump++)
+			if (emitter.slowowners[jump] == index)
+				Patch(emitter.slowjumps[jump], slowstub);
+		Callout(&emitter, emitter.slowinstructions[index], emitter.slowcounts[index]);
+		Byte(&emitter, 0xe9);
+		resume = emitter.cursor;
+		Word(&emitter, 0);
+		Patch(resume, emitter.slowresumes[index]);
+	}
 #endif
 	for (index = 0; index < emitter.fillcount; index++) {
 		Patch(emitter.fills[index][0], emitter.cursor);
@@ -2036,6 +2602,8 @@ static void Compile(OsxCpu *cpu, OsxNativeState *state, OsxNativeBlock *block, u
 	}
 	block->function = (OsxNativeFunction)(state->executebase + state->used);
 #if OSXPROFILEJIT
+	state->tmpstats[6] += (uint64)(emitter.cursor - emitter.start);
+	state->tmpstats[7] += (uint64)count;
 	if (state->tmpmap) {
 		tmpheader[0] = (uint32)(uintptr_t)(state->executebase + state->used);
 		tmpheader[1] = (uint32)((uint64)(uintptr_t)(state->executebase + state->used) >> 32);
@@ -2104,6 +2672,9 @@ void OsxJitRun(OsxCpu *cpu, int32 count)
 			return;
 		}
 		if (((cpu->pc & 0xfffff000) | 1) != cpu->fetchtag && !OsxCpuFetchPage(cpu)) {
+#if OSXPROFILEJIT
+			state->tmpstats[13]++;
+#endif
 			cpu->jitlink = NULL;
 			cpu->pc = cpu->nextpc;
 			cpu->slice--;
@@ -2115,6 +2686,9 @@ void OsxJitRun(OsxCpu *cpu, int32 count)
 			hash = ((physical >> 2) * 0x9e3779b1u) ^ (mode * 0x85ebca6bu);
 			version = state->versions[physical >> 12] + 1;
 			block = &state->front[hash >> 18];
+#if OSXPROFILEJIT
+			state->tmpstats[1]++;
+#endif
 			if (block->physical != physical || block->mode != mode || block->version != version) {
 				set = hash >> 16;
 				block = &state->blocks[set * OSXJITWAYS];
@@ -2122,6 +2696,26 @@ void OsxJitRun(OsxCpu *cpu, int32 count)
 					if (block[way].physical == physical && block[way].mode == mode && block[way].version == version)
 						break;
 				}
+#if OSXPROFILEJIT
+				state->tmpstats[1]--;
+				if (way < OSXJITWAYS)
+					state->tmpstats[2]++;
+				else {
+					int tmpway;
+					int tmpstale;
+					tmpstale = 0;
+					for (tmpway = 0; tmpway < OSXJITWAYS; tmpway++)
+						if (block[tmpway].physical == physical && block[tmpway].mode == mode && block[tmpway].function)
+							tmpstale = 1;
+					if (tmpstale)
+						state->tmpstats[3]++;
+					else
+						state->tmpstats[5]++;
+					tmpway = state->victims[set];
+					if (block[tmpway].function && block[tmpway].version == state->versions[block[tmpway].physical >> 12] + 1)
+						state->tmpstats[4]++;
+				}
+#endif
 				if (way == OSXJITWAYS) {
 					way = state->victims[set];
 					state->victims[set] = (uint8)((way + 1) & (OSXJITWAYS - 1));
@@ -2141,6 +2735,10 @@ void OsxJitRun(OsxCpu *cpu, int32 count)
 			}
 			if (block->count) {
 				code = block->function(cpu);
+#if OSXPROFILEJIT
+				state->tmpstats[8]++;
+				state->tmpstats[9 + (code & 3)]++;
+#endif
 				cpu->nextpc = cpu->pc;
 				if (code == OSXJITLINK || code == OSXJITDYNAMIC) {
 					linkkind = (uint32)code;
@@ -2159,8 +2757,29 @@ void OsxJitRun(OsxCpu *cpu, int32 count)
 		cpu->slice--;
 		OsxCpuExecuteInstruction(cpu, instruction);
 		state->interpreted++;
+#if OSXPROFILEJIT
+		state->tmpstats[15]++;
+#endif
 	}
 }
+
+#if OSXPROFILEJIT
+void OsxJitTmpStats(OsxCpu *cpu, FILE *log)
+{
+	static const char *const names[16] = { "flushes", "fronthit", "sethit", "stale", "evictlive", "newcompile", "bytes", "instrs", "dispatch", "retcontinue", "retinterpret", "retlink", "retdynamic", "fetchfault", "pagesinvalidated", "interpreted" };
+	OsxNativeState *state;
+	int index;
+	state = (OsxNativeState *)cpu->nativejit;
+	if (state == NULL)
+		return;
+	fprintf(log, "TMPJIT used %u", state->used);
+	for (index = 0; index < 16; index++) {
+		fprintf(log, " %s %llu", names[index], (unsigned long long)state->tmpstats[index]);
+		state->tmpstats[index] = 0;
+	}
+	fprintf(log, "\n");
+}
+#endif
 
 #else
 
@@ -2182,5 +2801,11 @@ void OsxJitRun(OsxCpu *cpu, int32 count)
 {
 	OsxCpuRun(cpu, count);
 }
+
+#if OSXPROFILEJIT
+void OsxJitTmpStats(OsxCpu *cpu, FILE *log)
+{
+}
+#endif
 
 #endif

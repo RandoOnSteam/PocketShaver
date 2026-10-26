@@ -81,6 +81,8 @@ static void Reset(OsxJitTest *test)
 	test->native->lr = test->reference->lr;
 	test->reference->ctr = Random(test);
 	test->native->ctr = test->reference->ctr;
+	test->reference->vrsave = Random(test);
+	test->native->vrsave = test->reference->vrsave;
 }
 
 static void Check(OsxJitTest *test, int matches, const char *name, uint32 instruction)
@@ -106,7 +108,8 @@ static void Compare(OsxJitTest *test, const char *name, uint32 instruction)
 	matches = memcmp(reference->gpr, native->gpr, sizeof(reference->gpr)) == 0;
 	matches &= memcmp(reference->fpr, native->fpr, sizeof(reference->fpr)) == 0;
 	matches &= memcmp(reference->vr, native->vr, sizeof(reference->vr)) == 0;
-	matches &= reference->vscr == native->vscr;
+	matches &= reference->vscr == native->vscr && reference->vrsave == native->vrsave;
+	matches &= memcmp(reference->sr, native->sr, sizeof(reference->sr)) == 0;
 	matches &= reference->pc == native->pc && reference->nextpc == native->nextpc;
 	matches &= reference->cr == native->cr && reference->xer == native->xer;
 	matches &= reference->lr == native->lr && reference->ctr == native->ctr;
@@ -168,7 +171,9 @@ static void RandomInstructions(OsxJitTest *test)
 		{(19u << 26) | (129u << 1), 0x03fff800}, {(19u << 26) | (193u << 1), 0x03fff800},
 		{(19u << 26) | (225u << 1), 0x03fff800}, {(19u << 26) | (257u << 1), 0x03fff800},
 		{(19u << 26) | (289u << 1), 0x03fff800}, {(19u << 26) | (417u << 1), 0x03fff800},
-		{(19u << 26) | (449u << 1), 0x03fff800}, {(31u << 26) | (595u << 1), 0x03ef0000}
+		{(19u << 26) | (449u << 1), 0x03fff800}, {(31u << 26) | (595u << 1), 0x03ef0000},
+		{(31u << 26) | (792u << 1), 0x03fff801}, {(31u << 26) | (210u << 1), 0x03ef0000},
+		{(31u << 26) | (242u << 1), 0x03e0f800}
 	};
 	uint32 instruction;
 	int iteration;
@@ -238,7 +243,7 @@ static uint64 FloatBits(OsxJitTest *test)
 
 static void FloatVectorMemory(OsxJitTest *test)
 {
-	static const uint32 indexed[] = {535, 567, 599, 631, 663, 695, 727, 759, 103, 231, 359, 487};
+	static const uint32 indexed[] = {535, 567, 599, 631, 663, 695, 727, 759, 103, 231, 359, 487, 6, 38, 71, 199};
 	OsxCpu *cpu;
 	uint32 instruction;
 	uint32 address;
@@ -260,7 +265,7 @@ static void FloatVectorMemory(OsxJitTest *test)
 		if ((iteration & 7) == 0)
 			address = TESTDATA + 4096 - 4 * (Random(test) % 4);
 		if (iteration % 3 == 0) {
-			extended = indexed[Random(test) % 12];
+			extended = indexed[Random(test) % 16];
 			instruction = (31u << 26) | (extended << 1) | (target << 21) | (base << 16) | (31u << 11);
 		} else {
 			opcode = 48 + Random(test) % 8;
@@ -306,6 +311,57 @@ static void FloatVectorMemory(OsxJitTest *test)
 			OsxCpuUpdateModes(cpu);
 		}
 		Run(test, instruction, 1, "float/vector memory");
+	}
+}
+
+static void FloatArithmetic(OsxJitTest *test)
+{
+	static const uint32 forms[] = {18, 20, 21, 25, 0, 32, 12, 15, 40, 72, 136, 264};
+	OsxCpu *cpu;
+	uint32 instruction;
+	uint32 extended;
+	uint32 fpscr;
+	uint64 bits;
+	int iteration;
+	int index;
+	int reg;
+	for (iteration = 0; iteration < 200000; iteration++) {
+		Reset(test);
+		extended = forms[Random(test) % 12];
+		instruction = ((Random(test) & 31) << 21) | ((Random(test) & 31) << 16) | ((Random(test) & 31) << 11) | (Random(test) & 1);
+		if (extended == 25)
+			instruction = (instruction & ~0xf800u) | ((Random(test) & 31) << 6);
+		if (extended >= 18 && extended <= 25) {
+			instruction |= extended << 1;
+			if (Random(test) & 1)
+				instruction |= 59u << 26;
+			else
+				instruction |= 63u << 26;
+		} else
+			instruction |= (63u << 26) | (extended << 1);
+		fpscr = Random(test) & 0xfff7f0f8u;
+		if (Random(test) & 3)
+			fpscr &= ~3u;
+		else
+			fpscr |= Random(test) & 3;
+		for (reg = 0; reg < 32; reg++) {
+			bits = FloatBits(test);
+			if (Random(test) & 1)
+				bits &= 0xffffffffe0000000ULL;
+			test->reference->fpr[reg].bits = bits;
+			test->native->fpr[reg].bits = bits;
+		}
+		for (index = 0; index < 2; index++) {
+			if (index == 0)
+				cpu = test->reference;
+			else
+				cpu = test->native;
+			cpu->fpscr = fpscr;
+			if ((iteration % 23) == 0)
+				cpu->msr = 0;
+			OsxCpuUpdateModes(cpu);
+		}
+		Run(test, instruction, 1, "float arithmetic");
 	}
 }
 
@@ -502,9 +558,11 @@ static void SprInstructions(OsxJitTest *test)
 	int iteration;
 	for (iteration = 0; iteration < 10000; iteration++) {
 		Reset(test);
-		number = Random(test) % 11;
+		number = Random(test) % 12;
 		if (number == 0)
 			number = 1;
+		else if (number == 11)
+			number = 256;
 		else if (number < 3)
 			number += 7;
 		else if (number < 5)
@@ -989,6 +1047,7 @@ int main(void)
 	RandomInstructions(&test);
 	MemoryInstructions(&test);
 	FloatVectorMemory(&test);
+	FloatArithmetic(&test);
 	VectorInstructions(&test);
 	ExtendedMemory(&test);
 	MachineState(&test);
