@@ -114,6 +114,8 @@ typedef struct OsxFaultRecord {
 
 #define OSXPROFILE 0
 #define OSXPROFILEJIT 0
+#define OSXMSGTRACE 0
+#define OSXNETTRACE 0
 
 typedef struct OsxCpu OsxCpu;
 

@@ -126,6 +126,7 @@ void OsxAudioReset(OsxMachine *machine)
 	if (audio->opened)
 		SDL_CloseAudio();
 	audio->opened = 0;
+	audio->running = 0;
 	audio->control = 0;
 	audio->codeccontrol = 0;
 	memset(audio->codec, 0, sizeof(audio->codec));
@@ -232,6 +233,7 @@ void OsxAudioPoll(OsxMachine *machine, uint64 now)
 	int got;
 	audio = &machine->audio;
 	if (!(machine->dbdma[OSXDBDMAAUDIOOUT].status & OSXDBDMASTATUSACTIVE)) {
+		audio->running = 0;
 		audio->lasttime = now;
 		return;
 	}
@@ -242,7 +244,13 @@ void OsxAudioPoll(OsxMachine *machine, uint64 now)
 		target = audio->rate * AUDIOFRAMEBYTES / AUDIOLATENCYDIVISOR;
 		SDL_LockAudio();
 		level = audio->head - audio->tail;
+		while (!audio->running && level + AUDIOFRAMEBYTES <= target) {
+			memset(audio->ring + (audio->head & (OSXAUDIORING - 1)), 0, AUDIOFRAMEBYTES);
+			audio->head += AUDIOFRAMEBYTES;
+			level += AUDIOFRAMEBYTES;
+		}
 		SDL_UnlockAudio();
+		audio->running = 1;
 	} else {
 		if (now <= audio->lasttime)
 			return;

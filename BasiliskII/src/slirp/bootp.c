@@ -75,12 +75,14 @@ static BOOTPClient *find_addr(struct in_addr *paddr, const uint8_t *macaddr)
 }
 
 static void dhcp_decode(const uint8_t *buf, int size,
-                        int *pmsg_type)
+                        int *pmsg_type, const uint8_t **prequested, int *prequestedlen)
 {
     const uint8_t *p, *p_end;
     int len, tag;
 
     *pmsg_type = 0;    
+    *prequested = NULL;
+    *prequestedlen = 0;
 
     p = buf;
     p_end = buf + size;
@@ -106,12 +108,28 @@ static void dhcp_decode(const uint8_t *buf, int size,
                 if (len >= 1)
                     *pmsg_type = p[0];
                 break;
+            case RFC2132_PARAM_LIST:
+                *prequested = p;
+                *prequestedlen = len;
+                break;
             default:
                 break;
             }
             p += len;
         }
     }
+}
+
+static int DhcpOptionPresent(const uint8_t *p, const uint8_t *end, int tag)
+{
+    if (tag == RFC1533_PAD || tag == RFC1533_END)
+        return 1;
+    while (p + 1 < end) {
+        if (p[0] == tag)
+            return 1;
+        p += 2 + p[1];
+    }
+    return 0;
 }
 
 static void bootp_reply(struct bootp_t *bp)
@@ -123,9 +141,12 @@ static void bootp_reply(struct bootp_t *bp)
     struct in_addr dns_addr;
     int dhcp_msg_type, val;
     uint8_t *q;
+    const uint8_t *requested;
+    int requestedlen;
+    int index;
 
     /* extract exact DHCP msg type */
-    dhcp_decode(bp->bp_vend, DHCP_OPT_LEN, &dhcp_msg_type);
+    dhcp_decode(bp->bp_vend, DHCP_OPT_LEN, &dhcp_msg_type, &requested, &requestedlen);
     
     if (dhcp_msg_type == 0)
         dhcp_msg_type = DHCPREQUEST; /* Force reply for old BOOTP clients */
@@ -223,6 +244,13 @@ static void bootp_reply(struct bootp_t *bp)
             *q++ = val;
             memcpy(q, slirp_hostname, val);
             q += val;
+        }
+
+        for (index = 0; index < requestedlen && q + 3 < rbp->bp_vend + DHCP_OPT_LEN; index++) {
+            if (!DhcpOptionPresent(rbp->bp_vend + 4, q, requested[index])) {
+                *q++ = requested[index];
+                *q++ = 0;
+            }
         }
     }
     *q++ = RFC1533_END;

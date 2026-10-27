@@ -129,6 +129,7 @@ typedef struct OsxAudio {
 	uint32 rate;
 	uint32 openrate;
 	int opened;
+	int running;
 	int disabled;
 	int32 leftgain;
 	int32 rightgain;

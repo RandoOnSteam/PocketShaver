@@ -57,6 +57,9 @@ typedef struct OsxSession {
 	FILE *slicelog;
 	FILE *script;
 	FILE *msglog;
+#if OSXMSGTRACE
+	uint32 pending[256][3];
+#endif
 	char scriptline[512];
 	char *scriptcommand;
 	uint64 scriptticks;
@@ -845,6 +848,9 @@ static void SyscallObserver(OsxCpu *cpu, void *context)
 	uint32 frame;
 	char text[160];
 	int index;
+#if OSXMSGTRACE
+	uint32 header[6];
+#endif
 	session = (OsxSession *)context;
 	if (cpu->gpr[0] == 4 && session->machine->log && session->writelogs < 2000) {
 		GuestString(cpu, cpu->gpr[4], text, sizeof(text));
@@ -853,11 +859,28 @@ static void SyscallObserver(OsxCpu *cpu, void *context)
 		fprintf(session->machine->log, "write fd %u: %s\n", cpu->gpr[3], text);
 		session->writelogs++;
 	}
+#if OSXMSGTRACE
+	if (session->msglog) {
+		index = ((cpu->sr[0] * 31u) ^ (cpu->gpr[1] >> 14)) & 255;
+		if (session->pending[index][0] == (cpu->sr[0] & 0xffffff) + 1 && session->pending[index][1] == cpu->gpr[1] >> 14) {
+			for (frame = 0; frame < 6; frame++)
+				if (!OsxCpuReadVirtual(cpu, session->pending[index][2] + frame * 4, &header[frame]))
+					header[frame] = 0xffffffffu;
+			fprintf(session->msglog, "%llu sr %06x recv bits %x size %u remote %x local %x id %d\n", (unsigned long long)OsxCpuTimebase(cpu), cpu->sr[0] & 0xffffff, header[0], header[1], header[2], header[3], (int32)header[5]);
+			session->pending[index][0] = 0;
+		}
+		if ((int32)cpu->gpr[0] == -31 && (cpu->gpr[4] & 2)) {
+			session->pending[index][0] = (cpu->sr[0] & 0xffffff) + 1;
+			session->pending[index][1] = cpu->gpr[1] >> 14;
+			session->pending[index][2] = cpu->gpr[3];
+		}
+	}
+#endif
 	key = cpu->gpr[0] << 16;
 	if ((int32)cpu->gpr[0] == -31 && OsxCpuReadVirtual(cpu, cpu->gpr[3] + 20, &identifier)) {
 		key = 0xffe10000u | (identifier & 0xffff);
 		if (session->msglog && OsxCpuReadVirtual(cpu, cpu->gpr[3] + 8, &frame)) {
-			fprintf(session->msglog, "%llu sr %06x lr %08x option %x id %d remote %x size %u bt", (unsigned long long)OsxCpuTimebase(cpu), cpu->sr[0] & 0xffffff, cpu->lr, cpu->gpr[4], identifier, frame, cpu->gpr[5]);
+			fprintf(session->msglog, "%llu sr %06x lr %08x option %x id %d remote %x size %u rsize %u rname %x timeout %u bt", (unsigned long long)OsxCpuTimebase(cpu), cpu->sr[0] & 0xffffff, cpu->lr, cpu->gpr[4], identifier, frame, cpu->gpr[5], cpu->gpr[6], cpu->gpr[7], cpu->gpr[8]);
 			frame = cpu->gpr[1];
 			for (index = 0; index < 12; index++) {
 				if (!OsxCpuReadVirtual(cpu, frame, &frame) || frame == 0 || !OsxCpuReadVirtual(cpu, frame + 8, &identifier))
@@ -867,6 +890,22 @@ static void SyscallObserver(OsxCpu *cpu, void *context)
 			fprintf(session->msglog, "\n");
 		}
 	}
+#if OSXMSGTRACE
+	else if (session->msglog) {
+		fprintf(session->msglog, "%llu sr %06x lr %08x syscall %d args %x %x %x %x bt", (unsigned long long)OsxCpuTimebase(cpu), cpu->sr[0] & 0xffffff, cpu->lr, (int32)cpu->gpr[0], cpu->gpr[3], cpu->gpr[4], cpu->gpr[5], cpu->gpr[6]);
+		frame = cpu->gpr[1];
+		for (index = 0; index < 12; index++) {
+			if (!OsxCpuReadVirtual(cpu, frame, &frame) || frame == 0 || !OsxCpuReadVirtual(cpu, frame + 8, &identifier))
+				break;
+			fprintf(session->msglog, " %08x", identifier);
+		}
+		if (cpu->gpr[0] == 59) {
+			GuestString(cpu, cpu->gpr[3], text, sizeof(text));
+			fprintf(session->msglog, " exec %s", text);
+		}
+		fprintf(session->msglog, "\n");
+	}
+#endif
 	if (key == session->backtracekey && session->backtracecount < 16) {
 		frame = cpu->gpr[1];
 		session->backtraces[session->backtracecount][0] = cpu->lr;
@@ -1106,6 +1145,9 @@ static void ExecuteScriptCommand(OsxSession *session, const char *command)
 	int second;
 	int third;
 	int fourth;
+#if OSXMSGTRACE
+	uint64 before;
+#endif
 	machine = session->machine;
 	if (machine->log)
 		fprintf(machine->log, "script %llu %s", (unsigned long long)OsxCpuTimebase(machine->cpu), command);
@@ -1117,6 +1159,13 @@ static void ExecuteScriptCommand(OsxSession *session, const char *command)
 		PressButton(session, first, 0);
 	else if (sscanf(command, "wheel %d", &first) == 1)
 		OsxCudaWheel(machine, first);
+#if OSXMSGTRACE
+	else if (sscanf(command, "det %d", &first) == 1 && first > 0 && machine->cpu->deterministic) {
+		before = OsxCpuTimebase(machine->cpu);
+		machine->cpu->deterministic = (uint32)first;
+		machine->cpu->virtualticks += before - OsxCpuTimebase(machine->cpu);
+	}
+#endif
 	else if (sscanf(command, "keydown %d", &first) == 1)
 		OsxCudaKey(machine, first, 1);
 	else if (sscanf(command, "keyup %d", &first) == 1)

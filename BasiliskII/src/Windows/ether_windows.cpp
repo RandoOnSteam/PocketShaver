@@ -1722,7 +1722,7 @@ static int slirp_add_redir(const char *redir_str)
 	// 0.0.0.0 doesn't seem to work, so default to a client address
 	// if none is specified
 	if (buf[0] == '\0' ?
-			!inet_pton(AF_INET, CTL_LOCALADDR, &guest_addr) :
+			!inet_pton(AF_INET, CTL_LOCAL, &guest_addr) :
 			!inet_pton(AF_INET, buf, &guest_addr)) {
 		goto fail_syntax;
 	}

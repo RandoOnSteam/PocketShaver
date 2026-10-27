@@ -192,6 +192,65 @@ void OsxBmacWrite(OsxMachine *machine, uint32 offset, uint32 value)
 		OsxBmacReceive(machine);
 }
 
+#if OSXNETTRACE
+static void NetTrace(OsxMachine *machine, const char *dir, const uint8 *f, int n)
+{
+	int type;
+	int ihl;
+	int proto;
+	int sport;
+	int dport;
+	int i;
+	if (!machine->log || n < 14)
+		return;
+	type = (f[12] << 8) | f[13];
+	fprintf(machine->log, "NET %s t=%llu len %d %02x:%02x:%02x:%02x:%02x:%02x<-%02x:%02x:%02x:%02x:%02x:%02x type %04x", dir, (unsigned long long)OsxCpuTimebase(machine->cpu), n, f[0],f[1],f[2],f[3],f[4],f[5],f[6],f[7],f[8],f[9],f[10],f[11], type);
+	if (type == 0x0806 && n >= 42)
+		fprintf(machine->log, " arp op %d sha %02x:%02x:%02x:%02x:%02x:%02x spa %d.%d.%d.%d tpa %d.%d.%d.%d", f[21], f[22],f[23],f[24],f[25],f[26],f[27], f[28],f[29],f[30],f[31], f[38],f[39],f[40],f[41]);
+	if (type == 0x0800 && n >= 34) {
+		ihl = (f[14] & 15) * 4;
+		proto = f[23];
+		fprintf(machine->log, " ip %d.%d.%d.%d->%d.%d.%d.%d proto %d", f[26],f[27],f[28],f[29],f[30],f[31],f[32],f[33], proto);
+		if ((proto == 6 || proto == 17) && n >= 14 + ihl + 4) {
+			sport = (f[14 + ihl] << 8) | f[15 + ihl];
+			dport = (f[16 + ihl] << 8) | f[17 + ihl];
+			fprintf(machine->log, " ports %d->%d", sport, dport);
+			if (proto == 6 && n >= 14 + ihl + 14)
+				fprintf(machine->log, " flags %02x", f[14 + ihl + 13]);
+			if (proto == 17 && (sport == 53 || dport == 53) && n >= 14 + ihl + 20) {
+				fprintf(machine->log, " dns id %02x%02x flags %02x%02x qd %d an %d name ", f[22 + ihl], f[23 + ihl], f[24 + ihl], f[25 + ihl], f[27 + ihl], f[29 + ihl]);
+				for (i = 14 + ihl + 20; i < n && f[i]; i++) {
+					if (f[i] < 32)
+						fputc('.', machine->log);
+					else
+						fputc(f[i], machine->log);
+				}
+				if (i + 2 < n)
+					fprintf(machine->log, " qtype %d", (f[i + 1] << 8) | f[i + 2]);
+			}
+			if (proto == 17 && (sport == 67 || sport == 68) && n >= 14 + ihl + 8 + 240) {
+				fprintf(machine->log, " bootp op %d yiaddr %d.%d.%d.%d opts", f[14 + ihl + 8], f[14+ihl+8+16],f[14+ihl+8+17],f[14+ihl+8+18],f[14+ihl+8+19]);
+				for (i = 14 + ihl + 8 + 240; i + 1 < n && f[i] != 255; i += 2 + f[i + 1]) {
+					if (f[i] == 0) {
+						i -= 1;
+						continue;
+					}
+					fprintf(machine->log, " %d", f[i]);
+					if ((f[i] == 53 || f[i] == 55) && i + 2 + f[i + 1] <= n) {
+						int k;
+						fprintf(machine->log, "[");
+						for (k = 0; k < f[i + 1]; k++)
+							fprintf(machine->log, "%d,", f[i + 2 + k]);
+						fprintf(machine->log, "]");
+					}
+				}
+			}
+		}
+	}
+	fprintf(machine->log, "\n");
+}
+#endif
+
 void OsxBmacTransmit(OsxMachine *machine)
 {
 	OsxBmac *bmac;
@@ -202,6 +261,9 @@ void OsxBmacTransmit(OsxMachine *machine)
 		if (length < 0)
 			return;
 		if (BackendReady(bmac) && (bmac->registers[BMACTXCFG >> 4] & BMACTXENABLE) && length >= 14) {
+#if OSXNETTRACE
+			NetTrace(machine, "tx", bmac->frame, length);
+#endif
 			EtherSlirpSend(bmac->frame, length);
 			bmac->busydeadline = OsxCpuTimebase(machine->cpu) + BMACBUSYPERIOD;
 		}
@@ -219,6 +281,9 @@ void OsxBmacReceive(OsxMachine *machine)
 			length = EtherSlirpReceive(bmac->pending);
 			if (length <= 0)
 				return;
+#if OSXNETTRACE
+			NetTrace(machine, "rx", bmac->pending, length);
+#endif
 			if (length > BMACMAXFRAME)
 				length = BMACMAXFRAME;
 			if (length < BMACMINFRAME) {
@@ -233,6 +298,10 @@ void OsxBmacReceive(OsxMachine *machine)
 		if (!OsxDbdmaInputFrame(machine, OSXDBDMABMACRX, bmac->pending, (uint32)bmac->pendinglength))
 			return;
 		bmac->pendinglength = 0;
+#if OSXNETTRACE
+		if (machine->log)
+			fprintf(machine->log, "NET rxdone t=%llu\n", (unsigned long long)OsxCpuTimebase(machine->cpu));
+#endif
 		bmac->status |= BMACFRAMERECEIVED;
 	}
 }
