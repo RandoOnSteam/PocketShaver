@@ -145,6 +145,7 @@ struct OsxCpu {
 	uint32 vscr;
 	uint32 jitscratch;
 	int jitflush;
+	int jithot;
 #if OSXPROFILE
 	uint32 tmpform[4][131072];
 	uint32 tmpexception[64];

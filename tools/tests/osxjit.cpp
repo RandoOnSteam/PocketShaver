@@ -1042,6 +1042,7 @@ int main(void)
 	test.reference->ram = (uint8 *)calloc(1, TESTRAMSIZE);
 	test.native->ram = (uint8 *)calloc(1, TESTRAMSIZE);
 	test.native->ramsize = TESTRAMSIZE;
+	test.native->jithot = 1;
 	if (!OsxJitCreate(test.native))
 		return 2;
 	RandomInstructions(&test);

@@ -35,6 +35,7 @@
 #define OSXJITRESERVE 65536
 #define OSXJITMISSES 1024
 #define OSXJITENTRY 25
+#define OSXJITHOT 3
 #define OSXJITCONTINUE 0
 #define OSXJITINTERPRET 1
 #define OSXJITLINK 2
@@ -77,6 +78,9 @@ typedef struct OsxNativeState {
 	uint8 *interpretthunk;
 	uint8 *fillthunk;
 	uint8 *timethunk;
+	uint8 *linkcallthunk;
+	uint8 *dynamicthunk;
+	uint8 *translatethunks[2][6];
 	uint32 thunkbytes;
 	uint64 compiled;
 	uint64 linked;
@@ -97,25 +101,18 @@ typedef struct OsxNativeEmitter {
 	uint8 *cursor;
 	uint8 *executestart;
 	uint32 physical;
-	OsxNativeRecord *records;
-	uint8 *checkthunk;
-	uint8 *missthunk;
 	uint8 *finishthunk;
-	uint8 *linkthunk;
 	uint8 *interpretthunk;
-	uint8 *fillthunk;
 	uint8 *timethunk;
+	uint8 *linkcallthunk;
+	uint8 *dynamicthunk;
+	uint8 *(*translatethunks)[6];
 	int deterministic;
 	uint32 enabled;
 	uint32 vectorvalue;
 	int shuffle;
 	int bytemask;
 	const uint32 (*vectorconstants)[4];
-	uint8 *fills[OSXJITLIMIT * 2][2];
-	uint8 *fillretries[OSXJITLIMIT * 2];
-	int fillcounts[OSXJITLIMIT * 2];
-	int fillkinds[OSXJITLIMIT * 2];
-	int fillcount;
 	uint8 *misses[OSXJITMISSES];
 	int misscounts[OSXJITMISSES];
 	int misscount;
@@ -303,22 +300,66 @@ static void DynamicExit(OsxNativeEmitter *emitter, int count)
 	Account(emitter, count);
 	Byte(emitter, 0x0f); Byte(emitter, 0x8e);
 	JumpTo(emitter, emitter->finishthunk);
-	RegisterOp(emitter, 0x89, 0, 11, 0);
-	Shift(emitter, 5, 0, 2);
-	ImmediateOp(emitter, 4, 0, OSXJITRECORDS - 1);
-	Byte(emitter, 0x48); Byte(emitter, 0xc1); Byte(emitter, 0xe0); Byte(emitter, 5);
-	Byte(emitter, 0x49); Byte(emitter, 0xba);
-	Quad(emitter, (uint64)(uintptr_t)emitter->records);
-	RegisterOp(emitter, 0x01, 10, 0, 1);
+	Byte(emitter, 0xe9);
+	JumpTo(emitter, emitter->dynamicthunk);
+}
+
+static void TranslateThunk(OsxNativeEmitter *emitter, uint8 *fillthunk, int store, uint32 limit)
+{
+	uint8 *retry;
+	uint8 *page;
+	uint8 *segment;
+	uint8 *outside;
+	uint8 *again;
+	retry = emitter->cursor;
+	RegisterOp(emitter, 0x89, 1, 0, 0);
+	ImmediateOp(emitter, 4, 1, 0xfffff000);
+	RegisterOp(emitter, 0x89, 2, 0, 0);
+	Shift(emitter, 5, 2, 12);
+	ImmediateOp(emitter, 4, 2, OSXTLBMASK);
+	Shift(emitter, 4, 2, 4);
+	if (store)
+		CpuMemory(emitter, 0x8b, 8, OSXJITOFFSET(writetlb), 1);
+	else
+		CpuMemory(emitter, 0x8b, 8, OSXJITOFFSET(readtlb), 1);
+	RegisterOp(emitter, 0x01, 8, 2, 1);
+	Byte(emitter, 0x41); Byte(emitter, 0x39); Byte(emitter, 0x08);
+	page = Jump(emitter, 5);
+	RegisterOp(emitter, 0x89, 2, 0, 0);
+	Shift(emitter, 5, 2, 28);
+	CpuMemory(emitter, 0x8b, 9, OSXJITOFFSET(datasr), 1);
+	Byte(emitter, 0x41); Byte(emitter, 0x8b); Byte(emitter, 0x14); Byte(emitter, 0x91);
+	Byte(emitter, 0x41); Byte(emitter, 0x39); Byte(emitter, 0x50); Byte(emitter, 4);
+	segment = Jump(emitter, 5);
+	RegisterOp(emitter, 0x89, 1, 0, 0);
+	ImmediateOp(emitter, 4, 1, 0xfff);
+	ImmediateOp(emitter, 7, 1, limit);
+	outside = Jump(emitter, 7);
+	Byte(emitter, 0x4d); Byte(emitter, 0x8b); Byte(emitter, 0x40); Byte(emitter, 8);
+	RegisterOp(emitter, 0x89, 0, 1, 0);
+	RegisterOp(emitter, 0x31, 1, 1, 0);
+	Byte(emitter, 0xc3);
+	Patch(page, emitter->cursor);
+	Patch(segment, emitter->cursor);
+	if (store)
+		Immediate(emitter, 9, OSXTLBWRITE);
+	else
+		Immediate(emitter, 9, OSXTLBREAD);
+	Byte(emitter, 0x48); Byte(emitter, 0x83); Byte(emitter, 0xec); Byte(emitter, 8);
 	Byte(emitter, 0xe8);
-	JumpTo(emitter, emitter->checkthunk);
-	Byte(emitter, 0x0f); Byte(emitter, 0x85);
-	JumpTo(emitter, emitter->missthunk);
-	Byte(emitter, 0x41); Byte(emitter, 0xff); Byte(emitter, 0x62); Byte(emitter, (uint32)offsetof(OsxNativeRecord, target));
+	JumpTo(emitter, fillthunk);
+	Byte(emitter, 0x48); Byte(emitter, 0x83); Byte(emitter, 0xc4); Byte(emitter, 8);
+	RegisterOp(emitter, 0x85, 1, 1, 0);
+	again = Jump(emitter, 5);
+	Patch(again, retry);
+	Patch(outside, emitter->cursor);
+	ImmediateOp(emitter, 1, 1, 1);
+	Byte(emitter, 0xc3);
 }
 
 static void EmitThunks(OsxNativeState *state)
 {
+	static const uint32 translatelimits[6] = { 0xfff, 0xffe, 0xffc, 0xff8, 0xff0, 0xfe0 };
 	OsxNativeEmitter emitter;
 	uint8 *misses[5];
 	int index;
@@ -375,6 +416,24 @@ static void EmitThunks(OsxNativeState *state)
 	Leave(&emitter, OSXJITLINK);
 	state->interpretthunk = state->executebase + (emitter.cursor - emitter.start);
 	Leave(&emitter, OSXJITINTERPRET);
+	state->linkcallthunk = state->executebase + (emitter.cursor - emitter.start);
+	Byte(&emitter, 0x58);
+	Byte(&emitter, 0x48); Byte(&emitter, 0x83); Byte(&emitter, 0xe8); Byte(&emitter, 9);
+	CpuMemory(&emitter, 0x89, 0, OSXJITOFFSET(jitlink), 1);
+	Leave(&emitter, OSXJITLINK);
+	state->dynamicthunk = state->executebase + (emitter.cursor - emitter.start);
+	RegisterOp(&emitter, 0x89, 0, 11, 0);
+	Shift(&emitter, 5, 0, 2);
+	ImmediateOp(&emitter, 4, 0, OSXJITRECORDS - 1);
+	Byte(&emitter, 0x48); Byte(&emitter, 0xc1); Byte(&emitter, 0xe0); Byte(&emitter, 5);
+	Byte(&emitter, 0x49); Byte(&emitter, 0xba);
+	Quad(&emitter, (uint64)(uintptr_t)state->records);
+	RegisterOp(&emitter, 0x01, 10, 0, 1);
+	Byte(&emitter, 0xe8);
+	JumpTo(&emitter, state->checkthunk);
+	Byte(&emitter, 0x0f); Byte(&emitter, 0x85);
+	JumpTo(&emitter, state->missthunk);
+	Byte(&emitter, 0x41); Byte(&emitter, 0xff); Byte(&emitter, 0x62); Byte(&emitter, (uint32)offsetof(OsxNativeRecord, target));
 	state->fillthunk = state->executebase + (emitter.cursor - emitter.start);
 	Byte(&emitter, 0x50);
 	Byte(&emitter, 0x41); Byte(&emitter, 0x52);
@@ -404,6 +463,10 @@ static void EmitThunks(OsxNativeState *state)
 	Byte(&emitter, 0x48); Byte(&emitter, 0x83); Byte(&emitter, 0xc4); Byte(&emitter, 0x20);
 	Byte(&emitter, 0x41); Byte(&emitter, 0x5b);
 	Byte(&emitter, 0xc3);
+	for (index = 0; index < 12; index++) {
+		state->translatethunks[index / 6][index % 6] = state->executebase + (emitter.cursor - emitter.start);
+		TranslateThunk(&emitter, state->fillthunk, index / 6, translatelimits[index % 6]);
+	}
 	state->thunkbytes = ((uint32)(emitter.cursor - emitter.start) + 63) & ~63u;
 	state->used = state->thunkbytes;
 	FlushInstructionCache(GetCurrentProcess(), state->executebase, state->thunkbytes);
@@ -411,7 +474,6 @@ static void EmitThunks(OsxNativeState *state)
 
 static void Exit(OsxNativeEmitter *emitter, int count, uint32 targetoffset)
 {
-	uint64 link;
 	if (targetoffset > 4095) {
 		DynamicExit(emitter, count);
 		return;
@@ -421,13 +483,8 @@ static void Exit(OsxNativeEmitter *emitter, int count, uint32 targetoffset)
 	JumpTo(emitter, emitter->finishthunk);
 	Byte(emitter, 0xe9);
 	Word(emitter, 0);
-	link = (uint64)(uintptr_t)(emitter->executestart + (emitter->cursor - emitter->start) - 4);
-	Byte(emitter, 0x48); Byte(emitter, 0xb8);
-	Word(emitter, (uint32)link);
-	Word(emitter, (uint32)(link >> 32));
-	CpuMemory(emitter, 0x89, 0, OSXJITOFFSET(jitlink), 1);
-	Byte(emitter, 0xe9);
-	JumpTo(emitter, emitter->linkthunk);
+	Byte(emitter, 0xe8);
+	JumpTo(emitter, emitter->linkcallthunk);
 }
 
 static void Advance(OsxNativeEmitter *emitter)
@@ -733,40 +790,23 @@ static void Address(OsxNativeEmitter *emitter, int base, int index, uint32 immed
 		RegisterOp(emitter, 0x89, 10, 0, 0);
 }
 
+static int LimitIndex(uint32 limit)
+{
+	switch (limit) {
+	case 0xfff: return 0;
+	case 0xffe: return 1;
+	case 0xffc: return 2;
+	case 0xff8: return 3;
+	case 0xff0: return 4;
+	}
+	return 5;
+}
+
 static void Translate(OsxNativeEmitter *emitter, int store, uint32 limit, int count)
 {
-	uint8 *retry;
-	int fill;
-	retry = emitter->cursor;
-	fill = emitter->fillcount++;
-	emitter->fillretries[fill] = retry;
-	emitter->fillcounts[fill] = count;
-	emitter->fillkinds[fill] = OSXTLBREAD;
-	if (store)
-		emitter->fillkinds[fill] = OSXTLBWRITE;
-	RegisterOp(emitter, 0x89, 1, 0, 0);
-	ImmediateOp(emitter, 4, 1, 0xfffff000);
-	RegisterOp(emitter, 0x89, 2, 0, 0);
-	Shift(emitter, 5, 2, 12);
-	ImmediateOp(emitter, 4, 2, OSXTLBMASK);
-	Shift(emitter, 4, 2, 4);
-	if (store)
-		CpuMemory(emitter, 0x8b, 8, OSXJITOFFSET(writetlb), 1);
-	else
-		CpuMemory(emitter, 0x8b, 8, OSXJITOFFSET(readtlb), 1);
-	RegisterOp(emitter, 0x01, 8, 2, 1);
-	Byte(emitter, 0x41); Byte(emitter, 0x39); Byte(emitter, 0x08);
-	emitter->fills[fill][0] = Jump(emitter, 5);
-	RegisterOp(emitter, 0x89, 2, 0, 0);
-	Shift(emitter, 5, 2, 28);
-	CpuMemory(emitter, 0x8b, 9, OSXJITOFFSET(datasr), 1);
-	Byte(emitter, 0x41); Byte(emitter, 0x8b); Byte(emitter, 0x14); Byte(emitter, 0x91);
-	Byte(emitter, 0x41); Byte(emitter, 0x39); Byte(emitter, 0x50); Byte(emitter, 4);
-	emitter->fills[fill][1] = Jump(emitter, 5);
-	ImmediateOp(emitter, 4, 0, 0xfff);
-	ImmediateOp(emitter, 7, 0, limit);
-	Miss(emitter, 7, count);
-	Byte(emitter, 0x4d); Byte(emitter, 0x8b); Byte(emitter, 0x40); Byte(emitter, 8);
+	Byte(emitter, 0xe8);
+	JumpTo(emitter, emitter->translatethunks[store != 0][LimitIndex(limit)]);
+	Miss(emitter, 5, count);
 }
 
 static void CallHelper(OsxNativeEmitter *emitter, uint64 function)
@@ -1864,28 +1904,6 @@ static int System(OsxNativeEmitter *emitter, uint32 instruction, uint32 extended
 	return 0;
 }
 
-static int Multiple(OsxNativeEmitter *emitter, uint32 instruction, uint32 opcode, int count)
-{
-	int first;
-	int base;
-	int reg;
-	int32 displacement;
-	uint32 single;
-	first = (instruction >> 21) & 31;
-	base = (instruction >> 16) & 31;
-	displacement = (int32)(int16)(instruction & 0xffff);
-	if (displacement + 4 * (31 - first) > 32767)
-		return 0;
-	if (opcode == 46 && base >= first)
-		return 0;
-	single = 32;
-	if (opcode == 47)
-		single = 36;
-	for (reg = first; reg < 32; reg++)
-		Memory(emitter, (single << 26) | ((uint32)reg << 21) | ((uint32)base << 16) | ((uint32)(displacement + 4 * (reg - first)) & 0xffff), single, -1, count);
-	return 1;
-}
-
 static void ConditionZero(OsxNativeEmitter *emitter)
 {
 	CpuMemory(emitter, 0x8b, 0, OSXJITOFFSET(xer), 0);
@@ -2081,8 +2099,10 @@ static int Emit(OsxNativeEmitter *emitter, uint32 instruction, int count)
 		return 1;
 	if (opcode == 19)
 		return ConditionLogical(emitter, instruction);
-	if (opcode == 46 || opcode == 47)
-		return Multiple(emitter, instruction, opcode, count);
+	if (opcode == 46 || opcode == 47) {
+		Callout(emitter, instruction, count);
+		return 1;
+	}
 	if (opcode == 31 && ((instruction & 0x6fe) == 0xce || (instruction & 0x6fe) == 0x2ce)) {
 		VectorQuad(emitter, instruction, count);
 		return 1;
@@ -2467,21 +2487,18 @@ static void Compile(OsxCpu *cpu, OsxNativeState *state, OsxNativeBlock *block, u
 	emitter.cursor = emitter.start;
 	emitter.executestart = state->executebase + state->used;
 	emitter.physical = physical;
-	emitter.records = state->records;
-	emitter.checkthunk = state->checkthunk;
-	emitter.missthunk = state->missthunk;
 	emitter.finishthunk = state->finishthunk;
-	emitter.linkthunk = state->linkthunk;
 	emitter.interpretthunk = state->interpretthunk;
-	emitter.fillthunk = state->fillthunk;
 	emitter.timethunk = state->timethunk;
+	emitter.linkcallthunk = state->linkcallthunk;
+	emitter.dynamicthunk = state->dynamicthunk;
+	emitter.translatethunks = state->translatethunks;
 	emitter.deterministic = cpu->deterministic != 0;
 	emitter.enabled = 0;
 	emitter.vectorvalue = 0;
 	emitter.shuffle = state->shuffle;
 	emitter.bytemask = 0;
 	emitter.vectorconstants = state->vectorconstants;
-	emitter.fillcount = 0;
 	emitter.misscount = 0;
 #if OSXJITSLOWPATH
 	emitter.slowactive = 0;
@@ -2504,9 +2521,9 @@ static void Compile(OsxCpu *cpu, OsxNativeState *state, OsxNativeBlock *block, u
 	status = 0;
 	pendingpc = 0;
 #if OSXJITSLOWPATH
-	while (count < limit && emitter.misscount < OSXJITMISSES - 128 && emitter.fillcount < OSXJITLIMIT * 2 - 4 && emitter.slowjumpcount < OSXJITLIMIT * 8 - 16) {
+	while (count < limit && emitter.misscount < OSXJITMISSES - 128 && emitter.slowjumpcount < OSXJITLIMIT * 8 - 16) {
 #else
-	while (count < limit && emitter.misscount < OSXJITMISSES - 128 && emitter.fillcount < OSXJITLIMIT * 2 - 4) {
+	while (count < limit && emitter.misscount < OSXJITMISSES - 128) {
 #endif
 		memcpy(&word, cpu->ram + physical + count * 4, 4);
 		instruction = tswap32(word);
@@ -2563,18 +2580,6 @@ static void Compile(OsxCpu *cpu, OsxNativeState *state, OsxNativeBlock *block, u
 		Patch(resume, emitter.slowresumes[index]);
 	}
 #endif
-	for (index = 0; index < emitter.fillcount; index++) {
-		Patch(emitter.fills[index][0], emitter.cursor);
-		Patch(emitter.fills[index][1], emitter.cursor);
-		Immediate(&emitter, 9, (uint32)emitter.fillkinds[index]);
-		Byte(&emitter, 0xe8);
-		JumpTo(&emitter, emitter.fillthunk);
-		RegisterOp(&emitter, 0x85, 1, 1, 0);
-		Miss(&emitter, 4, emitter.fillcounts[index]);
-		Byte(&emitter, 0xe9);
-		Word(&emitter, 0);
-		Patch(emitter.cursor - 4, emitter.fillretries[index]);
-	}
 	for (index = 0; index < emitter.misscount; index++) {
 		shared = 0;
 		while (shared < index && emitter.misscounts[shared] != emitter.misscounts[index])
@@ -2640,6 +2645,24 @@ static void Link(OsxNativeState *state, uint8 *jump, OsxNativeBlock *block)
 	state->linked++;
 }
 
+static void InterpretRun(OsxCpu *cpu, OsxNativeState *state)
+{
+	uint32 word;
+	uint32 instruction;
+	uint32 expected;
+	int executed;
+	executed = 0;
+	do {
+		memcpy(&word, cpu->fetchhost + (cpu->pc & 4095), 4);
+		instruction = tswap32(word);
+		expected = cpu->pc + 4;
+		cpu->slice--;
+		OsxCpuExecuteInstruction(cpu, instruction);
+		state->interpreted++;
+		executed++;
+	} while (cpu->pc == expected && executed < OSXJITLIMIT && cpu->slice > 0 && (cpu->pc & 4095) != 0 && !cpu->halted);
+}
+
 void OsxJitRun(OsxCpu *cpu, int32 count)
 {
 	OsxNativeState *state;
@@ -2655,11 +2678,15 @@ void OsxJitRun(OsxCpu *cpu, int32 count)
 	uint32 linkmode;
 	int way;
 	int code;
+	int hot;
 	state = (OsxNativeState *)cpu->nativejit;
 	if (state == NULL || cpu->tracefile) {
 		OsxCpuRun(cpu, count);
 		return;
 	}
+	hot = OSXJITHOT;
+	if (cpu->jithot)
+		hot = cpu->jithot;
 	if (cpu->halted)
 		return;
 	cpu->slice = count;
@@ -2719,13 +2746,26 @@ void OsxJitRun(OsxCpu *cpu, int32 count)
 				if (way == OSXJITWAYS) {
 					way = state->victims[set];
 					state->victims[set] = (uint8)((way + 1) & (OSXJITWAYS - 1));
-					Compile(cpu, state, block + way, physical, mode);
+					block[way].physical = physical;
+					block[way].mode = mode;
+					block[way].version = version;
+					block[way].function = NULL;
+					block[way].count = -1;
 				}
-				state->front[hash >> 18] = block[way];
-				block = &state->front[hash >> 18];
+				block += way;
+				if (block->count < 0) {
+					if (block->count > -hot)
+						block->count--;
+					else
+						Compile(cpu, state, block, physical, mode);
+				}
+				if (block->count > 0) {
+					state->front[hash >> 18] = *block;
+					block = &state->front[hash >> 18];
+				}
 			}
 			if (cpu->jitlink) {
-				if (block->count && mode == linkmode) {
+				if (block->count > 0 && mode == linkmode) {
 					if (linkkind == OSXJITLINK)
 						Link(state, cpu->jitlink, block);
 					else
@@ -2733,7 +2773,12 @@ void OsxJitRun(OsxCpu *cpu, int32 count)
 				}
 				cpu->jitlink = NULL;
 			}
-			if (block->count) {
+			if (block->count < 0) {
+				cpu->jitlink = NULL;
+				InterpretRun(cpu, state);
+				continue;
+			}
+			if (block->count > 0) {
 				code = block->function(cpu);
 #if OSXPROFILEJIT
 				state->tmpstats[8]++;
