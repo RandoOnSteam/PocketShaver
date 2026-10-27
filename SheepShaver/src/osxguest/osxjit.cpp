@@ -91,6 +91,7 @@ typedef struct OsxNativeState {
 #if OSXPROFILEJIT
 	FILE *tmpmap;
 	uint64 tmpstats[16];
+	uint32 tmpinterp[65536];
 #endif
 	uint8 victims[OSXJITSETS];
 	OsxNativeBlock front[OSXJITFRONT];
@@ -309,12 +310,14 @@ static void DynamicExit(OsxNativeEmitter *emitter, int count)
 static void TranslateThunk(OsxNativeEmitter *emitter, uint8 *fillthunk, int store, uint32 limit)
 {
 	uint8 *retry;
-	uint8 *page;
+	uint8 *slow;
 	uint8 *segment;
-	uint8 *outside;
+	uint8 *page;
 	uint8 *again;
 	retry = emitter->cursor;
 	RegisterOp(emitter, 0x89, 1, 0, 0);
+	if (limit != 0xfff)
+		ImmediateOp(emitter, 0, 1, 0xfff - limit);
 	ImmediateOp(emitter, 4, 1, 0xfffff000);
 	RegisterOp(emitter, 0x89, 2, 0, 0);
 	Shift(emitter, 5, 2, 12);
@@ -326,20 +329,23 @@ static void TranslateThunk(OsxNativeEmitter *emitter, uint8 *fillthunk, int stor
 		CpuMemory(emitter, 0x8b, 8, OSXJITOFFSET(readtlb), 1);
 	RegisterOp(emitter, 0x01, 8, 2, 1);
 	Byte(emitter, 0x41); Byte(emitter, 0x39); Byte(emitter, 0x08);
-	page = Jump(emitter, 5);
+	slow = Jump(emitter, 5);
 	RegisterOp(emitter, 0x89, 2, 0, 0);
 	Shift(emitter, 5, 2, 28);
 	CpuMemory(emitter, 0x8b, 9, OSXJITOFFSET(datasr), 1);
 	Byte(emitter, 0x41); Byte(emitter, 0x8b); Byte(emitter, 0x14); Byte(emitter, 0x91);
 	Byte(emitter, 0x41); Byte(emitter, 0x39); Byte(emitter, 0x50); Byte(emitter, 4);
 	segment = Jump(emitter, 5);
-	RegisterOp(emitter, 0x89, 1, 0, 0);
-	ImmediateOp(emitter, 4, 1, 0xfff);
-	ImmediateOp(emitter, 7, 1, limit);
-	outside = Jump(emitter, 7);
 	Byte(emitter, 0x4d); Byte(emitter, 0x8b); Byte(emitter, 0x40); Byte(emitter, 8);
-	RegisterOp(emitter, 0x89, 0, 1, 0);
+	ImmediateOp(emitter, 4, 0, 0xfff);
 	RegisterOp(emitter, 0x31, 1, 1, 0);
+	Byte(emitter, 0xc3);
+	Patch(slow, emitter->cursor);
+	RegisterOp(emitter, 0x89, 1, 0, 0);
+	ImmediateOp(emitter, 4, 1, 0xfffff000);
+	Byte(emitter, 0x41); Byte(emitter, 0x39); Byte(emitter, 0x08);
+	page = Jump(emitter, 5);
+	ImmediateOp(emitter, 1, 1, 1);
 	Byte(emitter, 0xc3);
 	Patch(page, emitter->cursor);
 	Patch(segment, emitter->cursor);
@@ -354,7 +360,6 @@ static void TranslateThunk(OsxNativeEmitter *emitter, uint8 *fillthunk, int stor
 	RegisterOp(emitter, 0x85, 1, 1, 0);
 	again = Jump(emitter, 5);
 	Patch(again, retry);
-	Patch(outside, emitter->cursor);
 	ImmediateOp(emitter, 1, 1, 1);
 	Byte(emitter, 0xc3);
 }
@@ -365,6 +370,9 @@ static void EmitThunks(OsxNativeState *state)
 	OsxNativeEmitter emitter;
 	uint8 *misses[5];
 	int index;
+#if OSXPROFILEJIT
+	FILE *thunks;
+#endif
 	emitter.start = state->writebase;
 	emitter.cursor = emitter.start;
 	emitter.executestart = state->executebase;
@@ -471,6 +479,16 @@ static void EmitThunks(OsxNativeState *state)
 	}
 	state->thunkbytes = ((uint32)(emitter.cursor - emitter.start) + 63) & ~63u;
 	state->used = state->thunkbytes;
+#if OSXPROFILEJIT
+	thunks = fopen("osxjitthunks.txt", "w");
+	if (thunks) {
+		fprintf(thunks, "check %x\nmiss %x\nfinish %x\nlink %x\ninterpret %x\nlinkcall %x\ndynamic %x\nfill %x\ntime %x\n", 0, (uint32)(state->missthunk - state->executebase), (uint32)(state->finishthunk - state->executebase), (uint32)(state->linkthunk - state->executebase), (uint32)(state->interpretthunk - state->executebase), (uint32)(state->linkcallthunk - state->executebase), (uint32)(state->dynamicthunk - state->executebase), (uint32)(state->fillthunk - state->executebase), (uint32)(state->timethunk - state->executebase));
+		for (index = 0; index < 12; index++)
+			fprintf(thunks, "translate%d_%d %x\n", index / 6, index % 6, (uint32)(state->translatethunks[index / 6][index % 6] - state->executebase));
+		fprintf(thunks, "end %x\n", state->thunkbytes);
+		fclose(thunks);
+	}
+#endif
 	FlushInstructionCache(GetCurrentProcess(), state->executebase, state->thunkbytes);
 }
 
@@ -1626,8 +1644,7 @@ static int Branch(OsxNativeEmitter *emitter, uint32 instruction, int count)
 			Patch(counterpatch, emitter->cursor);
 		if (conditionpatch)
 			Patch(conditionpatch, emitter->cursor);
-		Advance(emitter);
-		Exit(emitter, count + 1, offset + 4);
+		return 1;
 	}
 	return 2;
 }
@@ -2114,7 +2131,7 @@ static int Interpretable(uint32 instruction)
 	extended = (instruction >> 1) & 0x3ff;
 	switch (extended) {
 	case 7: case 39: case 135: case 167:
-	case 342: case 374: case 534: case 662: case 758: case 790: case 822: case 918: case 982:
+	case 342: case 374: case 758: case 790: case 822: case 918: case 982:
 		return 1;
 	}
 	return 0;
@@ -2127,6 +2144,11 @@ static void Callout(OsxNativeEmitter *emitter, uint32 instruction, int count)
 	emitter->enabled = 0;
 	emitter->bytemask = 0;
 	CpuMemory(emitter, 0x89, 11, OSXJITOFFSET(pc), 0);
+	RegisterOp(emitter, 0x89, 0, 13, 0);
+	RegisterOp(emitter, 0x29, 0, 12, 0);
+	if (count)
+		ImmediateOp(emitter, 0, 0, (uint32)count);
+	CpuMemory(emitter, 0x01, 0, OSXJITOFFSET(instructions), 1);
 	RegisterOp(emitter, 0x89, 1, 3, 1);
 	Immediate(emitter, 2, instruction);
 	Byte(emitter, 0x48); Byte(emitter, 0x83); Byte(emitter, 0xec); Byte(emitter, 0x20);
@@ -2134,6 +2156,11 @@ static void Callout(OsxNativeEmitter *emitter, uint32 instruction, int count)
 	Quad(emitter, (uint64)(uintptr_t)OsxCpuExecuteInline);
 	Byte(emitter, 0xff); Byte(emitter, 0xd0);
 	Byte(emitter, 0x48); Byte(emitter, 0x83); Byte(emitter, 0xc4); Byte(emitter, 0x20);
+	RegisterOp(emitter, 0x89, 2, 13, 0);
+	RegisterOp(emitter, 0x29, 2, 12, 0);
+	if (count)
+		ImmediateOp(emitter, 0, 2, (uint32)count);
+	CpuMemory(emitter, 0x29, 2, OSXJITOFFSET(instructions), 1);
 	RegisterOp(emitter, 0x85, 0, 0, 0);
 	resume = Jump(emitter, 4);
 	Charge(emitter, count + 1);
@@ -2889,6 +2916,9 @@ void OsxJitRun(OsxCpu *cpu, int32 count)
 		state->interpreted++;
 #if OSXPROFILEJIT
 		state->tmpstats[15]++;
+		state->tmpinterp[(instruction >> 26) << 10]++;
+		if ((instruction >> 26) == 31 || (instruction >> 26) == 19)
+			state->tmpinterp[((instruction >> 26) << 10) | ((instruction >> 1) & 0x3ff)]++;
 #endif
 	}
 }
@@ -2906,6 +2936,12 @@ void OsxJitTmpStats(OsxCpu *cpu, FILE *log)
 	for (index = 0; index < 16; index++) {
 		fprintf(log, " %s %llu", names[index], (unsigned long long)state->tmpstats[index]);
 		state->tmpstats[index] = 0;
+	}
+	fprintf(log, " interp");
+	for (index = 0; index < 65536; index++) {
+		if (state->tmpinterp[index] > 500)
+			fprintf(log, " %d/%d:%u", index >> 10, index & 1023, state->tmpinterp[index]);
+		state->tmpinterp[index] = 0;
 	}
 	fprintf(log, "\n");
 }

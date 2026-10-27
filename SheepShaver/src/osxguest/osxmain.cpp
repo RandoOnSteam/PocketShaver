@@ -1150,7 +1150,7 @@ static void ExecuteScriptCommand(OsxSession *session, const char *command)
 #endif
 	machine = session->machine;
 	if (machine->log)
-		fprintf(machine->log, "script %llu %s", (unsigned long long)OsxCpuTimebase(machine->cpu), command);
+		fprintf(machine->log, "script %llu host %u %s", (unsigned long long)OsxCpuTimebase(machine->cpu), (unsigned)SDL_GetTicks(), command);
 	if (sscanf(command, "mouse %d %d", &first, &second) == 2)
 		MovePointer(session, first, second);
 	else if (sscanf(command, "down %d", &first) == 1)
