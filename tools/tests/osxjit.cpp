@@ -209,6 +209,10 @@ static void MemoryInstructions(OsxJitTest *test)
 		instruction = (opcode << 26) | (target << 21) | (base << 16);
 		if (iteration & 1)
 			instruction = (31u << 26) | (indexed[opcode - 32] << 1) | (target << 21) | (base << 16) | (31u << 11);
+		if ((iteration & 3) == 3 && opcode == 32)
+			instruction = (31u << 26) | (534u << 1) | (target << 21) | (base << 16) | (31u << 11);
+		if ((iteration & 3) == 3 && opcode == 36)
+			instruction = (31u << 26) | (662u << 1) | (target << 21) | (base << 16) | (31u << 11);
 		for (index = 0; index < 2; index++) {
 			if (index == 0)
 				cpu = test->reference;
@@ -316,7 +320,7 @@ static void FloatVectorMemory(OsxJitTest *test)
 
 static void FloatArithmetic(OsxJitTest *test)
 {
-	static const uint32 forms[] = {18, 20, 21, 25, 0, 32, 12, 15, 40, 72, 136, 264};
+	static const uint32 forms[] = {18, 20, 21, 25, 0, 32, 12, 15, 40, 72, 136, 264, 28, 29, 30, 31};
 	OsxCpu *cpu;
 	uint32 instruction;
 	uint32 extended;
@@ -327,11 +331,13 @@ static void FloatArithmetic(OsxJitTest *test)
 	int reg;
 	for (iteration = 0; iteration < 200000; iteration++) {
 		Reset(test);
-		extended = forms[Random(test) % 12];
+		extended = forms[Random(test) % 16];
 		instruction = ((Random(test) & 31) << 21) | ((Random(test) & 31) << 16) | ((Random(test) & 31) << 11) | (Random(test) & 1);
 		if (extended == 25)
 			instruction = (instruction & ~0xf800u) | ((Random(test) & 31) << 6);
-		if (extended >= 18 && extended <= 25) {
+		if (extended >= 28)
+			instruction |= (Random(test) & 31) << 6;
+		if ((extended >= 18 && extended <= 25) || extended >= 28) {
 			instruction |= extended << 1;
 			if (Random(test) & 1)
 				instruction |= 59u << 26;
