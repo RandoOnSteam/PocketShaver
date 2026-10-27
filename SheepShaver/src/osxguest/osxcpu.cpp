@@ -1254,6 +1254,8 @@ static void WriteMsr(OsxCpu *cpu, uint32 value)
 		OsxCpuUpdateModes(cpu);
 		cpu->jitflush = 1;
 	}
+	if (changed & OSXMSRSE)
+		cpu->jitflush = 1;
 	if ((value & OSXMSRPOW) && (cpu->hid0 & (OSXHID0DOZE | OSXHID0NAP | OSXHID0SLEEP))) {
 		cpu->halted = 1;
 		cpu->slice = 0;
@@ -2230,6 +2232,15 @@ static OSXFORCEINLINE void Execute(OsxCpu *cpu, uint32 instruction)
 	IllegalInstruction(cpu, instruction);
 }
 
+static void ExecuteTraced(OsxCpu *cpu, uint32 instruction)
+{
+	uint64 exceptions;
+	exceptions = cpu->exceptions;
+	Execute(cpu, instruction);
+	if (cpu->exceptions == exceptions)
+		OsxCpuRaiseException(cpu, OSXVECTORTRACE, 0, cpu->nextpc);
+}
+
 int OsxCpuExecuteInline(OsxCpu *cpu, uint32 instruction)
 {
 	uint32 expected;
@@ -2253,7 +2264,10 @@ void OsxCpuExecuteInstruction(OsxCpu *cpu, uint32 instruction)
 	cpu->tmpform[1][OsxCpuTmpFormKey(instruction)]++;
 #endif
 	cpu->nextpc = cpu->pc + 4;
-	Execute(cpu, instruction);
+	if (cpu->msr & OSXMSRSE)
+		ExecuteTraced(cpu, instruction);
+	else
+		Execute(cpu, instruction);
 	cpu->pc = cpu->nextpc;
 	cpu->instructions++;
 }
@@ -2296,7 +2310,10 @@ void OsxCpuRun(OsxCpu *cpu, int32 count)
 		if (cpu->tracefile)
 			fprintf(cpu->tracefile, "%08x %08x r3=%08x r4=%08x lr=%08x\n", cpu->pc, instruction, cpu->gpr[3], cpu->gpr[4], cpu->lr);
 		cpu->nextpc = cpu->pc + 4;
-		Execute(cpu, instruction);
+		if (cpu->msr & OSXMSRSE)
+			ExecuteTraced(cpu, instruction);
+		else
+			Execute(cpu, instruction);
 		cpu->pc = cpu->nextpc;
 		cpu->instructions++;
 	}

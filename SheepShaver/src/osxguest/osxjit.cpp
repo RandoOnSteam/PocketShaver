@@ -2819,7 +2819,7 @@ void OsxJitRun(OsxCpu *cpu, int32 count)
 			cpu->slice--;
 			continue;
 		}
-		if (cpu->fetchhost >= cpu->ram && cpu->fetchhost < cpu->ram + cpu->ramsize && !(cpu->pc & 3)) {
+		if (!(cpu->msr & OSXMSRSE) && cpu->fetchhost >= cpu->ram && cpu->fetchhost < cpu->ram + cpu->ramsize && !(cpu->pc & 3)) {
 			physical = (uint32)(cpu->fetchhost - cpu->ram) + (cpu->pc & 4095);
 			mode = cpu->msr & (OSXMSRPR | OSXMSRIR);
 			hash = ((physical >> 2) * 0x9e3779b1u) ^ (mode * 0x85ebca6bu);
