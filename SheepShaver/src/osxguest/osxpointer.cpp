@@ -46,7 +46,11 @@ static void ScrollWheel(OsxCpu *cpu, OsxPointer *pointer, int delta)
 	sender = cpu->gpr[9];
 	if (pointer->wheeladdress == 0 || !OsxCpuWriteVirtual(cpu, stack, cpu->gpr[1]))
 		return;
-	if (pointer->sender) {
+	if (pointer->sender && pointer->compactwheel) {
+		if (!OsxCpuWriteVirtual(cpu, stack + 0x38, timelow) ||
+			!OsxCpuWriteVirtual(cpu, stack + 0x3c, sender))
+			return;
+	} else if (pointer->sender) {
 		for (offset = 0x38; offset < 0x44; offset += 4)
 			if (!OsxCpuWriteVirtual(cpu, stack + offset, 0))
 				return;
@@ -66,6 +70,8 @@ static void ScrollWheel(OsxCpu *cpu, OsxPointer *pointer, int delta)
 		cpu->gpr[8] = 0;
 		cpu->gpr[9] = 0;
 		cpu->gpr[10] = (uint32)(int32)(int16)delta;
+		if (pointer->compactwheel)
+			cpu->gpr[10] = timehigh;
 	}
 }
 

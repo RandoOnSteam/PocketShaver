@@ -520,8 +520,14 @@ static int FindPointerSymbols(OsxSession *session)
 		session->pointerbundle = bundles[index];
 		session->pointer.sender = index == 1;
 		if (FindPointerSymbol(session, relatives[index], &session->pointeroffset) && FindPointerSymbol(session, absolutes[index], &session->absoluteoffset)) {
-			if (!FindPointerSymbol(session, wheels[index], &session->wheeloffset))
+			session->pointer.compactwheel = 0;
+			if (!FindPointerSymbol(session, wheels[index], &session->wheeloffset)) {
 				session->wheeloffset = 0;
+				if (session->pointer.sender && FindPointerSymbol(session, "__ZN11IOHIDSystem21scrollWheelEventGatedEssslll12UnsignedWideP8OSObject", &session->wheeloffset))
+					session->pointer.compactwheel = 1;
+				else
+					session->wheeloffset = 0;
+			}
 			return 1;
 		}
 	}

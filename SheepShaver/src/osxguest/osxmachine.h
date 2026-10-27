@@ -292,6 +292,7 @@ typedef struct OsxPointer {
 	uint32 wheeladdress;
 	uint32 callstack;
 	int sender;
+	int compactwheel;
 	int pointerx;
 	int pointery;
 	int pointervalid;
