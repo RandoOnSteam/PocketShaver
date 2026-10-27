@@ -34,6 +34,14 @@
 #define OSXACCESSHOST 1
 #define OSXACCESSBUS 2
 
+#if defined(_MSC_VER)
+#define OSXFORCEINLINE __forceinline
+#elif defined(__GNUC__)
+#define OSXFORCEINLINE inline __attribute__((always_inline))
+#else
+#define OSXFORCEINLINE inline
+#endif
+
 static inline uint32 LoadHost32(const uint8 *host)
 {
 	uint32 value;
@@ -658,7 +666,7 @@ static int WriteSlow(OsxCpu *cpu, uint32 address, int size, uint32 value)
 	return 1;
 }
 
-static inline uint8 *ReadHost(OsxCpu *cpu, uint32 address, uint32 limit)
+static OSXFORCEINLINE uint8 *ReadHost(OsxCpu *cpu, uint32 address, uint32 limit)
 {
 	OsxTlbEntry *entry;
 	entry = &cpu->readtlb[(address >> 12) & OSXTLBMASK];
@@ -667,7 +675,7 @@ static inline uint8 *ReadHost(OsxCpu *cpu, uint32 address, uint32 limit)
 	return NULL;
 }
 
-static inline uint8 *WriteHost(OsxCpu *cpu, uint32 address, uint32 limit)
+static OSXFORCEINLINE uint8 *WriteHost(OsxCpu *cpu, uint32 address, uint32 limit)
 {
 	OsxTlbEntry *entry;
 	entry = &cpu->writetlb[(address >> 12) & OSXTLBMASK];
@@ -676,7 +684,7 @@ static inline uint8 *WriteHost(OsxCpu *cpu, uint32 address, uint32 limit)
 	return NULL;
 }
 
-static inline int Read32(OsxCpu *cpu, uint32 address, uint32 *value)
+static OSXFORCEINLINE int Read32(OsxCpu *cpu, uint32 address, uint32 *value)
 {
 	uint8 *host;
 	host = ReadHost(cpu, address, 0xffc);
@@ -687,7 +695,7 @@ static inline int Read32(OsxCpu *cpu, uint32 address, uint32 *value)
 	return ReadSlow(cpu, address, 4, value);
 }
 
-static inline int Read16(OsxCpu *cpu, uint32 address, uint32 *value)
+static OSXFORCEINLINE int Read16(OsxCpu *cpu, uint32 address, uint32 *value)
 {
 	uint8 *host;
 	host = ReadHost(cpu, address, 0xffe);
@@ -698,7 +706,7 @@ static inline int Read16(OsxCpu *cpu, uint32 address, uint32 *value)
 	return ReadSlow(cpu, address, 2, value);
 }
 
-static inline int Read8(OsxCpu *cpu, uint32 address, uint32 *value)
+static OSXFORCEINLINE int Read8(OsxCpu *cpu, uint32 address, uint32 *value)
 {
 	uint8 *host;
 	host = ReadHost(cpu, address, 0xfff);
@@ -709,7 +717,7 @@ static inline int Read8(OsxCpu *cpu, uint32 address, uint32 *value)
 	return ReadSlow(cpu, address, 1, value);
 }
 
-static inline int Write32(OsxCpu *cpu, uint32 address, uint32 value)
+static OSXFORCEINLINE int Write32(OsxCpu *cpu, uint32 address, uint32 value)
 {
 	uint8 *host;
 	host = WriteHost(cpu, address, 0xffc);
@@ -720,7 +728,7 @@ static inline int Write32(OsxCpu *cpu, uint32 address, uint32 value)
 	return WriteSlow(cpu, address, 4, value);
 }
 
-static inline int Write16(OsxCpu *cpu, uint32 address, uint32 value)
+static OSXFORCEINLINE int Write16(OsxCpu *cpu, uint32 address, uint32 value)
 {
 	uint8 *host;
 	host = WriteHost(cpu, address, 0xffe);
@@ -740,7 +748,7 @@ int OsxCpuReadData(OsxCpu *cpu, uint32 address, int size, uint32 *value)
 	return Read8(cpu, address, value);
 }
 
-static inline int Write8(OsxCpu *cpu, uint32 address, uint32 value)
+static OSXFORCEINLINE int Write8(OsxCpu *cpu, uint32 address, uint32 value)
 {
 	uint8 *host;
 	host = WriteHost(cpu, address, 0xfff);
@@ -897,7 +905,7 @@ int OsxCpuAddHook(OsxCpu *cpu, uint32 address, OsxHookFunction function, void *c
 	return 1;
 }
 
-static inline void SetCr0(OsxCpu *cpu, uint32 result)
+static OSXFORCEINLINE void SetCr0(OsxCpu *cpu, uint32 result)
 {
 	uint32 field;
 	if ((int32)result < 0)
@@ -910,19 +918,19 @@ static inline void SetCr0(OsxCpu *cpu, uint32 result)
 	cpu->cr = (cpu->cr & 0x0fffffff) | (field << 28);
 }
 
-static inline void SetCrField(OsxCpu *cpu, int field, uint32 value)
+static OSXFORCEINLINE void SetCrField(OsxCpu *cpu, int field, uint32 value)
 {
 	int shift;
 	shift = (7 - field) * 4;
 	cpu->cr = (cpu->cr & ~(0xfu << shift)) | (value << shift);
 }
 
-static inline uint32 CrBit(OsxCpu *cpu, int bit)
+static OSXFORCEINLINE uint32 CrBit(OsxCpu *cpu, int bit)
 {
 	return (cpu->cr >> (31 - bit)) & 1;
 }
 
-static inline void SetCrBit(OsxCpu *cpu, int bit, uint32 value)
+static OSXFORCEINLINE void SetCrBit(OsxCpu *cpu, int bit, uint32 value)
 {
 	uint32 mask;
 	mask = 0x80000000u >> bit;
@@ -932,7 +940,7 @@ static inline void SetCrBit(OsxCpu *cpu, int bit, uint32 value)
 		cpu->cr &= ~mask;
 }
 
-static inline void SetCarry(OsxCpu *cpu, int carry)
+static OSXFORCEINLINE void SetCarry(OsxCpu *cpu, int carry)
 {
 	if (carry)
 		cpu->xer |= OSXXERCA;
@@ -940,7 +948,7 @@ static inline void SetCarry(OsxCpu *cpu, int carry)
 		cpu->xer &= ~OSXXERCA;
 }
 
-static inline void SetOverflow(OsxCpu *cpu, int overflow)
+static OSXFORCEINLINE void SetOverflow(OsxCpu *cpu, int overflow)
 {
 	if (overflow)
 		cpu->xer |= OSXXEROV | OSXXERSO;
@@ -948,7 +956,7 @@ static inline void SetOverflow(OsxCpu *cpu, int overflow)
 		cpu->xer &= ~OSXXEROV;
 }
 
-static inline uint32 RotateLeft(uint32 value, uint32 count)
+static OSXFORCEINLINE uint32 RotateLeft(uint32 value, uint32 count)
 {
 	count &= 31;
 	if (count == 0)
@@ -956,7 +964,7 @@ static inline uint32 RotateLeft(uint32 value, uint32 count)
 	return (value << count) | (value >> (32 - count));
 }
 
-static inline uint32 RotateMask(uint32 begin, uint32 end)
+static OSXFORCEINLINE uint32 RotateMask(uint32 begin, uint32 end)
 {
 	uint32 first;
 	uint32 last;
@@ -1031,7 +1039,7 @@ static uint32 AddPlain(OsxCpu *cpu, uint32 left, uint32 right, int instruction)
 	return result;
 }
 
-static void CompareSigned(OsxCpu *cpu, int field, int32 left, int32 right)
+static OSXFORCEINLINE void CompareSigned(OsxCpu *cpu, int field, int32 left, int32 right)
 {
 	uint32 value;
 	if (left < right)
@@ -1043,7 +1051,7 @@ static void CompareSigned(OsxCpu *cpu, int field, int32 left, int32 right)
 	SetCrField(cpu, field, value | (cpu->xer >> 31));
 }
 
-static void CompareUnsigned(OsxCpu *cpu, int field, uint32 left, uint32 right)
+static OSXFORCEINLINE void CompareUnsigned(OsxCpu *cpu, int field, uint32 left, uint32 right)
 {
 	uint32 value;
 	if (left < right)
@@ -1055,7 +1063,7 @@ static void CompareUnsigned(OsxCpu *cpu, int field, uint32 left, uint32 right)
 	SetCrField(cpu, field, value | (cpu->xer >> 31));
 }
 
-static int BranchConditionTaken(OsxCpu *cpu, uint32 options, uint32 bit)
+static OSXFORCEINLINE int BranchConditionTaken(OsxCpu *cpu, uint32 options, uint32 bit)
 {
 	int counterok;
 	int conditionok;
@@ -1278,34 +1286,25 @@ static void StoreString(OsxCpu *cpu, uint32 address, int first, uint32 count)
 
 static void LoadString(OsxCpu *cpu, uint32 address, int first, uint32 count)
 {
-	uint32 values[32];
 	uint32 index;
 	uint32 byte;
 	int reg;
-	int used;
 	uint32 shift;
 	reg = first;
 	shift = 24;
-	used = 0;
 	for (index = 0; index < count; index++) {
 		if (!Read8(cpu, address + index, &byte))
 			return;
 		if (shift == 24)
-			values[used] = byte << 24;
+			cpu->gpr[reg] = byte << 24;
 		else
-			values[used] |= byte << shift;
+			cpu->gpr[reg] |= byte << shift;
 		if (shift == 0) {
 			shift = 24;
-			used++;
+			reg = (reg + 1) & 31;
 		} else {
 			shift -= 8;
 		}
-	}
-	if (shift != 24)
-		used++;
-	for (index = 0; index < (uint32)used; index++) {
-		cpu->gpr[reg] = values[index];
-		reg = (reg + 1) & 31;
 	}
 }
 
@@ -1387,81 +1386,58 @@ uint32 OsxCpuDoubleToSingle(uint64 bits)
 	return DoubleToSingle(bits);
 }
 
-static void ExecuteLoadStore(OsxCpu *cpu, uint32 instruction, uint32 opcode, uint32 address, int update)
+static OSXFORCEINLINE uint32 OffsetAddress(OsxCpu *cpu, uint32 opcode, int ra, uint32 base, uint32 offset)
+{
+	if (opcode & 1)
+		return cpu->gpr[ra] + offset;
+	return base + offset;
+}
+
+static OSXFORCEINLINE void UpdateBase(OsxCpu *cpu, uint32 opcode, int ra, uint32 address)
+{
+	if (opcode & 1)
+		cpu->gpr[ra] = address;
+}
+
+static void ExecuteFloatLoadStore(OsxCpu *cpu, uint32 instruction, uint32 opcode, uint32 address)
 {
 	uint32 value;
 	uint64 wide;
 	int target;
-	int base;
+	if (!RequireFloat(cpu))
+		return;
 	target = (instruction >> 21) & 31;
-	base = (instruction >> 16) & 31;
-	switch (opcode) {
-	case 32:
-		if (!Read32(cpu, address, &value))
-			return;
-		cpu->gpr[target] = value;
-		break;
-	case 34:
-		if (!Read8(cpu, address, &value))
-			return;
-		cpu->gpr[target] = value;
-		break;
-	case 36:
-		if (!Write32(cpu, address, cpu->gpr[target]))
-			return;
-		break;
-	case 38:
-		if (!Write8(cpu, address, cpu->gpr[target]))
-			return;
-		break;
-	case 40:
-		if (!Read16(cpu, address, &value))
-			return;
-		cpu->gpr[target] = value;
-		break;
-	case 42:
-		if (!Read16(cpu, address, &value))
-			return;
-		cpu->gpr[target] = (uint32)(int32)(int16)value;
-		break;
-	case 44:
-		if (!Write16(cpu, address, cpu->gpr[target]))
-			return;
-		break;
+	switch (opcode & ~1u) {
 	case 48:
-		if (!RequireFloat(cpu) || !Read32(cpu, address, &value))
+		if (!Read32(cpu, address, &value))
 			return;
 		cpu->fpr[target].bits = SingleToDouble(value);
 		break;
 	case 50:
-		if (!RequireFloat(cpu) || !Read64(cpu, address, &wide))
+		if (!Read64(cpu, address, &wide))
 			return;
 		cpu->fpr[target].bits = wide;
 		break;
 	case 52:
-		if (!RequireFloat(cpu) || !Write32(cpu, address, DoubleToSingle(cpu->fpr[target].bits)))
+		if (!Write32(cpu, address, DoubleToSingle(cpu->fpr[target].bits)))
 			return;
 		break;
 	case 54:
-		if (!RequireFloat(cpu) || !Write64(cpu, address, cpu->fpr[target].bits))
+		if (!Write64(cpu, address, cpu->fpr[target].bits))
 			return;
 		break;
 	}
-	if (update)
-		cpu->gpr[base] = address;
+	UpdateBase(cpu, opcode, (instruction >> 16) & 31, address);
 }
 
 static void LoadMultiple(OsxCpu *cpu, uint32 instruction, uint32 address)
 {
-	uint32 values[32];
 	int first;
 	int reg;
 	first = (instruction >> 21) & 31;
 	for (reg = first; reg < 32; reg++)
-		if (!Read32(cpu, address + (uint32)(reg - first) * 4, &values[reg]))
+		if (!Read32(cpu, address + (uint32)(reg - first) * 4, &cpu->gpr[reg]))
 			return;
-	for (reg = first; reg < 32; reg++)
-		cpu->gpr[reg] = values[reg];
 }
 
 static void StoreMultiple(OsxCpu *cpu, uint32 instruction, uint32 address)
@@ -1566,7 +1542,6 @@ static void ExecuteGroup31(OsxCpu *cpu, uint32 instruction)
 	uint32 mask;
 	uint64 wide;
 	int64 product;
-	int field;
 	int setcr;
 	extended = (instruction >> 1) & 0x3ff;
 	rd = (instruction >> 21) & 31;
@@ -1740,10 +1715,10 @@ static void ExecuteGroup31(OsxCpu *cpu, uint32 instruction)
 		cpu->gpr[rd] = cpu->cr;
 		return;
 	case 144:
-		mask = 0;
-		for (field = 0; field < 8; field++)
-			if (instruction & (0x80000u >> field))
-				mask |= 0xf0000000u >> (field * 4);
+		mask = (instruction >> 12) & 0xff;
+		mask = (mask | (mask << 12)) & 0x000f000fu;
+		mask = (mask | (mask << 6)) & 0x03030303u;
+		mask = ((mask | (mask << 3)) & 0x11111111u) * 0xf;
 		cpu->cr = (cpu->cr & ~mask) | (source & mask);
 		return;
 	case 512:
@@ -1989,7 +1964,7 @@ static void ExecuteGroup31(OsxCpu *cpu, uint32 instruction)
 		SetCr0(cpu, result);
 }
 
-static void Execute(OsxCpu *cpu, uint32 instruction);
+static OSXFORCEINLINE void Execute(OsxCpu *cpu, uint32 instruction);
 
 static void ExecuteVectorQuad(OsxCpu *cpu, uint32 instruction)
 {
@@ -2045,7 +2020,7 @@ static void ExecuteHook(OsxCpu *cpu, uint32 instruction)
 		Execute(cpu, hook->original);
 }
 
-static void Execute(OsxCpu *cpu, uint32 instruction)
+static OSXFORCEINLINE void Execute(OsxCpu *cpu, uint32 instruction)
 {
 	uint32 opcode;
 	int rd;
@@ -2057,6 +2032,8 @@ static void Execute(OsxCpu *cpu, uint32 instruction)
 	uint32 rotated;
 	uint32 mask;
 	uint32 target;
+	uint32 address;
+	uint32 value;
 	uint64 sum;
 	opcode = instruction >> 26;
 	rd = (instruction >> 21) & 31;
@@ -2184,11 +2161,58 @@ static void Execute(OsxCpu *cpu, uint32 instruction)
 		}
 		ExecuteGroup31(cpu, instruction);
 		return;
-	case 32: case 34: case 36: case 38: case 40: case 42: case 44: case 48: case 50: case 52: case 54:
-		ExecuteLoadStore(cpu, instruction, opcode, base + signedimmediate, 0);
+	case 32:
+	case 33:
+		address = OffsetAddress(cpu, opcode, ra, base, signedimmediate);
+		if (Read32(cpu, address, &value)) {
+			cpu->gpr[rd] = value;
+			UpdateBase(cpu, opcode, ra, address);
+		}
 		return;
-	case 33: case 35: case 37: case 39: case 41: case 43: case 45: case 49: case 51: case 53: case 55:
-		ExecuteLoadStore(cpu, instruction, opcode - 1, cpu->gpr[ra] + signedimmediate, 1);
+	case 34:
+	case 35:
+		address = OffsetAddress(cpu, opcode, ra, base, signedimmediate);
+		if (Read8(cpu, address, &value)) {
+			cpu->gpr[rd] = value;
+			UpdateBase(cpu, opcode, ra, address);
+		}
+		return;
+	case 40:
+	case 41:
+		address = OffsetAddress(cpu, opcode, ra, base, signedimmediate);
+		if (Read16(cpu, address, &value)) {
+			cpu->gpr[rd] = value;
+			UpdateBase(cpu, opcode, ra, address);
+		}
+		return;
+	case 42:
+	case 43:
+		address = OffsetAddress(cpu, opcode, ra, base, signedimmediate);
+		if (Read16(cpu, address, &value)) {
+			cpu->gpr[rd] = (uint32)(int32)(int16)value;
+			UpdateBase(cpu, opcode, ra, address);
+		}
+		return;
+	case 36:
+	case 37:
+		address = OffsetAddress(cpu, opcode, ra, base, signedimmediate);
+		if (Write32(cpu, address, cpu->gpr[rd]))
+			UpdateBase(cpu, opcode, ra, address);
+		return;
+	case 38:
+	case 39:
+		address = OffsetAddress(cpu, opcode, ra, base, signedimmediate);
+		if (Write8(cpu, address, cpu->gpr[rd]))
+			UpdateBase(cpu, opcode, ra, address);
+		return;
+	case 44:
+	case 45:
+		address = OffsetAddress(cpu, opcode, ra, base, signedimmediate);
+		if (Write16(cpu, address, cpu->gpr[rd]))
+			UpdateBase(cpu, opcode, ra, address);
+		return;
+	case 48: case 49: case 50: case 51: case 52: case 53: case 54: case 55:
+		ExecuteFloatLoadStore(cpu, instruction, opcode, OffsetAddress(cpu, opcode, ra, base, signedimmediate));
 		return;
 	case 46:
 		LoadMultiple(cpu, instruction, base + signedimmediate);
