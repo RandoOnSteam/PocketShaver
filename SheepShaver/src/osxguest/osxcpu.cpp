@@ -462,6 +462,10 @@ int OsxCpuTranslate(OsxCpu *cpu, uint32 address, int kind, int raise, uint32 *ph
 	int pass;
 	int slot;
 	int key;
+#if OSXG5
+	if (cpu->core970)
+		return Osx970TranslateVirtual((Osx970 *)cpu->core970, address, kind, physical);
+#endif
 	if (kind == OSXTLBFETCH) {
 		translated = (cpu->msr & OSXMSRIR) != 0;
 		bats = cpu->ibat;

@@ -1326,6 +1326,32 @@ static OsxTreeNode *BuildTree(OsxBootState *state, OsxTreeNode **memorymap)
 	node = NewNode(root, "cpus");
 	AddCell(node, "#address-cells", 1);
 	AddCell(node, "#size-cells", 0);
+#if OSXG5
+	if (state->machine->pvr == OSX970PVR) {
+		node = NewNode(node, "PowerPC,G5");
+		AddProperty(node, "altivec", "", 0);
+		AddProperty(node, "64-bit", "", 0);
+		AddString(node, "device_type", "cpu");
+		AddCell(node, "reg", 0);
+		AddCell(node, "cpu-version", state->machine->pvr);
+		AddCell(node, "clock-frequency", OSXCPUFREQUENCYG4);
+		AddCell(node, "bus-frequency", OSXBUSFREQUENCY);
+		AddCell(node, "timebase-frequency", OSXTIMEBASEFREQUENCY);
+		AddCell(node, "d-cache-size", 0x8000);
+		AddCell(node, "i-cache-size", 0x10000);
+		AddCell(node, "d-cache-sets", 128);
+		AddCell(node, "i-cache-sets", 512);
+		AddCell(node, "d-cache-block-size", 128);
+		AddCell(node, "i-cache-block-size", 128);
+		AddCell(node, "reservation-granule-size", 128);
+		AddCell(node, "tlb-size", 1024);
+		AddCell(node, "tlb-sets", 256);
+		AddCell(node, "slb-size", 64);
+		AddProperty(node, "graphics", "", 0);
+		AddProperty(node, "external-control", "", 0);
+		AddProperty(node, "general-purpose", "", 0);
+	} else {
+#endif
 	if (state->machine->pvr == OSXPVRG4) {
 		node = NewNode(node, "PowerPC,G4");
 		AddProperty(node, "altivec", "", 0);
@@ -1353,6 +1379,9 @@ static OsxTreeNode *BuildTree(OsxBootState *state, OsxTreeNode **memorymap)
 	AddProperty(node, "graphics", "", 0);
 	AddProperty(node, "external-control", "", 0);
 	AddProperty(node, "general-purpose", "", 0);
+#if OSXG5
+	}
+#endif
 
 	node = NewNode(root, "memory");
 	AddString(node, "device_type", "memory");
@@ -1648,6 +1677,10 @@ int OsxBootLoad(OsxMachine *machine, const char *imagepath, int bootbus, int boo
 	machine->pvr = OSXPVR;
 	if (NeedsVectorCpu(&volume))
 		machine->pvr = OSXPVRG4;
+#if OSXG5
+	if (PrefsFindBool("osxcpu970"))
+		machine->pvr = OSX970PVR;
+#endif
 	OsxCpuSetModel(machine->cpu, machine->pvr);
 	kernel = ReadFile(&volume, "/mach_kernel", &kernelsize);
 	if (kernel == NULL || !ThinPowerPC(kernel, &kernelsize) || !LoadKernel(&state, kernel, kernelsize)) {

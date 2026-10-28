@@ -2517,6 +2517,12 @@ void OsxJitDestroy(OsxCpu *cpu)
 
 int OsxJitInvalidate(OsxCpu *cpu, uint32 address, uint32 length)
 {
+#if OSXG5
+	if (cpu->core970) {
+		Osx970InvalidatePhysical((Osx970 *)cpu->core970, address, length);
+		return 1;
+	}
+#endif
 	OsxNativeState *state;
 	uint32 first;
 	uint32 last;
@@ -2960,6 +2966,12 @@ void OsxJitDestroy(OsxCpu *cpu)
 
 int OsxJitInvalidate(OsxCpu *cpu, uint32 address, uint32 length)
 {
+#if OSXG5
+	if (cpu->core970) {
+		Osx970InvalidatePhysical((Osx970 *)cpu->core970, address, length);
+		return 1;
+	}
+#endif
 	return 0;
 }
 

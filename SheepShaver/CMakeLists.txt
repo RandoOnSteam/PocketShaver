@@ -141,6 +141,7 @@ set(SS_CORE
 	"${SS_SRC}/mmio.cpp"
 	"${SS_SRC}/pcibridge.cpp"
 	"${SS_SRC}/osxguest/osxcpu.cpp"
+	"${SS_SRC}/osxguest/osxcpu970.cpp"
 	"${SS_SRC}/osxguest/osxjit.cpp"
 	"${SS_SRC}/osxguest/osxfpu.cpp"
 	"${SS_SRC}/osxguest/osxvec.cpp"
@@ -548,6 +549,7 @@ if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 8 AND ENABLE_OSX_GUEST_TESTS)
 	add_executable(OsxJitTest
 		"${SS_SRC}/../../tools/tests/osxjit.cpp"
 		"${SS_SRC}/osxguest/osxcpu.cpp"
+		"${SS_SRC}/osxguest/osxcpu970.cpp"
 		"${SS_SRC}/osxguest/osxfpu.cpp"
 		"${SS_SRC}/osxguest/osxvec.cpp"
 		"${SS_SRC}/osxguest/osxjit.cpp")

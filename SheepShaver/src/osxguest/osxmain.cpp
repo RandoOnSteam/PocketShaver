@@ -290,6 +290,18 @@ static void ReturnHook(OsxCpu *cpu, void *context, uint32 address)
 	cpu->nextpc = cpu->lr;
 }
 
+#if OSXG5
+static void NapHook(OsxCpu *cpu, void *context, uint32 address)
+{
+	cpu->msr |= OSXMSREE;
+	cpu->nextpc = cpu->lr;
+	if (!cpu->externalline && !cpu->decpending) {
+		cpu->halted = 1;
+		cpu->slice = 0;
+	}
+}
+#endif
+
 static void AllowStalledClassLookup(OsxMachine *machine)
 {
 	uint8 *code;
@@ -1296,7 +1308,14 @@ static void RunMachine(OsxSession *session, void *monitor)
 	now = OsxCpuTimebase(cpu);
 	slicesize = 20000;
 	while (!machine->quit) {
+#if OSXG5
+		if (cpu->core970)
+			Osx970CheckInterrupts((Osx970 *)cpu->core970, now);
+		else
+			OsxCpuCheckInterrupts(cpu, now);
+#else
 		OsxCpuCheckInterrupts(cpu, now);
+#endif
 		if (cpu->halted) {
 			waitticks = frameticks;
 			if (nextevent <= now)
@@ -1333,7 +1352,14 @@ static void RunMachine(OsxSession *session, void *monitor)
 		} else {
 			runstart = now;
 			runinstructions = cpu->instructions;
+#if OSXG5
+			if (cpu->core970)
+				Osx970Run((Osx970 *)cpu->core970, slicesize);
+			else
+				OsxJitRun(cpu, slicesize);
+#else
 			OsxJitRun(cpu, slicesize);
+#endif
 			if (session->slicelog)
 				LogSlice(session->slicelog, cpu);
 			now = OsxCpuTimebase(cpu);
@@ -1433,6 +1459,12 @@ static void DestroySession(OsxSession *session)
 		OsxAudioExit(machine);
 		if (machine->cpu) {
 			OsxJitDestroy(machine->cpu);
+#if OSXG5
+			if (machine->cpu->core970) {
+				Osx970JitDestroy((Osx970 *)machine->cpu->core970);
+				free(machine->cpu->core970);
+			}
+#endif
 			if (machine->cpu->watchfile)
 				fclose(machine->cpu->watchfile);
 			free(machine->cpu);
@@ -1485,6 +1517,9 @@ static int RunSession(OsxSession *session)
 	FILE *dump;
 	void *monitor;
 	int32 ramsize;
+#if OSXG5
+	Osx970 *core;
+#endif
 	machine = (OsxMachine *)calloc(1, sizeof(OsxMachine));
 	session->machine = machine;
 	if (machine == NULL)
@@ -1585,6 +1620,10 @@ static int RunSession(OsxSession *session)
 	HookKernelSymbol(machine, "_handleSleepTimerExpiration__14IOPMrootDomain", ReturnHook);
 	HookKernelSymbol(machine, "_sleepKernel__16IOPlatformExpert", ReturnHook);
 	HookKernelSymbol(machine, "_PE_Determine_Clock_Speeds", ReturnHook);
+#if OSXG5
+	if (machine->pvr == OSX970PVR)
+		HookKernelSymbol(machine, "_machine_idle", NapHook);
+#endif
 	if (machine->pvr == OSXPVRG4 || machine->ata[bootbus].drives[bootunit].atapi)
 		HookKernelSymbol(machine, "_PEGetPlatformEpoch", NewWorldEpochHook);
 	cpu->pc = machine->kernelentry;
@@ -1593,7 +1632,27 @@ static int RunSession(OsxSession *session)
 	cpu->gpr[3] = machine->bootargs;
 	cpu->gpr[4] = 0x426f6f58;
 	OsxCpuUpdateModes(cpu);
+#if OSXG5
+	if (machine->pvr == OSX970PVR) {
+		core = (Osx970 *)calloc(1, sizeof(Osx970));
+		if (core == NULL)
+			return 1;
+		Osx970Reset(core, cpu, OSX970PVR);
+		core->pc = machine->kernelentry;
+		core->nextpc = core->pc + 4;
+		core->msr = OSX970MSRHV;
+		core->gpr[1] = machine->scratch + 0x8000;
+		core->gpr[3] = machine->bootargs;
+		core->gpr[4] = 0x426f6f58;
+		cpu->core970 = core;
+		if (PrefsFindBool("osxjit") && Osx970JitCreate(core))
+			fprintf(machine->log, "cpu 970 jit\n");
+		else
+			fprintf(machine->log, "cpu 970 interpreter\n");
+	} else if (PrefsFindBool("osxjit")) {
+#else
 	if (PrefsFindBool("osxjit")) {
+#endif
 		if (OsxJitCreate(cpu))
 			fprintf(machine->log, "cpu native x64 soft TLB\n");
 		else

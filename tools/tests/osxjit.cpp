@@ -1036,6 +1036,441 @@ static void Benchmark(OsxJitTest *test)
 	Compare(test, "benchmark", 0);
 }
 
+#if OSXG5
+static void Put970(Osx970 *core, uint64 address, int size, uint64 value)
+{
+	int index;
+	for (index = size - 1; index >= 0; index--) {
+		core->cpu->ram[address + (uint64)index] = (uint8)value;
+		value >>= 8;
+	}
+}
+
+static void Reset970(Osx970 *core, OsxCpu *cpu)
+{
+	cpu->ramsize = TESTRAMSIZE;
+	cpu->buscontext = cpu;
+	cpu->busread = BusRead;
+	cpu->buswrite = BusWrite;
+	Osx970Reset(core, cpu, OSX970PVR);
+	cpu->xer = 0;
+	cpu->cr = 0;
+	core->msr = OSX970MSRHV | OSXMSRFP;
+	core->pc = TESTENTRY;
+}
+
+static uint64 Step970(Osx970 *core, uint32 instruction)
+{
+	Put970(core, core->pc, 4, instruction);
+	Osx970Run(core, 1);
+	return core->gpr[3];
+}
+
+static void Expect970(OsxJitTest *test, const char *name, uint64 actual, uint64 expected)
+{
+	test->checks++;
+	if (actual != expected) {
+		test->failures++;
+		if (test->failures <= 64)
+			printf("FAIL 970 %s got %016llx want %016llx\n", name, (unsigned long long)actual, (unsigned long long)expected);
+	}
+}
+
+static void Differential970(OsxJitTest *test, Osx970 *core)
+{
+	static const OsxJitTemplate templates[] = {
+		{7u << 26, 0x03ffffff}, {10u << 26, 0x039fffff}, {11u << 26, 0x039fffff},
+		{14u << 26, 0x03ffffff}, {15u << 26, 0x03ffffff},
+		{20u << 26, 0x03ffffff}, {21u << 26, 0x03ffffff}, {23u << 26, 0x03ffffff},
+		{24u << 26, 0x03ffffff}, {25u << 26, 0x03ffffff}, {26u << 26, 0x03ffffff},
+		{27u << 26, 0x03ffffff}, {28u << 26, 0x03ffffff}, {29u << 26, 0x03ffffff},
+		{(31u << 26) | (266u << 1), 0x03fff401}, {(31u << 26) | (40u << 1), 0x03fff401},
+		{(31u << 26) | (235u << 1), 0x03fff401}, {(31u << 26) | (28u << 1), 0x03fff801},
+		{(31u << 26) | (60u << 1), 0x03fff801}, {(31u << 26) | (124u << 1), 0x03fff801},
+		{(31u << 26) | (284u << 1), 0x03fff801}, {(31u << 26) | (316u << 1), 0x03fff801},
+		{(31u << 26) | (412u << 1), 0x03fff801}, {(31u << 26) | (444u << 1), 0x03fff801},
+		{(31u << 26) | (476u << 1), 0x03fff801}, {(31u << 26) | (922u << 1), 0x03ff0001},
+		{(31u << 26) | (954u << 1), 0x03ff0001}, {(31u << 26), 0x039ff800},
+		{(31u << 26) | (32u << 1), 0x039ff800}, {(31u << 26) | (19u << 1), 0x03e00000},
+		{16u << 26, 0x03ffffff}, {18u << 26, 0x03ffffff},
+		{(19u << 26) | (16u << 1), 0x03ff0001}, {(19u << 26) | (528u << 1), 0x03ff0001},
+		{(31u << 26) | (8u << 1), 0x03fff401}, {(31u << 26) | (138u << 1), 0x03fff401},
+		{(31u << 26) | (10u << 1), 0x03fff401}, {(31u << 26) | (136u << 1), 0x03fff401},
+		{(31u << 26) | (202u << 1), 0x03fff401}, {(31u << 26) | (200u << 1), 0x03fff401},
+		{(31u << 26) | (234u << 1), 0x03fff401}, {(31u << 26) | (232u << 1), 0x03fff401},
+		{(31u << 26) | (104u << 1), 0x03fff401}, {(31u << 26) | (11u << 1), 0x03fff801},
+		{(31u << 26) | (75u << 1), 0x03fff801}, {(31u << 26) | (459u << 1), 0x03fff401},
+		{(31u << 26) | (491u << 1), 0x03fff401}, {(31u << 26) | (24u << 1), 0x03fff801},
+		{(31u << 26) | (536u << 1), 0x03fff801}, {(31u << 26) | (26u << 1), 0x03fff801},
+		{(31u << 26) | (824u << 1), 0x03fff801}, {(31u << 26) | (144u << 1), 0x03fff000},
+		{(31u << 26) | (792u << 1), 0x03fff801}, {8u << 26, 0x03ffffff}, {12u << 26, 0x03ffffff},
+		{13u << 26, 0x03ffffff}, {(19u << 26) | (0u << 1), 0x039c0000},
+		{(19u << 26) | (33u << 1), 0x03fff800}, {(19u << 26) | (129u << 1), 0x03fff800},
+		{(19u << 26) | (193u << 1), 0x03fff800}, {(19u << 26) | (225u << 1), 0x03fff800},
+		{(19u << 26) | (257u << 1), 0x03fff800}, {(19u << 26) | (289u << 1), 0x03fff800},
+		{(19u << 26) | (417u << 1), 0x03fff800}, {(19u << 26) | (449u << 1), 0x03fff800},
+		{3u << 26, 0x03ffffff}, {(31u << 26) | (4u << 1), 0x03fff800}
+	};
+	OsxCpu *reference;
+	uint32 instruction;
+	int iteration;
+	int index;
+	int reg;
+	int matches;
+	reference = test->reference;
+	for (iteration = 0; iteration < 100000; iteration++) {
+		Reset(test);
+		Reset970(core, core->cpu);
+		for (reg = 0; reg < 32; reg++)
+			core->gpr[reg] = ((uint64)Random(test) << 32) | reference->gpr[reg];
+		core->cpu->cr = reference->cr;
+		core->cpu->xer = reference->xer;
+		core->lr = ((uint64)Random(test) << 32) | reference->lr;
+		core->ctr = ((uint64)Random(test) << 32) | reference->ctr;
+		index = (int)(Random(test) % (sizeof(templates) / sizeof(templates[0])));
+		instruction = templates[index].opcode | (Random(test) & templates[index].mask);
+		Put(reference, TESTENTRY, instruction);
+		OsxCpuRun(reference, 1);
+		Put970(core, TESTENTRY, 4, instruction);
+		Osx970Run(core, 1);
+		matches = 1;
+		for (reg = 0; reg < 32; reg++)
+			matches &= (uint32)core->gpr[reg] == reference->gpr[reg];
+		matches &= core->cpu->cr == reference->cr && core->cpu->xer == reference->xer;
+		matches &= (uint32)core->lr == reference->lr && (uint32)core->ctr == reference->ctr;
+		matches &= (uint32)core->pc == reference->pc && core->pc <= 0xffffffffULL;
+		test->checks++;
+		if (!matches) {
+			test->failures++;
+			if (test->failures <= 16) {
+				printf("FAIL 970 differential instruction %08x\n", instruction);
+				OsxCpuDump(reference, stdout);
+				for (reg = 0; reg < 32; reg += 4)
+					printf("970 r%-2d %016llx %016llx %016llx %016llx\n", reg, (unsigned long long)core->gpr[reg], (unsigned long long)core->gpr[reg + 1], (unsigned long long)core->gpr[reg + 2], (unsigned long long)core->gpr[reg + 3]);
+				printf("970 pc %016llx cr %08x xer %08x lr %016llx ctr %016llx\n", (unsigned long long)core->pc, core->cpu->cr, core->cpu->xer, (unsigned long long)core->lr, (unsigned long long)core->ctr);
+			}
+		}
+	}
+}
+
+static void Wide970(OsxJitTest *test, Osx970 *core)
+{
+	uint64 value;
+	Reset970(core, core->cpu);
+	core->msr |= OSX970MSRSF;
+	core->gpr[4] = 0x123456789abcdef0ULL;
+	core->gpr[5] = 8;
+	Expect970(test, "rldicl", Step970(core, 0x78834200), 0x0056789abcdef012ULL);
+	Expect970(test, "rldicr", Step970(core, 0x788327c4), 0x2345678900000000ULL);
+	Expect970(test, "sld", Step970(core, 0x7c000036 | (4u << 21) | (3u << 16) | (5u << 11)), 0x3456789abcdef000ULL);
+	Expect970(test, "srd", Step970(core, 0x7c000436 | (4u << 21) | (3u << 16) | (5u << 11)), 0x00123456789abcdeULL);
+	core->gpr[4] = 0xf000000000000010ULL;
+	Expect970(test, "srad", Step970(core, 0x7c000634 | (4u << 21) | (3u << 16) | (5u << 11)), 0xfff0000000000000ULL);
+	Expect970(test, "srad carry", (core->cpu->xer >> 29) & 1, 1);
+	Expect970(test, "sradi", Step970(core, 0x7c000674 | (4u << 21) | (3u << 16) | (4u << 11)), 0xff00000000000001ULL);
+	Expect970(test, "sradi carry", (core->cpu->xer >> 29) & 1, 0);
+	core->gpr[4] = 0x0000000080000000ULL;
+	Expect970(test, "extsw", Step970(core, 0x7c0007b4 | (4u << 21) | (3u << 16)), 0xffffffff80000000ULL);
+	Expect970(test, "cntlzd", Step970(core, 0x7c000074 | (4u << 21) | (3u << 16)), 32);
+	core->gpr[4] = 0x0000000100000001ULL;
+	core->gpr[5] = 0x0000000300000003ULL;
+	Expect970(test, "mulld", Step970(core, 0x7c0001d2 | (3u << 21) | (4u << 16) | (5u << 11)), 0x0000000600000003ULL);
+	core->gpr[4] = 0xffffffffffffffffULL;
+	core->gpr[5] = 0xffffffffffffffffULL;
+	Expect970(test, "mulhdu", Step970(core, 0x7c000012 | (3u << 21) | (4u << 16) | (5u << 11)), 0xfffffffffffffffeULL);
+	Expect970(test, "mulhd", Step970(core, 0x7c000092 | (3u << 21) | (4u << 16) | (5u << 11)), 0);
+	core->gpr[4] = 0x8000000000000000ULL;
+	core->gpr[5] = 2;
+	Expect970(test, "mulhd negative", Step970(core, 0x7c000092 | (3u << 21) | (4u << 16) | (5u << 11)), 0xffffffffffffffffULL);
+	core->gpr[4] = (uint64)(int64)-100;
+	core->gpr[5] = 7;
+	Expect970(test, "divd", Step970(core, 0x7c0003d2 | (3u << 21) | (4u << 16) | (5u << 11)), (uint64)(int64)-14);
+	Expect970(test, "divdu", Step970(core, 0x7c000392 | (3u << 21) | (4u << 16) | (5u << 11)), 0x2492492492492484ULL);
+	core->gpr[4] = 0x0000000100000000ULL;
+	core->gpr[5] = 1;
+	Step970(core, 0x7c200000 | (4u << 16) | (5u << 11));
+	Expect970(test, "cmpd", core->cpu->cr >> 28, 4);
+	Step970(core, 0x7c000000 | (4u << 16) | (5u << 11));
+	Expect970(test, "cmpw", core->cpu->cr >> 28, 8);
+	core->gpr[4] = 0xffffffffffffffffULL;
+	core->gpr[5] = 1;
+	Expect970(test, "add carry 64", Step970(core, 0x7c000014 | (3u << 21) | (4u << 16) | (5u << 11)), 0);
+	Expect970(test, "add carry 64 ca", (core->cpu->xer >> 29) & 1, 1);
+	core->gpr[4] = 0x00000000ffffffffULL;
+	Expect970(test, "add carry 64 no ca", Step970(core, 0x7c000014 | (3u << 21) | (4u << 16) | (5u << 11)), 0x100000000ULL);
+	Expect970(test, "add carry 64 no ca flag", (core->cpu->xer >> 29) & 1, 0);
+	core->msr &= ~OSX970MSRSF;
+	Step970(core, 0x7c000014 | (3u << 21) | (4u << 16) | (5u << 11));
+	Expect970(test, "add carry 32 ca flag", (core->cpu->xer >> 29) & 1, 1);
+	Expect970(test, "add carry 32 result", core->gpr[3], 0x100000000ULL);
+	core->msr |= OSX970MSRSF;
+	core->gpr[4] = TESTDATA;
+	core->gpr[5] = 0x0102030405060708ULL;
+	Step970(core, 0xf8000000 | (5u << 21) | (4u << 16) | 8);
+	Expect970(test, "std/ld", Step970(core, 0xe8000000 | (3u << 21) | (4u << 16) | 8), 0x0102030405060708ULL);
+	Put970(core, TESTDATA + 16, 4, 0x80000000);
+	Expect970(test, "lwa", Step970(core, 0xe8000002 | (3u << 21) | (4u << 16) | 16), 0xffffffff80000000ULL);
+	Step970(core, 0xf8000001 | (5u << 21) | (4u << 16) | 32);
+	Expect970(test, "stdu update", core->gpr[4], TESTDATA + 32);
+	core->gpr[4] = TESTDATA;
+	Step970(core, 0x7c0000a8 | (3u << 21) | (4u << 11));
+	Expect970(test, "ldarx", core->gpr[3], 0);
+	core->gpr[6] = 0x1111222233334444ULL;
+	core->cpu->xer = 0;
+	Step970(core, 0x7c0001ad | (6u << 21) | (4u << 11));
+	Expect970(test, "stdcx success", core->cpu->cr >> 28, 2);
+	Step970(core, 0x7c0001ad | (6u << 21) | (4u << 11));
+	Expect970(test, "stdcx fail", core->cpu->cr >> 28, 0);
+	core->gpr[3] = 0;
+	core->gpr[4] = 0xffffffff00000000ULL;
+	core->gpr[5] = 0x0000000012345678ULL;
+	Expect970(test, "rlwinm wrap", Step970(core, 0x54000000 | (5u << 21) | (3u << 16) | (0u << 11) | (28u << 6) | (3u << 1)), 0x1234567810000008ULL);
+	core->ctr = 0x100000001ULL;
+	core->msr &= ~OSX970MSRSF;
+	core->pc = TESTENTRY;
+	Step970(core, 0x42000010);
+	Expect970(test, "bdnz 32-bit low zero", core->pc, TESTENTRY + 4);
+	core->ctr = 0x100000001ULL;
+	core->msr |= OSX970MSRSF;
+	core->pc = TESTENTRY;
+	Step970(core, 0x42000010);
+	Expect970(test, "bdnz 64-bit", core->pc, TESTENTRY + 16);
+	core->pc = TESTENTRY;
+	core->srr0 = 0x0000000100000104ULL;
+	core->srr1 = OSX970MSRSF | OSXMSRFP;
+	Step970(core, 0x4c000024);
+	Expect970(test, "rfid pc", core->pc, 0x0000000100000104ULL);
+	core->pc = TESTENTRY;
+	core->msr = OSX970MSRHV | OSXMSRFP | OSX970MSRSF;
+	value = core->cpu->exceptions;
+	Step970(core, 0x44000002);
+	Expect970(test, "sc vector", core->pc, 0xc00);
+	Expect970(test, "sc srr0", core->srr0, TESTENTRY + 4);
+	Expect970(test, "sc msr", core->msr, OSX970MSRHV | OSX970MSRSF);
+	Expect970(test, "sc count", core->cpu->exceptions, value + 1);
+}
+
+static void Mmu970(OsxJitTest *test, Osx970 *core)
+{
+	uint64 physical;
+	uint64 vsid;
+	uint64 address;
+	uint64 hash;
+	uint64 pteg;
+	Reset970(core, core->cpu);
+	core->msr |= OSX970MSRSF;
+	core->sdr1 = 0x80000;
+	vsid = 0x123456;
+	address = 0x0000000120005000ULL;
+	core->gpr[4] = (address & 0xfffffffff0000000ULL) | OSX970SLBVALID | 5;
+	core->gpr[3] = (vsid << 12) | OSX970SLBKP;
+	Step970(core, 0x7c000324 | (3u << 21) | (4u << 11));
+	hash = vsid ^ ((address & 0x0fffffffULL) >> 12);
+	pteg = 0x80000 | ((hash & 0x7ff) << 7);
+	Put970(core, pteg + 16 * 3, 8, (vsid << 12) | ((address >> 16) & 0xf80) | 1);
+	Put970(core, pteg + 16 * 3 + 8, 8, 0x60000 | 2);
+	core->msr |= OSXMSRDR;
+	Expect970(test, "translate hit", (uint64)Osx970Translate(core, address + 0x123, OSXTLBREAD, 0, &physical), 1);
+	Expect970(test, "translate address", physical, 0x60123);
+	Expect970(test, "translate referenced", core->cpu->ram[pteg + 16 * 3 + 14] & 1, 1);
+	Expect970(test, "translate segment miss", (uint64)Osx970Translate(core, 0x0000000220005000ULL, OSXTLBREAD, 0, &physical), 0);
+	core->pc = TESTENTRY;
+	core->msr &= ~(uint64)OSXMSRDR;
+	core->gpr[5] = 0xdeadbeefcafef00dULL;
+	core->gpr[4] = address + 0x40;
+	core->msr |= OSXMSRDR;
+	Put970(core, TESTENTRY, 4, 0xf8000000 | (5u << 21) | (4u << 16));
+	Osx970Run(core, 1);
+	Expect970(test, "store through mmu", ((uint64)core->cpu->ram[0x60040] << 24) | ((uint64)core->cpu->ram[0x60041] << 16) | ((uint64)core->cpu->ram[0x60042] << 8) | core->cpu->ram[0x60043], 0xdeadbeef);
+	Expect970(test, "store changed bit", (core->cpu->ram[pteg + 16 * 3 + 15] >> 7) & 1, 1);
+	core->gpr[4] = 0x0000000220005000ULL;
+	core->pc = TESTENTRY;
+	Osx970Run(core, 1);
+	Expect970(test, "data segment vector", core->pc, 0x380);
+	Expect970(test, "data segment dar", core->dar, 0x0000000220005000ULL);
+}
+
+static uint32 RandomMemory970(OsxJitTest *test)
+{
+	static const uint32 dform[] = {32, 33, 34, 35, 40, 41, 42, 43, 36, 37, 38, 39, 44, 45};
+	static const uint32 xform[] = {23, 55, 87, 119, 279, 311, 343, 375, 21, 53, 151, 183, 215, 247, 407, 439, 149, 181};
+	uint32 kind;
+	uint32 base;
+	uint32 target;
+	kind = Random(test) % 4;
+	base = 20 + Random(test) % 4;
+	target = Random(test) % 16;
+	if (kind == 0)
+		return (dform[Random(test) % 14] << 26) | (target << 21) | (base << 16) | ((Random(test) % 512) & ~1u);
+	if (kind == 1)
+		return (31u << 26) | (xform[Random(test) % 18] << 1) | (target << 21) | (base << 16) | (24u << 11);
+	if (kind == 2)
+		return (58u << 26) | (target << 21) | (base << 16) | ((Random(test) % 256) & ~3u) | (Random(test) % 3);
+	return (62u << 26) | (target << 21) | (base << 16) | ((Random(test) % 256) & ~3u) | (Random(test) % 2);
+}
+
+static void Jit970(OsxJitTest *test, Osx970 *interpreted)
+{
+	static const OsxJitTemplate templates[] = {
+		{14u << 26, 0x01ffffff}, {15u << 26, 0x01ffffff}, {24u << 26, 0x01ffffff}, {25u << 26, 0x01ffffff},
+		{26u << 26, 0x01ffffff}, {27u << 26, 0x01ffffff}, {28u << 26, 0x01ffffff}, {29u << 26, 0x01ffffff},
+		{10u << 26, 0x03bf7fff}, {11u << 26, 0x03bf7fff}, {20u << 26, 0x01ffffff}, {21u << 26, 0x01ffffff},
+		{(31u << 26) | (266u << 1), 0x01eff001}, {(31u << 26) | (40u << 1), 0x01eff001}, {(31u << 26) | (104u << 1), 0x01ef0001},
+		{(31u << 26) | (235u << 1), 0x01eff001}, {(31u << 26) | (28u << 1), 0x01eff001}, {(31u << 26) | (60u << 1), 0x01eff001},
+		{(31u << 26) | (124u << 1), 0x01eff001}, {(31u << 26) | (284u << 1), 0x01eff001}, {(31u << 26) | (316u << 1), 0x01eff001},
+		{(31u << 26) | (412u << 1), 0x01eff001}, {(31u << 26) | (444u << 1), 0x01eff001}, {(31u << 26) | (476u << 1), 0x01eff001},
+		{(31u << 26) | (922u << 1), 0x01ef0001}, {(31u << 26) | (954u << 1), 0x01ef0001}, {(31u << 26) | (986u << 1), 0x01ef0001},
+		{(31u << 26), 0x03af7800}, {(31u << 26) | (32u << 1), 0x03af7800},
+		{(31u << 26) | (339u << 1) | (8u << 16), 0x01e00000}, {(31u << 26) | (339u << 1) | (9u << 16), 0x01e00000},
+		{(31u << 26) | (24u << 1), 0x01eff001}, {(31u << 26) | (824u << 1), 0x01eff001},
+		{8u << 26, 0x01ffffff}, {12u << 26, 0x01ffffff}, {13u << 26, 0x01ffffff},
+		{(31u << 26) | (10u << 1), 0x01eff001}, {(31u << 26) | (138u << 1), 0x01eff001}, {(31u << 26) | (202u << 1), 0x01ef0001},
+		{(31u << 26) | (8u << 1), 0x01eff001}, {(31u << 26) | (536u << 1), 0x01eff001}, {(31u << 26) | (26u << 1), 0x01ef0001},
+		{(19u << 26) | (33u << 1), 0x03fff800}, {(19u << 26) | (129u << 1), 0x03fff800}, {(19u << 26) | (193u << 1), 0x03fff800},
+		{(19u << 26) | (225u << 1), 0x03fff800}, {(19u << 26) | (257u << 1), 0x03fff800}, {(19u << 26) | (289u << 1), 0x03fff800},
+		{(19u << 26) | (417u << 1), 0x03fff800}, {(19u << 26) | (449u << 1), 0x03fff800},
+		{30u << 26, 0x01fffffb}, {(31u << 26) | (83u << 1), 0x01e00000}
+	};
+	Osx970 *compiled;
+	OsxCpu *cpu;
+	uint32 program[24];
+	uint32 index;
+	int iteration;
+	int reg;
+	int matches;
+	int side;
+	Osx970 *core;
+	int smallctr;
+	cpu = (OsxCpu *)calloc(1, sizeof(OsxCpu));
+	compiled = (Osx970 *)calloc(1, sizeof(Osx970));
+	cpu->ram = (uint8 *)calloc(1, TESTRAMSIZE);
+	Reset970(compiled, cpu);
+	compiled->jithot = 1;
+	if (!Osx970JitCreate(compiled)) {
+		printf("970 jit unavailable\n");
+		free(cpu->ram);
+		free(compiled);
+		free(cpu);
+		return;
+	}
+	for (iteration = 0; iteration < 20000; iteration++) {
+		smallctr = Random(test) % 4 == 0;
+		for (index = 0; index < 24; index++) {
+			reg = (int)(Random(test) % 12);
+			if (reg == 0 && index < 20)
+				program[index] = (16u << 26) | ((Random(test) % 32) << 21) | ((Random(test) % 32) << 16) | ((1 + Random(test) % (24 - index)) << 2);
+			else if (reg == 1 && index > 20)
+				program[index] = (19u << 26) | ((Random(test) % 32) << 21) | ((Random(test) % 32) << 16) | (16u << 1);
+			else if (reg == 2 && index > 20 && !smallctr)
+				program[index] = (19u << 26) | ((20u | (Random(test) % 2) * 8) << 21) | ((Random(test) % 32) << 16) | (528u << 1);
+			else if (reg == 3)
+				program[index] = (31u << 26) | ((Random(test) % 32) << 21) | (19u << 1);
+			else if (reg == 4)
+				program[index] = (31u << 26) | ((Random(test) % 32) << 21) | ((Random(test) & 0xff) << 12) | (144u << 1);
+			else if (reg == 5)
+				program[index] = (31u << 26) | ((Random(test) % 32) << 21) | ((272u + Random(test) % 4) & 31) << 16 | (((272u + Random(test) % 4) >> 5) << 11) | (339u << 1);
+			else if (Random(test) % 3 == 0)
+				program[index] = RandomMemory970(test);
+			else {
+				reg = (int)(Random(test) % (sizeof(templates) / sizeof(templates[0])));
+				program[index] = templates[reg].opcode | (Random(test) & templates[reg].mask);
+			}
+		}
+		for (side = 0; side < 2; side++) {
+			if (side == 0)
+				core = interpreted;
+			else
+				core = compiled;
+			if (side == 0)
+				Reset970(core, core->cpu);
+			else {
+				core->msr = OSX970MSRHV | OSXMSRFP;
+				core->pc = TESTENTRY;
+				core->cpu->cr = 0;
+				core->cpu->xer = 0;
+			}
+			if (iteration & 1)
+				core->msr |= OSX970MSRSF;
+		}
+		for (reg = 0; reg < 32; reg++) {
+			interpreted->gpr[reg] = ((uint64)Random(test) << 32) | Random(test);
+			if (reg >= 20 && reg < 24)
+				interpreted->gpr[reg] = TESTDATA + (uint64)(reg - 20) * 1024;
+			if (reg == 24)
+				interpreted->gpr[reg] = Random(test) % 512;
+			compiled->gpr[reg] = interpreted->gpr[reg];
+		}
+		interpreted->cpu->cr = Random(test);
+		interpreted->cpu->xer = Random(test) & 0xe000007f;
+		compiled->cpu->cr = interpreted->cpu->cr;
+		compiled->cpu->xer = interpreted->cpu->xer;
+		interpreted->lr = TESTENTRY + 96;
+		interpreted->ctr = ((uint64)Random(test) << 32) | (TESTENTRY + 96);
+		if (smallctr)
+			interpreted->ctr = 1 + Random(test) % 3;
+		for (reg = 0; reg < 4; reg++) {
+			interpreted->sprg[reg] = ((uint64)Random(test) << 32) | Random(test);
+			compiled->sprg[reg] = interpreted->sprg[reg];
+		}
+		compiled->lr = interpreted->lr;
+		compiled->ctr = interpreted->ctr;
+		for (index = 0; index < TESTBYTES; index++)
+			interpreted->cpu->ram[TESTDATA + index] = (uint8)Random(test);
+		memcpy(compiled->cpu->ram + TESTDATA, interpreted->cpu->ram + TESTDATA, TESTBYTES);
+		for (index = 0; index < 24; index++) {
+			Put970(interpreted, TESTENTRY + index * 4, 4, program[index]);
+			Put970(compiled, TESTENTRY + index * 4, 4, program[index]);
+		}
+		Put970(interpreted, TESTENTRY + 96, 4, 0x48000000);
+		Put970(compiled, TESTENTRY + 96, 4, 0x48000000);
+		Osx970InvalidatePhysical(compiled, TESTENTRY, 4096);
+		Osx970Run(interpreted, 24);
+		Osx970Run(compiled, 24);
+		matches = 1;
+		for (reg = 0; reg < 32; reg++)
+			matches &= interpreted->gpr[reg] == compiled->gpr[reg];
+		matches &= interpreted->cpu->cr == compiled->cpu->cr && interpreted->cpu->xer == compiled->cpu->xer;
+		matches &= interpreted->lr == compiled->lr && interpreted->ctr == compiled->ctr && interpreted->pc == compiled->pc;
+		matches &= memcmp(interpreted->cpu->ram + TESTDATA, compiled->cpu->ram + TESTDATA, TESTBYTES) == 0;
+		test->checks++;
+		if (!matches) {
+			test->failures++;
+			if (test->failures <= 8) {
+				printf("FAIL 970 jit iteration %d sf %d\n", iteration, iteration & 1);
+				for (index = 0; index < 24; index++)
+					printf("  %08x\n", program[index]);
+				for (reg = 0; reg < 32; reg++)
+					if (interpreted->gpr[reg] != compiled->gpr[reg])
+						printf("  r%d %016llx jit %016llx\n", reg, (unsigned long long)interpreted->gpr[reg], (unsigned long long)compiled->gpr[reg]);
+				printf("  cr %08x jit %08x xer %08x jit %08x pc %llx jit %llx\n", interpreted->cpu->cr, compiled->cpu->cr, interpreted->cpu->xer, compiled->cpu->xer, (unsigned long long)interpreted->pc, (unsigned long long)compiled->pc);
+			}
+		}
+	}
+	Osx970JitDestroy(compiled);
+	free(cpu->ram);
+	free(compiled);
+	free(cpu);
+}
+
+static void Test970(OsxJitTest *test)
+{
+	Osx970 *core;
+	OsxCpu *cpu;
+	cpu = (OsxCpu *)calloc(1, sizeof(OsxCpu));
+	core = (Osx970 *)calloc(1, sizeof(Osx970));
+	cpu->ram = (uint8 *)calloc(1, TESTRAMSIZE);
+	Reset970(core, cpu);
+	Differential970(test, core);
+	Wide970(test, core);
+	Mmu970(test, core);
+	Reset970(core, cpu);
+	Jit970(test, core);
+	free(cpu->ram);
+	free(core);
+	free(cpu);
+}
+#endif
+
 int main(void)
 {
 	OsxJitTest test;
@@ -1067,6 +1502,9 @@ int main(void)
 	Floating(&test);
 	VectorSequences(&test);
 	Benchmark(&test);
+#if OSXG5
+	Test970(&test);
+#endif
 	printf("checks %d failures %d\n", test.checks, test.failures);
 	result = test.failures != 0;
 	test.native->logfile = stdout;

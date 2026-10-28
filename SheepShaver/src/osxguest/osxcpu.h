@@ -116,6 +116,9 @@ typedef struct OsxFaultRecord {
 #define OSXPROFILEJIT 0
 #define OSXMSGTRACE 0
 #define OSXNETTRACE 0
+#ifndef OSXG5
+#define OSXG5 0
+#endif
 
 typedef struct OsxCpu OsxCpu;
 
@@ -233,6 +236,9 @@ struct OsxCpu {
 	uint32 watchright;
 	uint32 watchrowbytes;
 	uint64 virtualticks;
+#if OSXG5
+	void *core970;
+#endif
 	OsxTlbEntry tlb[OSXMODES][OSXTLBKINDS][OSXTLBSIZE];
 };
 
@@ -280,5 +286,98 @@ void OsxCpuExecuteFloat(OsxCpu *cpu, uint32 instruction);
 void OsxCpuSetFloatCompare(OsxCpu *cpu, int field, double left, double right, int ordered);
 void OsxCpuDump(OsxCpu *cpu, FILE *output);
 void OsxCpuDumpFaults(OsxCpu *cpu, FILE *output);
+
+#if OSXG5
+#define OSX970MSRSF 0x8000000000000000ULL
+#define OSX970MSRHV 0x1000000000000000ULL
+#define OSX970SRR1CLEAR 0x00000000783f0000ULL
+#define OSX970VECTORDSEGMENT 0x0380
+#define OSX970VECTORISEGMENT 0x0480
+#define OSX970HID0DOZE 0x0080000000000000ULL
+#define OSX970HID0NAP 0x0040000000000000ULL
+#define OSX970HID0DEEPNAP 0x0020000000000000ULL
+#define OSX970SLBSIZE 64
+#define OSX970SLBVALID 0x0000000008000000ULL
+#define OSX970SLBKS 0x0000000000000800ULL
+#define OSX970SLBKP 0x0000000000000400ULL
+#define OSX970SLBN 0x0000000000000200ULL
+#define OSX970TLBBITS 10
+#define OSX970TLBSIZE (1 << OSX970TLBBITS)
+#define OSX970TLBMASK (OSX970TLBSIZE - 1)
+#define OSX970TLBINVALID 1
+#define OSX970FILLS 256
+#define OSX970PVR 0x003c0301
+
+typedef struct Osx970Slb {
+	uint64 esid;
+	uint64 vsid;
+} Osx970Slb;
+
+typedef struct Osx970TlbEntry {
+	uint64 page;
+	uint8 *host;
+} Osx970TlbEntry;
+
+typedef struct Osx970 {
+	OsxCpu *cpu;
+	uint64 gpr[32];
+	uint64 pc;
+	uint64 nextpc;
+	uint64 lr;
+	uint64 ctr;
+	uint64 msr;
+	uint64 srr0;
+	uint64 srr1;
+	uint64 hsrr0;
+	uint64 hsrr1;
+	uint64 dar;
+	uint64 sdr1;
+	uint64 hior;
+	uint64 sprg[4];
+	uint64 hsprg[2];
+	uint64 hid0;
+	uint64 hid1;
+	uint64 hid4;
+	uint64 hid5;
+	uint64 dabr;
+	uint64 iabr;
+	uint64 scomc;
+	uint64 scomd;
+	uint64 reservation;
+	int reservationvalid;
+	uint32 dsisr;
+	uint32 pir;
+	uint64 fetchpage;
+	uint8 *fetchhost;
+	int modes[OSXTLBKINDS];
+	uint8 *codepages;
+	uint32 *versions;
+	void *jit;
+	uint8 *jitlinksite;
+	void *jitcache;
+	int slbhint;
+	int jithot;
+	Osx970Slb slb[OSX970SLBSIZE];
+	Osx970TlbEntry *filled[OSX970FILLS];
+	int fillcount;
+	Osx970TlbEntry tlb[OSXMODES][OSXTLBKINDS][OSX970TLBSIZE];
+} Osx970;
+
+void Osx970Reset(Osx970 *core, OsxCpu *cpu, uint32 pvr);
+void Osx970FlushTlb(Osx970 *core);
+void Osx970Raise(Osx970 *core, uint32 vector, uint64 srr1bits);
+int Osx970Translate(Osx970 *core, uint64 address, int kind, int raise, uint64 *physical);
+int Osx970Read(Osx970 *core, uint64 address, int size, uint64 *value);
+int Osx970Write(Osx970 *core, uint64 address, int size, uint64 value);
+void Osx970ExecuteInstruction(Osx970 *core, uint32 instruction);
+void Osx970CheckInterrupts(Osx970 *core, uint64 now);
+void Osx970Run(Osx970 *core, int32 count);
+int Osx970TranslateVirtual(Osx970 *core, uint32 address, int kind, uint32 *physical);
+int Osx970Step(Osx970 *core, uint32 instruction);
+void Osx970InvalidatePhysical(Osx970 *core, uint64 physical, uint64 length);
+int Osx970JitCreate(Osx970 *core);
+void Osx970JitDestroy(Osx970 *core);
+void Osx970JitRun(Osx970 *core, int32 count);
+#endif
 
 #endif
