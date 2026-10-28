@@ -1757,6 +1757,15 @@ static void DMCModeDescFromVModesIndex(int idx, DMCModeDesc *out)
 #endif
 
 #ifdef SHEEPSHAVER
+SDL_Surface *SDLSetVideoModeQuietly(int width, int height, int depth, Uint32 flags)
+{
+	SDL_SetHint(SDL_HINT_WINDOW_ACTIVATE_WHEN_SHOWN, "0");
+	sdl_window = SDL_CreateWindow("", width, height, flags);
+	if (sdl_window == NULL)
+		return NULL;
+	return SDL_GetWindowSurface(sdl_window);
+}
+
 bool VideoInit(void)
 {
 	const bool classic = false;

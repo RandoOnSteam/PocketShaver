@@ -247,6 +247,18 @@ static uint64 AddExtended(Osx970 *core, uint64 left, uint64 right, uint64 carryi
 	return result;
 }
 
+static uint64 LinearSize(OsxCpu *cpu)
+{
+	return (uint64)cpu->ramsize + cpu->highram;
+}
+
+static uint64 Linear(OsxCpu *cpu, uint64 physical)
+{
+	if (physical >= OSX970HIGHRAM)
+		return cpu->ramsize + (physical - OSX970HIGHRAM);
+	return physical;
+}
+
 void Osx970FlushTlb(Osx970 *core)
 {
 	int mode;
@@ -415,6 +427,10 @@ static int PhysicalHost(Osx970 *core, uint64 physical, uint8 **host)
 		*host = cpu->ram + physical;
 		return 1;
 	}
+	if (physical >= OSX970HIGHRAM && physical - OSX970HIGHRAM < cpu->highram) {
+		*host = cpu->ram + cpu->ramsize + (physical - OSX970HIGHRAM);
+		return 1;
+	}
 	if (physical >= cpu->vrambase && physical - cpu->vrambase < cpu->vramsize) {
 		*host = cpu->vram + (physical - cpu->vrambase);
 		return 1;
@@ -536,10 +552,10 @@ void Osx970InvalidatePhysical(Osx970 *core, uint64 physical, uint64 length)
 {
 	uint64 page;
 	uint64 last;
-	if (core->codepages == NULL || length == 0 || physical >= core->cpu->ramsize)
+	if (core->codepages == NULL || length == 0 || physical >= LinearSize(core->cpu))
 		return;
-	if (length > core->cpu->ramsize - physical)
-		length = core->cpu->ramsize - physical;
+	if (length > LinearSize(core->cpu) - physical)
+		length = LinearSize(core->cpu) - physical;
 	last = (physical + length - 1) >> 12;
 	for (page = physical >> 12; page <= last; page++) {
 		if (core->codepages[page]) {
@@ -555,7 +571,7 @@ static uint8 *HostSlow(Osx970 *core, uint64 address, int kind, int raise, uint64
 	if (!Osx970Translate(core, address, kind, raise, physical))
 		return NULL;
 	if (kind == OSXTLBWRITE)
-		Osx970InvalidatePhysical(core, *physical, 1);
+		Osx970InvalidatePhysical(core, Linear(core->cpu, *physical), 1);
 	if (!PhysicalHost(core, *physical, &host)) {
 		*bus = 1;
 		return NULL;
@@ -1745,6 +1761,8 @@ int Osx970TranslateVirtual(Osx970 *core, uint32 address, int kind, uint32 *physi
 			return 0;
 		result = address;
 	}
+	if (result >= OSX970HIGHRAM && result - OSX970HIGHRAM < core->cpu->highram)
+		result = Linear(core->cpu, result);
 	if (result > 0xffffffffULL)
 		return 0;
 	*physical = (uint32)result;
@@ -1863,7 +1881,10 @@ static void Execute(Osx970 *core, uint32 instruction)
 	case 17:
 		if (core->cpu->syscallobserver) {
 			Mirror(core);
-			core->cpu->syscallobserver(core->cpu, core->cpu->syscallcontext);
+			index = core->cpu->syscallobserver(core->cpu, core->cpu->syscallcontext);
+			Absorb(core);
+			if (index)
+				return;
 		}
 		RaiseAfter(core, OSXVECTORSYSCALL);
 		return;
@@ -3646,7 +3667,7 @@ int Osx970JitCreate(Osx970 *core)
 	if (jit == NULL)
 		return 0;
 	jit->arena = (uint8 *)VirtualAlloc(NULL, OSX970JITBYTES, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
-	pages = core->cpu->ramsize >> 12;
+	pages = (uint32)(LinearSize(core->cpu) >> 12);
 	core->codepages = (uint8 *)calloc(pages, 1);
 	core->versions = (uint32 *)calloc(pages, sizeof(uint32));
 	if (jit->arena == NULL || core->codepages == NULL || core->versions == NULL) {
@@ -3760,7 +3781,7 @@ static void JitRun(Osx970 *core, Osx970Jit *jit)
 			link = NULL;
 			continue;
 		}
-		if ((core->msr & OSXMSRSE) || core->fetchhost < cpu->ram || core->fetchhost >= cpu->ram + cpu->ramsize || (core->pc & 3)) {
+		if ((core->msr & OSXMSRSE) || core->fetchhost < cpu->ram || (uint64)(core->fetchhost - cpu->ram) >= LinearSize(cpu) || (core->pc & 3)) {
 			cpu->slice--;
 			Osx970ExecuteInstruction(core, instruction);
 			link = NULL;

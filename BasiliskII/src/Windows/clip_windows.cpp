@@ -88,6 +88,9 @@ static bool we_put_this_data = false;
 
 static DWORD last_clipboard_sequence = 0;
 
+// Host clipboard sequence announced to the frontmost Mac application
+static DWORD posted_clipboard_sequence = 0;
+
 // Define a byte array (rewrite if it's a bottleneck)
 struct ByteArray : public vector<uint8> {
 	uint8 *data() { return &(*this)[0]; }
@@ -185,6 +188,23 @@ static void do_putscrap(uint32 type, void *scrap, int32 length)
 }
 
 /*
+ * For OS X
+ */
+void ClipInterrupt(void)
+{
+	DWORD sequence = GetClipboardSequenceNumber();
+	if (sequence == last_clipboard_sequence || sequence == posted_clipboard_sequence)
+		return;
+	posted_clipboard_sequence = sequence;
+	if (!IsClipboardFormatAvailable(CF_TEXT))
+		return;
+	M68kRegisters r;
+	r.d[0] = 0x01000003;	// suspendResumeMessage, resumeFlag | convertClipboardFlag
+	r.a[0] = 15;			// osEvt
+	Execute68kTrap(0xa02f, &r);	// PostEvent()
+}
+
+/*
  * Mac application zeroes clipboard
  */
 
@@ -251,10 +271,10 @@ static void do_getscrap(void **handle, uint32 type, int32 offset)
 							if (c < 0x80) {
 								if (c == 0)
 									break;
-								if (c == 13 && i < length - 1 && data[i + 1] == 10) {	// CR/LF -> CR
-									c = 13;
+								if (c == 13 && i < length - 1 && data[i + 1] == 10)
 									i++;
-								}
+								else if (c == 10)
+									c = 13;
 							} else if (!no_clip_conversion)
 								c = iso2mac[c & 0x7f];
 							*p++ = c;

@@ -1744,6 +1744,15 @@ static void DMCModeDescFromVModesIndex(int idx, DMCModeDesc *out)
 #endif /* SHEEPSHAVER && TARGET_OS_IPHONE */
 
 #ifdef SHEEPSHAVER
+SDL_Surface *SDLSetVideoModeQuietly(int width, int height, int depth, Uint32 flags)
+{
+	SDL_SetHint(SDL_HINT_WINDOW_NO_ACTIVATION_WHEN_SHOWN, "1");
+	sdl_window = SDL_CreateWindow("", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, width, height, flags);
+	if (sdl_window == NULL)
+		return NULL;
+	return SDL_GetWindowSurface(sdl_window);
+}
+
 bool VideoInit(void)
 {
 	const bool classic = false;

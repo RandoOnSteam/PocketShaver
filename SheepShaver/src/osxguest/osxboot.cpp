@@ -32,6 +32,10 @@
 #define BOOTPAGE 4096
 #define BOOTMAXRANGES 64
 #define BOOTARGSSIZE 0x200
+#define CLIPTOOLBOX "/System/Library/Frameworks/Carbon.framework/Versions/A/Frameworks/HIToolbox.framework/Versions/A/HIToolbox"
+#define CLIPSYSTEM "/usr/lib/libSystem.B.dylib"
+#define CLIPCACHE "/private/var/db/dyld/dyld_shared_cache_ppc"
+#define CLIPCACHEIMAGES 4096
 #define TREENAMELENGTH 32
 #define BOOTMAXKEXTS 1024
 #define BOOTKEXTPATH 512
@@ -698,6 +702,162 @@ static int ThinPowerPC(uint8 *data, uint32 *size)
 		}
 	}
 	return 0;
+}
+
+static uint8 *ReadFileRange(OsxHfsVolume *volume, const char *path, uint32 offset, uint32 length)
+{
+	uint8 record[248];
+	OsxHfsFork *fork;
+	uint8 *data;
+	if (!LookupPath(volume, path, record) || Big16(record) != HFSFILERECORD)
+		return NULL;
+	fork = (OsxHfsFork *)malloc(sizeof(OsxHfsFork));
+	ParseFork(record + 88, Big32(record + 8), 0, fork);
+	CompleteFork(volume, fork);
+	data = NULL;
+	if (offset < fork->logical) {
+		if ((uint64)length > fork->logical - offset)
+			length = (uint32)(fork->logical - offset);
+		data = (uint8 *)malloc((size_t)length + 1);
+		if (data && !ReadFork(volume, fork, offset, data, length)) {
+			free(data);
+			data = NULL;
+		}
+		if (data)
+			data[length] = 0;
+	}
+	free(fork);
+	return data;
+}
+
+static uint32 CacheBase(OsxHfsVolume *volume, const char *path)
+{
+	uint8 *header;
+	uint8 *images;
+	uint8 *paths;
+	uint32 imageoffset;
+	uint32 imagecount;
+	uint32 low;
+	uint32 high;
+	uint32 offset;
+	uint32 address;
+	uint32 index;
+	header = ReadFileRange(volume, CLIPCACHE, 0, 32);
+	if (header == NULL)
+		return 0;
+	imageoffset = Big32(header + 24);
+	imagecount = Big32(header + 28);
+	if (memcmp(header, "dyld_v1", 7) != 0 || imagecount == 0 || imagecount > CLIPCACHEIMAGES) {
+		free(header);
+		return 0;
+	}
+	free(header);
+	images = ReadFileRange(volume, CLIPCACHE, imageoffset, imagecount * 32);
+	if (images == NULL)
+		return 0;
+	low = 0xffffffffu;
+	high = 0;
+	for (index = 0; index < imagecount; index++) {
+		offset = Big32(images + index * 32 + 24);
+		if (offset < low)
+			low = offset;
+		if (offset > high)
+			high = offset;
+	}
+	address = 0;
+	paths = ReadFileRange(volume, CLIPCACHE, low, high - low + HFSMAXNAME * 4);
+	for (index = 0; paths && index < imagecount && address == 0; index++)
+		if (strcmp((const char *)paths + Big32(images + index * 32 + 24) - low, path) == 0)
+			address = Big32(images + index * 32 + 4);
+	free(paths);
+	free(images);
+	return address;
+}
+
+static uint32 TextCommand(const uint8 *image, uint32 size)
+{
+	uint32 commands;
+	uint32 position;
+	uint32 index;
+	commands = Big32(image + 16);
+	position = 28;
+	for (index = 0; index < commands && position + 32 <= size; index++) {
+		if (Big32(image + position) == 1 && strcmp((const char *)image + position + 8, "__TEXT") == 0)
+			return position;
+		position += Big32(image + position + 4);
+	}
+	return 0;
+}
+
+static void FindSymbols(const uint8 *image, uint32 size, uint32 base, const char *const *names, int count, uint32 *values, uint32 *textlow, uint32 *texthigh)
+{
+	uint32 commands;
+	uint32 position;
+	uint32 text;
+	uint32 slide;
+	uint32 symbols;
+	uint32 symbolcount;
+	uint32 strings;
+	uint32 name;
+	uint32 index;
+	int wanted;
+	if (size < 28 || Big32(image) != 0xfeedface)
+		return;
+	text = TextCommand(image, size);
+	slide = 0;
+	if (base && text)
+		slide = base - Big32(image + text + 24);
+	if (text && textlow) {
+		*textlow = Big32(image + text + 24) + slide;
+		*texthigh = *textlow + Big32(image + text + 28);
+	}
+	commands = Big32(image + 16);
+	position = 28;
+	for (index = 0; index < commands && position + 24 <= size; index++) {
+		if (Big32(image + position) == 2) {
+			symbols = Big32(image + position + 8);
+			symbolcount = Big32(image + position + 12);
+			strings = Big32(image + position + 16);
+			for (; symbolcount > 0 && symbols + 12 <= size; symbolcount--, symbols += 12) {
+				name = strings + Big32(image + symbols);
+				if ((image[symbols + 4] & 0x0f) != 0x0f || name >= size)
+					continue;
+				for (wanted = 0; wanted < count; wanted++)
+					if (values[wanted] == 0 && strcmp((const char *)image + name, names[wanted]) == 0)
+						values[wanted] = Big32(image + symbols + 8) + slide;
+			}
+		}
+		position += Big32(image + position + 4);
+	}
+}
+
+static void FindClipboardFunctions(OsxMachine *machine, OsxHfsVolume *volume)
+{
+	static const char *const systemnames[3] = { "_malloc", "_free", "_bzero" };
+	static const char *const toolboxnames[5] = {
+		"_GetCurrentScrap", "_ClearCurrentScrap", "_PutScrapFlavor", "_GetScrapFlavorSize", "_GetScrapFlavorData"
+	};
+	OsxClip *clip;
+	uint8 *image;
+	uint32 size;
+	int index;
+	clip = &machine->clip;
+	free(clip->pending);
+	memset(clip, 0, sizeof(OsxClip));
+	image = ReadFile(volume, CLIPSYSTEM, &size);
+	if (image && ThinPowerPC(image, &size))
+		FindSymbols(image, size, CacheBase(volume, CLIPSYSTEM), systemnames, 3, clip->functions + OSXCLIPMALLOC, NULL, NULL);
+	free(image);
+	image = ReadFile(volume, CLIPTOOLBOX, &size);
+	if (image && ThinPowerPC(image, &size))
+		FindSymbols(image, size, CacheBase(volume, CLIPTOOLBOX), toolboxnames, 5, clip->functions + OSXCLIPGETCURRENT, &clip->textlow, &clip->texthigh);
+	free(image);
+	clip->ready = clip->texthigh > clip->textlow;
+	for (index = 0; index < OSXCLIPFUNCTIONS; index++)
+		if (clip->functions[index] == 0)
+			clip->ready = 0;
+	if (machine->log)
+		fprintf(machine->log, "clipboard ready %d toolbox %08x-%08x scrap %08x malloc %08x\n", clip->ready, clip->textlow, clip->texthigh, clip->functions[OSXCLIPGETCURRENT], clip->functions[OSXCLIPMALLOC]);
 }
 
 static int PlistString(const uint8 *plist, const char *key, char *output, uint32 size)
@@ -1441,6 +1601,144 @@ static void AddU3Nodes(OsxTreeNode *root)
 	node = NewNode(i2c, "i2c-hwclock");
 	AddString(node, "compatible", "pulsar-legacy-slewing");
 	AddCell(node, "reg", 0xd2);
+	node = NewNode(u3, "dart");
+	AddString(node, "device_type", "dart");
+	AddStrings(node, "compatible", "u3-dart", "dart");
+	cells[0] = OSXG5DART;
+	cells[1] = OSXG5DARTSIZE;
+	AddCells(node, "reg", cells, 2);
+}
+
+static void AddK2I2cNode(OsxTreeNode *macio)
+{
+	OsxTreeNode *node;
+	uint32 cells[2];
+	node = NewNode(macio, "i2c");
+	AddString(node, "device_type", "i2c");
+	AddStrings(node, "compatible", "k2-i2c", "keywest-i2c");
+	AddProperty(node, "built-in", "", 0);
+	cells[0] = 0x18000;
+	cells[1] = 0x1000;
+	AddCells(node, "reg", cells, 2);
+	AddCell(node, "AAPL,address", OSXG5MACIOBASE + 0x18000);
+	AddCell(node, "AAPL,address-step", 0x10);
+	AddCell(node, "AAPL,i2c-rate", 100);
+	AddString(node, "AAPL,driver-name", ".i2c-mac-io");
+	AddCell(node, "#address-cells", 1);
+	AddCell(node, "#size-cells", 0);
+	node = NewNode(node, "deq");
+	AddString(node, "device_type", "deq");
+	AddCell(node, "reg", 0x6a);
+	AddCell(node, "i2c-address", 0x6a);
+}
+
+static OsxTreeNode *AddI2sNodes(OsxTreeNode *macio)
+{
+	static const uint32 clockdata[] = {
+		0x02b11000, 0x3c, 0x3400, 0x44, 0x4000, 0x44, 0x400, 0x44,
+		4, 0x69303439, 0x6e756c6c, 0,
+		0x02ee0000, 0x3c, 0x3400, 0x44, 0x4000, 0x44, 0x200, 0x44,
+		2, 0x69303435, 0x6e756c6c, 0,
+		0x01194000, 0x3c, 0x3000, 0x3c, 0x400, 0x44, 0x4000, 0,
+		0, 0x6e756c6c, 0x6e756c6c, 0
+	};
+	static const uint32 clockid[] = { 0x69327330, 0x69303435, 0x69303439, 0x69303138 };
+	static const uint32 priorities[] = { 2, 4, 4 };
+	OsxTreeNode *i2s;
+	OsxTreeNode *bus;
+	OsxTreeNode *node;
+	uint32 cells[6];
+	i2s = NewNode(macio, "i2s");
+	AddString(i2s, "device_type", "i2s");
+	AddProperty(i2s, "built-in", "", 0);
+	cells[0] = 0x10000;
+	cells[1] = 0x1000;
+	cells[2] = 0x8000;
+	cells[3] = 0x400;
+	AddCells(i2s, "reg", cells, 4);
+	AddCell(i2s, "#address-cells", 1);
+	AddProperty(i2s, "ranges", "", 0);
+	AddCell(i2s, "AAPL,address", OSXG5MACIOBASE + 0x10000);
+	bus = NewNode(i2s, "i2s-a");
+	AddString(bus, "device_type", "soundbus");
+	AddString(bus, "compatible", "i2sbus");
+	AddProperty(bus, "built-in", "", 0);
+	cells[0] = 0;
+	cells[1] = 0x1000;
+	cells[2] = 0;
+	cells[3] = 0x100;
+	cells[4] = 0x100;
+	cells[5] = 0x100;
+	AddCells(bus, "reg", cells, 6);
+	cells[0] = 0x1e;
+	cells[1] = 1;
+	cells[2] = OSXG5IRQI2STX;
+	cells[3] = 0;
+	cells[4] = OSXG5IRQI2SRX;
+	cells[5] = 0;
+	AddCells(bus, "interrupts", cells, 6);
+	AddCells(bus, "AAPL,requested-priorities", priorities, 3);
+	AddCells(bus, "AAPL,clock-id", clockid, 4);
+	AddCells(bus, "AAPL,clock-data", clockdata, (int)(sizeof(clockdata) / sizeof(clockdata[0])));
+	node = NewNode(bus, "sound");
+	AddString(node, "device_type", "soundchip");
+	AddString(node, "compatible", "AOAK2");
+	AddProperty(node, "built-in", "", 0);
+	AddCell(node, "layout-id", 36);
+	AddCell(node, "object-model-version", 2);
+	AddCell(node, "vendor-id", 0x106b);
+	return bus;
+}
+
+static void AddI2sFunctions(OsxTreeNode *macio, OsxTreeNode *bus)
+{
+	static const char *const setnames[10] = {
+		"platform-do-enable", "platform-do-disable", "platform-do-clock-enable", "platform-do-clock-disable",
+		"platform-do-sw-reset", "platform-do-clear-sw-reset", "platform-do-cell-enable", "platform-do-cell-disable",
+		"platform-do-dig-hw-reset", "platform-do-codec-clock-mux"
+	};
+	static const uint32 setvalues[10][3] = {
+		{ 0x08000000, 0x2000, 0x2000 }, { 0x08000000, 0, 0x2000 }, { 0x08800000, 0x1000, 0x1000 }, { 0x08800000, 0, 0x1000 },
+		{ 0x08000000, 0x800, 0x800 }, { 0x08000000, 0, 0x800 }, { 0x08000000, 0x400, 0x400 }, { 0x08000000, 0, 0x400 },
+		{ 0x08000000, 0, 0 }, { 0x08000000, 0, 0 }
+	};
+	static const char *const getnames[4] = {
+		"platform-do-get-enable", "platform-do-get-clock-enable", "platform-do-get-sw-reset", "platform-do-get-cell-enable"
+	};
+	static const uint32 getvalues[4][2] = { { 0x2000, 0xd }, { 0x1000, 0xc }, { 0x800, 0xb }, { 0x400, 0xa } };
+	static const char *const busnames[14] = {
+		"platform-enable", "platform-disable", "platform-clock-enable", "platform-clock-disable", "platform-sw-reset",
+		"platform-clear-sw-reset", "platform-cell-enable", "platform-cell-disable", "platform-get-enable",
+		"platform-get-clock-enable", "platform-get-sw-reset", "platform-get-cell-enable", "platform-dig-hw-reset",
+		"platform-codec-clock-mux"
+	};
+	uint32 cells[7];
+	uint32 macioh;
+	uint32 bush;
+	int index;
+	macioh = Big32(FindProperty(macio, "AAPL,phandle")->value);
+	bush = Big32(FindProperty(bus, "AAPL,phandle")->value);
+	for (index = 0; index < 14; index++)
+		AddCell(bus, busnames[index], macioh);
+	for (index = 0; index < 10; index++) {
+		cells[0] = bush;
+		cells[1] = setvalues[index][0];
+		cells[2] = 3;
+		cells[3] = 0x3c;
+		cells[4] = setvalues[index][1];
+		cells[5] = setvalues[index][2];
+		AddCells(macio, setnames[index], cells, 6);
+	}
+	for (index = 0; index < 4; index++) {
+		cells[0] = bush;
+		cells[1] = 0x08000000;
+		cells[2] = 0x1a;
+		cells[3] = 0x3c;
+		cells[4] = getvalues[index][0];
+		cells[5] = getvalues[index][1];
+		cells[6] = 1;
+		AddCells(macio, getnames[index], cells, 7);
+	}
 }
 
 static OsxTreeNode *BuildTreeG5(OsxBootState *state, OsxTreeNode **memorymap)
@@ -1602,6 +1900,8 @@ static OsxTreeNode *BuildTreeG5(OsxBootState *state, OsxTreeNode **memorymap)
 	AddCell(mpic, "clock-frequency", 4166666);
 
 	AddPmuNodes(macio, interrupting);
+	AddK2I2cNode(macio);
+	interrupting[6] = AddI2sNodes(macio);
 	interrupting[3] = AddKauaiNode(ht, OSXG5DEVICEATA0, OSXG5ATABASE, OSXG5IRQATA0, OSXG5IRQATA0DMA);
 	interrupting[4] = AddKauaiNode(ht, OSXG5DEVICEATA1, OSXG5ATABASE + OSXG5ATASIZE, OSXG5IRQATA1, OSXG5IRQATA1DMA);
 
@@ -1631,8 +1931,9 @@ static OsxTreeNode *BuildTreeG5(OsxBootState *state, OsxTreeNode **memorymap)
 	AddPhandles(root, &state->phandle);
 	property = FindProperty(mpic, "AAPL,phandle");
 	parent = Big32(property->value);
-	for (index = 0; index < 6; index++)
+	for (index = 0; index < 7; index++)
 		AddCell(interrupting[index], "interrupt-parent", parent);
+	AddI2sFunctions(macio, interrupting[6]);
 	AddCell(cpu, "AAPL,parentIC", parent);
 	return root;
 }
@@ -1904,6 +2205,14 @@ static void InstallBootArgs(OsxBootState *state, const char *commandline, uint32
 	strncpy((char *)args + 4, commandline, 255);
 	StoreBig32(args + 0x104, 0);
 	StoreBig32(args + 0x108, machine->ramsize);
+#if OSXG5
+	if (machine->g5state.highsize) {
+		args[3] = 2;
+		StoreBig32(args + 0x108, machine->ramsize >> 12);
+		StoreBig32(args + 0x10c, (uint32)(OSXG5HIGHRAM >> 12));
+		StoreBig32(args + 0x110, machine->g5state.highsize >> 12);
+	}
+#endif
 	StoreBig32(args + 0x1d4, OSXVRAMBASE);
 	StoreBig32(args + 0x1d8, strstr(commandline, "-v") == NULL);
 	StoreBig32(args + 0x1dc, machine->rowbytes);
@@ -2052,6 +2361,7 @@ int OsxBootLoad(OsxMachine *machine, const char *imagepath, int bootbus, int boo
 	} else {
 		fprintf(stderr, "osx: no Extensions.mkext, booting without drivers\n");
 	}
+	FindClipboardFunctions(machine, &volume);
 	CloseVolume(&volume);
 	machine->bootargs = Allocate(&state, BOOTARGSSIZE);
 	AddRange(&state, "BootArgs", machine->bootargs, BOOTARGSSIZE);

@@ -418,6 +418,9 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 						SonyInterrupt();
 						DiskInterrupt();
 						CDROMInterrupt();
+#ifdef _WIN32
+						ClipInterrupt();
+#endif
 					}
 
 					r->d[0] = 1;		// Flag: 68k interrupt routine executes VBLTasks etc.

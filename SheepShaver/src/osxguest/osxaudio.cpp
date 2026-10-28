@@ -231,8 +231,14 @@ void OsxAudioPoll(OsxMachine *machine, uint64 now)
 	uint32 level;
 	uint32 want;
 	int got;
+	int channel;
 	audio = &machine->audio;
-	if (!(machine->dbdma[OSXDBDMAAUDIOOUT].status & OSXDBDMASTATUSACTIVE)) {
+	channel = OSXDBDMAAUDIOOUT;
+#if OSXG5
+	if (machine->g5)
+		channel = OSXG5DBDMAI2SOUT;
+#endif
+	if (!(machine->dbdma[channel].status & OSXDBDMASTATUSACTIVE)) {
 		audio->running = 0;
 		audio->lasttime = now;
 		return;
@@ -263,9 +269,12 @@ void OsxAudioPoll(OsxMachine *machine, uint64 now)
 		want = (target - level) & ~(uint32)(AUDIOFRAMEBYTES - 1);
 		if (want > OSXAUDIOBLOCK)
 			want = OSXAUDIOBLOCK;
-		got = OsxDbdmaTransfer(machine, OSXDBDMAAUDIOOUT, audio->block, want, 0);
+		got = OsxDbdmaTransfer(machine, channel, audio->block, want, 0);
 		if (got <= 0)
 			return;
+#if OSXG5
+		machine->g5state.i2sframes += (uint32)got / AUDIOFRAMEBYTES;
+#endif
 		if (audio->opened) {
 			SDL_LockAudio();
 			StoreBlock(audio, (uint32)got);

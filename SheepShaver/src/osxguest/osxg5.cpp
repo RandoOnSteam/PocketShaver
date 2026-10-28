@@ -51,12 +51,32 @@
 #define I2CIRQADDR 0x02
 #define I2CIRQSTOP 0x04
 #define I2CPULSAR 0x69
+#define I2CTAS3004 0x35
+#define I2CCS8420 0x10
+#define CS8420INCREMENT 0x80
+#define CS8420VERSION 0x7f
+#define TASVOLUME 0x04
+#define TASANALOG 0x40
+#define I2SINTERRUPT 0x00
+#define I2SFORMAT 0x10
+#define I2SFRAMECOUNT 0x40
+#define I2SWORDSIZES 0x60
+#define I2SCLOCKSSTOPPED 0x01000000u
+#define I2SPENDING 0x55550000u
+#define K2FCR1 0x3c
+#define K2FCR1I2SCELL 0x00000400u
+#define K2FCR1I2SRESET 0x00000800u
+#define K2FCR1I2SCLOCK 0x00001000u
 
 #define GPIOINDATA 0x02
 #define GPIOPMU 0x09
 
 #define K2COUNTERFREQUENCY 18432000
 #define K2COUNTER 0x15038
+
+#define DARTENABLE 0x200
+#define DARTFLUSH 0x400
+#define DARTVALID 0x80000000u
 
 #define ATAIRQDMA 0x80000000u
 #define ATAIRQDRIVE 0x40000000u
@@ -134,8 +154,11 @@ static void MpicReset(OsxMpic *mpic)
 void OsxG5Reset(OsxMachine *machine)
 {
 	OsxG5 *g5;
+	uint32 highsize;
 	g5 = &machine->g5state;
+	highsize = g5->highsize;
 	memset(g5, 0, sizeof(OsxG5));
+	g5->highsize = highsize;
 	SetFunction(&g5->functions[0], OSXG5DEVICEHOST, 0x0057106b, 0x06000000, 0, 0);
 	SetFunction(&g5->functions[1], OSXG5DEVICEMACIO, 0x0041106b, 0xff000000, OSXG5MACIOBASE, OSXG5MACIOSIZE);
 	SetFunction(&g5->functions[2], OSXG5DEVICEATA0, 0x0043106b, 0x01018f00, OSXG5ATABASE, OSXG5ATASIZE);
@@ -147,6 +170,15 @@ void OsxG5Reset(OsxMachine *machine)
 	StoreLittle(g5->functions[2].config + 0x3c, 4, 0x0100 | OSXG5IRQATA0);
 	StoreLittle(g5->functions[3].config + 0x3c, 4, 0x0100 | OSXG5IRQATA1);
 	MpicReset(&g5->mpic);
+	g5->i2c.device = I2CPULSAR;
+	g5->i2c.width = 1;
+	g5->k2i2c.device = I2CTAS3004;
+	g5->k2i2c.width = OSXG5I2CWIDTH;
+	g5->k2i2c.secondary = I2CCS8420;
+	g5->k2i2c.receiver[CS8420VERSION] = 0x11;
+	g5->i2sinterrupt = I2SCLOCKSSTOPPED;
+	machine->dbdma[OSXG5DBDMAI2SOUT].irq = OSXG5IRQDIRECT | OSXG5IRQI2STX;
+	machine->dbdma[OSXG5DBDMAI2SIN].irq = OSXG5IRQDIRECT | OSXG5IRQI2SRX;
 	g5->gpio[GPIOPMU] = GPIOINDATA;
 	machine->dbdma[OSXDBDMAIDE0].irq = OSXIRQIDE0DMA;
 	machine->dbdma[OSXDBDMAIDE1].irq = OSXIRQIDE1DMA;
@@ -383,6 +415,10 @@ void OsxG5SetLine(OsxMachine *machine, int source, int level)
 	case OSXIRQCUDA:
 		MpicSetSource(machine, OSXG5IRQPMU, level);
 		break;
+	default:
+		if (source & OSXG5IRQDIRECT)
+			MpicSetSource(machine, source & (OSXG5IRQDIRECT - 1), level);
+		break;
 	}
 }
 
@@ -473,7 +509,10 @@ static int I2cStart(OsxKeyWest *i2c)
 	mode = i2c->mode & I2CMODEMASK;
 	i2c->active = 0;
 	i2c->status &= ~I2CSTATUSBUSY;
-	if ((i2c->addr >> 1) != I2CPULSAR)
+	i2c->selected = 0;
+	if (i2c->secondary && (i2c->addr >> 1) == i2c->secondary)
+		i2c->selected = 1;
+	else if ((i2c->addr >> 1) != i2c->device)
 		return 0;
 	i2c->active = 1;
 	i2c->status |= I2CSTATUSBUSY;
@@ -481,14 +520,54 @@ static int I2cStart(OsxKeyWest *i2c)
 		i2c->pointerset = 0;
 	if (mode == I2CMODESTANDARDSUB || mode == I2CMODECOMBINED) {
 		i2c->pointer = i2c->subaddr;
+		i2c->map = i2c->subaddr;
 		i2c->pointerset = 1;
 	}
+	i2c->position = 0;
 	return 1;
+}
+
+static uint8 I2cFetch(OsxKeyWest *i2c)
+{
+	uint8 value;
+	if (i2c->selected) {
+		value = i2c->receiver[i2c->map & CS8420VERSION];
+		if (i2c->map & CS8420INCREMENT)
+			i2c->map = (uint8)((i2c->map & CS8420INCREMENT) | ((i2c->map + 1) & CS8420VERSION));
+		return value;
+	}
+	if (i2c->width == 1)
+		return i2c->memory[i2c->pointer++];
+	value = 0;
+	if (i2c->position < i2c->width)
+		value = i2c->memory[i2c->pointer * i2c->width + i2c->position];
+	i2c->position++;
+	return value;
+}
+
+static void I2cStore(OsxKeyWest *i2c, uint8 value)
+{
+	if (i2c->selected) {
+		if ((i2c->map & CS8420VERSION) != CS8420VERSION)
+			i2c->receiver[i2c->map & CS8420VERSION] = value;
+		if (i2c->map & CS8420INCREMENT)
+			i2c->map = (uint8)((i2c->map & CS8420INCREMENT) | ((i2c->map + 1) & CS8420VERSION));
+		return;
+	}
+	if (i2c->width == 1) {
+		i2c->memory[i2c->pointer++] = value;
+		return;
+	}
+	if (i2c->position < i2c->width)
+		i2c->memory[i2c->pointer * i2c->width + i2c->position] = value;
+	if (i2c->pointer == TASVOLUME)
+		i2c->volumewritten = 1;
+	i2c->position++;
 }
 
 static void I2cReadByte(OsxKeyWest *i2c)
 {
-	i2c->data = i2c->clock[i2c->pointer++];
+	i2c->data = I2cFetch(i2c);
 	i2c->status |= I2CSTATUSLASTAAK;
 	i2c->lastnak = !(i2c->control & I2CCONTROLAAK);
 	i2c->isr |= I2CIRQDATA;
@@ -549,14 +628,24 @@ static void I2cAcknowledge(OsxKeyWest *i2c, uint8 value)
 		I2cReadByte(i2c);
 	}
 	mode = i2c->mode & I2CMODEMASK;
-	if ((value & I2CIRQDATA) && i2c->active && (i2c->addr & 1) && (mode == I2CMODECOMBINED || mode == I2CMODESTANDARD || mode == I2CMODESTANDARDSUB) && (previous & I2CIRQDATA)) {
+	if (!(value & I2CIRQDATA) || !i2c->active)
+		return;
+	if ((i2c->addr & 1) && (mode == I2CMODECOMBINED || mode == I2CMODESTANDARD)) {
+		if (!(previous & I2CIRQDATA))
+			return;
 		if (i2c->lastnak) {
 			I2cStop(i2c);
 			i2c->isr |= I2CIRQSTOP;
 		} else {
 			I2cReadByte(i2c);
 		}
+		return;
 	}
+	if (i2c->addr & 1) {
+		I2cReadByte(i2c);
+		return;
+	}
+	i2c->isr |= I2CIRQDATA;
 }
 
 static void I2cData(OsxKeyWest *i2c, uint8 value)
@@ -564,10 +653,12 @@ static void I2cData(OsxKeyWest *i2c, uint8 value)
 	i2c->data = value;
 	if (i2c->active && !(i2c->addr & 1)) {
 		if (i2c->pointerset) {
-			i2c->clock[i2c->pointer++] = value;
+			I2cStore(i2c, value);
 		} else {
 			i2c->pointer = value;
+			i2c->map = value;
 			i2c->pointerset = 1;
+			i2c->position = 0;
 		}
 		i2c->status |= I2CSTATUSLASTAAK;
 		i2c->isr |= I2CIRQDATA;
@@ -592,6 +683,68 @@ static void I2cWrite(OsxKeyWest *i2c, uint32 reg, uint8 value)
 	}
 }
 
+static uint8 *PhysicalHost(OsxMachine *machine, uint64 physical, uint32 length)
+{
+	uint64 high;
+	if (physical < machine->ramsize && length <= machine->ramsize - physical)
+		return machine->ram + physical;
+	high = physical - OSXG5HIGHRAM;
+	if (physical >= OSXG5HIGHRAM && high < machine->g5state.highsize && length <= machine->g5state.highsize - high)
+		return machine->ram + machine->ramsize + high;
+	return NULL;
+}
+
+uint8 *OsxG5DmaHost(OsxMachine *machine, uint32 bus, uint32 length)
+{
+	OsxG5 *g5;
+	uint8 *table;
+	uint32 pages;
+	uint32 entry;
+	g5 = &machine->g5state;
+	if (!(g5->dartcontrol & DARTENABLE))
+		return PhysicalHost(machine, bus, length);
+	if ((bus & 0xfff) + length > 0x1000)
+		return NULL;
+	pages = g5->dartcontrol & 0x1ff;
+	if (pages == 0)
+		pages = 512;
+	if ((bus >> 12) >= pages * 1024)
+		return NULL;
+	table = PhysicalHost(machine, ((uint64)((g5->dartcontrol >> 12) & 0xfffff) << 12) + (bus >> 12) * 4, 4);
+	if (table == NULL)
+		return NULL;
+	entry = BusFromBytes(table, 4);
+	if (!(entry & DARTVALID)) {
+		g5->dartexception = bus >> 12;
+		return NULL;
+	}
+	return PhysicalHost(machine, ((uint64)(entry & 0x00ffffff) << 12) | (bus & 0xfff), length);
+}
+
+int OsxG5DmaCopy(OsxMachine *machine, uint32 bus, uint8 *data, uint32 length, int towardmemory)
+{
+	uint8 *host;
+	uint32 chunk;
+	uint32 done;
+	done = 0;
+	while (done < length) {
+		chunk = 0x1000 - ((bus + done) & 0xfff);
+		if (chunk > length - done)
+			chunk = length - done;
+		host = OsxG5DmaHost(machine, bus + done, chunk);
+		if (host == NULL)
+			return 0;
+		if (towardmemory) {
+			memcpy(host, data + done, chunk);
+			OsxJitInvalidate(machine->cpu, (uint32)(host - machine->ram), chunk);
+		} else {
+			memcpy(data + done, host, chunk);
+		}
+		done += chunk;
+	}
+	return 1;
+}
+
 static uint64 K2Counter(OsxMachine *machine)
 {
 	uint64 timebase;
@@ -599,10 +752,104 @@ static uint64 K2Counter(OsxMachine *machine)
 	return (timebase / OSXTIMEBASEFREQUENCY) * K2COUNTERFREQUENCY + (timebase % OSXTIMEBASEFREQUENCY) * K2COUNTERFREQUENCY / OSXTIMEBASEFREQUENCY;
 }
 
+static void TasUpdateGain(OsxMachine *machine)
+{
+	OsxKeyWest *tas;
+	const uint8 *volume;
+	tas = &machine->g5state.k2i2c;
+	volume = tas->memory + TASVOLUME * OSXG5I2CWIDTH;
+	if (tas->memory[TASANALOG * OSXG5I2CWIDTH] & 1) {
+		machine->audio.leftgain = 0;
+		machine->audio.rightgain = 0;
+	} else if (tas->volumewritten) {
+		machine->audio.leftgain = (int32)(((uint32)volume[0] << 16) | ((uint32)volume[1] << 8) | volume[2]);
+		machine->audio.rightgain = (int32)(((uint32)volume[3] << 16) | ((uint32)volume[4] << 8) | volume[5]);
+	}
+}
+
+static int I2sDivider(uint32 field, int sclk)
+{
+	if (sclk) {
+		if (field == 8)
+			return 1;
+		if (field == 9)
+			return 3;
+		return (int)(field + 1) * 2;
+	}
+	if (field == 0x14)
+		return 1;
+	if (field == 0x13)
+		return 3;
+	if (field == 0x12)
+		return 5;
+	return (int)(field + 1) * 2;
+}
+
+static void I2sUpdateRate(OsxMachine *machine)
+{
+	static const uint32 clocks[4] = { 18432000, 45158400, 49152000, 0 };
+	uint32 format;
+	uint32 source;
+	uint32 rate;
+	format = machine->g5state.i2sformat;
+	source = clocks[(format >> 30) & 3];
+	rate = 44100;
+	if (source)
+		rate = source / (uint32)(I2sDivider((format >> 24) & 0x1f, 0) * I2sDivider((format >> 20) & 0x0f, 1) * 64);
+	if (rate >= 8000 && rate <= 96000)
+		machine->audio.rate = rate;
+}
+
+static void I2sUpdateClocks(OsxMachine *machine)
+{
+	uint32 fcr1;
+	fcr1 = bswap_32(machine->g5state.fcr[K2FCR1 >> 2]);
+	if (!(fcr1 & K2FCR1I2SCELL) || !(fcr1 & K2FCR1I2SCLOCK) || (fcr1 & K2FCR1I2SRESET))
+		machine->g5state.i2sinterrupt |= I2SCLOCKSSTOPPED;
+}
+
+static uint32 I2sRead(OsxMachine *machine, uint32 reg)
+{
+	OsxG5 *g5;
+	g5 = &machine->g5state;
+	switch (reg) {
+	case I2SINTERRUPT: return g5->i2sinterrupt;
+	case I2SFORMAT: return g5->i2sformat;
+	case I2SWORDSIZES: return g5->i2swordsizes;
+	case I2SFRAMECOUNT: return g5->i2sframes + g5->i2sframebias;
+	}
+	return 0;
+}
+
+static void I2sWrite(OsxMachine *machine, uint32 reg, uint32 value)
+{
+	OsxG5 *g5;
+	g5 = &machine->g5state;
+	switch (reg) {
+	case I2SINTERRUPT:
+		g5->i2sinterrupt = (g5->i2sinterrupt & I2SPENDING & ~(value & I2SPENDING)) | (value & ~I2SPENDING);
+		break;
+	case I2SFORMAT:
+		g5->i2sformat = value;
+		I2sUpdateRate(machine);
+		break;
+	case I2SWORDSIZES:
+		g5->i2swordsizes = value;
+		break;
+	case I2SFRAMECOUNT:
+		g5->i2sframebias = value - g5->i2sframes;
+		break;
+	}
+}
+
 static uint32 MacIoRead(OsxMachine *machine, uint32 offset, int size)
 {
 	OsxG5 *g5;
 	g5 = &machine->g5state;
+	if (offset >= 0x10000 && offset < 0x10100)
+		return bswap_32(I2sRead(machine, offset & 0xf0)) >> ((4 - size) * 8);
+	if (offset >= 0x18000 && offset < 0x19000)
+		return I2cRead(&g5->k2i2c, offset & 0xf0) << ((size - 1) * 8);
 	if (offset >= 0x8000 && offset < 0x9000)
 		return OsxHeathrowRead(machine, offset, size);
 	if (offset == K2COUNTER && size == 4)
@@ -640,9 +887,20 @@ static void MacIoWrite(OsxMachine *machine, uint32 offset, int size, uint32 valu
 		OsxCudaWrite(machine, (offset >> 9) & 15, value & 0xff);
 		return;
 	}
+	if (offset >= 0x10000 && offset < 0x10100) {
+		if (size == 4)
+			I2sWrite(machine, offset & 0xf0, bswap_32(value));
+		return;
+	}
+	if (offset >= 0x18000 && offset < 0x19000) {
+		I2cWrite(&g5->k2i2c, offset & 0xf0, (uint8)(value >> ((size - 1) * 8)));
+		TasUpdateGain(machine);
+		return;
+	}
 	if (offset < OSXG5GPIOBASE) {
 		if (size == 4)
 			g5->fcr[offset >> 2] = value;
+		I2sUpdateClocks(machine);
 		return;
 	}
 	if (offset - OSXG5GPIOBASE + size <= OSXG5GPIOSIZE) {
@@ -707,6 +965,10 @@ static uint32 U3Read(OsxMachine *machine, uint32 offset, int size)
 		return I2cRead(&machine->g5state.i2c, (offset - (OSXG5U3I2C - OSXG5U3BASE)) & 0xf0) << ((size - 1) * 8);
 	if (offset - (OSXG5HTSELF - OSXG5U3BASE) < 0x1000)
 		return HtSelfRead(machine, offset - (OSXG5HTSELF - OSXG5U3BASE), size);
+	if (offset == OSXG5DART - OSXG5U3BASE && size == 4)
+		return machine->g5state.dartcontrol;
+	if (offset == OSXG5DART - OSXG5U3BASE + 0x10 && size == 4)
+		return machine->g5state.dartexception;
 	if (offset == 0 && size == 4)
 		return 0x33;
 	return 0;
@@ -718,6 +980,10 @@ static void U3Write(OsxMachine *machine, uint32 offset, int size, uint32 value)
 		I2cWrite(&machine->g5state.i2c, (offset - (OSXG5U3I2C - OSXG5U3BASE)) & 0xf0, (uint8)(value >> ((size - 1) * 8)));
 	else if (offset - (OSXG5HTSELF - OSXG5U3BASE) < 0x400)
 		ConfigWrite(machine, (offset - (OSXG5HTSELF - OSXG5U3BASE)) >> 2, size, value);
+	else if (offset == OSXG5DART - OSXG5U3BASE && size == 4)
+		machine->g5state.dartcontrol = value & ~DARTFLUSH;
+	else if (offset == OSXG5DART - OSXG5U3BASE + 0x10 && size == 4)
+		machine->g5state.dartexception = 0;
 }
 
 static uint8 ChrpChecksum(const uint8 *header)
@@ -827,12 +1093,6 @@ static void GmacStatus(OsxMachine *machine, uint32 bits)
 	GmacUpdate(machine);
 }
 
-static uint8 *GmacGuest(OsxMachine *machine, uint32 address, uint32 length)
-{
-	if (address >= machine->ramsize || length > machine->ramsize - address)
-		return NULL;
-	return machine->ram + address;
-}
 
 static void GmacResetRx(OsxGmac *gmac)
 {
@@ -898,7 +1158,6 @@ static void GmacTransmit(OsxMachine *machine)
 {
 	OsxGmac *gmac;
 	uint8 *descriptor;
-	uint8 *data;
 	uint32 base;
 	uint32 mask;
 	uint32 done;
@@ -917,7 +1176,7 @@ static void GmacTransmit(OsxMachine *machine)
 	done = gmac->txdma[GMACTXDONE >> 2] & mask;
 	kick = gmac->txdma[GMACTXKICK >> 2] & mask;
 	while (done != kick) {
-		descriptor = GmacGuest(machine, base + done * 16, 16);
+		descriptor = OsxG5DmaHost(machine, base + done * 16, 16);
 		if (descriptor == NULL)
 			break;
 		control = LoadLittle(descriptor, 4);
@@ -928,9 +1187,7 @@ static void GmacTransmit(OsxMachine *machine)
 		length = control & 0x7fff;
 		if (gmac->txsize + length > OSXG5GMACFRAME)
 			length = OSXG5GMACFRAME - gmac->txsize;
-		data = GmacGuest(machine, LoadLittle(descriptor + 8, 4), length);
-		if (data)
-			memcpy(gmac->txdata + gmac->txsize, data, length);
+		OsxG5DmaCopy(machine, LoadLittle(descriptor + 8, 4), gmac->txdata + gmac->txsize, length, 0);
 		gmac->txsize += length;
 		if ((control & GMACTXEOF) && gmac->txsize > 0) {
 			start = (gmac->txfirst >> 15) & 0x3f;
@@ -976,7 +1233,6 @@ static int GmacDeliver(OsxMachine *machine, const uint8 *frame, uint32 length)
 {
 	OsxGmac *gmac;
 	uint8 *descriptor;
-	uint8 *buffer;
 	uint32 mask;
 	uint32 done;
 	uint32 config;
@@ -991,14 +1247,10 @@ static int GmacDeliver(OsxMachine *machine, const uint8 *frame, uint32 length)
 	if (!GmacAccepts(gmac, frame))
 		return 1;
 	done = gmac->rxdma[GMACRXDONE >> 2] & mask;
-	descriptor = GmacGuest(machine, gmac->rxdma[GMACRXDBLOW >> 2] + done * 16, 16);
+	descriptor = OsxG5DmaHost(machine, gmac->rxdma[GMACRXDBLOW >> 2] + done * 16, 16);
 	if (descriptor == NULL)
 		return 1;
-	buffer = GmacGuest(machine, (LoadLittle(descriptor + 8, 4) & ~7u) + ((config & 0x1c00) >> 10), length);
-	if (buffer) {
-		memcpy(buffer, frame, length);
-		OsxJitInvalidate(machine->cpu, (uint32)(buffer - machine->ram), length);
-	}
+	OsxG5DmaCopy(machine, (LoadLittle(descriptor + 8, 4) & ~7u) + ((config & 0x1c00) >> 10), (uint8 *)frame, length, 1);
 	fcs = 4;
 	if (gmac->mac[GMACMACRXCFG >> 2] & 4)
 		fcs = 0;

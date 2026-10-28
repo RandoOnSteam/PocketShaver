@@ -124,7 +124,7 @@ typedef struct OsxCpu OsxCpu;
 
 typedef void (*OsxHookFunction)(OsxCpu *cpu, void *context, uint32 address);
 typedef void (*OsxVectorFunction)(OsxCpu *cpu, uint32 instruction);
-typedef void (*OsxSyscallFunction)(OsxCpu *cpu, void *context);
+typedef int (*OsxSyscallFunction)(OsxCpu *cpu, void *context);
 typedef uint32 (*OsxBusReadFunction)(void *context, uint32 address, int size);
 typedef void (*OsxBusWriteFunction)(void *context, uint32 address, int size, uint32 value);
 
@@ -211,6 +211,9 @@ struct OsxCpu {
 	uint8 *fetchhost;
 	uint8 *ram;
 	uint32 ramsize;
+#if OSXG5
+	uint32 highram;
+#endif
 	uint8 *vram;
 	uint32 vrambase;
 	uint32 vramsize;
@@ -298,6 +301,7 @@ void OsxCpuDumpFaults(OsxCpu *cpu, FILE *output);
 #define OSX970HID0DEEPNAP 0x0020000000000000ULL
 #define OSX970SLBSIZE 64
 #define OSX970SLBVALID 0x0000000008000000ULL
+#define OSX970HIGHRAM 0x100000000ULL
 #define OSX970SLBKS 0x0000000000000800ULL
 #define OSX970SLBKP 0x0000000000000400ULL
 #define OSX970SLBN 0x0000000000000200ULL

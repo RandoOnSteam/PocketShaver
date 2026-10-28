@@ -364,6 +364,12 @@ static inline int PhysicalHost(OsxCpu *cpu, uint32 physical, uint8 **host)
 		*host = cpu->ram + physical;
 		return 1;
 	}
+#if OSXG5
+	if (physical - cpu->ramsize < cpu->highram) {
+		*host = cpu->ram + physical;
+		return 1;
+	}
+#endif
 	if (physical - cpu->vrambase < cpu->vramsize) {
 		*host = cpu->vram + (physical - cpu->vrambase);
 		return 1;
@@ -2096,8 +2102,8 @@ static OSXFORCEINLINE void Execute(OsxCpu *cpu, uint32 instruction)
 			cpu->lr = cpu->pc + 4;
 		return;
 	case 17:
-		if (cpu->syscallobserver)
-			cpu->syscallobserver(cpu, cpu->syscallcontext);
+		if (cpu->syscallobserver && cpu->syscallobserver(cpu, cpu->syscallcontext))
+			return;
 		OsxCpuRaiseException(cpu, OSXVECTORSYSCALL, 0, cpu->pc + 4);
 		return;
 	case 18:

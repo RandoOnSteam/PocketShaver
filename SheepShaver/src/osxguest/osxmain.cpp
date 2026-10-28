@@ -1,6 +1,6 @@
 /*
  *  osxmain.cpp - main() entry point for OSX emulation path
- * 
+ *
  *	(C) 2026 RandoOnSteam (battlemageloveryt@gmail.com)
  *
  *  This program is free software; you can redistribute it and/or modify
@@ -38,6 +38,12 @@
 #define OSXSLICE 262144
 
 SDL_Surface *SDLSetVideoModeQuietly(int width, int height, int depth, Uint32 flags);
+#if SDL_VERSION_ATLEAST(2, 0, 0)
+extern SDL_Window *sdl_window;
+#define OSXVIDEOFLAGS 0
+#else
+#define OSXVIDEOFLAGS SDL_SWSURFACE
+#endif
 #define OSXDEFAULTRAM (256 * 1024 * 1024)
 #define OSXFRAMERATE 60
 #define OSXPRESENTRUNS 16
@@ -111,6 +117,20 @@ int OsxGuestRequested(void)
 	return OsxSelectBootImage(&diskindex, &partition) == OSXBOOTNATIVE;
 }
 
+#if SDL_VERSION_ATLEAST(2, 0, 0) /* SDL2+ -> SDL1 names we use */
+	#define SDLK_KP0 SDLK_KP_0
+	#define SDLK_KP1 SDLK_KP_1
+	#define SDLK_KP2 SDLK_KP_2
+	#define SDLK_KP3 SDLK_KP_3
+	#define SDLK_KP4 SDLK_KP_4
+	#define SDLK_KP5 SDLK_KP_5
+	#define SDLK_KP6 SDLK_KP_6
+	#define SDLK_KP7 SDLK_KP_7
+	#define SDLK_KP8 SDLK_KP_8
+	#define SDLK_KP9 SDLK_KP_9
+	#define SDLK_LSUPER SDLK_LGUI
+	#define SDLK_RSUPER SDLK_RGUI
+#endif /* SDL_VERSION_ATLEAST(2, 0, 0) */
 static int MapKey(int key)
 {
 	static const OsxKeyMapping mappings[] = {
@@ -638,13 +658,24 @@ static int HostButton(int button)
 		return 1;
 	if (button == SDL_BUTTON_MIDDLE)
 		return 2;
+#if !SDL_VERSION_ATLEAST(2, 0, 0)
 	if (button == SDL_BUTTON_WHEELUP)
 		return 3;
 	if (button == SDL_BUTTON_WHEELDOWN)
 		return 4;
+#endif
 	return -1;
 }
-
+#if SDL_VERSION_ATLEAST(2, 0, 0)
+static int HostWheelButton(int wheely)
+{
+	if (wheely > 0)
+		return 3; /* up */
+	if (wheely < 0)
+		return 4; /* down */
+	return -1;
+}
+#endif
 #ifdef ENABLE_EMULATOR_MONITOR
 static void MonitorInput(void *context, int operation, int first, int second)
 {
@@ -703,6 +734,9 @@ static void PresentFrame(OsxSession *session)
 	uint32 rowbytes;
 	uint32 runstart[OSXPRESENTRUNS];
 	uint32 runend[OSXPRESENTRUNS];
+#if SDL_VERSION_ATLEAST(2, 0, 0)
+	SDL_Rect rects[OSXPRESENTRUNS];
+#endif
 	int runs;
 	int open;
 	uint32 openrow;
@@ -752,8 +786,19 @@ static void PresentFrame(OsxSession *session)
 #if OSXPROFILE
 	session->tmpframes += runs != 0;
 #endif
+#if SDL_VERSION_ATLEAST(2, 0, 0)
+	for (index = 0; index < runs; index++) {
+		rects[index].x = 0;
+		rects[index].y = (int)runstart[index];
+		rects[index].w = (int)machine->width;
+		rects[index].h = (int)(runend[index] - runstart[index] + 1);
+	}
+	if (runs)
+		SDL_UpdateWindowSurfaceRects(sdl_window, rects, runs);
+#else
 	for (index = 0; index < runs; index++)
 		SDL_UpdateRect(session->screen, 0, runstart[index], machine->width, runend[index] - runstart[index] + 1);
+#endif
 }
 
 static void HandleEvents(OsxSession *session, void *monitor)
@@ -793,6 +838,11 @@ static void HandleEvents(OsxSession *session, void *monitor)
 		case SDL_MOUSEBUTTONUP:
 			PressButton(session, HostButton(event.button.button), 0);
 			break;
+		#if SDL_VERSION_ATLEAST(2, 0, 0)
+		case SDL_MOUSEWHEEL:
+			PressButton(session, HostWheelButton(event.wheel.y), 1);
+			break;
+		#endif
 		case SDL_KEYDOWN:
 			code = MapKey(event.key.keysym.sym);
 			if (code >= 0)
@@ -858,7 +908,7 @@ static void AttachDisks(OsxMachine *machine, const char **bootimage, int *bootbu
 	}
 }
 
-static void SyscallObserver(OsxCpu *cpu, void *context)
+static int SyscallObserver(OsxCpu *cpu, void *context)
 {
 	OsxSession *session;
 	uint32 key;
@@ -870,6 +920,8 @@ static void SyscallObserver(OsxCpu *cpu, void *context)
 	uint32 header[6];
 #endif
 	session = (OsxSession *)context;
+	if (OsxClipSyscall(session->machine, cpu))
+		return 1;
 	if (cpu->gpr[0] == 4 && session->machine->log && session->writelogs < 2000) {
 		GuestString(cpu, cpu->gpr[4], text, sizeof(text));
 		if (cpu->gpr[5] < sizeof(text))
@@ -936,16 +988,17 @@ static void SyscallObserver(OsxCpu *cpu, void *context)
 	for (index = 0; index < 64; index++) {
 		if (session->syscallcounts[index] && session->syscallkeys[index] == key) {
 			session->syscallcounts[index]++;
-			return;
+			return 0;
 		}
 	}
 	for (index = 0; index < 64; index++) {
 		if (session->syscallcounts[index] == 0) {
 			session->syscallkeys[index] = key;
 			session->syscallcounts[index] = 1;
-			return;
+			return 0;
 		}
 	}
+	return 0;
 }
 
 static void DumpSyscalls(OsxSession *session)
@@ -1431,7 +1484,7 @@ static void RunMachine(OsxSession *session, void *monitor)
 	}
 }
 
-static uint8 *AllocateMemory(uint32 size)
+static uint8 *AllocateMemory(size_t size)
 {
 #ifdef _WIN32
 	return (uint8 *)VirtualAlloc(NULL, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
@@ -1536,7 +1589,15 @@ static int RunSession(OsxSession *session)
 	if (ramsize < 128 * 1024 * 1024)
 		ramsize = OSXDEFAULTRAM;
 	machine->ramsize = (uint32)ramsize & ~0xfffffu;
+#if OSXG5
+	if (PrefsFindString("osxmodel") && strcmp(PrefsFindString("osxmodel"), "PowerMac7,3") == 0 && PrefsFindInt32("ramsize") > 2048 && PrefsFindInt32("ramsize") <= 4096) {
+		machine->ramsize = 0x80000000u;
+		machine->g5state.highsize = (uint32)(PrefsFindInt32("ramsize") - 2048) << 20;
+	}
+	machine->ram = AllocateMemory((size_t)machine->ramsize + machine->g5state.highsize);
+#else
 	machine->ram = AllocateMemory(machine->ramsize);
+#endif
 	machine->vram = AllocateMemory(OSXVRAMSIZE);
 	if (machine->ram == NULL || machine->vram == NULL) {
 		fprintf(stderr, "osx: cannot allocate guest memory\n");
@@ -1555,6 +1616,9 @@ static int RunSession(OsxSession *session)
 	}
 	cpu->ram = machine->ram;
 	cpu->ramsize = machine->ramsize;
+#if OSXG5
+	cpu->highram = machine->g5state.highsize;
+#endif
 	cpu->vram = machine->vram;
 	cpu->vrambase = OSXVRAMBASE;
 	cpu->vramsize = OSXVRAMSIZE;
@@ -1678,12 +1742,17 @@ static int RunSession(OsxSession *session)
 #if defined(_WIN32) && (defined(_M_X64) || defined(__x86_64__))
 	session->pixelshuffle = IsProcessorFeaturePresent(36) != 0;
 #endif
+#if !SDL_VERSION_ATLEAST(2, 0, 0)
 	SDL_WM_SetCaption("SheepShaver - Mac OS X", "SheepShaver");
-	session->screen = SDLSetVideoModeQuietly((int)machine->width, (int)machine->height, 32, SDL_SWSURFACE);
+#endif
+	session->screen = SDLSetVideoModeQuietly((int)machine->width, (int)machine->height, 32, OSXVIDEOFLAGS);
 	if (session->screen == NULL) {
 		fprintf(stderr, "osx: SDL_SetVideoMode failed: %s\n", SDL_GetError());
 		return 1;
 	}
+#if SDL_VERSION_ATLEAST(2, 0, 0)
+	SDL_SetWindowTitle(sdl_window, "SheepShaver - Mac OS X");
+#endif
 	SDL_ShowCursor(SDL_DISABLE);
 	session->shadow = (uint8 *)malloc(machine->rowbytes * machine->height);
 	if (session->shadow == NULL)

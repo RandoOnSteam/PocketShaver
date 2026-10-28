@@ -314,6 +314,9 @@ typedef struct OsxCuda {
 #define OSXG5U3BASE 0xf8000000
 #define OSXG5U3SIZE 0x01000000
 #define OSXG5U3I2C 0xf8001000
+#define OSXG5DART 0xf8033000
+#define OSXG5DARTSIZE 0x7000
+#define OSXG5HIGHRAM 0x100000000ULL
 #define OSXG5MPICOFFSET 0x40000
 #define OSXG5MPICSIZE 0x40000
 #define OSXG5MPICSOURCES 68
@@ -335,6 +338,12 @@ typedef struct OsxCuda {
 #define OSXG5IRQATA0DMA 0x0d
 #define OSXG5IRQATA1 0x28
 #define OSXG5IRQATA1DMA 0x0e
+#define OSXG5I2CWIDTH 15
+#define OSXG5IRQDIRECT 0x100
+#define OSXG5IRQI2STX 0x01
+#define OSXG5IRQI2SRX 0x02
+#define OSXG5DBDMAI2SOUT 0
+#define OSXG5DBDMAI2SIN 1
 #define OSXG5GPIOBASE 0x50
 #define OSXG5GPIOSIZE 0x60
 
@@ -373,7 +382,15 @@ typedef struct OsxKeyWest {
 	int lastnak;
 	int pointerset;
 	uint8 pointer;
-	uint8 clock[256];
+	uint8 device;
+	int width;
+	int position;
+	int volumewritten;
+	uint8 secondary;
+	int selected;
+	uint8 map;
+	uint8 receiver[0x80];
+	uint8 memory[0x100 * OSXG5I2CWIDTH];
 } OsxKeyWest;
 
 typedef struct OsxGmac {
@@ -391,8 +408,17 @@ typedef struct OsxGmac {
 typedef struct OsxG5 {
 	OsxG5Function functions[OSXG5FUNCTIONS];
 	OsxGmac gmac;
+	uint32 dartcontrol;
+	uint32 dartexception;
+	uint32 highsize;
 	OsxMpic mpic;
 	OsxKeyWest i2c;
+	OsxKeyWest k2i2c;
+	uint32 i2sinterrupt;
+	uint32 i2sformat;
+	uint32 i2swordsizes;
+	uint32 i2sframebias;
+	uint32 i2sframes;
 	uint32 fcr[20];
 	uint8 gpio[OSXG5GPIOSIZE];
 	uint32 atafcr[2];
@@ -423,6 +449,45 @@ typedef struct OsxInputEvent {
 	int first;
 	int second;
 } OsxInputEvent;
+
+#define OSXCLIPMALLOC 0
+#define OSXCLIPFREE 1
+#define OSXCLIPBZERO 2
+#define OSXCLIPGETCURRENT 3
+#define OSXCLIPCLEARCURRENT 4
+#define OSXCLIPPUTFLAVOR 5
+#define OSXCLIPFLAVORSIZE 6
+#define OSXCLIPFLAVORDATA 7
+#define OSXCLIPFUNCTIONS 8
+
+typedef struct OsxClip {
+	uint32 functions[OSXCLIPFUNCTIONS];
+	uint32 textlow;
+	uint32 texthigh;
+	int ready;
+	int busy;
+	int task;
+	int step;
+	uint32 saved[32];
+	uint32 savedlr;
+	uint32 savedctr;
+	uint32 pc;
+	uint32 stack;
+	uint32 stackphysical;
+	uint32 block;
+	uint32 data;
+	uint32 size;
+	uint32 scrap;
+	uint32 lastscrap;
+	int primed;
+	uint32 lasthash;
+	uint8 *pending;
+	uint32 pendinglength;
+	uint64 started;
+	uint64 lastattempt;
+	uint64 lastput;
+	uint64 lastget;
+} OsxClip;
 
 struct OsxMachine {
 	OsxCpu *cpu;
@@ -465,6 +530,7 @@ struct OsxMachine {
 	uint32 kernelsize;
 	uint8 *mkext;
 	uint32 mkextsize;
+	OsxClip clip;
 	int pointerx;
 	int pointery;
 	int pointerbuttons;
@@ -492,6 +558,8 @@ void OsxG5SetLine(OsxMachine *machine, int source, int level);
 void OsxG5SetPmuRequest(OsxMachine *machine, int level);
 void OsxG5PrepareNvram(OsxMachine *machine);
 void OsxG5GmacReceive(OsxMachine *machine);
+uint8 *OsxG5DmaHost(OsxMachine *machine, uint32 bus, uint32 length);
+int OsxG5DmaCopy(OsxMachine *machine, uint32 bus, uint8 *data, uint32 length, int towardmemory);
 #endif
 uint32 OsxHeathrowRead(OsxMachine *machine, uint32 offset, int size);
 void OsxHeathrowWrite(OsxMachine *machine, uint32 offset, int size, uint32 value);
@@ -554,6 +622,7 @@ void OsxPointerHook(OsxCpu *cpu, void *context, uint32 address);
 
 int OsxBootLoad(OsxMachine *machine, const char *imagepath, int bootbus, int bootunit, const char *commandline);
 uint32 OsxFindKernelSymbol(OsxMachine *machine, const char *name);
+int OsxClipSyscall(OsxMachine *machine, OsxCpu *cpu);
 int OsxKextSymbolOffset(OsxMachine *machine, const char *bundle, const char *symbol, uint32 *offset);
 uint32 OsxAdler32(const uint8 *data, uint32 length);
 int OsxMkextHasBundle(const uint8 *mkext, uint32 size, const char *bundle);

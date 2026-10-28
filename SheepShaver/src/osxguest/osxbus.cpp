@@ -76,6 +76,14 @@ static uint32 WriteLittleRegister(uint32 reg, uint32 offset, int size, uint32 va
 static inline uint32 ReadGuest32(OsxMachine *machine, uint32 address)
 {
 	uint8 *host;
+#if OSXG5
+	if (machine->g5) {
+		host = OsxG5DmaHost(machine, address, 4);
+		if (host == NULL)
+			return 0;
+		return ((uint32)host[0] << 24) | ((uint32)host[1] << 16) | ((uint32)host[2] << 8) | host[3];
+	}
+#endif
 	if (address > machine->ramsize - 4)
 		return 0;
 	host = machine->ram + address;
@@ -90,6 +98,18 @@ static inline uint32 ReadGuestLittle32(OsxMachine *machine, uint32 address)
 static inline void WriteGuestLittle32(OsxMachine *machine, uint32 address, uint32 value)
 {
 	uint8 *host;
+#if OSXG5
+	if (machine->g5) {
+		host = OsxG5DmaHost(machine, address, 4);
+		if (host == NULL)
+			return;
+		host[0] = (uint8)value;
+		host[1] = (uint8)(value >> 8);
+		host[2] = (uint8)(value >> 16);
+		host[3] = (uint8)(value >> 24);
+		return;
+	}
+#endif
 	if (address > machine->ramsize - 4)
 		return;
 	host = machine->ram + address;
@@ -374,6 +394,11 @@ int OsxDbdmaTransfer(OsxMachine *machine, int channel, uint8 *data, uint32 lengt
 		chunk = residual;
 		if (chunk > length - consumed)
 			chunk = length - consumed;
+#if OSXG5
+		if (machine->g5)
+			OsxG5DmaCopy(machine, address + done, data + consumed, chunk, towardmemory);
+		else
+#endif
 		if (address + done + chunk <= machine->ramsize) {
 			if (towardmemory) {
 				memcpy(machine->ram + address + done, data + consumed, chunk);
