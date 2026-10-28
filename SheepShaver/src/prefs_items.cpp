@@ -57,6 +57,7 @@ prefs_desc common_prefs_items[] = {
 	{"osxjit", TYPE_BOOLEAN, false,     "enable the Mac OS X native JIT compiler"},
 #if defined(OSXG5) && OSXG5
 	{"osxcpu970", TYPE_BOOLEAN, false,  "run the Mac OS X guest on a PowerPC 970 (G5) CPU"},
+	{"osxmodel", TYPE_STRING, false,    "Mac OS X guest device-tree model name"},
 #endif
 	{"osxtracestart", TYPE_STRING, false, "kernel symbol that starts instruction tracing"},
 	{"osxtracestop", TYPE_STRING, false, "kernel symbol that stops instruction tracing"},

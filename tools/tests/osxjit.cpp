@@ -1297,9 +1297,20 @@ static uint32 RandomMemory970(OsxJitTest *test)
 	uint32 kind;
 	uint32 base;
 	uint32 target;
-	kind = Random(test) % 4;
+	kind = Random(test) % 9;
 	base = 20 + Random(test) % 4;
 	target = Random(test) % 16;
+	if (kind == 4)
+		return (31u << 26) | (target << 21) | (base << 16) | (25u << 11) | (20u << 1);
+	if (kind == 5)
+		return (31u << 26) | (target << 21) | (base << 16) | (25u << 11) | (150u << 1) | 1;
+	if (kind == 6)
+		return ((46u + Random(test) % 2) << 26) | ((24u + Random(test) % 8) << 21) | (base << 16) | ((Random(test) % 128) & ~3u);
+	if (kind == 7)
+		return (31u << 26) | (target << 21) | (base << 16) | (25u << 11) | ((103u + (Random(test) % 2) * 128u) << 1);
+	if (kind == 8)
+		return (7u << 26) | (target << 21) | (base << 16) | (Random(test) & 0xffff);
+	kind &= 3;
 	if (kind == 0)
 		return (dform[Random(test) % 14] << 26) | (target << 21) | (base << 16) | ((Random(test) % 512) & ~1u);
 	if (kind == 1)
@@ -1391,6 +1402,8 @@ static void Jit970(OsxJitTest *test, Osx970 *interpreted)
 			}
 			if (iteration & 1)
 				core->msr |= OSX970MSRSF;
+			if (iteration & 2)
+				core->msr |= OSXMSRVEC;
 		}
 		for (reg = 0; reg < 32; reg++) {
 			interpreted->gpr[reg] = ((uint64)Random(test) << 32) | Random(test);
@@ -1398,8 +1411,19 @@ static void Jit970(OsxJitTest *test, Osx970 *interpreted)
 				interpreted->gpr[reg] = TESTDATA + (uint64)(reg - 20) * 1024;
 			if (reg == 24)
 				interpreted->gpr[reg] = Random(test) % 512;
+			if (reg == 25)
+				interpreted->gpr[reg] = (Random(test) % 128) * 4 + (Random(test) % 8 == 0);
 			compiled->gpr[reg] = interpreted->gpr[reg];
 		}
+		for (index = 0; index < 32; index++) {
+			interpreted->cpu->vr[index][0] = Random(test);
+			interpreted->cpu->vr[index][1] = Random(test);
+			interpreted->cpu->vr[index][2] = Random(test);
+			interpreted->cpu->vr[index][3] = Random(test);
+		}
+		memcpy(compiled->cpu->vr, interpreted->cpu->vr, sizeof(interpreted->cpu->vr));
+		interpreted->reservationvalid = 0;
+		compiled->reservationvalid = 0;
 		interpreted->cpu->cr = Random(test);
 		interpreted->cpu->xer = Random(test) & 0xe000007f;
 		compiled->cpu->cr = interpreted->cpu->cr;
@@ -1432,6 +1456,8 @@ static void Jit970(OsxJitTest *test, Osx970 *interpreted)
 		matches &= interpreted->cpu->cr == compiled->cpu->cr && interpreted->cpu->xer == compiled->cpu->xer;
 		matches &= interpreted->lr == compiled->lr && interpreted->ctr == compiled->ctr && interpreted->pc == compiled->pc;
 		matches &= memcmp(interpreted->cpu->ram + TESTDATA, compiled->cpu->ram + TESTDATA, TESTBYTES) == 0;
+		matches &= memcmp(interpreted->cpu->vr, compiled->cpu->vr, sizeof(interpreted->cpu->vr)) == 0;
+		matches &= interpreted->reservationvalid == compiled->reservationvalid;
 		test->checks++;
 		if (!matches) {
 			test->failures++;

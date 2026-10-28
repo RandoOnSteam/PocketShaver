@@ -1311,6 +1311,12 @@ static OsxTreeNode *BuildTree(OsxBootState *state, OsxTreeNode **memorymap)
 	uint32 cells[16];
 	machine = state->machine;
 	root = NewNode(NULL, "device-tree");
+#if OSXG5
+	if (state->machine->pvr == OSX970PVR && PrefsFindString("osxmodel")) {
+		AddString(root, "model", PrefsFindString("osxmodel"));
+		AddStrings(root, "compatible", PrefsFindString("osxmodel"), "MacRISC4");
+	} else
+#endif
 	if (state->machine->pvr == OSXPVRG4) {
 		AddString(root, "model", "PowerMac1,2");
 		AddStrings(root, "compatible", "PowerMac1,2", "MacRISC");

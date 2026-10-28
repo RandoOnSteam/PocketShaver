@@ -2066,6 +2066,7 @@ typedef struct Osx970Emitter {
 	uint64 page;
 	uint32 key;
 	int fetchmode;
+	int vector;
 } Osx970Emitter;
 
 static void EmitByte(Osx970Emitter *emitter, uint32 value)
@@ -2394,6 +2395,209 @@ static void EmitNot(Osx970Emitter *emitter, int reg)
 	EmitRegister(emitter, 1, 0xf7, 2, reg);
 }
 
+static void EmitTlbLookup(Osx970Emitter *emitter, int store, int size, int mode, uint64 pc, uint32 instruction, uint32 count)
+{
+	uint32 tlb;
+	EmitRegister(emitter, 0, 0x89, OSX970RAX, OSX970RDX);
+	EmitByte(emitter, 0xc1);
+	EmitByte(emitter, 0xea);
+	EmitByte(emitter, 12);
+	EmitByte(emitter, 0x81);
+	EmitByte(emitter, 0xe2);
+	EmitDword(emitter, OSX970TLBMASK);
+	EmitByte(emitter, 0xc1);
+	EmitByte(emitter, 0xe2);
+	EmitByte(emitter, 4);
+	if (store)
+		tlb = OSX970FIELD(tlb) + (uint32)((mode * OSXTLBKINDS + OSXTLBWRITE) * OSX970TLBSIZE) * (uint32)sizeof(Osx970TlbEntry);
+	else
+		tlb = OSX970FIELD(tlb) + (uint32)((mode * OSXTLBKINDS + OSXTLBREAD) * OSX970TLBSIZE) * (uint32)sizeof(Osx970TlbEntry);
+	EmitByte(emitter, 0x4c);
+	EmitByte(emitter, 0x8d);
+	EmitByte(emitter, 0x40);
+	EmitByte(emitter, (uint32)(size - 1));
+	EmitByte(emitter, 0x49);
+	EmitByte(emitter, 0x81);
+	EmitByte(emitter, 0xe0);
+	EmitDword(emitter, 0xfffff000u);
+	EmitByte(emitter, 0x4c);
+	EmitByte(emitter, 0x39);
+	EmitByte(emitter, 0x84);
+	EmitByte(emitter, 0x13);
+	EmitDword(emitter, tlb);
+	EmitColdStep(emitter, 0x85, pc, instruction, count);
+	EmitByte(emitter, 0x48);
+	EmitByte(emitter, 0x8b);
+	EmitByte(emitter, 0x94);
+	EmitByte(emitter, 0x13);
+	EmitDword(emitter, tlb + 8);
+}
+
+static void EmitHostOffset(Osx970Emitter *emitter, uint32 opcode, int reg, uint32 displacement)
+{
+	EmitRex(emitter, 0, reg, OSX970RAX, OSX970RDX);
+	EmitOpcode(emitter, opcode);
+	EmitByte(emitter, 0x44 | ((reg & 7) << 3));
+	EmitByte(emitter, (OSX970RAX << 3) | OSX970RDX);
+	EmitByte(emitter, displacement);
+}
+
+static void EmitResume(Osx970Emitter *emitter, int first)
+{
+	int index;
+	for (index = first; index < emitter->coldcount; index++)
+		emitter->colds[index].resume = emitter->cursor;
+}
+
+static void EmitAlignmentCheck(Osx970Emitter *emitter, uint32 mask, uint64 pc, uint32 instruction, uint32 count)
+{
+	EmitByte(emitter, 0xa8);
+	EmitByte(emitter, mask);
+	EmitColdStep(emitter, 0x85, pc, instruction, count);
+}
+
+static void EmitIndexedAddress(Osx970Emitter *emitter, uint32 instruction, int sixtyfour)
+{
+	int ra;
+	ra = (instruction >> 16) & 31;
+	EmitLoadGpr(emitter, OSX970RAX, (instruction >> 11) & 31);
+	if (ra)
+		EmitMemory(emitter, 1, 0x03, OSX970RAX, OSX970RBX, OSX970GPR(ra));
+	if (!sixtyfour)
+		EmitRegister(emitter, 0, 0x89, OSX970RAX, OSX970RAX);
+}
+
+static int EmitSpecialMemory(Osx970Emitter *emitter, uint32 instruction, uint64 pc, uint32 count, int sixtyfour, int mode)
+{
+	uint32 opcode;
+	uint32 extended;
+	uint32 index;
+	uint32 total;
+	uint8 *fail;
+	uint8 *done;
+	uint8 *skip;
+	int first;
+	int rt;
+	int ra;
+	opcode = instruction >> 26;
+	extended = (instruction >> 1) & 0x3ff;
+	rt = (instruction >> 21) & 31;
+	ra = (instruction >> 16) & 31;
+	first = emitter->coldcount;
+	if (emitter->coldcount >= OSX970JITEXITS - 8)
+		return 0;
+	if (opcode == 46 || opcode == 47) {
+		total = (uint32)(32 - rt) * 4;
+		if (opcode == 46 && ra >= rt)
+			return 0;
+		if (ra) {
+			EmitLoadGpr(emitter, OSX970RAX, ra);
+			EmitByte(emitter, 0x48);
+			EmitByte(emitter, 0x05);
+			EmitDword(emitter, (uint32)(int32)(int16)(instruction & 0xffff));
+		} else
+			EmitImmediate(emitter, OSX970RAX, (uint64)(int64)(int16)(instruction & 0xffff));
+		if (!sixtyfour)
+			EmitRegister(emitter, 0, 0x89, OSX970RAX, OSX970RAX);
+		EmitAlignmentCheck(emitter, 3, pc, instruction, count);
+		EmitTlbLookup(emitter, opcode == 47, (int)total, mode, pc, instruction, count);
+		for (index = 0; index < 32 - (uint32)rt; index++) {
+			if (opcode == 46) {
+				EmitHostOffset(emitter, 0x8b, OSX970RCX, index * 4);
+				EmitByte(emitter, 0x0f);
+				EmitByte(emitter, 0xc9);
+				EmitStoreGpr(emitter, OSX970RCX, rt + (int)index);
+			} else {
+				EmitMemory(emitter, 0, 0x8b, OSX970RCX, OSX970RBX, OSX970GPR(rt + (int)index));
+				EmitByte(emitter, 0x0f);
+				EmitByte(emitter, 0xc9);
+				EmitHostOffset(emitter, 0x89, OSX970RCX, index * 4);
+			}
+		}
+		EmitResume(emitter, first);
+		return 1;
+	}
+	if (opcode != 31)
+		return 0;
+	if (extended == 20) {
+		EmitIndexedAddress(emitter, instruction, sixtyfour);
+		EmitAlignmentCheck(emitter, 3, pc, instruction, count);
+		EmitTlbLookup(emitter, 0, 4, mode, pc, instruction, count);
+		EmitHostOffset(emitter, 0x8b, OSX970RCX, 0);
+		EmitByte(emitter, 0x0f);
+		EmitByte(emitter, 0xc9);
+		EmitStoreGpr(emitter, OSX970RCX, rt);
+		EmitMemory(emitter, 1, 0x89, OSX970RAX, OSX970RBX, OSX970FIELD(reservation));
+		EmitMemory(emitter, 0, 0xc7, 0, OSX970RBX, OSX970FIELD(reservationvalid));
+		EmitDword(emitter, 1);
+		EmitResume(emitter, first);
+		return 1;
+	}
+	if (extended == 150 && (instruction & 1)) {
+		EmitIndexedAddress(emitter, instruction, sixtyfour);
+		EmitAlignmentCheck(emitter, 3, pc, instruction, count);
+		EmitMemory(emitter, 0, 0x83, 7, OSX970RBX, OSX970FIELD(reservationvalid));
+		EmitByte(emitter, 0);
+		fail = EmitJump(emitter, 0x84);
+		EmitMemory(emitter, 1, 0x39, OSX970RAX, OSX970RBX, OSX970FIELD(reservation));
+		done = EmitJump(emitter, 0x85);
+		EmitTlbLookup(emitter, 1, 4, mode, pc, instruction, count);
+		EmitMemory(emitter, 0, 0x8b, OSX970RCX, OSX970RBX, OSX970GPR(rt));
+		EmitByte(emitter, 0x0f);
+		EmitByte(emitter, 0xc9);
+		EmitHostOffset(emitter, 0x89, OSX970RCX, 0);
+		EmitMemory(emitter, 0, 0xc7, 0, OSX970RBX, OSX970FIELD(reservationvalid));
+		EmitDword(emitter, 0);
+		EmitImmediate32(emitter, OSX970RDX, 2);
+		skip = EmitJump(emitter, 0);
+		PatchJump(fail, emitter->cursor);
+		PatchJump(done, emitter->cursor);
+		EmitMemory(emitter, 0, 0xc7, 0, OSX970RBX, OSX970FIELD(reservationvalid));
+		EmitDword(emitter, 0);
+		EmitRegister(emitter, 0, 0x31, OSX970RDX, OSX970RDX);
+		PatchJump(skip, emitter->cursor);
+		EmitMemory(emitter, 0, 0x8b, OSX970RCX, OSX970RSI, OSX970CPUFIELD(xer));
+		EmitByte(emitter, 0xc1);
+		EmitByte(emitter, 0xe9);
+		EmitByte(emitter, 31);
+		EmitRegister(emitter, 0, 0x09, OSX970RCX, OSX970RDX);
+		EmitMemory(emitter, 0, 0x8b, OSX970RAX, OSX970RSI, OSX970CPUFIELD(cr));
+		EmitByte(emitter, 0x25);
+		EmitDword(emitter, 0x0fffffffu);
+		EmitByte(emitter, 0xc1);
+		EmitByte(emitter, 0xe2);
+		EmitByte(emitter, 28);
+		EmitRegister(emitter, 0, 0x09, OSX970RDX, OSX970RAX);
+		EmitMemory(emitter, 0, 0x89, OSX970RAX, OSX970RSI, OSX970CPUFIELD(cr));
+		EmitResume(emitter, first);
+		return 1;
+	}
+	if ((extended == 103 || extended == 359 || extended == 231 || extended == 487) && emitter->vector) {
+		EmitIndexedAddress(emitter, instruction, sixtyfour);
+		EmitByte(emitter, 0x48);
+		EmitByte(emitter, 0x83);
+		EmitByte(emitter, 0xe0);
+		EmitByte(emitter, 0xf0);
+		EmitTlbLookup(emitter, extended == 231 || extended == 487, 16, mode, pc, instruction, count);
+		for (index = 0; index < 4; index++) {
+			if (extended == 103 || extended == 359) {
+				EmitHostOffset(emitter, 0x8b, OSX970RCX, index * 4);
+				EmitByte(emitter, 0x0f);
+				EmitByte(emitter, 0xc9);
+				EmitMemory(emitter, 0, 0x89, OSX970RCX, OSX970RSI, OSX970CPUFIELD(vr) + (uint32)rt * 16 + index * 4);
+			} else {
+				EmitMemory(emitter, 0, 0x8b, OSX970RCX, OSX970RSI, OSX970CPUFIELD(vr) + (uint32)rt * 16 + index * 4);
+				EmitByte(emitter, 0x0f);
+				EmitByte(emitter, 0xc9);
+				EmitHostOffset(emitter, 0x89, OSX970RCX, index * 4);
+			}
+		}
+		EmitResume(emitter, first);
+		return 1;
+	}
+	return 0;
+}
+
 static int EmitMemoryAccess(Osx970Emitter *emitter, uint32 instruction, uint64 pc, uint32 count, int sixtyfour, int mode)
 {
 	uint32 opcode;
@@ -2487,39 +2691,7 @@ static int EmitMemoryAccess(Osx970Emitter *emitter, uint32 instruction, uint64 p
 		EmitRegister(emitter, 0, 0x89, OSX970RAX, OSX970RAX);
 	if (update)
 		EmitRegister(emitter, 1, 0x89, OSX970RAX, OSX970R10);
-	EmitRegister(emitter, 0, 0x89, OSX970RAX, OSX970RDX);
-	EmitByte(emitter, 0xc1);
-	EmitByte(emitter, 0xea);
-	EmitByte(emitter, 12);
-	EmitByte(emitter, 0x81);
-	EmitByte(emitter, 0xe2);
-	EmitDword(emitter, OSX970TLBMASK);
-	EmitByte(emitter, 0xc1);
-	EmitByte(emitter, 0xe2);
-	EmitByte(emitter, 4);
-	if (store)
-		tlb = OSX970FIELD(tlb) + (uint32)((mode * OSXTLBKINDS + OSXTLBWRITE) * OSX970TLBSIZE) * (uint32)sizeof(Osx970TlbEntry);
-	else
-		tlb = OSX970FIELD(tlb) + (uint32)((mode * OSXTLBKINDS + OSXTLBREAD) * OSX970TLBSIZE) * (uint32)sizeof(Osx970TlbEntry);
-	EmitByte(emitter, 0x4c);
-	EmitByte(emitter, 0x8d);
-	EmitByte(emitter, 0x40);
-	EmitByte(emitter, (uint32)(size - 1));
-	EmitByte(emitter, 0x49);
-	EmitByte(emitter, 0x81);
-	EmitByte(emitter, 0xe0);
-	EmitDword(emitter, 0xfffff000u);
-	EmitByte(emitter, 0x4c);
-	EmitByte(emitter, 0x39);
-	EmitByte(emitter, 0x84);
-	EmitByte(emitter, 0x13);
-	EmitDword(emitter, tlb);
-	EmitColdStep(emitter, 0x85, pc, instruction, count);
-	EmitByte(emitter, 0x48);
-	EmitByte(emitter, 0x8b);
-	EmitByte(emitter, 0x94);
-	EmitByte(emitter, 0x13);
-	EmitDword(emitter, tlb + 8);
+	EmitTlbLookup(emitter, store, size, mode, pc, instruction, count);
 	if (store) {
 		EmitMemory(emitter, size == 8, 0x8b, OSX970R9, OSX970RBX, OSX970GPR(rt));
 		if (size == 8) {
@@ -3046,9 +3218,21 @@ static int EmitNative(Osx970Emitter *emitter, uint32 instruction, uint64 pc, uin
 		return 1;
 	case 8: case 12: case 13:
 		return EmitCarry(emitter, instruction, sixtyfour);
+	case 7:
+		EmitLoadGpr(emitter, OSX970RAX, ra);
+		EmitByte(emitter, 0x48);
+		EmitByte(emitter, 0x69);
+		EmitByte(emitter, 0xc0);
+		EmitDword(emitter, (uint32)(int32)(int16)immediate);
+		EmitStoreGpr(emitter, OSX970RAX, rt);
+		return 1;
+	case 46: case 47:
+		return EmitSpecialMemory(emitter, instruction, pc, count, sixtyfour, mode);
 	case 30:
 		return EmitRotate64(emitter, instruction, sixtyfour);
 	case 19:
+		if (((instruction >> 1) & 0x3ff) == 150)
+			return 1;
 		return EmitConditionLogic(emitter, instruction);
 	case 31:
 		break;
@@ -3056,7 +3240,7 @@ static int EmitNative(Osx970Emitter *emitter, uint32 instruction, uint64 pc, uin
 		return EmitMemoryAccess(emitter, instruction, pc, count, sixtyfour, mode);
 	}
 	extended = (instruction >> 1) & 0x3ff;
-	if (EmitCarry(emitter, instruction, sixtyfour) || EmitShiftCount(emitter, instruction, sixtyfour))
+	if (EmitCarry(emitter, instruction, sixtyfour) || EmitShiftCount(emitter, instruction, sixtyfour) || EmitSpecialMemory(emitter, instruction, pc, count, sixtyfour, mode))
 		return 1;
 	if (extended == 83) {
 		if (mode == OSXMODEUSER)
@@ -3225,6 +3409,7 @@ static void Compile(Osx970 *core, Osx970Jit *jit, Osx970Block *block, uint64 pc,
 	emitter.page = pc & ~0xfffULL;
 	emitter.key = key;
 	emitter.fetchmode = core->modes[OSXTLBFETCH];
+	emitter.vector = (core->msr & OSXMSRVEC) != 0;
 	emitter.stepthunk = jit->stepthunk;
 	sixtyfour = (core->msr & OSX970MSRSF) != 0;
 	mode = core->modes[OSXTLBREAD];
@@ -3411,7 +3596,7 @@ static void JitRun(Osx970 *core, Osx970Jit *jit)
 			continue;
 		}
 		physical = (uint32)(core->fetchhost - cpu->ram) + (uint32)(core->pc & 0xfff);
-		key = (uint32)((core->msr & (OSXMSRPR | OSXMSRIR | OSXMSRDR)) | ((core->msr >> 32) & 0x80000000u));
+		key = (uint32)((core->msr & (OSXMSRPR | OSXMSRIR | OSXMSRDR | OSXMSRVEC)) | ((core->msr >> 32) & 0x80000000u));
 		hash = (uint32)((((uint64)physical >> 2) * 0x9e3779b1u) ^ ((uint64)key * 0x85ebca6bu)) >> 16;
 		block = &jit->blocks[hash & (OSX970JITBLOCKS - 1)];
 		version = core->versions[physical >> 12];
