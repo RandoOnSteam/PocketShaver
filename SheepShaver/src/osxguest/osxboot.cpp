@@ -1456,6 +1456,7 @@ static OsxTreeNode *BuildTreeG5(OsxBootState *state, OsxTreeNode **memorymap)
 	OsxTreeNode *chosen;
 	OsxTreeNode *interrupting[8];
 	OsxTreeProperty *property;
+	uint8 address[6];
 	uint32 cells[12];
 	uint32 parent;
 	int index;
@@ -1604,6 +1605,16 @@ static OsxTreeNode *BuildTreeG5(OsxBootState *state, OsxTreeNode **memorymap)
 	interrupting[3] = AddKauaiNode(ht, OSXG5DEVICEATA0, OSXG5ATABASE, OSXG5IRQATA0, OSXG5IRQATA0DMA);
 	interrupting[4] = AddKauaiNode(ht, OSXG5DEVICEATA1, OSXG5ATABASE + OSXG5ATASIZE, OSXG5IRQATA1, OSXG5IRQATA1DMA);
 
+	node = NewNode(ht, "ethernet");
+	AddString(node, "device_type", "network");
+	AddString(node, "compatible", "K2-GMAC");
+	AddPciRegister(node, OSXG5DEVICEGMAC, OSXG5GMACBASE, OSXG5GMACSIZE, 0);
+	AddPciIdentity(node, 0x106b, 0x004c, 0x020000);
+	AddInterrupts(node, OSXG5IRQGMAC, 1, 0, 0, 1);
+	OsxBmacHardwareAddress(address);
+	AddProperty(node, "local-mac-address", address, sizeof(address));
+	interrupting[5] = node;
+
 	node = NewNode(ht, "display");
 	AddString(node, "device_type", "display");
 	AddString(node, "compatible", "display");
@@ -1620,7 +1631,7 @@ static OsxTreeNode *BuildTreeG5(OsxBootState *state, OsxTreeNode **memorymap)
 	AddPhandles(root, &state->phandle);
 	property = FindProperty(mpic, "AAPL,phandle");
 	parent = Big32(property->value);
-	for (index = 0; index < 5; index++)
+	for (index = 0; index < 6; index++)
 		AddCell(interrupting[index], "interrupt-parent", parent);
 	AddCell(cpu, "AAPL,parentIC", parent);
 	return root;

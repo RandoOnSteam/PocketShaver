@@ -321,6 +321,12 @@ void OsxBmacPoll(OsxMachine *machine, uint64 now)
 	else
 		bmac->polldeadline = now + BMACIDLEPOLL;
 	EtherSlirpPoll();
+#if OSXG5
+	if (machine->g5) {
+		OsxG5GmacReceive(machine);
+		return;
+	}
+#endif
 	OsxBmacReceive(machine);
 }
 

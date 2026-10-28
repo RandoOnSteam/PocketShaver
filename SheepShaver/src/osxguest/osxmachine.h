@@ -323,7 +323,12 @@ typedef struct OsxCuda {
 #define OSXG5DEVICEATA0 13
 #define OSXG5DEVICEATA1 14
 #define OSXG5DEVICEDISPLAY 16
-#define OSXG5FUNCTIONS 5
+#define OSXG5DEVICEGMAC 15
+#define OSXG5FUNCTIONS 6
+#define OSXG5GMACBASE 0x80200000
+#define OSXG5GMACSIZE 0x00200000
+#define OSXG5GMACFRAME 4096
+#define OSXG5IRQGMAC 0x29
 #define OSXG5IRQPMU 0x19
 #define OSXG5IRQPMUGPIO 0x2f
 #define OSXG5IRQATA0 0x27
@@ -371,8 +376,21 @@ typedef struct OsxKeyWest {
 	uint8 clock[256];
 } OsxKeyWest;
 
+typedef struct OsxGmac {
+	uint32 gregs[0x2000 >> 2];
+	uint32 txdma[0x1000 >> 2];
+	uint32 rxdma[0x2000 >> 2];
+	uint32 mac[0x200 >> 2];
+	uint32 mif[0x20 >> 2];
+	int rxkicked;
+	uint32 txsize;
+	uint32 txfirst;
+	uint8 txdata[OSXG5GMACFRAME];
+} OsxGmac;
+
 typedef struct OsxG5 {
 	OsxG5Function functions[OSXG5FUNCTIONS];
+	OsxGmac gmac;
 	OsxMpic mpic;
 	OsxKeyWest i2c;
 	uint32 fcr[20];
@@ -473,6 +491,7 @@ void OsxG5BusWrite(OsxMachine *machine, uint32 address, int size, uint32 value);
 void OsxG5SetLine(OsxMachine *machine, int source, int level);
 void OsxG5SetPmuRequest(OsxMachine *machine, int level);
 void OsxG5PrepareNvram(OsxMachine *machine);
+void OsxG5GmacReceive(OsxMachine *machine);
 #endif
 uint32 OsxHeathrowRead(OsxMachine *machine, uint32 offset, int size);
 void OsxHeathrowWrite(OsxMachine *machine, uint32 offset, int size, uint32 value);
