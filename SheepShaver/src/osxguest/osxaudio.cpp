@@ -39,6 +39,7 @@
 #define AUDIOMUTESPEAKER 0x080
 #define AUDIOLATENCYDIVISOR 10
 #define AUDIOFRAMEBYTES 4
+#define AUDIOPOLLTICKS (OSXTIMEBASEFREQUENCY / 1000)
 
 static uint32 SampleRate(uint32 control)
 {
@@ -247,6 +248,9 @@ void OsxAudioPoll(OsxMachine *machine, uint64 now)
 		OpenHost(machine);
 	level = 0;
 	if (audio->opened) {
+		if (audio->running && now < audio->lasttime)
+			return;
+		audio->lasttime = now + AUDIOPOLLTICKS;
 		target = audio->rate * AUDIOFRAMEBYTES / AUDIOLATENCYDIVISOR;
 		SDL_LockAudio();
 		level = audio->head - audio->tail;

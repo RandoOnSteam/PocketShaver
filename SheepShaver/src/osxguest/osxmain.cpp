@@ -1400,7 +1400,7 @@ static void RunMachine(OsxSession *session, void *monitor)
 				else if (atadeadline - now < waitticks)
 					waitticks = atadeadline - now;
 			}
-			milliseconds = (uint32)(waitticks * 1000 / OSXTIMEBASEFREQUENCY);
+			milliseconds = (uint32)((waitticks * 1000 + OSXTIMEBASEFREQUENCY - 1) / OSXTIMEBASEFREQUENCY);
 			if (cpu->deterministic)
 				cpu->virtualticks += waitticks + 1;
 			else if (milliseconds > 0)

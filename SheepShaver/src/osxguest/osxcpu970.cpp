@@ -2101,8 +2101,9 @@ void Osx970CheckInterrupts(Osx970 *core, uint64 now)
 #define OSX970R8 8
 #define OSX970R9 9
 #define OSX970R10 10
-#define OSX970GPR(reg) ((uint32)(offsetof(Osx970, gpr) + (uint32)(reg) * 8))
-#define OSX970FIELD(member) ((uint32)offsetof(Osx970, member))
+#define OSX970BASE ((uint32)offsetof(Osx970, gpr) + 128)
+#define OSX970GPR(reg) ((uint32)(offsetof(Osx970, gpr) + (uint32)(reg) * 8) - OSX970BASE)
+#define OSX970FIELD(member) ((uint32)offsetof(Osx970, member) - OSX970BASE)
 #define OSX970CPUFIELD(member) ((uint32)offsetof(OsxCpu, member))
 
 typedef int (*Osx970Code)(Osx970 *core);
@@ -2130,6 +2131,7 @@ typedef struct Osx970Jit {
 	uint8 *arena;
 	uint8 *stepthunk;
 	uint8 *probes[OSXMODES][2][5];
+	uint8 *lookups[OSXMODES];
 	uint8 *exitthunk;
 	uint32 codestart;
 	uint32 used;
@@ -2154,6 +2156,7 @@ typedef struct Osx970Emitter {
 	uint8 *stepthunk;
 	uint8 *exitthunk;
 	uint8 *(*probes)[2][5];
+	uint8 **lookups;
 	uint8 *exits[OSX970JITEXITS];
 	int exitcount;
 	Osx970Cold colds[OSX970JITEXITS];
@@ -2318,9 +2321,17 @@ static void EmitSetPc(Osx970Emitter *emitter, uint64 pc);
 
 static void EmitDynamicLookup(Osx970Emitter *emitter)
 {
-	uint32 tlb;
 	if (emitter->exitcount >= OSX970JITEXITS - 8)
 		return;
+	EmitImmediate32(emitter, OSX970R9, emitter->key);
+	EmitByte(emitter, 0xe9);
+	EmitDword(emitter, 0);
+	PatchJump(emitter->cursor - 4, emitter->lookups[emitter->fetchmode]);
+}
+
+static void EmitLookupThunk(Osx970Emitter *emitter)
+{
+	uint32 tlb;
 	tlb = OSX970FIELD(tlb) + (uint32)((emitter->fetchmode * OSXTLBKINDS + OSXTLBFETCH) * OSX970TLBSIZE) * (uint32)sizeof(Osx970TlbEntry);
 	EmitRegister(emitter, 0, 0x89, OSX970RDX, OSX970RAX);
 	EmitByte(emitter, 0xc1);
@@ -2337,10 +2348,10 @@ static void EmitDynamicLookup(Osx970Emitter *emitter)
 	EmitByte(emitter, 0x39);
 	EmitByte(emitter, 0x11);
 	emitter->exits[emitter->exitcount++] = EmitJump(emitter, 0x85);
-	EmitByte(emitter, 0x81);
-	EmitByte(emitter, 0x79);
+	EmitByte(emitter, 0x44);
+	EmitByte(emitter, 0x39);
+	EmitByte(emitter, 0x49);
 	EmitByte(emitter, 0x08);
-	EmitDword(emitter, emitter->key);
 	emitter->exits[emitter->exitcount++] = EmitJump(emitter, 0x85);
 	EmitRegister(emitter, 1, 0x89, OSX970RDX, OSX970RAX);
 	EmitByte(emitter, 0x48);
@@ -3565,6 +3576,7 @@ static void Compile(Osx970 *core, Osx970Jit *jit, Osx970Block *block, uint64 pc,
 	emitter.vector = (core->msr & OSXMSRVEC) != 0;
 	emitter.stepthunk = jit->stepthunk;
 	emitter.probes = jit->probes;
+	emitter.lookups = jit->lookups;
 	emitter.exitthunk = jit->exitthunk;
 	sixtyfour = (core->msr & OSX970MSRSF) != 0;
 	mode = core->modes[OSXTLBREAD];
@@ -3586,7 +3598,7 @@ static void Compile(Osx970 *core, Osx970Jit *jit, Osx970Block *block, uint64 pc,
 	EmitByte(&emitter, 0x83);
 	EmitByte(&emitter, 0xec);
 	EmitByte(&emitter, 0x20);
-	EmitRegister(&emitter, 1, 0x89, OSX970RCX, OSX970RBX);
+	EmitMemory(&emitter, 1, 0x8d, OSX970RBX, OSX970RCX, OSX970BASE);
 	EmitMemory(&emitter, 1, 0x8b, OSX970RSI, OSX970RBX, OSX970FIELD(cpu));
 	body = emitter.cursor;
 	EmitMemory(&emitter, 1, 0x8b, OSX970RAX, OSX970RBX, OSX970FIELD(versions));
@@ -3683,7 +3695,7 @@ int Osx970JitCreate(Osx970 *core)
 	jit->stepthunk = jit->arena;
 	thunk.cursor = jit->arena;
 	EmitMemory(&thunk, 1, 0x89, OSX970R8, OSX970RBX, OSX970FIELD(pc));
-	EmitRegister(&thunk, 1, 0x89, OSX970RBX, OSX970RCX);
+	EmitMemory(&thunk, 1, 0x8d, OSX970RCX, OSX970RBX, (uint32)0 - OSX970BASE);
 	EmitImmediate(&thunk, OSX970RAX, (uint64)(uintptr_t)Osx970Step);
 	EmitByte(&thunk, 0xff);
 	EmitByte(&thunk, 0xe0);
@@ -3694,6 +3706,24 @@ int Osx970JitCreate(Osx970 *core)
 				jit->probes[mode][store][size] = thunk.cursor;
 				EmitTlbProbe(&thunk, store, 1 << size, mode);
 			}
+	for (mode = 0; mode < OSXMODES; mode++) {
+		thunk.cursor = jit->arena + ((uint32)(thunk.cursor - jit->arena) + 15 & ~15u);
+		jit->lookups[mode] = thunk.cursor;
+		thunk.fetchmode = mode;
+		thunk.exitcount = 0;
+		EmitLookupThunk(&thunk);
+		for (size = 0; size < thunk.exitcount; size++)
+			PatchJump(thunk.exits[size], thunk.cursor);
+		EmitRegister(&thunk, 0, 0x31, OSX970RAX, OSX970RAX);
+		EmitByte(&thunk, 0x48);
+		EmitByte(&thunk, 0x83);
+		EmitByte(&thunk, 0xc4);
+		EmitByte(&thunk, 0x20);
+		EmitByte(&thunk, 0x5f);
+		EmitByte(&thunk, 0x5e);
+		EmitByte(&thunk, 0x5b);
+		EmitByte(&thunk, 0xc3);
+	}
 	thunk.cursor = jit->arena + ((uint32)(thunk.cursor - jit->arena) + 15 & ~15u);
 	jit->exitthunk = thunk.cursor;
 	EmitByte(&thunk, 0x48);

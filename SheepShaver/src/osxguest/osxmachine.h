@@ -480,6 +480,7 @@ typedef struct OsxClip {
 	uint32 data;
 	uint32 size;
 	uint32 scrap;
+	uint32 flavor;
 	uint32 lastscrap;
 	int primed;
 	uint32 lasthash;

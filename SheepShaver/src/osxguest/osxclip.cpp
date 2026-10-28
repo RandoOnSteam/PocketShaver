@@ -35,6 +35,35 @@
 #define CLIPTASKPUT 1
 #define CLIPTASKGET 2
 #define CLIPUTXT 0x75747874u
+#define CLIPTEXT 0x54455854u
+
+static uint32 MacRomanCharacter(uint32 byte)
+{
+	static const uint16 characters[128] = {
+		0x00c4, 0x00c5, 0x00c7, 0x00c9, 0x00d1, 0x00d6, 0x00dc, 0x00e1, 0x00e0, 0x00e2, 0x00e4, 0x00e3, 0x00e5, 0x00e7, 0x00e9, 0x00e8,
+		0x00ea, 0x00eb, 0x00ed, 0x00ec, 0x00ee, 0x00ef, 0x00f1, 0x00f3, 0x00f2, 0x00f4, 0x00f6, 0x00f5, 0x00fa, 0x00f9, 0x00fb, 0x00fc,
+		0x2020, 0x00b0, 0x00a2, 0x00a3, 0x00a7, 0x2022, 0x00b6, 0x00df, 0x00ae, 0x00a9, 0x2122, 0x00b4, 0x00a8, 0x2260, 0x00c6, 0x00d8,
+		0x221e, 0x00b1, 0x2264, 0x2265, 0x00a5, 0x00b5, 0x2202, 0x2211, 0x220f, 0x03c0, 0x222b, 0x00aa, 0x00ba, 0x03a9, 0x00e6, 0x00f8,
+		0x00bf, 0x00a1, 0x00ac, 0x221a, 0x0192, 0x2248, 0x2206, 0x00ab, 0x00bb, 0x2026, 0x00a0, 0x00c0, 0x00c3, 0x00d5, 0x0152, 0x0153,
+		0x2013, 0x2014, 0x201c, 0x201d, 0x2018, 0x2019, 0x00f7, 0x25ca, 0x00ff, 0x0178, 0x2044, 0x20ac, 0x2039, 0x203a, 0xfb01, 0xfb02,
+		0x2021, 0x00b7, 0x201a, 0x201e, 0x2030, 0x00c2, 0x00ca, 0x00c1, 0x00cb, 0x00c8, 0x00cd, 0x00ce, 0x00cf, 0x00cc, 0x00d3, 0x00d4,
+		0xf8ff, 0x00d2, 0x00da, 0x00db, 0x00d9, 0x0131, 0x02c6, 0x02dc, 0x00af, 0x02d8, 0x02d9, 0x02da, 0x00b8, 0x02dd, 0x02db, 0x02c7
+	};
+	if (byte < 0x80)
+		return byte;
+	return characters[byte & 0x7f];
+}
+
+static uint8 MacRomanByte(uint32 character)
+{
+	uint32 byte;
+	if (character < 0x80)
+		return (uint8)character;
+	for (byte = 0x80; byte < 0x100; byte++)
+		if (MacRomanCharacter(byte) == character)
+			return (uint8)byte;
+	return '?';
+}
 
 static void StoreUnit(uint8 *output, uint32 *used, uint32 unit)
 {
@@ -311,7 +340,7 @@ static int Begin(OsxMachine *machine, OsxCpu *cpu, int task)
 	clip->data = 0;
 	clip->started = OsxHostNanoseconds();
 	if (task == CLIPTASKPUT)
-		Call(clip, cpu, OSXCLIPMALLOC, clip->pendinglength + CLIPHEADER, 0, 0, 0, 0);
+		Call(clip, cpu, OSXCLIPMALLOC, clip->pendinglength + clip->pendinglength / 2 + CLIPHEADER, 0, 0, 0, 0);
 	else
 		Call(clip, cpu, OSXCLIPMALLOC, CLIPHEADER, 0, 0, 0, 0);
 	return 1;
@@ -343,10 +372,10 @@ static int AdvancePut(OsxMachine *machine, OsxClip *clip, OsxCpu *cpu, uint32 re
 			return Finish(clip, cpu);
 		clip->block = result;
 		clip->step = 1;
-		Call(clip, cpu, OSXCLIPBZERO, clip->block, clip->pendinglength + CLIPHEADER, 0, 0, 0);
+		Call(clip, cpu, OSXCLIPBZERO, clip->block, clip->pendinglength + clip->pendinglength / 2 + CLIPHEADER, 0, 0, 0);
 		return 1;
 	case 1:
-		if (!CopyGuest(cpu, clip->block + CLIPHEADER, clip->pending, clip->pendinglength, 1))
+		if (!CopyGuest(cpu, clip->block + CLIPHEADER, clip->pending, clip->pendinglength + clip->pendinglength / 2, 1))
 			return Release(clip, cpu, 6, clip->block);
 		clip->step = 2;
 		Call(clip, cpu, OSXCLIPCLEARCURRENT, 0, 0, 0, 0, 0);
@@ -358,8 +387,12 @@ static int AdvancePut(OsxMachine *machine, OsxClip *clip, OsxCpu *cpu, uint32 re
 	case 3:
 		if (result != 0)
 			return Release(clip, cpu, 6, clip->block);
-		clip->step = 4;
+		clip->step = 7;
 		Call(clip, cpu, OSXCLIPPUTFLAVOR, ReadWord(cpu, clip->block), CLIPUTXT, 0, clip->pendinglength, clip->block + CLIPHEADER);
+		return 1;
+	case 7:
+		clip->step = 4;
+		Call(clip, cpu, OSXCLIPPUTFLAVOR, ReadWord(cpu, clip->block), CLIPTEXT, 0, clip->pendinglength / 2, clip->block + CLIPHEADER + clip->pendinglength);
 		return 1;
 	case 4:
 		clip->step = 5;
@@ -369,8 +402,10 @@ static int AdvancePut(OsxMachine *machine, OsxClip *clip, OsxCpu *cpu, uint32 re
 		if (result == 0)
 			clip->lastscrap = ReadWord(cpu, clip->block);
 		clip->primed = 1;
-		if (machine->log)
+		if (machine->log) {
 			fprintf(machine->log, "clipboard to guest %u bytes\n", clip->pendinglength);
+			fflush(machine->log);
+		}
 		return Release(clip, cpu, 6, clip->block);
 	}
 	return Finish(clip, cpu);
@@ -381,6 +416,7 @@ static int AdvanceGet(OsxMachine *machine, OsxClip *clip, OsxCpu *cpu, uint32 re
 	uint8 *data;
 	uint32 length;
 	uint32 hash;
+	uint32 index;
 	switch (clip->step) {
 	case 0:
 		if (result == 0)
@@ -397,16 +433,25 @@ static int AdvanceGet(OsxMachine *machine, OsxClip *clip, OsxCpu *cpu, uint32 re
 		if (result != 0)
 			return Release(clip, cpu, 8, clip->block);
 		clip->scrap = ReadWord(cpu, clip->block);
-		if (!clip->primed || clip->scrap == clip->lastscrap) {
+		if (!clip->primed) {
 			clip->primed = 1;
 			clip->lastscrap = clip->scrap;
 			return Release(clip, cpu, 8, clip->block);
 		}
 		clip->step = 3;
+		clip->flavor = CLIPUTXT;
 		Call(clip, cpu, OSXCLIPFLAVORSIZE, clip->scrap, CLIPUTXT, clip->block + 4, 0, 0);
 		return 1;
 	case 3:
-		clip->size = ReadWord(cpu, clip->block + 4);
+		length = ReadWord(cpu, clip->block + 4);
+		if (result == 0 && clip->scrap == clip->lastscrap && length == clip->size)
+			return Release(clip, cpu, 8, clip->block);
+		clip->size = length;
+		if ((result != 0 || clip->size == 0) && clip->flavor == CLIPUTXT) {
+			clip->flavor = CLIPTEXT;
+			Call(clip, cpu, OSXCLIPFLAVORSIZE, clip->scrap, CLIPTEXT, clip->block + 4, 0, 0);
+			return 1;
+		}
 		if (result != 0 || clip->size == 0 || clip->size > CLIPMAXBYTES) {
 			clip->lastscrap = clip->scrap;
 			return Release(clip, cpu, 8, clip->block);
@@ -424,18 +469,33 @@ static int AdvanceGet(OsxMachine *machine, OsxClip *clip, OsxCpu *cpu, uint32 re
 	case 5:
 		OsxCpuWriteVirtual(cpu, clip->block + 4, clip->size);
 		clip->step = 6;
-		Call(clip, cpu, OSXCLIPFLAVORDATA, clip->scrap, CLIPUTXT, clip->block + 4, clip->data, 0);
+		Call(clip, cpu, OSXCLIPFLAVORDATA, clip->scrap, clip->flavor, clip->block + 4, clip->data, 0);
 		return 1;
 	case 6:
 		length = ReadWord(cpu, clip->block + 4);
 		if (result == 0 && length <= clip->size) {
-			data = (uint8 *)malloc(length + 1);
-			if (data && CopyGuest(cpu, clip->data, data, length, 0)) {
+			data = (uint8 *)malloc(length * 2 + 1);
+			if (data && CopyGuest(cpu, clip->data, data + length, length, 0)) {
+				if (clip->flavor == CLIPTEXT) {
+					for (index = 0; index < length; index++) {
+						data[index * 2] = (uint8)(MacRomanCharacter(data[length + index]) >> 8);
+						data[index * 2 + 1] = (uint8)MacRomanCharacter(data[length + index]);
+					}
+					length *= 2;
+				} else
+					memmove(data, data + length, length);
+				if (length >= 2 && data[0] == 0xfe && data[1] == 0xff) {
+					length -= 2;
+					memmove(data, data + 2, length);
+				}
 				hash = OsxAdler32(data, length);
-				if (hash != clip->lasthash)
+				if (hash != clip->lasthash) {
 					WriteHostClipboard(data, length);
-				if (machine->log)
-					fprintf(machine->log, "clipboard to host %u bytes\n", length);
+					if (machine->log) {
+						fprintf(machine->log, "clipboard to host %u bytes\n", length);
+						fflush(machine->log);
+					}
+				}
 				clip->lasthash = hash;
 			}
 			free(data);
@@ -455,6 +515,7 @@ int OsxClipSyscall(OsxMachine *machine, OsxCpu *cpu)
 	uint8 *host;
 	uint32 length;
 	uint32 hash;
+	uint32 index;
 	uint64 now;
 	clip = &machine->clip;
 	if (!clip->ready || !(cpu->msr & OSXMSRPR))
@@ -488,6 +549,14 @@ int OsxClipSyscall(OsxMachine *machine, OsxCpu *cpu)
 	clip->lastput = now;
 	data = ReadHostClipboard(&length);
 	if (data && length > 0 && length <= CLIPMAXBYTES) {
+		host = (uint8 *)realloc(data, length + length / 2 + 1);
+		if (host == NULL) {
+			free(data);
+			return 0;
+		}
+		data = host;
+		for (index = 0; index < length / 2; index++)
+			data[length + index] = MacRomanByte(((uint32)data[index * 2] << 8) | data[index * 2 + 1]);
 		hash = OsxAdler32(data, length);
 		if (hash != clip->lasthash) {
 			clip->lasthash = hash;
