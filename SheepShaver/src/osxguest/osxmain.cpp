@@ -1562,11 +1562,19 @@ static int RunSession(OsxSession *session)
 	cpu->busread = OsxBusRead;
 	cpu->buswrite = OsxBusWrite;
 	cpu->logfile = machine->log;
+#if OSXG5
+	if (PrefsFindString("osxmodel") && strcmp(PrefsFindString("osxmodel"), "PowerMac7,3") == 0)
+		machine->g5 = 1;
+#endif
 	OsxPciReset(machine);
 	OsxAtaReset(machine);
 	OsxCudaReset(machine);
 	OsxBmacReset(machine);
 	OsxAudioReset(machine);
+#if OSXG5
+	if (machine->g5)
+		OsxG5Reset(machine);
+#endif
 	XPRAMInit(NULL);
 	session->nvramready = 1;
 	memcpy(machine->nvram, XPRAM, OSXNVRAMSIZE);
@@ -1614,6 +1622,10 @@ static int RunSession(OsxSession *session)
 		OsxCpuAddHook(cpu, OsxFindKernelSymbol(machine, "_panic"), PanicHook, session);
 	memcpy(machine->nvramclassic, machine->nvram, OSXNVRAMSIZE);
 	OsxNvramMakeNewWorld(machine->nvram);
+#if OSXG5
+	if (machine->g5)
+		OsxG5PrepareNvram(machine);
+#endif
 	HookKernelSymbol(machine, "__ZN16IOPlatformExpert14getBootROMTypeEv", NewWorldEpochHook);
 	HookKernelSymbol(machine, "_getBootROMType__16IOPlatformExpert", NewWorldEpochHook);
 	HookKernelSymbol(machine, "_sleepSystem__14IOPMrootDomain", RefuseSleepHook);

@@ -206,6 +206,12 @@ void OsxPicSetLine(OsxMachine *machine, int source, int level)
 	OsxPic *pic;
 	int bank;
 	uint32 bit;
+#if OSXG5
+	if (machine->g5) {
+		OsxG5SetLine(machine, source, level);
+		return;
+	}
+#endif
 	pic = &machine->pic;
 	bank = source >> 5;
 	bit = 1u << (source & 31);
@@ -641,6 +647,10 @@ uint32 OsxBusRead(void *context, uint32 address, int size)
 {
 	OsxMachine *machine;
 	machine = (OsxMachine *)context;
+#if OSXG5
+	if (machine->g5)
+		return OsxG5BusRead(machine, address, size);
+#endif
 	if (address - OSXHEATHROWBASE < OSXHEATHROWSIZE)
 		return OsxHeathrowRead(machine, address - OSXHEATHROWBASE, size);
 	if (address >= OSXCONFIGDATABASE && address < OSXCONFIGDATABASE + 0x00100000)
@@ -661,6 +671,12 @@ void OsxBusWrite(void *context, uint32 address, int size, uint32 value)
 {
 	OsxMachine *machine;
 	machine = (OsxMachine *)context;
+#if OSXG5
+	if (machine->g5) {
+		OsxG5BusWrite(machine, address, size, value);
+		return;
+	}
+#endif
 	if (address - OSXHEATHROWBASE < OSXHEATHROWSIZE) {
 		OsxHeathrowWrite(machine, address - OSXHEATHROWBASE, size, value);
 		return;

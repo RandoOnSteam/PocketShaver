@@ -147,6 +147,7 @@ set(SS_CORE
 	"${SS_SRC}/osxguest/osxvec.cpp"
 	"${SS_SRC}/osxguest/osxtest.cpp"
 	"${SS_SRC}/osxguest/osxbus.cpp"
+	"${SS_SRC}/osxguest/osxg5.cpp"
 	"${SS_SRC}/osxguest/osxata.cpp"
 	"${SS_SRC}/osxguest/osxcuda.cpp"
 	"${SS_SRC}/osxguest/osxpointer.cpp"

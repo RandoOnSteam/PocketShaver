@@ -284,7 +284,103 @@ typedef struct OsxCuda {
 	OsxMouseEvent pointerqueue[OSXMOUSEQUEUE];
 	int pointerread;
 	int pointerwrite;
+#if OSXG5
+	int pmu;
+	int pmustate;
+	uint8 pmucommand;
+	int pmucommandlength;
+	int pmuresponselength;
+	int pmucommandposition;
+	int pmuresponseposition;
+	int pmuresponsesize;
+	uint8 pmucommandbuffer[OSXCUDABUFFER];
+	uint8 pmuresponse[OSXCUDABUFFER];
+	uint8 pmuintbits;
+	uint8 pmuintmask;
+	uint8 adbreply[OSXCUDABUFFER];
+	int adbreplysize;
+	uint64 tickdeadline;
+#endif
 } OsxCuda;
+
+#if OSXG5
+#define OSXG5MACIOBASE 0x80000000
+#define OSXG5MACIOSIZE 0x00080000
+#define OSXG5ATABASE 0x80080000
+#define OSXG5ATASIZE 0x00004000
+#define OSXG5HTCONFIG 0xf2000000
+#define OSXG5HTCONFIGSIZE 0x02800000
+#define OSXG5HTSELF 0xf8070000
+#define OSXG5U3BASE 0xf8000000
+#define OSXG5U3SIZE 0x01000000
+#define OSXG5U3I2C 0xf8001000
+#define OSXG5MPICOFFSET 0x40000
+#define OSXG5MPICSIZE 0x40000
+#define OSXG5MPICSOURCES 68
+#define OSXG5MPICIPI 64
+#define OSXG5DEVICEHOST 0
+#define OSXG5DEVICEMACIO 7
+#define OSXG5DEVICEATA0 13
+#define OSXG5DEVICEATA1 14
+#define OSXG5DEVICEDISPLAY 16
+#define OSXG5FUNCTIONS 5
+#define OSXG5IRQPMU 0x19
+#define OSXG5IRQPMUGPIO 0x2f
+#define OSXG5IRQATA0 0x27
+#define OSXG5IRQATA0DMA 0x0d
+#define OSXG5IRQATA1 0x28
+#define OSXG5IRQATA1DMA 0x0e
+#define OSXG5GPIOBASE 0x50
+#define OSXG5GPIOSIZE 0x60
+
+typedef struct OsxG5Function {
+	uint32 device;
+	uint8 config[256];
+	uint32 barmask[6];
+} OsxG5Function;
+
+typedef struct OsxMpic {
+	uint32 ivpr[OSXG5MPICSOURCES];
+	uint32 idr[OSXG5MPICSOURCES];
+	uint8 line[OSXG5MPICSOURCES];
+	uint8 pending[OSXG5MPICSOURCES];
+	uint8 inservice[16];
+	int inservicecount;
+	uint32 gcr;
+	uint32 vid;
+	uint32 spvr;
+	uint32 tfrr;
+	uint32 ctpr;
+	uint32 timers[16];
+} OsxMpic;
+
+typedef struct OsxKeyWest {
+	uint8 mode;
+	uint8 control;
+	uint8 status;
+	uint8 isr;
+	uint8 ier;
+	uint8 addr;
+	uint8 subaddr;
+	uint8 data;
+	int active;
+	int readpending;
+	int lastnak;
+	int pointerset;
+	uint8 pointer;
+	uint8 clock[256];
+} OsxKeyWest;
+
+typedef struct OsxG5 {
+	OsxG5Function functions[OSXG5FUNCTIONS];
+	OsxMpic mpic;
+	OsxKeyWest i2c;
+	uint32 fcr[20];
+	uint8 gpio[OSXG5GPIOSIZE];
+	uint32 atafcr[2];
+	uint32 atairq[2];
+} OsxG5;
+#endif
 
 typedef struct OsxPointer {
 	OsxMachine *machine;
@@ -357,6 +453,10 @@ struct OsxMachine {
 	int pointermoved;
 	uint64 unknownreads;
 	uint64 unknownwrites;
+#if OSXG5
+	int g5;
+	OsxG5 g5state;
+#endif
 };
 
 uint32 OsxBusRead(void *context, uint32 address, int size);
@@ -366,6 +466,14 @@ uint32 OsxPciConfigRead(OsxMachine *machine, uint32 offset, int size);
 void OsxPciConfigWrite(OsxMachine *machine, uint32 offset, int size, uint32 value);
 
 void OsxPicSetLine(OsxMachine *machine, int source, int level);
+#if OSXG5
+void OsxG5Reset(OsxMachine *machine);
+uint32 OsxG5BusRead(OsxMachine *machine, uint32 address, int size);
+void OsxG5BusWrite(OsxMachine *machine, uint32 address, int size, uint32 value);
+void OsxG5SetLine(OsxMachine *machine, int source, int level);
+void OsxG5SetPmuRequest(OsxMachine *machine, int level);
+void OsxG5PrepareNvram(OsxMachine *machine);
+#endif
 uint32 OsxHeathrowRead(OsxMachine *machine, uint32 offset, int size);
 void OsxHeathrowWrite(OsxMachine *machine, uint32 offset, int size, uint32 value);
 void OsxDbdmaKick(OsxMachine *machine, int channel);

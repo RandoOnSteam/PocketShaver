@@ -160,6 +160,19 @@ void OsxCudaReset(OsxMachine *machine)
 	cuda->mousewrite = 0;
 	cuda->pointerread = 0;
 	cuda->pointerwrite = 0;
+#if OSXG5
+	cuda->pmu = machine->g5;
+	cuda->pmustate = 0;
+	cuda->pmuintbits = 0;
+	cuda->pmuintmask = 0x90;
+	cuda->adbreplysize = 0;
+	cuda->tickdeadline = 0;
+	if (cuda->pmu) {
+		cuda->b = 0x18;
+		cuda->lastb = cuda->b;
+		cuda->dirb = 0xff;
+	}
+#endif
 }
 
 static void SendToHost(OsxMachine *machine, const uint8 *data, int length)
@@ -511,6 +524,311 @@ static uint64 TimerDeadline(uint64 start, uint32 ticks)
 	return start + ((uint64)ticks + 1) * OSXTIMEBASEFREQUENCY / VIAFREQUENCY;
 }
 
+#if OSXG5
+#define PMUTACK 0x08
+#define PMUTREQ 0x10
+#define PMUSTATEIDLE 0
+#define PMUSTATECOMMAND 1
+#define PMUSTATERESPONSE 2
+#define PMUINTADB 0x10
+#define PMUINTADBAUTO 0x04
+#define PMUINTTICK 0x80
+#define PMUSETRTC 0x30
+#define PMUWRITEXPRAM 0x32
+#define PMUREADRTC 0x38
+#define PMUREADXPRAM 0x3a
+#define PMUADBCOMMAND 0x20
+#define PMUADBPOLLOFF 0x21
+#define PMUSETINTRMASK 0x70
+#define PMUINTACK 0x78
+#define PMUSHUTDOWN 0x7e
+#define PMUPOWEREVENTS 0x8f
+#define PMURESET 0xd0
+#define PMUGETCOVER 0xdc
+#define PMUSYSTEMREADY 0xdf
+#define PMUDOWNLOADSTATUS 0xe2
+#define PMUREADPMURAM 0xe8
+#define PMUGETVERSION 0xea
+
+static const signed char pmulengths[256][2] = {
+	{ -1, 0 }, { -1, 0 }, { -1, 0 }, { -1, 0 }, { -1, 0 }, { -1, 0 }, { -1, 0 }, { -1, 0 },
+	{ -1, -1 }, { -1, -1 }, { -1, -1 }, { -1, -1 }, { -1, -1 }, { -1, -1 }, { -1, -1 }, { -1, -1 },
+	{ 1, 0 }, { 1, 0 }, { -1, 0 }, { -1, 0 }, { -1, 0 }, { -1, 0 }, { -1, 0 }, { -1, 0 },
+	{ 0, 1 }, { 0, 1 }, { -1, -1 }, { -1, -1 }, { -1, -1 }, { -1, -1 }, { -1, -1 }, { 0, 0 },
+	{ -1, 0 }, { 0, 0 }, { 2, 0 }, { 1, 0 }, { 1, 0 }, { -1, 0 }, { -1, 0 }, { -1, 0 },
+	{ 0, -1 }, { 0, -1 }, { -1, -1 }, { -1, -1 }, { -1, -1 }, { -1, -1 }, { -1, -1 }, { 0, -1 },
+	{ 4, 0 }, { 20, 0 }, { -1, 0 }, { 3, 0 }, { -1, 0 }, { -1, 0 }, { -1, 0 }, { -1, 0 },
+	{ 0, 4 }, { 0, 20 }, { 2, -1 }, { 2, 1 }, { 3, -1 }, { -1, -1 }, { -1, -1 }, { 4, 0 },
+	{ 1, 0 }, { 1, 0 }, { -1, 0 }, { -1, 0 }, { -1, 0 }, { -1, 0 }, { -1, 0 }, { -1, 0 },
+	{ 0, 1 }, { 0, 1 }, { -1, -1 }, { 1, 0 }, { 1, 0 }, { -1, -1 }, { -1, -1 }, { -1, -1 },
+	{ 1, 0 }, { 0, 0 }, { 2, 0 }, { 2, 0 }, { -1, 0 }, { 1, 0 }, { 3, 0 }, { 1, 0 },
+	{ 0, 1 }, { 1, 0 }, { 0, 2 }, { 0, 2 }, { 0, -1 }, { -1, -1 }, { -1, -1 }, { -1, -1 },
+	{ 2, 0 }, { -1, 0 }, { -1, 0 }, { -1, 0 }, { -1, 0 }, { -1, 0 }, { -1, 0 }, { -1, 0 },
+	{ 0, 3 }, { 0, 3 }, { 0, 2 }, { 0, 8 }, { 0, -1 }, { 0, -1 }, { -1, -1 }, { -1, -1 },
+	{ 1, 0 }, { 1, 0 }, { 1, 0 }, { -1, 0 }, { -1, 0 }, { -1, 0 }, { -1, 0 }, { -1, 0 },
+	{ 0, -1 }, { 0, -1 }, { -1, -1 }, { -1, -1 }, { -1, -1 }, { 5, 1 }, { 4, 1 }, { 4, 1 },
+	{ 4, 0 }, { -1, 0 }, { 0, 0 }, { -1, 0 }, { -1, 0 }, { -1, 0 }, { -1, 0 }, { -1, 0 },
+	{ 0, 5 }, { -1, -1 }, { -1, -1 }, { -1, -1 }, { -1, -1 }, { -1, -1 }, { -1, -1 }, { -1, -1 },
+	{ 1, 0 }, { 2, 0 }, { -1, 0 }, { -1, 0 }, { -1, 0 }, { -1, 0 }, { -1, 0 }, { -1, 0 },
+	{ 0, 1 }, { 0, 1 }, { -1, -1 }, { -1, -1 }, { -1, -1 }, { -1, -1 }, { -1, -1 }, { -1, -1 },
+	{ 2, 0 }, { 2, 0 }, { 2, 0 }, { 4, 0 }, { -1, 0 }, { 0, 0 }, { -1, 0 }, { -1, 0 },
+	{ 1, 1 }, { 1, 0 }, { 3, 0 }, { 2, 0 }, { -1, -1 }, { -1, -1 }, { -1, -1 }, { -1, -1 },
+	{ -1, 0 }, { -1, 0 }, { -1, 0 }, { -1, 0 }, { -1, 0 }, { -1, 0 }, { -1, 0 }, { -1, 0 },
+	{ -1, -1 }, { -1, -1 }, { -1, -1 }, { -1, -1 }, { -1, -1 }, { -1, -1 }, { -1, -1 }, { -1, -1 },
+	{ -1, 0 }, { -1, 0 }, { -1, 0 }, { -1, 0 }, { -1, 0 }, { -1, 0 }, { -1, 0 }, { -1, 0 },
+	{ -1, -1 }, { -1, -1 }, { -1, -1 }, { -1, -1 }, { -1, -1 }, { -1, -1 }, { -1, -1 }, { -1, -1 },
+	{ 0, 0 }, { -1, 0 }, { -1, 0 }, { -1, 0 }, { -1, 0 }, { -1, 0 }, { -1, 0 }, { -1, 0 },
+	{ 1, 1 }, { 1, 1 }, { -1, -1 }, { -1, -1 }, { 0, 1 }, { 0, -1 }, { -1, -1 }, { -1, -1 },
+	{ -1, 0 }, { 4, 0 }, { 0, 1 }, { -1, 0 }, { -1, 0 }, { 4, 0 }, { -1, 0 }, { -1, 0 },
+	{ 3, -1 }, { -1, -1 }, { 0, 1 }, { -1, -1 }, { 0, -1 }, { -1, -1 }, { -1, -1 }, { 0, 0 },
+	{ -1, 0 }, { -1, 0 }, { -1, 0 }, { -1, 0 }, { -1, 0 }, { -1, 0 }, { -1, 0 }, { -1, 0 },
+	{ -1, -1 }, { -1, -1 }, { -1, -1 }, { -1, -1 }, { -1, -1 }, { -1, -1 }, { -1, -1 }, { -1, -1 }
+};
+
+static void PmuUpdateRequest(OsxMachine *machine)
+{
+	OsxCuda *cuda;
+	cuda = &machine->cuda;
+	OsxG5SetPmuRequest(machine, (cuda->pmuintbits & cuda->pmuintmask) != 0);
+}
+
+static void PmuRaiseSr(OsxMachine *machine)
+{
+	machine->cuda.ifr |= VIAIRQSR;
+	UpdateIrq(machine);
+}
+
+static void PmuAdbCommand(OsxMachine *machine, const uint8 *data, int length)
+{
+	OsxCuda *cuda;
+	uint8 request[OSXCUDABUFFER];
+	int result;
+	cuda = &machine->cuda;
+	if (length < 2)
+		return;
+	if (data[0] == 0 && data[1] == 0x86) {
+		if (length == 4) {
+			cuda->pollmask = (uint16)((data[2] << 8) | data[3]);
+			cuda->autopoll = cuda->pollmask != 0;
+		}
+		return;
+	}
+	result = 0;
+	if (length >= 3 && data[2] <= length - 3) {
+		request[0] = data[0];
+		memcpy(request + 1, data + 3, length - 3);
+		result = AdbRequest(machine, request, length - 2, cuda->adbreply + 1);
+	}
+	if (result < 0)
+		result = 0;
+	cuda->adbreply[0] = data[0];
+	cuda->adbreplysize = result + 1;
+	cuda->pmuintbits |= PMUINTADB;
+	PmuUpdateRequest(machine);
+}
+
+static int PmuDispatch(OsxMachine *machine)
+{
+	OsxCuda *cuda;
+	uint8 *in;
+	uint8 *out;
+	uint32 now;
+	int length;
+	int index;
+	cuda = &machine->cuda;
+	in = cuda->pmucommandbuffer;
+	out = cuda->pmuresponse;
+	length = cuda->pmucommandposition;
+	if (length > OSXCUDABUFFER)
+		length = OSXCUDABUFFER;
+	cuda->pmuresponsesize = 0;
+	switch (cuda->pmucommand) {
+	case PMUINTACK:
+		if (cuda->pmuintbits & PMUINTADB) {
+			memcpy(out + 1, cuda->adbreply, cuda->adbreplysize);
+			out[0] = cuda->pmuintbits & (PMUINTADB | PMUINTADBAUTO);
+			cuda->pmuresponsesize = cuda->adbreplysize + 1;
+			cuda->pmuintbits &= ~(PMUINTADB | PMUINTADBAUTO);
+			cuda->adbreplysize = 0;
+		} else {
+			out[0] = cuda->pmuintbits;
+			cuda->pmuintbits = 0;
+			cuda->pmuresponsesize = 1;
+		}
+		PmuUpdateRequest(machine);
+		return 1;
+	case PMUSETINTRMASK:
+		if (length == 1)
+			cuda->pmuintmask = in[0];
+		PmuUpdateRequest(machine);
+		return 1;
+	case PMUADBCOMMAND:
+		PmuAdbCommand(machine, in, length);
+		return 1;
+	case PMUADBPOLLOFF:
+		cuda->autopoll = 0;
+		return 1;
+	case PMURESET:
+		machine->quit = 2;
+		return 1;
+	case PMUSHUTDOWN:
+		out[0] = 0;
+		cuda->pmuresponsesize = 1;
+		if (length == 4 && memcmp(in, "MATT", 4) == 0)
+			machine->quit = 1;
+		return 1;
+	case PMUREADRTC:
+		now = (uint32)(HostSeconds(machine) + MACEPOCHOFFSET + cuda->timeoffset);
+		out[0] = (uint8)(now >> 24);
+		out[1] = (uint8)(now >> 16);
+		out[2] = (uint8)(now >> 8);
+		out[3] = (uint8)now;
+		cuda->pmuresponsesize = 4;
+		return 1;
+	case PMUSETRTC:
+		if (length == 4) {
+			now = ((uint32)in[0] << 24) | ((uint32)in[1] << 16) | ((uint32)in[2] << 8) | in[3];
+			cuda->timeoffset = (int64)now - (HostSeconds(machine) + MACEPOCHOFFSET);
+		}
+		return 1;
+	case PMUREADXPRAM:
+		for (index = 0; length == 2 && index < in[1] && index < OSXCUDABUFFER && in[0] + index < OSXPRAMSIZE; index++)
+			out[index] = machine->nvram[OSXPRAMOFFSET + in[0] + index];
+		cuda->pmuresponsesize = index;
+		return 1;
+	case PMUWRITEXPRAM:
+		for (index = 0; length >= 2 && index < in[1] && index + 2 < length && in[0] + index < OSXPRAMSIZE; index++)
+			machine->nvram[OSXPRAMOFFSET + in[0] + index] = in[index + 2];
+		return 1;
+	case PMUSYSTEMREADY:
+		return 1;
+	case PMUGETVERSION:
+		out[0] = 1;
+		cuda->pmuresponsesize = 1;
+		return 1;
+	case PMUPOWEREVENTS:
+		if (length >= 1 && (in[0] == 0 || in[0] == 3)) {
+			out[0] = 0;
+			out[1] = 0;
+			cuda->pmuresponsesize = 2;
+		}
+		return 1;
+	case PMUGETCOVER:
+		out[0] = 0;
+		cuda->pmuresponsesize = 1;
+		return 1;
+	case PMUDOWNLOADSTATUS:
+		out[0] = 0x62;
+		cuda->pmuresponsesize = 1;
+		return 1;
+	case PMUREADPMURAM:
+		out[0] = 0xd0;
+		out[1] = 0x7f;
+		out[2] = 0x0c;
+		cuda->pmuresponsesize = 3;
+		return 1;
+	}
+	return 0;
+}
+
+static void PmuExecute(OsxMachine *machine)
+{
+	OsxCuda *cuda;
+	cuda = &machine->cuda;
+	if (PmuDispatch(machine))
+		return;
+	if (machine->log)
+		fprintf(machine->log, "pmu unknown command %02x length %d\n", cuda->pmucommand, cuda->pmucommandposition);
+	if (cuda->pmuresponselength > 0) {
+		cuda->pmuresponsesize = cuda->pmuresponselength;
+		memset(cuda->pmuresponse, 0, cuda->pmuresponselength);
+	}
+}
+
+static void PmuUpdate(OsxMachine *machine)
+{
+	OsxCuda *cuda;
+	cuda = &machine->cuda;
+	if (cuda->b == cuda->lastb)
+		return;
+	cuda->lastb = cuda->b;
+	if ((cuda->b & (PMUTREQ | PMUTACK)) == PMUTREQ) {
+		cuda->b |= PMUTACK;
+		cuda->lastb = cuda->b;
+		return;
+	}
+	if ((cuda->b & (PMUTREQ | PMUTACK)) != PMUTACK)
+		return;
+	cuda->b &= ~PMUTACK;
+	cuda->lastb = cuda->b;
+	if (cuda->pmustate == PMUSTATEIDLE) {
+		if (!(cuda->acr & CUDASROUT))
+			return;
+		cuda->pmucommand = cuda->sr;
+		PmuRaiseSr(machine);
+		cuda->pmucommandlength = pmulengths[cuda->pmucommand][0];
+		cuda->pmuresponselength = pmulengths[cuda->pmucommand][1];
+		cuda->pmucommandposition = 0;
+		cuda->pmuresponseposition = 0;
+		cuda->pmustate = PMUSTATECOMMAND;
+	} else if (cuda->pmustate == PMUSTATECOMMAND) {
+		if (!(cuda->acr & CUDASROUT))
+			return;
+		if (cuda->pmucommandlength == -1)
+			cuda->pmucommandlength = cuda->sr;
+		else if (cuda->pmucommandposition++ < OSXCUDABUFFER)
+			cuda->pmucommandbuffer[cuda->pmucommandposition - 1] = cuda->sr;
+		PmuRaiseSr(machine);
+	} else {
+		if (cuda->acr & CUDASROUT)
+			return;
+		if (cuda->pmuresponselength == -1) {
+			cuda->sr = (uint8)cuda->pmuresponsesize;
+			cuda->pmuresponselength = cuda->pmuresponsesize;
+		} else if (cuda->pmuresponseposition < cuda->pmuresponsesize) {
+			cuda->sr = cuda->pmuresponse[cuda->pmuresponseposition++];
+		}
+		PmuRaiseSr(machine);
+	}
+	if (cuda->pmustate == PMUSTATECOMMAND && cuda->pmucommandlength == cuda->pmucommandposition) {
+		PmuExecute(machine);
+		cuda->pmustate = PMUSTATERESPONSE;
+	}
+	if (cuda->pmustate == PMUSTATERESPONSE && cuda->pmuresponselength == cuda->pmuresponseposition)
+		cuda->pmustate = PMUSTATEIDLE;
+}
+
+static void PmuPoll(OsxMachine *machine, uint64 now)
+{
+	OsxCuda *cuda;
+	int result;
+	uint8 request;
+	cuda = &machine->cuda;
+	if (now >= cuda->tickdeadline) {
+		cuda->tickdeadline = now + OSXTIMEBASEFREQUENCY;
+		cuda->pmuintbits |= PMUINTTICK;
+		PmuUpdateRequest(machine);
+	}
+	if (!cuda->autopoll || (cuda->pmuintbits & PMUINTADB) || cuda->pmustate != PMUSTATEIDLE)
+		return;
+	result = 0;
+	request = 0;
+	if (KeyboardHasData(cuda) && (cuda->pollmask & (1u << cuda->keyboard.address))) {
+		request = (uint8)((cuda->keyboard.address << 4) | 0x0c);
+		result = TalkKeyboard(cuda, 0, cuda->adbreply + 1);
+	} else if (MouseHasData(cuda) && (cuda->pollmask & (1u << cuda->mouse.address))) {
+		request = (uint8)((cuda->mouse.address << 4) | 0x0c);
+		result = TalkMouse(cuda, 0, cuda->adbreply + 1);
+	}
+	if (result <= 0)
+		return;
+	cuda->adbreply[0] = request;
+	cuda->adbreplysize = result + 1;
+	cuda->pmuintbits |= PMUINTADB | PMUINTADBAUTO;
+	PmuUpdateRequest(machine);
+}
+#endif
+
 uint32 OsxCudaRead(OsxMachine *machine, uint32 reg)
 {
 	OsxCuda *cuda;
@@ -574,6 +892,12 @@ void OsxCudaWrite(OsxMachine *machine, uint32 reg, uint32 value)
 	switch (reg) {
 	case VIAB:
 		cuda->b = (uint8)((cuda->b & ~cuda->dirb) | (value & cuda->dirb));
+#if OSXG5
+		if (cuda->pmu) {
+			PmuUpdate(machine);
+			break;
+		}
+#endif
 		CudaUpdate(machine);
 		break;
 	case VIAA:
@@ -619,6 +943,10 @@ void OsxCudaWrite(OsxMachine *machine, uint32 reg, uint32 value)
 		break;
 	case VIAACR:
 		cuda->acr = (uint8)value;
+#if OSXG5
+		if (cuda->pmu)
+			break;
+#endif
 		CudaUpdate(machine);
 		break;
 	case VIAPCR:
@@ -709,6 +1037,12 @@ void OsxCudaPoll(OsxMachine *machine, uint64 now)
 	}
 	if (now >= cuda->polldeadline) {
 		cuda->polldeadline = now + MicrosecondsToTicks(cuda->pollrate * 1000);
+#if OSXG5
+		if (cuda->pmu) {
+			PmuPoll(machine, now);
+			return;
+		}
+#endif
 		AutoPoll(machine);
 	}
 }

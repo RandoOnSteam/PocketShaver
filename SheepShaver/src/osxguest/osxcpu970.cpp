@@ -265,6 +265,61 @@ void Osx970FlushTlb(Osx970 *core)
 	core->fetchpage = OSX970TLBINVALID;
 }
 
+static void FlushSegments(Osx970 *core, uint64 first, uint64 second)
+{
+	Osx970TlbEntry *entry;
+	uint64 segment;
+	int index;
+	int kept;
+	if (core->fillcount > OSX970FILLS) {
+		Osx970FlushTlb(core);
+		return;
+	}
+	kept = 0;
+	for (index = 0; index < core->fillcount; index++) {
+		entry = core->filled[index];
+		segment = entry->page >> 28;
+		if (segment == first || segment == second)
+			entry->page = OSX970TLBINVALID;
+		else if (entry->page != OSX970TLBINVALID)
+			core->filled[kept++] = entry;
+	}
+	core->fillcount = kept;
+	core->fetchpage = OSX970TLBINVALID;
+}
+
+static void FlushPageIndex(Osx970 *core, uint64 pageindex)
+{
+	Osx970TlbEntry *entry;
+	int index;
+	int kept;
+	if (core->fillcount > OSX970FILLS) {
+		Osx970FlushTlb(core);
+		return;
+	}
+	kept = 0;
+	for (index = 0; index < core->fillcount; index++) {
+		entry = core->filled[index];
+		if (((entry->page >> 12) & 0xffff) == pageindex)
+			entry->page = OSX970TLBINVALID;
+		else if (entry->page != OSX970TLBINVALID)
+			core->filled[kept++] = entry;
+	}
+	core->fillcount = kept;
+	core->fetchpage = OSX970TLBINVALID;
+}
+
+static void WriteSegment(Osx970 *core, int index, uint64 esid, uint64 vsid)
+{
+	Osx970Slb *slb;
+	slb = &core->slb[index];
+	if (slb->esid == esid && slb->vsid == vsid)
+		return;
+	FlushSegments(core, slb->esid >> 28, esid >> 28);
+	slb->esid = esid;
+	slb->vsid = vsid;
+}
+
 void Osx970Reset(Osx970 *core, OsxCpu *cpu, uint32 pvr)
 {
 	memset(core, 0, sizeof(Osx970));
@@ -312,6 +367,15 @@ static void DataFault(Osx970 *core, uint64 address, int kind, uint32 reason)
 
 static void TranslationFault(Osx970 *core, uint64 address, int kind, uint32 reason)
 {
+	OsxFaultRecord *record;
+	if (!(core->msr & OSXMSRPR)) {
+		record = &core->cpu->faults[core->cpu->faultlogs & (OSXFAULTRING - 1)];
+		record->pc = (uint32)core->pc;
+		record->address = (uint32)address;
+		record->reason = reason;
+		record->instruction = kind == OSXTLBFETCH;
+		core->cpu->faultlogs++;
+	}
 	if (kind == OSXTLBFETCH)
 		Osx970Raise(core, OSXVECTORISI, reason);
 	else
@@ -1337,9 +1401,7 @@ static void ExecuteGroup31(Osx970 *core, uint32 instruction)
 			field = (instruction >> 16) & 15;
 		else
 			field = (uint32)(rb >> 28) & 15;
-		core->slb[field].esid = ((uint64)field << 28) | OSX970SLBVALID;
-		core->slb[field].vsid = ((rs & 0x0fffffffULL) << 12) | (((rs >> 27) & 0xf) << 8);
-		Osx970FlushTlb(core);
+		WriteSegment(core, field, ((uint64)field << 28) | OSX970SLBVALID, ((rs & 0x0fffffffULL) << 12) | (((rs >> 27) & 0xf) << 8));
 		return;
 	case 595: case 659:
 		if (!Supervisor(core))
@@ -1356,10 +1418,7 @@ static void ExecuteGroup31(Osx970 *core, uint32 instruction)
 	case 402:
 		if (!Supervisor(core))
 			return;
-		index = (int)(rb & (OSX970SLBSIZE - 1));
-		core->slb[index].esid = rb & (0xfffffffff0000000ULL | OSX970SLBVALID);
-		core->slb[index].vsid = rs & 0x3ffffffffffffff0ULL;
-		Osx970FlushTlb(core);
+		WriteSegment(core, (int)(rb & (OSX970SLBSIZE - 1)), rb & (0xfffffffff0000000ULL | OSX970SLBVALID), rs & 0x3ffffffffffffff0ULL);
 		return;
 	case 434:
 		if (!Supervisor(core))
@@ -1368,7 +1427,7 @@ static void ExecuteGroup31(Osx970 *core, uint32 instruction)
 		for (index = 0; index < OSX970SLBSIZE; index++)
 			if (core->slb[index].esid == slbvalue)
 				core->slb[index].esid &= ~OSX970SLBVALID;
-		Osx970FlushTlb(core);
+		FlushSegments(core, slbvalue >> 28, slbvalue >> 28);
 		return;
 	case 498:
 		if (!Supervisor(core))
@@ -1389,7 +1448,12 @@ static void ExecuteGroup31(Osx970 *core, uint32 instruction)
 		index = (int)(rb & (OSX970SLBSIZE - 1));
 		core->gpr[rt] = core->slb[index].vsid;
 		return;
-	case 274: case 306: case 370:
+	case 274: case 306:
+		if (!Supervisor(core))
+			return;
+		FlushPageIndex(core, (rb >> 12) & 0xffff);
+		return;
+	case 370:
 		if (!Supervisor(core))
 			return;
 		Osx970FlushTlb(core);
@@ -1946,6 +2010,9 @@ int Osx970Step(Osx970 *core, uint32 instruction)
 	msr = core->msr;
 	expected = Effective(core, core->pc + 4);
 	core->nextpc = expected;
+#if OSXPROFILE
+	core->cpu->tmpform[3][OsxCpuTmpFormKey(instruction)]++;
+#endif
 	Execute(core, instruction);
 	core->pc = core->nextpc;
 	if (core->nextpc != expected || core->msr != msr || core->cpu->halted)
@@ -2002,7 +2069,7 @@ void Osx970CheckInterrupts(Osx970 *core, uint64 now)
 #define OSX970JITBYTES (16 * 1024 * 1024)
 #define OSX970JITRESERVE 32768
 #define OSX970JITLIMIT 64
-#define OSX970JITHOT 3
+#define OSX970JITHOT 32
 #define OSX970JITCACHE 4096
 #define OSX970JITEXITS 256
 #define OSX970RAX 0
@@ -2041,8 +2108,15 @@ typedef struct Osx970Jit {
 	Osx970Cache cache[OSX970JITCACHE];
 	uint8 *arena;
 	uint8 *stepthunk;
+	uint8 *probes[OSXMODES][2][5];
+	uint8 *exitthunk;
+	uint32 codestart;
 	uint32 used;
 	uint64 compiled;
+	uint64 resets;
+	uint64 guestcompiled;
+	uint64 bytes;
+	uint64 coldbytes;
 	Osx970Block blocks[OSX970JITBLOCKS];
 } Osx970Jit;
 
@@ -2057,6 +2131,8 @@ typedef struct Osx970Cold {
 typedef struct Osx970Emitter {
 	uint8 *cursor;
 	uint8 *stepthunk;
+	uint8 *exitthunk;
+	uint8 *(*probes)[2][5];
 	uint8 *exits[OSX970JITEXITS];
 	int exitcount;
 	Osx970Cold colds[OSX970JITEXITS];
@@ -2199,12 +2275,22 @@ static void EmitAccount(Osx970Emitter *emitter, uint32 count)
 	EmitByte(emitter, count);
 }
 
+static void EmitLeave(Osx970Emitter *emitter, uint32 count)
+{
+	EmitImmediate32(emitter, OSX970RCX, count);
+	EmitByte(emitter, 0xe9);
+	EmitDword(emitter, 0);
+	PatchJump(emitter->cursor - 4, emitter->exitthunk);
+}
+
 static void EmitExit(Osx970Emitter *emitter, uint32 count)
 {
-	EmitAccount(emitter, count);
-	if (emitter->exitcount >= OSX970JITEXITS)
+	if (emitter->exitcount >= OSX970JITEXITS) {
+		EmitAccount(emitter, count);
 		return;
-	emitter->exits[emitter->exitcount++] = EmitJump(emitter, 0);
+	}
+	emitter->exits[emitter->exitcount++] = NULL;
+	EmitLeave(emitter, count);
 }
 
 static void EmitSetPc(Osx970Emitter *emitter, uint64 pc);
@@ -2395,7 +2481,58 @@ static void EmitNot(Osx970Emitter *emitter, int reg)
 	EmitRegister(emitter, 1, 0xf7, 2, reg);
 }
 
+static int SizeIndex(int size)
+{
+	switch (size) {
+	case 1: return 0;
+	case 2: return 1;
+	case 4: return 2;
+	case 8: return 3;
+	case 16: return 4;
+	}
+	return -1;
+}
+
+static uint32 TlbOffset(int store, int mode)
+{
+	if (store)
+		return OSX970FIELD(tlb) + (uint32)((mode * OSXTLBKINDS + OSXTLBWRITE) * OSX970TLBSIZE) * (uint32)sizeof(Osx970TlbEntry);
+	return OSX970FIELD(tlb) + (uint32)((mode * OSXTLBKINDS + OSXTLBREAD) * OSX970TLBSIZE) * (uint32)sizeof(Osx970TlbEntry);
+}
+
+static void EmitTlbCompare(Osx970Emitter *emitter, int store, int size, int mode);
+
+static void EmitTlbFetch(Osx970Emitter *emitter, int store, int mode)
+{
+	EmitByte(emitter, 0x48);
+	EmitByte(emitter, 0x8b);
+	EmitByte(emitter, 0x94);
+	EmitByte(emitter, 0x13);
+	EmitDword(emitter, TlbOffset(store, mode) + 8);
+}
+
 static void EmitTlbLookup(Osx970Emitter *emitter, int store, int size, int mode, uint64 pc, uint32 instruction, uint32 count)
+{
+	if (SizeIndex(size) < 0) {
+		EmitTlbCompare(emitter, store, size, mode);
+		EmitColdStep(emitter, 0x85, pc, instruction, count);
+		EmitTlbFetch(emitter, store, mode);
+		return;
+	}
+	EmitByte(emitter, 0xe8);
+	EmitDword(emitter, 0);
+	PatchJump(emitter->cursor - 4, emitter->probes[mode][store][SizeIndex(size)]);
+	EmitColdStep(emitter, 0x85, pc, instruction, count);
+}
+
+static void EmitTlbProbe(Osx970Emitter *emitter, int store, int size, int mode)
+{
+	EmitTlbCompare(emitter, store, size, mode);
+	EmitTlbFetch(emitter, store, mode);
+	EmitByte(emitter, 0xc3);
+}
+
+static void EmitTlbCompare(Osx970Emitter *emitter, int store, int size, int mode)
 {
 	uint32 tlb;
 	EmitRegister(emitter, 0, 0x89, OSX970RAX, OSX970RDX);
@@ -2408,10 +2545,7 @@ static void EmitTlbLookup(Osx970Emitter *emitter, int store, int size, int mode,
 	EmitByte(emitter, 0xc1);
 	EmitByte(emitter, 0xe2);
 	EmitByte(emitter, 4);
-	if (store)
-		tlb = OSX970FIELD(tlb) + (uint32)((mode * OSXTLBKINDS + OSXTLBWRITE) * OSX970TLBSIZE) * (uint32)sizeof(Osx970TlbEntry);
-	else
-		tlb = OSX970FIELD(tlb) + (uint32)((mode * OSXTLBKINDS + OSXTLBREAD) * OSX970TLBSIZE) * (uint32)sizeof(Osx970TlbEntry);
+	tlb = TlbOffset(store, mode);
 	EmitByte(emitter, 0x4c);
 	EmitByte(emitter, 0x8d);
 	EmitByte(emitter, 0x40);
@@ -2425,12 +2559,6 @@ static void EmitTlbLookup(Osx970Emitter *emitter, int store, int size, int mode,
 	EmitByte(emitter, 0x84);
 	EmitByte(emitter, 0x13);
 	EmitDword(emitter, tlb);
-	EmitColdStep(emitter, 0x85, pc, instruction, count);
-	EmitByte(emitter, 0x48);
-	EmitByte(emitter, 0x8b);
-	EmitByte(emitter, 0x94);
-	EmitByte(emitter, 0x13);
-	EmitDword(emitter, tlb + 8);
 }
 
 static void EmitHostOffset(Osx970Emitter *emitter, uint32 opcode, int reg, uint32 displacement)
@@ -3395,11 +3523,15 @@ static void Compile(Osx970 *core, Osx970Jit *jit, Osx970Block *block, uint64 pc,
 	uint32 page;
 	int sixtyfour;
 	int mode;
+	int tlbmode;
 	int index;
+	uint8 *host;
+	Osx970TlbEntry *entry;
 	if (jit->used + OSX970JITRESERVE >= OSX970JITBYTES) {
 		memset(jit->blocks, 0, sizeof(jit->blocks));
 		memset(jit->cache, 0, sizeof(jit->cache));
-		jit->used = (uint32)(jit->stepthunk - jit->arena) + 64;
+		jit->used = jit->codestart;
+		jit->resets++;
 	}
 	start = jit->arena + jit->used;
 	emitter.cursor = start;
@@ -3411,16 +3543,20 @@ static void Compile(Osx970 *core, Osx970Jit *jit, Osx970Block *block, uint64 pc,
 	emitter.fetchmode = core->modes[OSXTLBFETCH];
 	emitter.vector = (core->msr & OSXMSRVEC) != 0;
 	emitter.stepthunk = jit->stepthunk;
+	emitter.probes = jit->probes;
+	emitter.exitthunk = jit->exitthunk;
 	sixtyfour = (core->msr & OSX970MSRSF) != 0;
 	mode = core->modes[OSXTLBREAD];
 	page = physical >> 12;
 	if (!core->codepages[page]) {
 		core->codepages[page] = 1;
-		for (index = 0; index < OSX970TLBSIZE; index++) {
-			core->tlb[OSXMODEUSER][OSXTLBWRITE][index].page = OSX970TLBINVALID;
-			core->tlb[OSXMODESUPERVISOR][OSXTLBWRITE][index].page = OSX970TLBINVALID;
-			core->tlb[OSXMODEREAL][OSXTLBWRITE][index].page = OSX970TLBINVALID;
-		}
+		host = core->cpu->ram + ((uintptr_t)page << 12);
+		for (tlbmode = 0; tlbmode < OSXMODES; tlbmode++)
+			for (index = 0; index < OSX970TLBSIZE; index++) {
+				entry = &core->tlb[tlbmode][OSXTLBWRITE][index];
+				if (entry->page != OSX970TLBINVALID && entry->host + entry->page == host)
+					entry->page = OSX970TLBINVALID;
+			}
 	}
 	EmitByte(&emitter, 0x53);
 	EmitByte(&emitter, 0x56);
@@ -3466,10 +3602,7 @@ static void Compile(Osx970 *core, Osx970Jit *jit, Osx970Block *block, uint64 pc,
 			EmitDword(&emitter, 0);
 			PatchJump(emitter.cursor - 4, emitter.colds[index].resume);
 		}
-		EmitAccount(&emitter, emitter.colds[index].count);
-		EmitByte(&emitter, 0xe9);
-		EmitDword(&emitter, 0);
-		PatchJump(emitter.cursor - 4, finish);
+		EmitLeave(&emitter, emitter.colds[index].count);
 	}
 	for (index = 0; index < emitter.linkcount; index++) {
 		PatchJump(emitter.links[index], emitter.cursor);
@@ -3484,10 +3617,14 @@ static void Compile(Osx970 *core, Osx970Jit *jit, Osx970Block *block, uint64 pc,
 	}
 	PatchJump(stale, finish);
 	for (index = 0; index < emitter.exitcount; index++)
-		PatchJump(emitter.exits[index], finish);
+		if (emitter.exits[index])
+			PatchJump(emitter.exits[index], finish);
 	FlushInstructionCache(GetCurrentProcess(), start, (SIZE_T)(emitter.cursor - start));
 	jit->used += ((uint32)(emitter.cursor - start) + 15) & ~15u;
 	jit->compiled++;
+	jit->guestcompiled += count;
+	jit->bytes += (uint64)(emitter.cursor - start);
+	jit->coldbytes += (uint64)(emitter.cursor - epilogue);
 	block->pc = pc;
 	block->physical = physical;
 	block->key = key;
@@ -3502,6 +3639,9 @@ int Osx970JitCreate(Osx970 *core)
 	Osx970Jit *jit;
 	Osx970Emitter thunk;
 	uint32 pages;
+	int mode;
+	int store;
+	int size;
 	jit = (Osx970Jit *)calloc(1, sizeof(Osx970Jit));
 	if (jit == NULL)
 		return 0;
@@ -3526,7 +3666,33 @@ int Osx970JitCreate(Osx970 *core)
 	EmitImmediate(&thunk, OSX970RAX, (uint64)(uintptr_t)Osx970Step);
 	EmitByte(&thunk, 0xff);
 	EmitByte(&thunk, 0xe0);
-	jit->used = 64;
+	for (mode = 0; mode < OSXMODES; mode++)
+		for (store = 0; store < 2; store++)
+			for (size = 0; size < 5; size++) {
+				thunk.cursor = jit->arena + ((uint32)(thunk.cursor - jit->arena) + 15 & ~15u);
+				jit->probes[mode][store][size] = thunk.cursor;
+				EmitTlbProbe(&thunk, store, 1 << size, mode);
+			}
+	thunk.cursor = jit->arena + ((uint32)(thunk.cursor - jit->arena) + 15 & ~15u);
+	jit->exitthunk = thunk.cursor;
+	EmitByte(&thunk, 0x48);
+	EmitByte(&thunk, 0x01);
+	EmitByte(&thunk, 0x8e);
+	EmitDword(&thunk, OSX970CPUFIELD(instructions));
+	EmitByte(&thunk, 0x29);
+	EmitByte(&thunk, 0x8e);
+	EmitDword(&thunk, OSX970CPUFIELD(slice));
+	EmitRegister(&thunk, 0, 0x31, OSX970RAX, OSX970RAX);
+	EmitByte(&thunk, 0x48);
+	EmitByte(&thunk, 0x83);
+	EmitByte(&thunk, 0xc4);
+	EmitByte(&thunk, 0x20);
+	EmitByte(&thunk, 0x5f);
+	EmitByte(&thunk, 0x5e);
+	EmitByte(&thunk, 0x5b);
+	EmitByte(&thunk, 0xc3);
+	jit->codestart = ((uint32)(thunk.cursor - jit->arena) + 63) & ~63u;
+	jit->used = jit->codestart;
 	core->jit = jit;
 	core->jitcache = jit->cache;
 	return 1;
@@ -3538,6 +3704,8 @@ void Osx970JitDestroy(Osx970 *core)
 	jit = (Osx970Jit *)core->jit;
 	if (jit == NULL)
 		return;
+	if (core->cpu->logfile)
+		fprintf(core->cpu->logfile, "970 jit compiled %llu resets %llu instructions %llu guest %llu bytes %llu cold %llu\n", (unsigned long long)jit->compiled, (unsigned long long)jit->resets, (unsigned long long)core->cpu->instructions, (unsigned long long)jit->guestcompiled, (unsigned long long)jit->bytes, (unsigned long long)jit->coldbytes);
 	VirtualFree(jit->arena, 0, MEM_RELEASE);
 	free(jit);
 	free(core->codepages);
@@ -3559,6 +3727,9 @@ static void InterpretBlock(Osx970 *core)
 		instruction = (uint32)LoadBig(core->fetchhost + (core->pc & 0xfff), 4);
 		expected = Effective(core, core->pc + 4);
 		cpu->slice--;
+#if OSXPROFILE
+		cpu->tmpform[0][OsxCpuTmpFormKey(instruction)]++;
+#endif
 		Osx970ExecuteInstruction(core, instruction);
 		executed++;
 	} while (core->pc == expected && executed < OSX970JITLIMIT && cpu->slice > 0 && (core->pc & 0xfff) != 0 && !cpu->halted);
