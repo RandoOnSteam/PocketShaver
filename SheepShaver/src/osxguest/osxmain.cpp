@@ -746,7 +746,7 @@ static void PresentFrame(OsxSession *session)
 	runs = 0;
 	open = 0;
 	openrow = 0;
-	if (SDL_LockSurface(session->screen) != 0)
+	if (session->screen == NULL || session->screen->w < (int)machine->width || session->screen->h < (int)machine->height || SDL_LockSurface(session->screen) != 0)
 		return;
 	for (row = 0; row < machine->height; row++) {
 		source = machine->vram + row * rowbytes;
@@ -841,6 +841,10 @@ static void HandleEvents(OsxSession *session, void *monitor)
 		#if SDL_VERSION_ATLEAST(2, 0, 0)
 		case SDL_MOUSEWHEEL:
 			PressButton(session, HostWheelButton(event.wheel.y), 1);
+			break;
+		case SDL_WINDOWEVENT:
+			session->screen = SDL_GetWindowSurface(sdl_window);
+			memset(session->shadow, 0xff, session->machine->rowbytes * session->machine->height);
 			break;
 		#endif
 		case SDL_KEYDOWN:

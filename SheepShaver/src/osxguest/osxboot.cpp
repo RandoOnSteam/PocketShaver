@@ -34,6 +34,7 @@
 #define BOOTARGSSIZE 0x200
 #define CLIPTOOLBOX "/System/Library/Frameworks/Carbon.framework/Versions/A/Frameworks/HIToolbox.framework/Versions/A/HIToolbox"
 #define CLIPSYSTEM "/usr/lib/libSystem.B.dylib"
+#define CLIPDOCK "/System/Library/CoreServices/Dock.app/Contents/MacOS/Dock"
 #define CLIPCACHE "/private/var/db/dyld/dyld_shared_cache_ppc"
 #define CLIPCACHEIMAGES 4096
 #define TREENAMELENGTH 32
@@ -852,12 +853,18 @@ static void FindClipboardFunctions(OsxMachine *machine, OsxHfsVolume *volume)
 	if (image && ThinPowerPC(image, &size))
 		FindSymbols(image, size, CacheBase(volume, CLIPTOOLBOX), toolboxnames, 5, clip->functions + OSXCLIPGETCURRENT, &clip->textlow, &clip->texthigh);
 	free(image);
+	image = ReadFile(volume, CLIPDOCK, &size);
+	if (image && ThinPowerPC(image, &size) && size >= 28 && Big32(image) == 0xfeedface && TextCommand(image, size)) {
+		clip->functions[OSXCLIPDOCK] = Big32(image + TextCommand(image, size) + 24);
+		clip->functions[OSXCLIPDOCKCOMMANDS] = Big32(image + 20);
+	}
+	free(image);
 	clip->ready = clip->texthigh > clip->textlow;
 	for (index = 0; index < OSXCLIPFUNCTIONS; index++)
 		if (clip->functions[index] == 0)
 			clip->ready = 0;
 	if (machine->log)
-		fprintf(machine->log, "clipboard ready %d toolbox %08x-%08x scrap %08x malloc %08x\n", clip->ready, clip->textlow, clip->texthigh, clip->functions[OSXCLIPGETCURRENT], clip->functions[OSXCLIPMALLOC]);
+		fprintf(machine->log, "clipboard ready %d toolbox %08x-%08x scrap %08x malloc %08x dock %08x\n", clip->ready, clip->textlow, clip->texthigh, clip->functions[OSXCLIPGETCURRENT], clip->functions[OSXCLIPMALLOC], clip->functions[OSXCLIPDOCK]);
 }
 
 static int PlistString(const uint8 *plist, const char *key, char *output, uint32 size)

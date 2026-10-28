@@ -23,11 +23,12 @@
 
 #define CLIPMACHMSG 0xffffffe1u
 #define CLIPMACHMSGOVERWRITE 0xffffffe0u
+#define CLIPMACHSEND 1u
+#define CLIPMACHRECEIVE 2u
 #define CLIPMAXBYTES 0x400000u
 #define CLIPFRAME 0x400u
 #define CLIPDEPTH 32
 #define CLIPHEADER 16u
-#define CLIPATTEMPT 50000000ULL
 #define CLIPPUTINTERVAL 250000000ULL
 #define CLIPGETINTERVAL 500000000ULL
 #define CLIPTIMEOUT 30000000000ULL
@@ -110,7 +111,7 @@ static char *Utf8FromGuest(const uint8 *data, uint32 length)
 		}
 		if (character == '\r')
 			character = '\n';
-		if (character == 0)
+		if (character == 0 || character == 0xfeff)
 			continue;
 		if (character < 0x80)
 			output[used++] = (char)character;
@@ -474,12 +475,14 @@ int OsxClipSyscall(OsxMachine *machine, OsxCpu *cpu)
 		}
 		return 0;
 	}
-	if (cpu->gpr[0] != CLIPMACHMSG && cpu->gpr[0] != CLIPMACHMSGOVERWRITE)
+	if ((cpu->gpr[0] != CLIPMACHMSG && cpu->gpr[0] != CLIPMACHMSGOVERWRITE) || (cpu->gpr[4] & (CLIPMACHSEND | CLIPMACHRECEIVE)) != CLIPMACHRECEIVE)
 		return 0;
+	if (clip->functions[OSXCLIPDOCK]) {
+		if (ReadWord(cpu, clip->functions[OSXCLIPDOCK] + 20) != clip->functions[OSXCLIPDOCKCOMMANDS])
+			return 0;
+		clip->functions[OSXCLIPDOCK] = 0;
+	}
 	now = OsxHostNanoseconds();
-	if (now - clip->lastattempt < CLIPATTEMPT)
-		return 0;
-	clip->lastattempt = now;
 	if (now - clip->lastput < CLIPPUTINTERVAL || !EventLoopThread(clip, cpu))
 		return 0;
 	clip->lastput = now;

@@ -458,7 +458,9 @@ typedef struct OsxInputEvent {
 #define OSXCLIPPUTFLAVOR 5
 #define OSXCLIPFLAVORSIZE 6
 #define OSXCLIPFLAVORDATA 7
-#define OSXCLIPFUNCTIONS 8
+#define OSXCLIPDOCK 8
+#define OSXCLIPDOCKCOMMANDS 9
+#define OSXCLIPFUNCTIONS 10
 
 typedef struct OsxClip {
 	uint32 functions[OSXCLIPFUNCTIONS];
@@ -484,7 +486,6 @@ typedef struct OsxClip {
 	uint8 *pending;
 	uint32 pendinglength;
 	uint64 started;
-	uint64 lastattempt;
 	uint64 lastput;
 	uint64 lastget;
 } OsxClip;
