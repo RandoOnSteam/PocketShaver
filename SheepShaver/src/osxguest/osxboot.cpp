@@ -1001,7 +1001,7 @@ static uint8 *StoreEntry(uint8 *package, uint8 *field, uint32 position, const ui
 	return output;
 }
 
-static uint8 *BuildDriverPackage(OsxHfsVolume *volume, int safeboot, uint32 *size)
+static uint8 *BuildDriverPackage(OsxHfsVolume *volume, int safeboot, const char *const *only, int onlycount, uint32 *size)
 {
 	OsxKextList list;
 	OsxKextCandidate *kext;
@@ -1019,6 +1019,12 @@ static uint8 *BuildDriverPackage(OsxHfsVolume *volume, int safeboot, uint32 *siz
 	list.count = 0;
 	list.safeboot = safeboot;
 	CollectKexts(volume, BOOTEXTENSIONS, &list, 0);
+	for (index = 0; only && index < list.count; index++) {
+		list.kexts[index].selected = 0;
+		for (selected = 0; selected < onlycount; selected++)
+			if (strcmp(list.kexts[index].identifier, only[selected]) == 0)
+				list.kexts[index].selected = 1;
+	}
 	do {
 		changed = 0;
 		for (index = 0; index < list.count; index++)
@@ -1578,7 +1584,7 @@ static void AddPmuNodes(OsxTreeNode *macio, OsxTreeNode **interrupting)
 	AddProperty(node, "prim-info", priminfo, sizeof(priminfo));
 }
 
-static void AddU3Nodes(OsxTreeNode *root)
+static OsxTreeNode *AddU3Nodes(OsxTreeNode *root)
 {
 	OsxTreeNode *u3;
 	OsxTreeNode *i2c;
@@ -1603,21 +1609,21 @@ static void AddU3Nodes(OsxTreeNode *root)
 	AddCell(i2c, "AAPL,address-step", 0x10);
 	AddCell(i2c, "AAPL,i2c-rate", 100);
 	AddString(i2c, "AAPL,driver-name", ".i2c-uni-n");
+	AddInterrupts(i2c, OSXG5IRQU3I2C, 1, 0, 0, 1);
 	AddCell(i2c, "#address-cells", 1);
 	AddCell(i2c, "#size-cells", 0);
-	node = NewNode(i2c, "i2c-hwclock");
-	AddString(node, "compatible", "pulsar-legacy-slewing");
-	AddCell(node, "reg", 0xd2);
 	node = NewNode(u3, "dart");
 	AddString(node, "device_type", "dart");
 	AddStrings(node, "compatible", "u3-dart", "dart");
 	cells[0] = OSXG5DART;
 	cells[1] = OSXG5DARTSIZE;
 	AddCells(node, "reg", cells, 2);
+	return i2c;
 }
 
-static void AddK2I2cNode(OsxTreeNode *macio)
+static OsxTreeNode *AddK2I2cNode(OsxTreeNode *macio)
 {
+	OsxTreeNode *i2c;
 	OsxTreeNode *node;
 	uint32 cells[2];
 	node = NewNode(macio, "i2c");
@@ -1633,10 +1639,13 @@ static void AddK2I2cNode(OsxTreeNode *macio)
 	AddString(node, "AAPL,driver-name", ".i2c-mac-io");
 	AddCell(node, "#address-cells", 1);
 	AddCell(node, "#size-cells", 0);
+	AddInterrupts(node, OSXG5IRQK2I2C, 1, 0, 0, 1);
+	i2c = node;
 	node = NewNode(node, "deq");
 	AddString(node, "device_type", "deq");
 	AddCell(node, "reg", 0x6a);
 	AddCell(node, "i2c-address", 0x6a);
+	return i2c;
 }
 
 static OsxTreeNode *AddI2sNodes(OsxTreeNode *macio)
@@ -1759,7 +1768,7 @@ static OsxTreeNode *BuildTreeG5(OsxBootState *state, OsxTreeNode **memorymap)
 	OsxTreeNode *macio;
 	OsxTreeNode *mpic;
 	OsxTreeNode *chosen;
-	OsxTreeNode *interrupting[8];
+	OsxTreeNode *interrupting[9];
 	OsxTreeProperty *property;
 	uint8 address[6];
 	uint32 cells[12];
@@ -1847,7 +1856,7 @@ static OsxTreeNode *BuildTreeG5(OsxBootState *state, OsxTreeNode **memorymap)
 	AddCells(node, "reg", cells, 2);
 	AddCell(node, "#bytes", OSXFLASHBANK);
 
-	AddU3Nodes(root);
+	interrupting[8] = AddU3Nodes(root);
 
 	ht = NewNode(root, "ht");
 	AddString(ht, "device_type", "ht");
@@ -1907,7 +1916,7 @@ static OsxTreeNode *BuildTreeG5(OsxBootState *state, OsxTreeNode **memorymap)
 	AddCell(mpic, "clock-frequency", 4166666);
 
 	AddPmuNodes(macio, interrupting);
-	AddK2I2cNode(macio);
+	interrupting[7] = AddK2I2cNode(macio);
 	interrupting[6] = AddI2sNodes(macio);
 	interrupting[3] = AddKauaiNode(ht, OSXG5DEVICEATA0, OSXG5ATABASE, OSXG5IRQATA0, OSXG5IRQATA0DMA);
 	interrupting[4] = AddKauaiNode(ht, OSXG5DEVICEATA1, OSXG5ATABASE + OSXG5ATASIZE, OSXG5IRQATA1, OSXG5IRQATA1DMA);
@@ -1922,7 +1931,7 @@ static OsxTreeNode *BuildTreeG5(OsxBootState *state, OsxTreeNode **memorymap)
 	AddProperty(node, "local-mac-address", address, sizeof(address));
 	interrupting[5] = node;
 
-	node = NewNode(ht, "display");
+	node = NewNode(ht, "SSHV,display");
 	AddString(node, "device_type", "display");
 	AddString(node, "compatible", "display");
 	AddString(node, "model", "SheepShaver,Framebuffer");
@@ -1938,7 +1947,7 @@ static OsxTreeNode *BuildTreeG5(OsxBootState *state, OsxTreeNode **memorymap)
 	AddPhandles(root, &state->phandle);
 	property = FindProperty(mpic, "AAPL,phandle");
 	parent = Big32(property->value);
-	for (index = 0; index < 7; index++)
+	for (index = 0; index < 9; index++)
 		AddCell(interrupting[index], "interrupt-parent", parent);
 	AddI2sFunctions(macio, interrupting[6]);
 	AddCell(cpu, "AAPL,parentIC", parent);
@@ -2161,7 +2170,7 @@ static OsxTreeNode *BuildTree(OsxBootState *state, OsxTreeNode **memorymap)
 	AddBmacNode(macio);
 	AddAudioNode(macio);
 
-	node = NewNode(pci, "display");
+	node = NewNode(pci, "SSHV,display");
 	AddString(node, "device_type", "display");
 	AddString(node, "compatible", "display");
 	AddString(node, "model", "SheepShaver,Framebuffer");
@@ -2253,6 +2262,25 @@ static int NeedsVectorCpu(OsxHfsVolume *volume)
 	}
 	free(dyld);
 	return !compatible;
+}
+
+static uint8 *AddDisplayDrivers(OsxHfsVolume *volume, uint8 *mkext, uint32 *size)
+{
+	static const char *const bundles[2] = { "com.apple.iokit.IOGraphicsFamily", "com.apple.iokit.IONDRVSupport" };
+	uint8 *donor;
+	uint8 *merged;
+	uint32 donorsize;
+	if (OsxMkextHasBundle(mkext, *size, bundles[1]))
+		return mkext;
+	donor = BuildDriverPackage(volume, 0, bundles, 2, &donorsize);
+	merged = NULL;
+	if (donor)
+		merged = OsxMkextAddBundles(mkext, *size, donor, donorsize, bundles, 2, NULL, 0, size);
+	free(donor);
+	if (merged == NULL)
+		return mkext;
+	free(mkext);
+	return merged;
 }
 
 static uint8 *AddOldWorldDrivers(uint8 *mkext, uint32 *size, const char *bootpath)
@@ -2355,7 +2383,9 @@ int OsxBootLoad(OsxMachine *machine, const char *imagepath, int bootbus, int boo
 		mkext = NULL;
 	}
 	if (mkext == NULL)
-		mkext = BuildDriverPackage(&volume, state.ignorendrv, &mkextsize);
+		mkext = BuildDriverPackage(&volume, state.ignorendrv, NULL, 0, &mkextsize);
+	else if (!state.ignorendrv)
+		mkext = AddDisplayDrivers(&volume, mkext, &mkextsize);
 	if (mkext)
 		mkext = AddOldWorldDrivers(mkext, &mkextsize, imagepath);
 	if (mkext) {

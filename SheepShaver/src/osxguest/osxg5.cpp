@@ -894,6 +894,7 @@ static void MacIoWrite(OsxMachine *machine, uint32 offset, int size, uint32 valu
 	}
 	if (offset >= 0x18000 && offset < 0x19000) {
 		I2cWrite(&g5->k2i2c, offset & 0xf0, (uint8)(value >> ((size - 1) * 8)));
+		MpicSetSource(machine, OSXG5IRQK2I2C, (g5->k2i2c.isr & g5->k2i2c.ier) != 0);
 		TasUpdateGain(machine);
 		return;
 	}
@@ -976,9 +977,10 @@ static uint32 U3Read(OsxMachine *machine, uint32 offset, int size)
 
 static void U3Write(OsxMachine *machine, uint32 offset, int size, uint32 value)
 {
-	if (offset - (OSXG5U3I2C - OSXG5U3BASE) < 0x1000)
+	if (offset - (OSXG5U3I2C - OSXG5U3BASE) < 0x1000) {
 		I2cWrite(&machine->g5state.i2c, (offset - (OSXG5U3I2C - OSXG5U3BASE)) & 0xf0, (uint8)(value >> ((size - 1) * 8)));
-	else if (offset - (OSXG5HTSELF - OSXG5U3BASE) < 0x400)
+		MpicSetSource(machine, OSXG5IRQU3I2C, (machine->g5state.i2c.isr & machine->g5state.i2c.ier) != 0);
+	} else if (offset - (OSXG5HTSELF - OSXG5U3BASE) < 0x400)
 		ConfigWrite(machine, (offset - (OSXG5HTSELF - OSXG5U3BASE)) >> 2, size, value);
 	else if (offset == OSXG5DART - OSXG5U3BASE && size == 4)
 		machine->g5state.dartcontrol = value & ~DARTFLUSH;

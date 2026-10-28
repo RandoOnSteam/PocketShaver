@@ -47,6 +47,8 @@ extern SDL_Window *sdl_window;
 #define OSXDEFAULTRAM (256 * 1024 * 1024)
 #define OSXFRAMERATE 60
 #define OSXPRESENTRUNS 16
+#define OSXSETTLEMS 3000
+#define OSXAMPSETTLEMS 225
 
 typedef struct OsxKeyMapping {
 	int sdlkey;
@@ -340,6 +342,12 @@ static void HookKernelSymbol(OsxMachine *machine, const char *name, OsxHookFunct
 {
 	if (OsxFindKernelSymbol(machine, name))
 		OsxCpuAddHook(machine->cpu, OsxFindKernelSymbol(machine, name), function, NULL);
+}
+
+static void SettleHook(OsxCpu *cpu, void *context, uint32 address)
+{
+	if ((cpu->gpr[3] == OSXSETTLEMS || cpu->gpr[3] == OSXAMPSETTLEMS) && cpu->lr >= ((OsxMachine *)context)->kernelend)
+		cpu->gpr[3] = 0;
 }
 
 static void CallHook(OsxCpu *cpu, void *context, uint32 address)
@@ -1331,6 +1339,7 @@ static void RunMachine(OsxSession *session, void *monitor)
 	uint64 frameticks;
 	uint64 nextevent;
 	uint64 eventticks;
+	uint64 eventwait;
 	uint64 waitticks;
 	uint64 cudadeadline;
 	uint64 bmacdeadline;
@@ -1379,6 +1388,7 @@ static void RunMachine(OsxSession *session, void *monitor)
 				waitticks = 0;
 			else if (nextevent - now < waitticks)
 				waitticks = nextevent - now;
+			eventwait = waitticks;
 			if (cpu->decdeadline != OSXNEVER && cpu->decdeadline > now && cpu->decdeadline - now < waitticks)
 				waitticks = cpu->decdeadline - now;
 			cudadeadline = OsxCudaNextDeadline(machine);
@@ -1400,7 +1410,9 @@ static void RunMachine(OsxSession *session, void *monitor)
 				else if (atadeadline - now < waitticks)
 					waitticks = atadeadline - now;
 			}
-			milliseconds = (uint32)((waitticks * 1000 + OSXTIMEBASEFREQUENCY - 1) / OSXTIMEBASEFREQUENCY);
+			milliseconds = (uint32)(waitticks * 1000 / OSXTIMEBASEFREQUENCY);
+			if (waitticks == eventwait)
+				milliseconds = (uint32)((waitticks * 1000 + OSXTIMEBASEFREQUENCY - 1) / OSXTIMEBASEFREQUENCY);
 			if (cpu->deterministic)
 				cpu->virtualticks += waitticks + 1;
 			else if (milliseconds > 0)
@@ -1663,6 +1675,8 @@ static int RunSession(OsxSession *session)
 	if (!OsxBootLoad(machine, bootimage, bootbus, bootunit, bootargs))
 		return 1;
 	AllowStalledClassLookup(machine);
+	if (OsxFindKernelSymbol(machine, "_IOSleep"))
+		OsxCpuAddHook(cpu, OsxFindKernelSymbol(machine, "_IOSleep"), SettleHook, machine);
 	if (OsxFindKernelSymbol(machine, "_conslog_putc"))
 		OsxCpuAddHook(cpu, OsxFindKernelSymbol(machine, "_conslog_putc"), ConsoleHook, session);
 	if (OsxFindKernelSymbol(machine, "_kmputc"))

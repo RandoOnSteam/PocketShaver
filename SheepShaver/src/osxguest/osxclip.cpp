@@ -368,15 +368,19 @@ static int AdvancePut(OsxMachine *machine, OsxClip *clip, OsxCpu *cpu, uint32 re
 {
 	switch (clip->step) {
 	case 0:
-		if (result == 0)
+		if (result == 0) {
+			clip->lasthash = 0;
 			return Finish(clip, cpu);
+		}
 		clip->block = result;
 		clip->step = 1;
 		Call(clip, cpu, OSXCLIPBZERO, clip->block, clip->pendinglength + clip->pendinglength / 2 + CLIPHEADER, 0, 0, 0);
 		return 1;
 	case 1:
-		if (!CopyGuest(cpu, clip->block + CLIPHEADER, clip->pending, clip->pendinglength + clip->pendinglength / 2, 1))
+		if (!CopyGuest(cpu, clip->block + CLIPHEADER, clip->pending, clip->pendinglength + clip->pendinglength / 2, 1)) {
+			clip->lasthash = 0;
 			return Release(clip, cpu, 6, clip->block);
+		}
 		clip->step = 2;
 		Call(clip, cpu, OSXCLIPCLEARCURRENT, 0, 0, 0, 0, 0);
 		return 1;
@@ -385,8 +389,10 @@ static int AdvancePut(OsxMachine *machine, OsxClip *clip, OsxCpu *cpu, uint32 re
 		Call(clip, cpu, OSXCLIPGETCURRENT, clip->block, 0, 0, 0, 0);
 		return 1;
 	case 3:
-		if (result != 0)
+		if (result != 0) {
+			clip->lasthash = 0;
 			return Release(clip, cpu, 6, clip->block);
+		}
 		clip->step = 7;
 		Call(clip, cpu, OSXCLIPPUTFLAVOR, ReadWord(cpu, clip->block), CLIPUTXT, 0, clip->pendinglength, clip->block + CLIPHEADER);
 		return 1;

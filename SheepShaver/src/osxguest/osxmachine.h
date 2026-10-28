@@ -334,6 +334,8 @@ typedef struct OsxCuda {
 #define OSXG5IRQGMAC 0x29
 #define OSXG5IRQPMU 0x19
 #define OSXG5IRQPMUGPIO 0x2f
+#define OSXG5IRQU3I2C 0x00
+#define OSXG5IRQK2I2C 0x1a
 #define OSXG5IRQATA0 0x27
 #define OSXG5IRQATA0DMA 0x0d
 #define OSXG5IRQATA1 0x28
