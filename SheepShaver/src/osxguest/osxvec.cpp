@@ -997,7 +997,7 @@ static int VectorEnabled(OsxCpu *cpu)
 	return 1;
 }
 
-static void VectorGeneric(OsxCpu *cpu, uint32 instruction)
+static OSXJITABI void VectorGeneric(OsxCpu *cpu, uint32 instruction)
 {
 	uint32 result[4];
 	uint32 kind;
@@ -1072,28 +1072,28 @@ static inline void Store(uint32 *target, const uint32 *result)
 	target[3] = result[3];
 }
 
-static void VectorPermute(OsxCpu *cpu, uint32 instruction)
+static OSXJITABI void VectorPermute(OsxCpu *cpu, uint32 instruction)
 {
 	uint32 result[4];
 	Permute(result, VectorA(cpu, instruction), VectorB(cpu, instruction), VectorC(cpu, instruction));
 	Store(VectorD(cpu, instruction), result);
 }
 
-static void VectorShiftDouble(OsxCpu *cpu, uint32 instruction)
+static OSXJITABI void VectorShiftDouble(OsxCpu *cpu, uint32 instruction)
 {
 	uint32 result[4];
 	ShiftDouble(result, VectorA(cpu, instruction), VectorB(cpu, instruction), (instruction >> 6) & 15);
 	Store(VectorD(cpu, instruction), result);
 }
 
-static void VectorMultiplyHigh(OsxCpu *cpu, uint32 instruction)
+static OSXJITABI void VectorMultiplyHigh(OsxCpu *cpu, uint32 instruction)
 {
 	uint32 result[4];
 	MultiplyHigh(cpu, result, VectorA(cpu, instruction), VectorB(cpu, instruction), VectorC(cpu, instruction), instruction & 0x3f);
 	Store(VectorD(cpu, instruction), result);
 }
 
-static void VectorSelect(OsxCpu *cpu, uint32 instruction)
+static OSXJITABI void VectorSelect(OsxCpu *cpu, uint32 instruction)
 {
 	const uint32 *a;
 	const uint32 *b;
@@ -1108,7 +1108,7 @@ static void VectorSelect(OsxCpu *cpu, uint32 instruction)
 	Store(VectorD(cpu, instruction), result);
 }
 
-static void VectorLogical(OsxCpu *cpu, uint32 instruction)
+static OSXJITABI void VectorLogical(OsxCpu *cpu, uint32 instruction)
 {
 	const uint32 *a;
 	const uint32 *b;
@@ -1139,7 +1139,7 @@ static void VectorLogical(OsxCpu *cpu, uint32 instruction)
 		d[index] = ~(a[index] | b[index]);
 }
 
-static void VectorModular(OsxCpu *cpu, uint32 instruction)
+static OSXJITABI void VectorModular(OsxCpu *cpu, uint32 instruction)
 {
 	const uint32 *a;
 	const uint32 *b;
@@ -1163,7 +1163,7 @@ static void VectorModular(OsxCpu *cpu, uint32 instruction)
 	}
 }
 
-static void VectorModularWord(OsxCpu *cpu, uint32 instruction)
+static OSXJITABI void VectorModularWord(OsxCpu *cpu, uint32 instruction)
 {
 	const uint32 *a;
 	const uint32 *b;
@@ -1181,7 +1181,7 @@ static void VectorModularWord(OsxCpu *cpu, uint32 instruction)
 	}
 }
 
-static void VectorMerge(OsxCpu *cpu, uint32 instruction)
+static OSXJITABI void VectorMerge(OsxCpu *cpu, uint32 instruction)
 {
 	uint32 result[4];
 	uint32 kind;
@@ -1190,7 +1190,7 @@ static void VectorMerge(OsxCpu *cpu, uint32 instruction)
 	Store(VectorD(cpu, instruction), result);
 }
 
-static void VectorSplat(OsxCpu *cpu, uint32 instruction)
+static OSXJITABI void VectorSplat(OsxCpu *cpu, uint32 instruction)
 {
 	uint32 result[4];
 	Splat(result, VectorB(cpu, instruction), 1u << ((((instruction & 0x7ff) - 524) >> 6) & 3), (instruction >> 16) & 31);

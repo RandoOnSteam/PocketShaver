@@ -21,9 +21,9 @@
 #include <math.h>
 #include <fenv.h>
 #include <stddef.h>
+#include <stdint.h>
 #include "osxcpu.h"
-#if defined(_WIN32) && (defined(_M_X64) || defined(__x86_64__))
-#include <windows.h>
+#if OSXHOSTX64
 #define OSX970JIT 1
 #else
 #define OSX970JIT 0
@@ -2024,7 +2024,7 @@ static void Execute(Osx970 *core, uint32 instruction)
 	Illegal(core);
 }
 
-int Osx970Step(Osx970 *core, uint32 instruction)
+OSXJITABI int Osx970Step(Osx970 *core, uint32 instruction)
 {
 	uint64 msr;
 	uint64 expected;
@@ -2091,6 +2091,7 @@ void Osx970CheckInterrupts(Osx970 *core, uint64 now)
 #define OSX970JITRESERVE 32768
 #define OSX970JITLIMIT 64
 #define OSX970JITHOT 32
+#define OSX970JITWAYS 4
 #define OSX970JITCACHE 4096
 #define OSX970JITEXITS 256
 #define OSX970RAX 0
@@ -2106,7 +2107,7 @@ void Osx970CheckInterrupts(Osx970 *core, uint64 now)
 #define OSX970FIELD(member) ((uint32)offsetof(Osx970, member) - OSX970BASE)
 #define OSX970CPUFIELD(member) ((uint32)offsetof(OsxCpu, member))
 
-typedef int (*Osx970Code)(Osx970 *core);
+typedef int (OSXJITABI *Osx970Code)(Osx970 *core);
 
 typedef struct Osx970Block {
 	uint64 pc;
@@ -3652,7 +3653,6 @@ static void Compile(Osx970 *core, Osx970Jit *jit, Osx970Block *block, uint64 pc,
 	for (index = 0; index < emitter.exitcount; index++)
 		if (emitter.exits[index])
 			PatchJump(emitter.exits[index], finish);
-	FlushInstructionCache(GetCurrentProcess(), start, (SIZE_T)(emitter.cursor - start));
 	jit->used += ((uint32)(emitter.cursor - start) + 15) & ~15u;
 	jit->compiled++;
 	jit->guestcompiled += count;
@@ -3678,13 +3678,13 @@ int Osx970JitCreate(Osx970 *core)
 	jit = (Osx970Jit *)calloc(1, sizeof(Osx970Jit));
 	if (jit == NULL)
 		return 0;
-	jit->arena = (uint8 *)VirtualAlloc(NULL, OSX970JITBYTES, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+	jit->arena = OsxJitAllocate(OSX970JITBYTES);
 	pages = (uint32)(LinearSize(core->cpu) >> 12);
 	core->codepages = (uint8 *)calloc(pages, 1);
 	core->versions = (uint32 *)calloc(pages, sizeof(uint32));
 	if (jit->arena == NULL || core->codepages == NULL || core->versions == NULL) {
 		if (jit->arena)
-			VirtualFree(jit->arena, 0, MEM_RELEASE);
+			OsxJitRelease(jit->arena, OSX970JITBYTES);
 		free(core->codepages);
 		free(core->versions);
 		core->codepages = NULL;
@@ -3757,7 +3757,7 @@ void Osx970JitDestroy(Osx970 *core)
 		return;
 	if (core->cpu->logfile)
 		fprintf(core->cpu->logfile, "970 jit compiled %llu resets %llu instructions %llu guest %llu bytes %llu cold %llu\n", (unsigned long long)jit->compiled, (unsigned long long)jit->resets, (unsigned long long)core->cpu->instructions, (unsigned long long)jit->guestcompiled, (unsigned long long)jit->bytes, (unsigned long long)jit->coldbytes);
-	VirtualFree(jit->arena, 0, MEM_RELEASE);
+	OsxJitRelease(jit->arena, OSX970JITBYTES);
 	free(jit);
 	free(core->codepages);
 	free(core->versions);
@@ -3790,6 +3790,8 @@ static void JitRun(Osx970 *core, Osx970Jit *jit)
 {
 	OsxCpu *cpu;
 	Osx970Block *block;
+	Osx970Block spare;
+	int way;
 	uint32 instruction;
 	uint32 physical;
 	uint32 key;
@@ -3820,9 +3822,25 @@ static void JitRun(Osx970 *core, Osx970Jit *jit)
 		physical = (uint32)(core->fetchhost - cpu->ram) + (uint32)(core->pc & 0xfff);
 		key = (uint32)((core->msr & (OSXMSRPR | OSXMSRIR | OSXMSRDR | OSXMSRVEC)) | ((core->msr >> 32) & 0x80000000u));
 		hash = (uint32)((((uint64)physical >> 2) * 0x9e3779b1u) ^ ((uint64)key * 0x85ebca6bu)) >> 16;
-		block = &jit->blocks[hash & (OSX970JITBLOCKS - 1)];
+		block = &jit->blocks[hash & (OSX970JITBLOCKS - OSX970JITWAYS)];
 		version = core->versions[physical >> 12];
-		if (block->pc != core->pc || block->physical != physical || block->key != key || block->version != version) {
+		if (block->pc != core->pc || block->physical != physical || block->key != key) {
+			way = 1;
+			while (way < OSX970JITWAYS - 1 && (block[way].pc != core->pc || block[way].physical != physical || block[way].key != key))
+				way++;
+			spare = block[way];
+			if (spare.pc != core->pc || spare.physical != physical || spare.key != key) {
+				spare.pc = core->pc;
+				spare.physical = physical;
+				spare.key = key;
+				spare.version = version;
+				spare.count = 0;
+				spare.code = NULL;
+			}
+			memmove(block + 1, block, way * sizeof(Osx970Block));
+			block[0] = spare;
+		}
+		if (block->version != version) {
 			block->pc = core->pc;
 			block->physical = physical;
 			block->key = key;
@@ -3840,10 +3858,8 @@ static void JitRun(Osx970 *core, Osx970Jit *jit)
 			Compile(core, jit, block, core->pc, physical, key);
 			link = NULL;
 		}
-		if (link) {
+		if (link)
 			PatchJump(link, block->body);
-			FlushInstructionCache(GetCurrentProcess(), link, 4);
-		}
 		cache = &jit->cache[(core->pc >> 2) & (OSX970JITCACHE - 1)];
 		entry = &core->tlb[core->modes[OSXTLBFETCH]][OSXTLBFETCH][(core->pc >> 12) & OSX970TLBMASK];
 		if (entry->page == (core->pc & ~0xfffULL)) {

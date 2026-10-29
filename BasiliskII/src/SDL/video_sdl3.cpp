@@ -1759,11 +1759,16 @@ static void DMCModeDescFromVModesIndex(int idx, DMCModeDesc *out)
 #ifdef SHEEPSHAVER
 SDL_Surface *SDLSetVideoModeQuietly(int width, int height, int depth, Uint32 flags)
 {
+	float scale;
 	SDL_SetHint(SDL_HINT_WINDOW_ACTIVATE_WHEN_SHOWN, "0");
-	sdl_window = SDL_CreateWindow("", width, height, flags);
+	sdl_window = NULL;
+	scale = get_display_scale();
+	sdl_window = SDL_CreateWindow("", (int)(width * scale), (int)(height * scale), flags);
 	if (sdl_window == NULL)
 		return NULL;
-	return SDL_GetWindowSurface(sdl_window);
+	if ((int)(width * scale) == width)
+		return SDL_GetWindowSurface(sdl_window);
+	return SDL_CreateSurface(width, height, SDL_PIXELFORMAT_XRGB8888);
 }
 
 bool VideoInit(void)

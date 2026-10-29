@@ -212,12 +212,11 @@ else()
 	"${B2_SRC}/Unix/strlcpy.c"
 	"${B2_SRC}/Unix/tinyxml2.cpp"
 	"${B2_SRC}/Unix/disk_sparsebundle.cpp"
-	"${B2_SRC}/Unix/posix_sem.cpp"
 	)
 	if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 		list(APPEND B2_PLATFORM "${B2_SRC}/Unix/Linux/scsi_linux.cpp")
 	else()
-		list(APPEND B2_PLATFORM "${B2_SRC}/dummy/scsi_dummy.cpp")
+		list(APPEND B2_PLATFORM "${B2_SRC}/dummy/scsi_dummy.cpp" "${B2_SRC}/Unix/posix_sem.cpp")
 	endif()
 	if(ENABLE_GTK)
 	find_package(PkgConfig REQUIRED)

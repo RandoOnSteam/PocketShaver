@@ -19,10 +19,10 @@
  */
 #include "sysdeps.h"
 #include <stddef.h>
+#include <stdint.h>
 #include "osxcpu.h"
 
-#if defined(_WIN32) && (defined(_M_X64) || defined(__x86_64__))
-#include <windows.h>
+#if OSXHOSTX64
 
 #define OSXJITSETS 65536
 #define OSXJITWAYS 4
@@ -44,7 +44,7 @@
 #define OSXJITGPR(reg) (OSXJITOFFSET(gpr) + (uint32)(reg) * 4)
 #define OSXJITFPR(reg) (OSXJITOFFSET(fpr) + (uint32)(reg) * 8)
 
-typedef int (*OsxNativeFunction)(OsxCpu *cpu);
+typedef int (OSXJITABI *OsxNativeFunction)(OsxCpu *cpu);
 
 typedef struct OsxNativeRecord {
 	uint32 address;
@@ -63,7 +63,6 @@ typedef struct OsxNativeBlock {
 } OsxNativeBlock;
 
 typedef struct OsxNativeState {
-	HANDLE section;
 	uint8 *writebase;
 	uint8 *executebase;
 	uint32 used;
@@ -489,7 +488,6 @@ static void EmitThunks(OsxNativeState *state)
 		fclose(thunks);
 	}
 #endif
-	FlushInstructionCache(GetCurrentProcess(), state->executebase, state->thunkbytes);
 }
 
 static void Exit(OsxNativeEmitter *emitter, int count, uint32 targetoffset)
@@ -2457,8 +2455,8 @@ int OsxJitCreate(OsxCpu *cpu)
 	if (state == NULL)
 		return 0;
 	state->pagecount = (cpu->ramsize + 4095) >> 12;
-	state->shuffle = IsProcessorFeaturePresent(36) != 0;
-	state->fused = IsProcessorFeaturePresent(40) != 0;
+	state->shuffle = OsxHostFeature(OSXFEATURESSSE3);
+	state->fused = OsxHostFeature(OSXFEATUREAVX2);
 	for (index = 0; index < 4; index++) {
 		state->vectorconstants[0][index] = 0x00010203u + (uint32)index * 0x04040404u;
 		state->vectorconstants[1][index] = 0x1f1f1f1fu;
@@ -2475,11 +2473,8 @@ int OsxJitCreate(OsxCpu *cpu)
 	state->records = (OsxNativeRecord *)malloc(OSXJITRECORDS * sizeof(OsxNativeRecord));
 	if (state->records)
 		memset(state->records, 0xff, OSXJITRECORDS * sizeof(OsxNativeRecord));
-	state->section = CreateFileMapping(INVALID_HANDLE_VALUE, NULL, PAGE_EXECUTE_READWRITE, 0, OSXJITBYTES, NULL);
-	if (state->section) {
-		state->writebase = (uint8 *)MapViewOfFile(state->section, FILE_MAP_WRITE | FILE_MAP_EXECUTE, 0, 0, OSXJITBYTES);
-		state->executebase = state->writebase;
-	}
+	state->writebase = OsxJitAllocate(OSXJITBYTES);
+	state->executebase = state->writebase;
 	cpu->nativejit = state;
 	if (state->versions == NULL || state->compiledpages == NULL || state->records == NULL || state->writebase == NULL || state->executebase == NULL) {
 		OsxJitDestroy(cpu);
@@ -2506,9 +2501,7 @@ void OsxJitDestroy(OsxCpu *cpu)
 		fclose(state->tmpmap);
 #endif
 	if (state->writebase)
-		UnmapViewOfFile(state->writebase);
-	if (state->section)
-		CloseHandle(state->section);
+		OsxJitRelease(state->writebase, OSXJITBYTES);
 	free(state->versions);
 	free(state->compiledpages);
 	free(state->records);
@@ -2740,7 +2733,6 @@ static void Compile(OsxCpu *cpu, OsxNativeState *state, OsxNativeBlock *block, u
 		fwrite(tmpwords, 4, (size_t)count, state->tmpmap);
 	}
 #endif
-	FlushInstructionCache(GetCurrentProcess(), state->executebase + state->used, (SIZE_T)(emitter.cursor - emitter.start));
 	state->used += ((uint32)(emitter.cursor - emitter.start) + 15) & ~15u;
 	state->compiled++;
 }

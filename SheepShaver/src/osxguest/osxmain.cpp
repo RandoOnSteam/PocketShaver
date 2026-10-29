@@ -24,11 +24,16 @@
 #include "osxmachine.h"
 #include "xpram.h"
 #include "osxguest.h"
-#ifdef _WIN32
-#include <mmsystem.h>
-#if defined(_M_X64) || defined(__x86_64__)
+#if OSXHOSTX64
 #include <tmmintrin.h>
 #endif
+#if OSXHOSTX64 && !defined(_MSC_VER)
+#define OSXSSSE3 __attribute__((target("ssse3")))
+#else
+#define OSXSSSE3
+#endif
+#ifdef _WIN32
+#include <mmsystem.h>
 #pragma comment(lib, "winmm.lib")
 #endif
 #ifdef ENABLE_EMULATOR_MONITOR
@@ -133,20 +138,43 @@ int OsxGuestRequested(void)
 	#define SDLK_LSUPER SDLK_LGUI
 	#define SDLK_RSUPER SDLK_RGUI
 #endif /* SDL_VERSION_ATLEAST(2, 0, 0) */
+#if SDL_VERSION_ATLEAST(3, 0, 0)
+#define OSXSDLSUCCESS true
+#define OSXEVENTQUIT SDL_EVENT_QUIT
+#define OSXEVENTMOTION SDL_EVENT_MOUSE_MOTION
+#define OSXEVENTBUTTONDOWN SDL_EVENT_MOUSE_BUTTON_DOWN
+#define OSXEVENTBUTTONUP SDL_EVENT_MOUSE_BUTTON_UP
+#define OSXEVENTWHEEL SDL_EVENT_MOUSE_WHEEL
+#define OSXEVENTWINDOW SDL_EVENT_WINDOW_EXPOSED
+#define OSXEVENTKEYDOWN SDL_EVENT_KEY_DOWN
+#define OSXEVENTKEYUP SDL_EVENT_KEY_UP
+#define OSXEVENTKEY(event) ((event).key.key)
+#else
+#define OSXSDLSUCCESS 0
+#define OSXEVENTQUIT SDL_QUIT
+#define OSXEVENTMOTION SDL_MOUSEMOTION
+#define OSXEVENTBUTTONDOWN SDL_MOUSEBUTTONDOWN
+#define OSXEVENTBUTTONUP SDL_MOUSEBUTTONUP
+#define OSXEVENTWHEEL SDL_MOUSEWHEEL
+#define OSXEVENTWINDOW SDL_WINDOWEVENT
+#define OSXEVENTKEYDOWN SDL_KEYDOWN
+#define OSXEVENTKEYUP SDL_KEYUP
+#define OSXEVENTKEY(event) ((event).key.keysym.sym)
+#endif
 static int MapKey(int key)
 {
 	static const OsxKeyMapping mappings[] = {
-		{ SDLK_a, 0x00 }, { SDLK_s, 0x01 }, { SDLK_d, 0x02 }, { SDLK_f, 0x03 }, { SDLK_h, 0x04 },
-		{ SDLK_g, 0x05 }, { SDLK_z, 0x06 }, { SDLK_x, 0x07 }, { SDLK_c, 0x08 }, { SDLK_v, 0x09 },
-		{ SDLK_b, 0x0b }, { SDLK_q, 0x0c }, { SDLK_w, 0x0d }, { SDLK_e, 0x0e }, { SDLK_r, 0x0f },
-		{ SDLK_y, 0x10 }, { SDLK_t, 0x11 }, { SDLK_1, 0x12 }, { SDLK_2, 0x13 }, { SDLK_3, 0x14 },
+		{ 'a', 0x00 }, { 's', 0x01 }, { 'd', 0x02 }, { 'f', 0x03 }, { 'h', 0x04 },
+		{ 'g', 0x05 }, { 'z', 0x06 }, { 'x', 0x07 }, { 'c', 0x08 }, { 'v', 0x09 },
+		{ 'b', 0x0b }, { 'q', 0x0c }, { 'w', 0x0d }, { 'e', 0x0e }, { 'r', 0x0f },
+		{ 'y', 0x10 }, { 't', 0x11 }, { SDLK_1, 0x12 }, { SDLK_2, 0x13 }, { SDLK_3, 0x14 },
 		{ SDLK_4, 0x15 }, { SDLK_6, 0x16 }, { SDLK_5, 0x17 }, { SDLK_EQUALS, 0x18 }, { SDLK_9, 0x19 },
 		{ SDLK_7, 0x1a }, { SDLK_MINUS, 0x1b }, { SDLK_8, 0x1c }, { SDLK_0, 0x1d }, { SDLK_RIGHTBRACKET, 0x1e },
-		{ SDLK_o, 0x1f }, { SDLK_u, 0x20 }, { SDLK_LEFTBRACKET, 0x21 }, { SDLK_i, 0x22 }, { SDLK_p, 0x23 },
-		{ SDLK_RETURN, 0x24 }, { SDLK_l, 0x25 }, { SDLK_j, 0x26 }, { SDLK_QUOTE, 0x27 }, { SDLK_k, 0x28 },
+		{ 'o', 0x1f }, { 'u', 0x20 }, { SDLK_LEFTBRACKET, 0x21 }, { 'i', 0x22 }, { 'p', 0x23 },
+		{ SDLK_RETURN, 0x24 }, { 'l', 0x25 }, { 'j', 0x26 }, { '\'', 0x27 }, { 'k', 0x28 },
 		{ SDLK_SEMICOLON, 0x29 }, { SDLK_BACKSLASH, 0x2a }, { SDLK_COMMA, 0x2b }, { SDLK_SLASH, 0x2c },
-		{ SDLK_n, 0x2d }, { SDLK_m, 0x2e }, { SDLK_PERIOD, 0x2f }, { SDLK_TAB, 0x30 }, { SDLK_SPACE, 0x31 },
-		{ SDLK_BACKQUOTE, 0x32 }, { SDLK_BACKSPACE, 0x33 }, { SDLK_ESCAPE, 0x35 }, { SDLK_LCTRL, 0x36 },
+		{ 'n', 0x2d }, { 'm', 0x2e }, { SDLK_PERIOD, 0x2f }, { SDLK_TAB, 0x30 }, { SDLK_SPACE, 0x31 },
+		{ '`', 0x32 }, { SDLK_BACKSPACE, 0x33 }, { SDLK_ESCAPE, 0x35 }, { SDLK_LCTRL, 0x36 },
 		{ SDLK_RCTRL, 0x36 }, { SDLK_LALT, 0x37 }, { SDLK_RALT, 0x37 }, { SDLK_LSHIFT, 0x38 },
 		{ SDLK_RSHIFT, 0x38 }, { SDLK_CAPSLOCK, 0x39 }, { SDLK_LSUPER, 0x3a }, { SDLK_RSUPER, 0x3a },
 		{ SDLK_LEFT, 0x3b }, { SDLK_RIGHT, 0x3c }, { SDLK_DOWN, 0x3d }, { SDLK_UP, 0x3e },
@@ -712,21 +740,29 @@ static void MonitorInput(void *context, int operation, int first, int second)
 }
 #endif
 
+#if OSXHOSTX64
+static OSXSSSE3 uint32 ShufflePixels(uint32 *target, const uint8 *source, uint32 width)
+{
+	__m128i order;
+	__m128i pixels;
+	uint32 column;
+	order = _mm_setr_epi8(3, 2, 1, -128, 7, 6, 5, -128, 11, 10, 9, -128, 15, 14, 13, -128);
+	for (column = 0; column + 4 <= width; column += 4) {
+		pixels = _mm_loadu_si128((const __m128i *)(source + column * 4));
+		pixels = _mm_shuffle_epi8(pixels, order);
+		_mm_storeu_si128((__m128i *)(target + column), pixels);
+	}
+	return column;
+}
+#endif
+
 static void ConvertPixels(uint32 *target, const uint8 *source, uint32 width, int shuffle)
 {
 	uint32 column;
 	column = 0;
-#if defined(_WIN32) && (defined(_M_X64) || defined(__x86_64__))
-	if (shuffle) {
-		__m128i order;
-		__m128i pixels;
-		order = _mm_setr_epi8(3, 2, 1, -128, 7, 6, 5, -128, 11, 10, 9, -128, 15, 14, 13, -128);
-		for (; column + 4 <= width; column += 4) {
-			pixels = _mm_loadu_si128((const __m128i *)(source + column * 4));
-			pixels = _mm_shuffle_epi8(pixels, order);
-			_mm_storeu_si128((__m128i *)(target + column), pixels);
-		}
-	}
+#if OSXHOSTX64
+	if (shuffle)
+		column = ShufflePixels(target, source, width);
 #endif
 	for (; column < width; column++)
 		target[column] = ((uint32)source[column * 4 + 1] << 16) | ((uint32)source[column * 4 + 2] << 8) | source[column * 4 + 3];
@@ -745,6 +781,12 @@ static void PresentFrame(OsxSession *session)
 #if SDL_VERSION_ATLEAST(2, 0, 0)
 	SDL_Rect rects[OSXPRESENTRUNS];
 #endif
+#if SDL_VERSION_ATLEAST(3, 0, 0)
+	SDL_Rect scaled;
+	SDL_Surface *window;
+	int pixelwidth;
+	int pixelheight;
+#endif
 	int runs;
 	int open;
 	uint32 openrow;
@@ -754,7 +796,15 @@ static void PresentFrame(OsxSession *session)
 	runs = 0;
 	open = 0;
 	openrow = 0;
-	if (session->screen == NULL || session->screen->w < (int)machine->width || session->screen->h < (int)machine->height || SDL_LockSurface(session->screen) != 0)
+#if SDL_VERSION_ATLEAST(3, 0, 0)
+	window = SDL_GetWindowSurface(sdl_window);
+	SDL_GetWindowSizeInPixels(sdl_window, &pixelwidth, &pixelheight);
+	if (pixelwidth == (int)machine->width)
+		session->screen = window;
+	if (window == NULL)
+		return;
+#endif
+	if (session->screen == NULL || session->screen->w < (int)machine->width || session->screen->h < (int)machine->height || SDL_LockSurface(session->screen) != OSXSDLSUCCESS)
 		return;
 	for (row = 0; row < machine->height; row++) {
 		source = machine->vram + row * rowbytes;
@@ -800,6 +850,16 @@ static void PresentFrame(OsxSession *session)
 		rects[index].y = (int)runstart[index];
 		rects[index].w = (int)machine->width;
 		rects[index].h = (int)(runend[index] - runstart[index] + 1);
+#if SDL_VERSION_ATLEAST(3, 0, 0)
+		if (window != session->screen) {
+			scaled.x = 0;
+			scaled.y = (int)(runstart[index] * (uint32)window->h / machine->height);
+			scaled.w = window->w;
+			scaled.h = (int)((runend[index] + 1) * (uint32)window->h / machine->height) - scaled.y;
+			SDL_BlitSurfaceScaled(session->screen, &rects[index], window, &scaled, SDL_SCALEMODE_LINEAR);
+			rects[index] = scaled;
+		}
+#endif
 	}
 	if (runs)
 		SDL_UpdateWindowSurfaceRects(sdl_window, rects, runs);
@@ -813,6 +873,10 @@ static void HandleEvents(OsxSession *session, void *monitor)
 {
 	SDL_Event event;
 	int code;
+#if SDL_VERSION_ATLEAST(3, 0, 0)
+	int width;
+	int height;
+#endif
 	while (SDL_PollEvent(&event)) {
 #ifdef ENABLE_EMULATOR_MONITOR
 		if (monitor) {
@@ -834,34 +898,45 @@ static void HandleEvents(OsxSession *session, void *monitor)
 		}
 #endif
 		switch (event.type) {
-		case SDL_QUIT:
+		case OSXEVENTQUIT:
 			session->machine->quit = 1;
 			break;
-		case SDL_MOUSEMOTION:
-			MovePointer(session, event.motion.x, event.motion.y);
+		case OSXEVENTMOTION:
+#if SDL_VERSION_ATLEAST(3, 0, 0)
+			SDL_GetWindowSize(sdl_window, &width, &height);
+			event.motion.x = event.motion.x * session->machine->width / width;
+			event.motion.y = event.motion.y * session->machine->height / height;
+#endif
+			MovePointer(session, (int)event.motion.x, (int)event.motion.y);
 			break;
-		case SDL_MOUSEBUTTONDOWN:
+		case OSXEVENTBUTTONDOWN:
 			PressButton(session, HostButton(event.button.button), 1);
 			break;
-		case SDL_MOUSEBUTTONUP:
+		case OSXEVENTBUTTONUP:
 			PressButton(session, HostButton(event.button.button), 0);
 			break;
 		#if SDL_VERSION_ATLEAST(2, 0, 0)
-		case SDL_MOUSEWHEEL:
-			PressButton(session, HostWheelButton(event.wheel.y), 1);
+		case OSXEVENTWHEEL:
+			PressButton(session, HostWheelButton((int)event.wheel.y), 1);
 			break;
-		case SDL_WINDOWEVENT:
+		#if SDL_VERSION_ATLEAST(3, 0, 0)
+		case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
+		case SDL_EVENT_WINDOW_RESTORED:
+		#endif
+		case OSXEVENTWINDOW:
+#if !SDL_VERSION_ATLEAST(3, 0, 0)
 			session->screen = SDL_GetWindowSurface(sdl_window);
+#endif
 			memset(session->shadow, 0xff, session->machine->rowbytes * session->machine->height);
 			break;
 		#endif
-		case SDL_KEYDOWN:
-			code = MapKey(event.key.keysym.sym);
+		case OSXEVENTKEYDOWN:
+			code = MapKey(OSXEVENTKEY(event));
 			if (code >= 0)
 				OsxCudaKey(session->machine, code, 1);
 			break;
-		case SDL_KEYUP:
-			code = MapKey(event.key.keysym.sym);
+		case OSXEVENTKEYUP:
+			code = MapKey(OSXEVENTKEY(event));
 			if (code >= 0)
 				OsxCudaKey(session->machine, code, 0);
 			break;
@@ -1569,6 +1644,10 @@ static void DestroySession(OsxSession *session)
 		fclose(session->tmpsamplefile);
 #endif
 	free(session->shadow);
+#if SDL_VERSION_ATLEAST(3, 0, 0)
+	if (session->screen && session->screen != SDL_GetWindowSurface(sdl_window))
+		SDL_DestroySurface(session->screen);
+#endif
 	if (session->sdlready)
 		SDL_Quit();
 	if (session->nvramready)
@@ -1752,13 +1831,13 @@ static int RunSession(OsxSession *session)
 		else
 			fprintf(machine->log, "cpu interpreter\n");
 	}
-	if (SDL_Init(SDL_INIT_VIDEO) != 0) {
+	if (SDL_Init(SDL_INIT_VIDEO) != OSXSDLSUCCESS) {
 		fprintf(stderr, "osx: SDL_Init failed: %s\n", SDL_GetError());
 		return 1;
 	}
 	session->sdlready = 1;
-#if defined(_WIN32) && (defined(_M_X64) || defined(__x86_64__))
-	session->pixelshuffle = IsProcessorFeaturePresent(36) != 0;
+#if OSXHOSTX64
+	session->pixelshuffle = OsxHostFeature(OSXFEATURESSSE3);
 #endif
 #if !SDL_VERSION_ATLEAST(2, 0, 0)
 	SDL_WM_SetCaption("SheepShaver - Mac OS X", "SheepShaver");
@@ -1771,7 +1850,11 @@ static int RunSession(OsxSession *session)
 #if SDL_VERSION_ATLEAST(2, 0, 0)
 	SDL_SetWindowTitle(sdl_window, "SheepShaver - Mac OS X");
 #endif
+#if SDL_VERSION_ATLEAST(3, 0, 0)
+	SDL_HideCursor();
+#else
 	SDL_ShowCursor(SDL_DISABLE);
+#endif
 	session->shadow = (uint8 *)malloc(machine->rowbytes * machine->height);
 	if (session->shadow == NULL)
 		return 1;

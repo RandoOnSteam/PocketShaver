@@ -26,6 +26,7 @@
 #endif
 #else
 #include <time.h>
+#include <sys/mman.h>
 #endif
 #include "osxcpu.h"
 
@@ -171,7 +172,42 @@ uint64 OsxHostNanoseconds(void)
 #endif
 }
 
-uint64 OsxCpuTimebase(OsxCpu *cpu)
+int OsxHostFeature(int feature)
+{
+#if defined(_WIN32)
+	return IsProcessorFeaturePresent(feature) != 0;
+#elif OSXHOSTX64
+	if (feature == OSXFEATURESSSE3)
+		return __builtin_cpu_supports("ssse3") != 0;
+	return __builtin_cpu_supports("avx2") != 0;
+#else
+	return 0;
+#endif
+}
+
+uint8 *OsxJitAllocate(uint32 size)
+{
+#ifdef _WIN32
+	return (uint8 *)VirtualAlloc(NULL, size, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+#else
+	void *memory;
+	memory = mmap(NULL, size, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	if (memory == MAP_FAILED)
+		return NULL;
+	return (uint8 *)memory;
+#endif
+}
+
+void OsxJitRelease(uint8 *memory, uint32 size)
+{
+#ifdef _WIN32
+	VirtualFree(memory, 0, MEM_RELEASE);
+#else
+	munmap(memory, size);
+#endif
+}
+
+OSXJITABI uint64 OsxCpuTimebase(OsxCpu *cpu)
 {
 	uint64 elapsed;
 	if (cpu->deterministic)
@@ -612,7 +648,7 @@ static int AccessSlow(OsxCpu *cpu, uint32 address, int kind, uint8 **host, uint3
 	return OSXACCESSHOST;
 }
 
-int OsxCpuFillTlb(OsxCpu *cpu, uint32 address, int kind)
+OSXJITABI int OsxCpuFillTlb(OsxCpu *cpu, uint32 address, int kind)
 {
 	uint8 *host;
 	uint32 physical;
@@ -1388,12 +1424,12 @@ static uint32 DoubleToSingle(uint64 bits)
 	return ((uint32)(bits >> 32) & 0x80000000u) | (uint32)((fraction >> 29) & 0x7fffff);
 }
 
-uint64 OsxCpuSingleToDouble(uint32 word)
+OSXJITABI uint64 OsxCpuSingleToDouble(uint32 word)
 {
 	return SingleToDouble(word);
 }
 
-uint32 OsxCpuDoubleToSingle(uint64 bits)
+OSXJITABI uint32 OsxCpuDoubleToSingle(uint64 bits)
 {
 	return DoubleToSingle(bits);
 }
@@ -2251,7 +2287,7 @@ static void ExecuteTraced(OsxCpu *cpu, uint32 instruction)
 		OsxCpuRaiseException(cpu, OSXVECTORTRACE, 0, cpu->nextpc);
 }
 
-int OsxCpuExecuteInline(OsxCpu *cpu, uint32 instruction)
+OSXJITABI int OsxCpuExecuteInline(OsxCpu *cpu, uint32 instruction)
 {
 	uint32 expected;
 	expected = cpu->pc + 4;

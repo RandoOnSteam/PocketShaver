@@ -308,14 +308,13 @@ else()
 	"${SS_SRC}/Unix/strlcpy.c"
 	"${SS_SRC}/Unix/tinyxml2.cpp"
 	"${SS_SRC}/Unix/disk_sparsebundle.cpp"
-	"${SS_SRC}/Unix/posix_sem.cpp"
 	"${B2_SRC}/dummy/clip_dummy.cpp"
 	"${SS_SRC}/dummy/prefs_dummy.cpp"
 	)
 	if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 		list(APPEND SS_PLATFORM "${SS_SRC}/Unix/Linux/scsi_linux.cpp")
 	else()
-		list(APPEND SS_PLATFORM "${B2_SRC}/dummy/scsi_dummy.cpp")
+		list(APPEND SS_PLATFORM "${B2_SRC}/dummy/scsi_dummy.cpp" "${SS_SRC}/Unix/posix_sem.cpp")
 	endif()
 	if(ENABLE_GTK)
 	find_package(PkgConfig REQUIRED)
@@ -547,7 +546,7 @@ endif()
 # Executable
 # ---------------------------------------------------------------------------
 # ppc-execute-impl.cpp is #included by ppc-execute.cpp (not a separate TU)
-if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 8 AND ENABLE_OSX_GUEST_TESTS)
+if(CMAKE_SIZEOF_VOID_P EQUAL 8 AND ENABLE_OSX_GUEST_TESTS AND (WIN32 OR CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64"))
 	add_executable(OsxJitTest
 		"${SS_SRC}/../../tools/tests/osxjit.cpp"
 		"${SS_SRC}/osxguest/osxcpu.cpp"

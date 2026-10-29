@@ -20,6 +20,19 @@
 #ifndef OSXCPU_H
 #define OSXCPU_H
 
+#if defined(_M_X64) || defined(__x86_64__)
+#define OSXHOSTX64 1
+#else
+#define OSXHOSTX64 0
+#endif
+#if OSXHOSTX64 && !defined(_WIN32)
+#define OSXJITABI __attribute__((ms_abi))
+#else
+#define OSXJITABI
+#endif
+#define OSXFEATURESSSE3 36
+#define OSXFEATUREAVX2 40
+
 #define OSXTLBBITS 10
 #define OSXTLBSIZE (1 << OSXTLBBITS)
 #define OSXTLBMASK (OSXTLBSIZE - 1)
@@ -123,7 +136,7 @@ typedef struct OsxFaultRecord {
 typedef struct OsxCpu OsxCpu;
 
 typedef void (*OsxHookFunction)(OsxCpu *cpu, void *context, uint32 address);
-typedef void (*OsxVectorFunction)(OsxCpu *cpu, uint32 instruction);
+typedef void (OSXJITABI *OsxVectorFunction)(OsxCpu *cpu, uint32 instruction);
 typedef int (*OsxSyscallFunction)(OsxCpu *cpu, void *context);
 typedef uint32 (*OsxBusReadFunction)(void *context, uint32 address, int size);
 typedef void (*OsxBusWriteFunction)(void *context, uint32 address, int size, uint32 value);
@@ -253,8 +266,8 @@ int OsxCpuReadQuad(OsxCpu *cpu, uint32 address, uint32 *words);
 #if OSXPROFILE
 uint32 OsxCpuTmpFormKey(uint32 instruction);
 #endif
-uint64 OsxCpuSingleToDouble(uint32 word);
-uint32 OsxCpuDoubleToSingle(uint64 bits);
+OSXJITABI uint64 OsxCpuSingleToDouble(uint32 word);
+OSXJITABI uint32 OsxCpuDoubleToSingle(uint64 bits);
 int OsxCpuWriteQuad(OsxCpu *cpu, uint32 address, const uint32 *words);
 void OsxCpuExecuteVector(OsxCpu *cpu, uint32 instruction);
 int OsxCpuExecuteVectorMemory(OsxCpu *cpu, uint32 instruction, uint32 extended, uint32 address);
@@ -262,7 +275,10 @@ OsxVectorFunction OsxCpuVectorHandler(uint32 instruction);
 void OsxCpuRun(OsxCpu *cpu, int32 count);
 int OsxCpuFetchPage(OsxCpu *cpu);
 void OsxCpuExecuteInstruction(OsxCpu *cpu, uint32 instruction);
-int OsxCpuExecuteInline(OsxCpu *cpu, uint32 instruction);
+OSXJITABI int OsxCpuExecuteInline(OsxCpu *cpu, uint32 instruction);
+int OsxHostFeature(int feature);
+uint8 *OsxJitAllocate(uint32 size);
+void OsxJitRelease(uint8 *memory, uint32 size);
 int OsxJitCreate(OsxCpu *cpu);
 void OsxJitDestroy(OsxCpu *cpu);
 void OsxJitRun(OsxCpu *cpu, int32 count);
@@ -275,13 +291,13 @@ void OsxCpuRaiseException(OsxCpu *cpu, uint32 vector, uint32 srr1bits, uint32 sr
 void OsxCpuUpdateModes(OsxCpu *cpu);
 void OsxCpuFlushTlb(OsxCpu *cpu);
 void OsxCpuWatch(OsxCpu *cpu, FILE *file, uint32 rowbytes, uint32 left, uint32 top, uint32 right, uint32 bottom);
-uint64 OsxCpuTimebase(OsxCpu *cpu);
+OSXJITABI uint64 OsxCpuTimebase(OsxCpu *cpu);
 uint64 OsxCpuHostTicks(void);
 void OsxCpuCalibrateTimebase(OsxCpu *cpu);
 uint64 OsxCpuNextDeadline(OsxCpu *cpu);
 uint64 OsxHostNanoseconds(void);
 int OsxCpuAddHook(OsxCpu *cpu, uint32 address, OsxHookFunction function, void *context);
-int OsxCpuFillTlb(OsxCpu *cpu, uint32 address, int kind);
+OSXJITABI int OsxCpuFillTlb(OsxCpu *cpu, uint32 address, int kind);
 int OsxCpuTranslate(OsxCpu *cpu, uint32 address, int kind, int raise, uint32 *physical);
 int OsxCpuReadVirtual(OsxCpu *cpu, uint32 address, uint32 *value);
 int OsxCpuWriteVirtual(OsxCpu *cpu, uint32 address, uint32 value);
@@ -377,7 +393,7 @@ void Osx970ExecuteInstruction(Osx970 *core, uint32 instruction);
 void Osx970CheckInterrupts(Osx970 *core, uint64 now);
 void Osx970Run(Osx970 *core, int32 count);
 int Osx970TranslateVirtual(Osx970 *core, uint32 address, int kind, uint32 *physical);
-int Osx970Step(Osx970 *core, uint32 instruction);
+OSXJITABI int Osx970Step(Osx970 *core, uint32 instruction);
 void Osx970InvalidatePhysical(Osx970 *core, uint64 physical, uint64 length);
 int Osx970JitCreate(Osx970 *core);
 void Osx970JitDestroy(Osx970 *core);

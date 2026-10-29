@@ -40,6 +40,7 @@
 #define AUDIOLATENCYDIVISOR 10
 #define AUDIOFRAMEBYTES 4
 #define AUDIOPOLLTICKS (OSXTIMEBASEFREQUENCY / 1000)
+#define AUDIOMARGINDIVISOR 200
 
 static uint32 SampleRate(uint32 control)
 {
@@ -70,6 +71,61 @@ static void UpdateGain(OsxAudio *audio)
 	audio->rightgain = AttenuationGain(volume & 15);
 }
 
+#if SDL_VERSION_ATLEAST(3, 0, 0)
+static void SDLCALL AudioCallback(void *context, SDL_AudioStream *stream, int length, int total)
+{
+	OsxAudio *audio;
+	uint32 count;
+	uint32 offset;
+	uint32 first;
+	audio = (OsxAudio *)context;
+	if (length <= 0)
+		return;
+	count = audio->head - audio->tail;
+	if (count > (uint32)length + audio->rate / AUDIOMARGINDIVISOR * AUDIOFRAMEBYTES)
+		count = (uint32)length + audio->rate / AUDIOMARGINDIVISOR * AUDIOFRAMEBYTES;
+	offset = audio->tail & (OSXAUDIORING - 1);
+	first = OSXAUDIORING - offset;
+	if (first > count)
+		first = count;
+	SDL_PutAudioStreamData(stream, audio->ring + offset, (int)first);
+	if (count > first)
+		SDL_PutAudioStreamData(stream, audio->ring, (int)(count - first));
+	audio->tail += count;
+}
+
+static void LockHost(OsxAudio *audio)
+{
+	SDL_LockAudioStream((SDL_AudioStream *)audio->stream);
+}
+
+static void UnlockHost(OsxAudio *audio)
+{
+	SDL_UnlockAudioStream((SDL_AudioStream *)audio->stream);
+}
+
+static void CloseHost(OsxAudio *audio)
+{
+	if (audio->stream)
+		SDL_DestroyAudioStream((SDL_AudioStream *)audio->stream);
+	audio->stream = NULL;
+}
+
+static void *StartHost(OsxAudio *audio)
+{
+	SDL_AudioSpec spec;
+	SDL_AudioStream *stream;
+	if (!SDL_InitSubSystem(SDL_INIT_AUDIO))
+		return NULL;
+	spec.freq = (int)audio->rate;
+	spec.format = SDL_AUDIO_S16BE;
+	spec.channels = 2;
+	stream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, AudioCallback, audio);
+	if (stream)
+		SDL_ResumeAudioStreamDevice(stream);
+	return stream;
+}
+#else
 static void AudioCallback(void *context, Uint8 *stream, int length)
 {
 	OsxAudio *audio;
@@ -87,35 +143,56 @@ static void AudioCallback(void *context, Uint8 *stream, int length)
 	memset(stream + count, 0, (uint32)length - count);
 }
 
-static void OpenHost(OsxMachine *machine)
+static void LockHost(OsxAudio *audio)
 {
-	OsxAudio *audio;
-	SDL_AudioSpec spec;
-	audio = &machine->audio;
-	if (audio->opened)
+	SDL_LockAudio();
+}
+
+static void UnlockHost(OsxAudio *audio)
+{
+	SDL_UnlockAudio();
+}
+
+static void CloseHost(OsxAudio *audio)
+{
+	if (audio->stream)
 		SDL_CloseAudio();
-	audio->opened = 0;
-	audio->head = 0;
-	audio->tail = 0;
-	audio->openrate = audio->rate;
-	if (SDL_InitSubSystem(SDL_INIT_AUDIO) != 0) {
-		audio->disabled = 1;
-		return;
-	}
+	audio->stream = NULL;
+}
+
+static void *StartHost(OsxAudio *audio)
+{
+	SDL_AudioSpec spec;
+	if (SDL_InitSubSystem(SDL_INIT_AUDIO) != 0)
+		return NULL;
 	spec.freq = (int)audio->rate;
 	spec.format = AUDIO_S16MSB;
 	spec.channels = 2;
 	spec.samples = 1024;
 	spec.callback = AudioCallback;
 	spec.userdata = audio;
-	if (SDL_OpenAudio(&spec, NULL) < 0) {
+	if (SDL_OpenAudio(&spec, NULL) < 0)
+		return NULL;
+	SDL_PauseAudio(0);
+	return audio;
+}
+#endif
+
+static void OpenHost(OsxMachine *machine)
+{
+	OsxAudio *audio;
+	audio = &machine->audio;
+	CloseHost(audio);
+	audio->head = 0;
+	audio->tail = 0;
+	audio->openrate = audio->rate;
+	audio->stream = StartHost(audio);
+	if (audio->stream == NULL) {
 		if (machine->log)
 			fprintf(machine->log, "audio open failed: %s\n", SDL_GetError());
 		audio->disabled = 1;
 		return;
 	}
-	audio->opened = 1;
-	SDL_PauseAudio(0);
 	if (machine->log)
 		fprintf(machine->log, "audio opened %u Hz\n", audio->rate);
 }
@@ -124,9 +201,7 @@ void OsxAudioReset(OsxMachine *machine)
 {
 	OsxAudio *audio;
 	audio = &machine->audio;
-	if (audio->opened)
-		SDL_CloseAudio();
-	audio->opened = 0;
+	CloseHost(audio);
 	audio->running = 0;
 	audio->control = 0;
 	audio->codeccontrol = 0;
@@ -146,9 +221,7 @@ void OsxAudioReset(OsxMachine *machine)
 
 void OsxAudioExit(OsxMachine *machine)
 {
-	if (machine->audio.opened)
-		SDL_CloseAudio();
-	machine->audio.opened = 0;
+	CloseHost(&machine->audio);
 }
 
 uint32 OsxAudioRead(OsxMachine *machine, uint32 offset)
@@ -244,22 +317,22 @@ void OsxAudioPoll(OsxMachine *machine, uint64 now)
 		audio->lasttime = now;
 		return;
 	}
-	if (!audio->disabled && (!audio->opened || audio->openrate != audio->rate))
+	if (!audio->disabled && (!audio->stream || audio->openrate != audio->rate))
 		OpenHost(machine);
 	level = 0;
-	if (audio->opened) {
+	if (audio->stream) {
 		if (audio->running && now < audio->lasttime)
 			return;
 		audio->lasttime = now + AUDIOPOLLTICKS;
 		target = audio->rate * AUDIOFRAMEBYTES / AUDIOLATENCYDIVISOR;
-		SDL_LockAudio();
+		LockHost(audio);
 		level = audio->head - audio->tail;
 		while (!audio->running && level + AUDIOFRAMEBYTES <= target) {
 			memset(audio->ring + (audio->head & (OSXAUDIORING - 1)), 0, AUDIOFRAMEBYTES);
 			audio->head += AUDIOFRAMEBYTES;
 			level += AUDIOFRAMEBYTES;
 		}
-		SDL_UnlockAudio();
+		UnlockHost(audio);
 		audio->running = 1;
 	} else {
 		if (now <= audio->lasttime)
@@ -279,11 +352,11 @@ void OsxAudioPoll(OsxMachine *machine, uint64 now)
 #if OSXG5
 		machine->g5state.i2sframes += (uint32)got / AUDIOFRAMEBYTES;
 #endif
-		if (audio->opened) {
-			SDL_LockAudio();
+		if (audio->stream) {
+			LockHost(audio);
 			StoreBlock(audio, (uint32)got);
 			audio->head += (uint32)got;
-			SDL_UnlockAudio();
+			UnlockHost(audio);
 		}
 		level += (uint32)got;
 	}

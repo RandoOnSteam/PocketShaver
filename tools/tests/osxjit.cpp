@@ -234,6 +234,8 @@ static void MemoryInstructions(OsxJitTest *test)
 
 static uint64 FloatBits(OsxJitTest *test)
 {
+	uint32 draw0;
+	uint32 draw1;
 	static const uint64 specials[] = {
 		0, 0x8000000000000000ULL, 0x7ff0000000000000ULL, 0xfff0000000000000ULL, 0x7ff8000000000000ULL,
 		0x7ff4000000000001ULL, 0x0000000000000001ULL, 0x000fffffffffffffULL, 0x3ff0000000000000ULL,
@@ -242,7 +244,7 @@ static uint64 FloatBits(OsxJitTest *test)
 	};
 	if (Random(test) & 1)
 		return specials[Random(test) % (sizeof(specials) / sizeof(specials[0]))];
-	return ((uint64)Random(test) << 32) | Random(test);
+	return (draw0 = Random(test), draw1 = Random(test), ((uint64)draw0 << 32) | draw1);
 }
 
 static void FloatVectorMemory(OsxJitTest *test)
@@ -320,6 +322,10 @@ static void FloatVectorMemory(OsxJitTest *test)
 
 static void FloatArithmetic(OsxJitTest *test)
 {
+	uint32 draw0;
+	uint32 draw1;
+	uint32 draw2;
+	uint32 draw3;
 	static const uint32 forms[] = {18, 20, 21, 25, 0, 32, 12, 15, 40, 72, 136, 264, 28, 29, 30, 31};
 	OsxCpu *cpu;
 	uint32 instruction;
@@ -332,7 +338,7 @@ static void FloatArithmetic(OsxJitTest *test)
 	for (iteration = 0; iteration < 200000; iteration++) {
 		Reset(test);
 		extended = forms[Random(test) % 16];
-		instruction = ((Random(test) & 31) << 21) | ((Random(test) & 31) << 16) | ((Random(test) & 31) << 11) | (Random(test) & 1);
+		instruction = (draw0 = Random(test), draw1 = Random(test), draw2 = Random(test), draw3 = Random(test), ((draw0 & 31) << 21) | ((draw1 & 31) << 16) | ((draw2 & 31) << 11) | (draw3 & 1));
 		if (extended == 25)
 			instruction = (instruction & ~0xf800u) | ((Random(test) & 31) << 6);
 		if (extended >= 28)
@@ -373,6 +379,9 @@ static void FloatArithmetic(OsxJitTest *test)
 
 static void VectorInstructions(OsxJitTest *test)
 {
+	uint32 draw0;
+	uint32 draw1;
+	uint32 draw2;
 	OsxCpu *cpu;
 	uint32 instruction;
 	uint32 kind;
@@ -387,7 +396,7 @@ static void VectorInstructions(OsxJitTest *test)
 		kind = Random(test) & 0x7ff;
 		if (iteration & 1)
 			kind = 32 + Random(test) % 16;
-		instruction = (4u << 26) | ((Random(test) & 31) << 21) | ((Random(test) & 31) << 16) | ((Random(test) & 31) << 11) | kind;
+		instruction = (draw0 = Random(test), draw1 = Random(test), draw2 = Random(test), (4u << 26) | ((draw0 & 31) << 21) | ((draw1 & 31) << 16) | ((draw2 & 31) << 11) | kind);
 		if (kind < 64 && kind >= 32)
 			instruction |= (Random(test) & 31) << 6;
 		vscr = Random(test) & 0x00010001u;
@@ -592,6 +601,8 @@ static void SprInstructions(OsxJitTest *test)
 
 static void Sequences(OsxJitTest *test)
 {
+	uint32 draw0;
+	uint32 draw1;
 	OsxCpu *cpu;
 	uint32 instruction;
 	int iteration;
@@ -602,7 +613,7 @@ static void Sequences(OsxJitTest *test)
 		Reset(test);
 		count = 1 + (int)(Random(test) % 65);
 		for (step = 0; step < 64; step++) {
-			instruction = ((14 + Random(test) % 2) << 26) | (Random(test) & 0x03ffffff);
+			instruction = (draw0 = Random(test), draw1 = Random(test), ((14 + draw0 % 2) << 26) | (draw1 & 0x03ffffff));
 			if ((step & 7) == 0)
 				instruction = (21u << 26) | (Random(test) & 0x03ffffff);
 			Put(test->reference, TESTENTRY + (uint32)step * 4, instruction);
@@ -859,6 +870,8 @@ static void Contexts(OsxJitTest *test)
 
 static void Floating(OsxJitTest *test)
 {
+	uint32 draw0;
+	uint32 draw1;
 	static const uint64 values[] = {
 		0, 0x8000000000000000ULL, 1, 0x8000000000000001ULL,
 		0x0010000000000000ULL, 0x8010000000000000ULL,
@@ -879,8 +892,8 @@ static void Floating(OsxJitTest *test)
 	int index;
 	for (iteration = 0; iteration < 20000; iteration++) {
 		Reset(test);
-		left = ((uint64)Random(test) << 32) | Random(test);
-		right = ((uint64)Random(test) << 32) | Random(test);
+		left = (draw0 = Random(test), draw1 = Random(test), ((uint64)draw0 << 32) | draw1);
+		right = (draw0 = Random(test), draw1 = Random(test), ((uint64)draw0 << 32) | draw1);
 		if (iteration < 4096) {
 			left = values[iteration & 15];
 			right = values[(iteration >> 4) & 15];
@@ -913,7 +926,7 @@ static void Floating(OsxJitTest *test)
 		if ((iteration & 7) == 0)
 			address = TESTDATA + 4095;
 		instruction = (opcode << 26) | (3u << 21) | (4u << 16);
-		left = ((uint64)Random(test) << 32) | Random(test);
+		left = (draw0 = Random(test), draw1 = Random(test), ((uint64)draw0 << 32) | draw1);
 		for (index = 0; index < 2; index++) {
 			if (index == 0)
 				cpu = test->reference;
@@ -957,6 +970,9 @@ static void Floating(OsxJitTest *test)
 
 static void VectorSequences(OsxJitTest *test)
 {
+	uint32 draw0;
+	uint32 draw1;
+	uint32 draw2;
 	static const uint32 kinds[] = {
 		0, 64, 128, 1024, 1088, 1152, 1028, 1092, 1156, 1220, 1284,
 		12, 76, 140, 268, 332, 396, 524, 588, 652, 32, 33, 42, 43, 44, 270
@@ -981,7 +997,7 @@ static void VectorSequences(OsxJitTest *test)
 		}
 		for (step = 0; step < 32; step++) {
 			kind = kinds[Random(test) % (sizeof(kinds) / sizeof(kinds[0]))];
-			instruction = (4u << 26) | ((Random(test) & 31) << 21) | ((Random(test) & 31) << 16) | ((Random(test) & 31) << 11) | kind;
+			instruction = (draw0 = Random(test), draw1 = Random(test), draw2 = Random(test), (4u << 26) | ((draw0 & 31) << 21) | ((draw1 & 31) << 16) | ((draw2 & 31) << 11) | kind);
 			if (kind >= 32 && kind <= 44)
 				instruction |= (Random(test) & 31) << 6;
 			if (step == 16 && (scenario & 1))
@@ -1292,6 +1308,9 @@ static void Mmu970(OsxJitTest *test, Osx970 *core)
 
 static uint32 RandomMemory970(OsxJitTest *test)
 {
+	uint32 draw0;
+	uint32 draw1;
+	uint32 draw2;
 	static const uint32 dform[] = {32, 33, 34, 35, 40, 41, 42, 43, 36, 37, 38, 39, 44, 45};
 	static const uint32 xform[] = {23, 55, 87, 119, 279, 311, 343, 375, 21, 53, 151, 183, 215, 247, 407, 439, 149, 181};
 	uint32 kind;
@@ -1305,23 +1324,26 @@ static uint32 RandomMemory970(OsxJitTest *test)
 	if (kind == 5)
 		return (31u << 26) | (target << 21) | (base << 16) | (25u << 11) | (150u << 1) | 1;
 	if (kind == 6)
-		return ((46u + Random(test) % 2) << 26) | ((24u + Random(test) % 8) << 21) | (base << 16) | ((Random(test) % 128) & ~3u);
+		return (draw0 = Random(test), draw1 = Random(test), draw2 = Random(test), ((46u + draw0 % 2) << 26) | ((24u + draw1 % 8) << 21) | (base << 16) | ((draw2 % 128) & ~3u));
 	if (kind == 7)
 		return (31u << 26) | (target << 21) | (base << 16) | (25u << 11) | ((103u + (Random(test) % 2) * 128u) << 1);
 	if (kind == 8)
 		return (7u << 26) | (target << 21) | (base << 16) | (Random(test) & 0xffff);
 	kind &= 3;
 	if (kind == 0)
-		return (dform[Random(test) % 14] << 26) | (target << 21) | (base << 16) | ((Random(test) % 512) & ~1u);
+		return (draw0 = Random(test), draw1 = Random(test), (dform[draw0 % 14] << 26) | (target << 21) | (base << 16) | ((draw1 % 512) & ~1u));
 	if (kind == 1)
 		return (31u << 26) | (xform[Random(test) % 18] << 1) | (target << 21) | (base << 16) | (24u << 11);
 	if (kind == 2)
-		return (58u << 26) | (target << 21) | (base << 16) | ((Random(test) % 256) & ~3u) | (Random(test) % 3);
-	return (62u << 26) | (target << 21) | (base << 16) | ((Random(test) % 256) & ~3u) | (Random(test) % 2);
+		return (draw0 = Random(test), draw1 = Random(test), (58u << 26) | (target << 21) | (base << 16) | ((draw0 % 256) & ~3u) | (draw1 % 3));
+	return (draw0 = Random(test), draw1 = Random(test), (62u << 26) | (target << 21) | (base << 16) | ((draw0 % 256) & ~3u) | (draw1 % 2));
 }
 
 static void Jit970(OsxJitTest *test, Osx970 *interpreted)
 {
+	uint32 draw0;
+	uint32 draw1;
+	uint32 draw2;
 	static const OsxJitTemplate templates[] = {
 		{14u << 26, 0x01ffffff}, {15u << 26, 0x01ffffff}, {24u << 26, 0x01ffffff}, {25u << 26, 0x01ffffff},
 		{26u << 26, 0x01ffffff}, {27u << 26, 0x01ffffff}, {28u << 26, 0x01ffffff}, {29u << 26, 0x01ffffff},
@@ -1369,17 +1391,17 @@ static void Jit970(OsxJitTest *test, Osx970 *interpreted)
 		for (index = 0; index < 24; index++) {
 			reg = (int)(Random(test) % 12);
 			if (reg == 0 && index < 20)
-				program[index] = (16u << 26) | ((Random(test) % 32) << 21) | ((Random(test) % 32) << 16) | ((1 + Random(test) % (24 - index)) << 2);
+				program[index] = (draw0 = Random(test), draw1 = Random(test), draw2 = Random(test), (16u << 26) | ((draw0 % 32) << 21) | ((draw1 % 32) << 16) | ((1 + draw2 % (24 - index)) << 2));
 			else if (reg == 1 && index > 20)
-				program[index] = (19u << 26) | ((Random(test) % 32) << 21) | ((Random(test) % 32) << 16) | (16u << 1);
+				program[index] = (draw0 = Random(test), draw1 = Random(test), (19u << 26) | ((draw0 % 32) << 21) | ((draw1 % 32) << 16) | (16u << 1));
 			else if (reg == 2 && index > 20 && !smallctr)
-				program[index] = (19u << 26) | ((20u | (Random(test) % 2) * 8) << 21) | ((Random(test) % 32) << 16) | (528u << 1);
+				program[index] = (draw0 = Random(test), draw1 = Random(test), (19u << 26) | ((20u | (draw0 % 2) * 8) << 21) | ((draw1 % 32) << 16) | (528u << 1));
 			else if (reg == 3)
 				program[index] = (31u << 26) | ((Random(test) % 32) << 21) | (19u << 1);
 			else if (reg == 4)
-				program[index] = (31u << 26) | ((Random(test) % 32) << 21) | ((Random(test) & 0xff) << 12) | (144u << 1);
+				program[index] = (draw0 = Random(test), draw1 = Random(test), (31u << 26) | ((draw0 % 32) << 21) | ((draw1 & 0xff) << 12) | (144u << 1));
 			else if (reg == 5)
-				program[index] = (31u << 26) | ((Random(test) % 32) << 21) | ((272u + Random(test) % 4) & 31) << 16 | (((272u + Random(test) % 4) >> 5) << 11) | (339u << 1);
+				program[index] = (draw0 = Random(test), draw1 = Random(test), draw2 = Random(test), (31u << 26) | ((draw0 % 32) << 21) | ((272u + draw1 % 4) & 31) << 16 | (((272u + draw2 % 4) >> 5) << 11) | (339u << 1));
 			else if (Random(test) % 3 == 0)
 				program[index] = RandomMemory970(test);
 			else {
@@ -1406,13 +1428,13 @@ static void Jit970(OsxJitTest *test, Osx970 *interpreted)
 				core->msr |= OSXMSRVEC;
 		}
 		for (reg = 0; reg < 32; reg++) {
-			interpreted->gpr[reg] = ((uint64)Random(test) << 32) | Random(test);
+			interpreted->gpr[reg] = (draw0 = Random(test), draw1 = Random(test), ((uint64)draw0 << 32) | draw1);
 			if (reg >= 20 && reg < 24)
 				interpreted->gpr[reg] = TESTDATA + (uint64)(reg - 20) * 1024;
 			if (reg == 24)
 				interpreted->gpr[reg] = Random(test) % 512;
 			if (reg == 25)
-				interpreted->gpr[reg] = (Random(test) % 128) * 4 + (Random(test) % 8 == 0);
+				interpreted->gpr[reg] = (draw0 = Random(test), draw1 = Random(test), (draw0 % 128) * 4 + (draw1 % 8 == 0));
 			compiled->gpr[reg] = interpreted->gpr[reg];
 		}
 		for (index = 0; index < 32; index++) {
@@ -1433,7 +1455,7 @@ static void Jit970(OsxJitTest *test, Osx970 *interpreted)
 		if (smallctr)
 			interpreted->ctr = 1 + Random(test) % 3;
 		for (reg = 0; reg < 4; reg++) {
-			interpreted->sprg[reg] = ((uint64)Random(test) << 32) | Random(test);
+			interpreted->sprg[reg] = (draw0 = Random(test), draw1 = Random(test), ((uint64)draw0 << 32) | draw1);
 			compiled->sprg[reg] = interpreted->sprg[reg];
 		}
 		compiled->lr = interpreted->lr;
@@ -1450,6 +1472,8 @@ static void Jit970(OsxJitTest *test, Osx970 *interpreted)
 		Osx970InvalidatePhysical(compiled, TESTENTRY, 4096);
 		Osx970Run(interpreted, 24);
 		Osx970Run(compiled, 24);
+		if (compiled->cpu->slice < 0)
+			Osx970Run(interpreted, -compiled->cpu->slice);
 		matches = 1;
 		for (reg = 0; reg < 32; reg++)
 			matches &= interpreted->gpr[reg] == compiled->gpr[reg];

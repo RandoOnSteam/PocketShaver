@@ -19,6 +19,8 @@ extern "C" {
 #define sem_destroy(SEM)			semaphore_destroy(current_task(), *(SEM))
 #define sem_wait(SEM)				semaphore_wait(*(SEM))
 #define sem_post(SEM)				semaphore_signal(*(SEM))
+#elif defined(__linux__)
+#include_next <semaphore.h>
 #else
 typedef struct psem {
 	pthread_mutex_t sem_lock;

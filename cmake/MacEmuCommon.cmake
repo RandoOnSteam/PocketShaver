@@ -269,9 +269,9 @@ function(macemu_find_sdl)
 	if(USE_SDL3)
 		find_package(SDL3 QUIET CONFIG)
 		if(NOT SDL3_FOUND)
-			find_path(SDL3_INCLUDE_DIR SDL.h
+			find_path(SDL3_INCLUDE_DIR SDL3/SDL.h
 				PATHS ENV SDL3DIR
-				PATH_SUFFIXES include include/SDL3)
+				PATH_SUFFIXES include)
 			find_library(SDL3_LIBRARY
 				NAMES SDL3 SDL3-static
 				PATHS ENV SDL3DIR
@@ -287,7 +287,7 @@ function(macemu_find_sdl)
 				message(STATUS "SDL3 find_path found")
 				message(STATUS "SDL3_INCLUDE_DIR: ${SDL3_INCLUDE_DIR}")
 				if(EXISTS "${SDL3_INCLUDE_DIR}/SDL3")
-					set(SDL2_INCLUDE_DIR "${SDL3_INCLUDE_DIR}/SDL3" PARENT_SCOPE)
+					set(SDL2_INCLUDE_DIR "${SDL3_INCLUDE_DIR};${SDL3_INCLUDE_DIR}/SDL3" PARENT_SCOPE)
 					message(STATUS "SDL3 new style include path")
 				else()
 					set(SDL2_INCLUDE_DIR "${SDL3_INCLUDE_DIR}" PARENT_SCOPE)

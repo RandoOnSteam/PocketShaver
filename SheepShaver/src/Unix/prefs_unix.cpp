@@ -58,6 +58,20 @@ static char prefs_path[1024];
 
 std::string UserPrefsPath;
 
+#ifdef __linux__
+extern std::string xpram_name;
+
+static void SetXPRAMName(void)
+{
+	std::string path = prefs_path;
+	std::string::size_type slash = path.rfind('/');
+	if (slash == std::string::npos)
+		xpram_name = ".sheepshaver_nvram";
+	else
+		xpram_name = path.substr(0, slash + 1) + ".sheepshaver_nvram";
+}
+#endif
+
 /*
  *  Load preferences from settings file
  */
@@ -66,6 +80,9 @@ void LoadPrefs(const char *vmdir)
 {
 	if (vmdir) {
 		snprintf(prefs_path, sizeof(prefs_path), "%s/prefs", vmdir);
+#ifdef __linux__
+		SetXPRAMName();
+#endif
 		FILE *prefs = fopen(prefs_path, "r");
 		if (!prefs) {
 			printf("No file at %s found.\n", prefs_path);
@@ -92,6 +109,9 @@ void LoadPrefs(const char *vmdir)
 		strcat(prefs_path, PREFS_FILE_NAME);
 		printf("Looking for prefs_path: %s\n", prefs_path);
 	}
+#ifdef __linux__
+	SetXPRAMName();
+#endif
 
 	// Read preferences from settings file
 	FILE *f = fopen(prefs_path, "r");
