@@ -387,7 +387,7 @@ int16 DiskOpen(uint32 pb, uint32 dce)
 	drive_vec::iterator info, end = drives.end();
 	for (info = drives.begin(); info != end; ++info) {
 
-		info->num = FindFreeDriveNumber(1);
+		info->num = FindFreeDriveNumber(DiskFirstDrive);
 		info->to_be_mounted = false;
 
 		if (info->fh) {
@@ -594,11 +594,7 @@ int16 DiskControl(uint32 pb, uint32 dce)
 			return noErr;
 
 		case 23:	// Get drive info
-			if (ReadMacInt8(info->status + dsDiskInPlace) == 8)
-				WriteMacInt32(pb + csParam, 0x0601);	// Unspecified fixed SCSI disk
-			else
-				WriteMacInt32(pb + csParam, 0x0201);	// Unspecified SCSI disk
-			return noErr;
+			return controlErr;
 
 		case 24:	// Get partition size
 			if (ReadMacInt8(info->status + dsDiskInPlace) > 0) {

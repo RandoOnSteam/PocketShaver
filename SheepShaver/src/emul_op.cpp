@@ -49,6 +49,7 @@
 #include "name_registry.h"
 #include "user_strings.h"
 #include "emul_op.h"
+#include "soundinput.h"
 #include "thunks.h"
 
 #define DEBUG 0
@@ -235,6 +236,7 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 
 		case OP_AUDIO_DISPATCH:		// Audio component functions
 			r->d[0] = AudioDispatch(r->a[3], r->a[4]);
+			SoundInputInstall();
 			break;
 
 		case OP_SOUNDIN_OPEN:		// Sound input driver functions
@@ -249,8 +251,8 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 		case OP_SOUNDIN_STATUS:
 			r->d[0] = SoundInStatus(r->a[0], r->a[1]);
 			break;
-		case OP_SOUNDIN_CLOSE:
-			r->d[0] = SoundInClose(r->a[0], r->a[1]);
+		case OP_SOUNDIN_SPB:
+			SoundInputDispatch(r);
 			break;
 #ifdef ENABLE_JOYMANAGER
 		case OP_JOY_OPEN:
@@ -360,6 +362,7 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 			EtherResetCachedAllocation();
 			ether_reset();
 			AudioReset();
+			SoundInputReset();
 #if (defined(ENABLE_GFXACCEL) && defined(SHEEPSHAVER)) || TARGET_OS_IPHONE
 			GfxAccelResetForReboot();
 #endif
@@ -590,7 +593,8 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 			}
 			break;
 
-		case OP_GESTALT_VM:		// _Gestalt head-patch: report VM present to selected apps
+		case OP_GESTALT_VM: {	// _Gestalt head-patch: report VM present to selected apps
+			uint32 response;
 			// Some apps check Gestalt('vm  ') (gestaltVMAttr) and refuse to run when
 			// virtual memory is off, but SheepShaver has no MMU so VM is always off.
 			// For those apps (matched by current-app name) return a synthesized "VM
@@ -603,10 +607,15 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 				r->a[0] = 0x00000001;			// gestaltVMPresent
 				r->d[0] = 0;					// noErr
 				r->a[1] = GestaltRtsStub();		// jmp (a1) -> the thunk's rts
+			} else if (SoundInputGestalt(r->d[1], r->d[0], &response)) {
+				r->a[0] = response;
+				r->d[0] = 0;
+				r->a[1] = GestaltRtsStub();
 			} else {
 				r->a[1] = GestaltHookOrig();	// chain to stock _Gestalt (only A1 touched)
 			}
 			break;
+		}
 
 		case OP_PRGLUE:
 			PrintGlue(r);

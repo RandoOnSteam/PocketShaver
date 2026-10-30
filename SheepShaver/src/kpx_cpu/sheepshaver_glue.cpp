@@ -4047,7 +4047,8 @@ void sheepshaver_cpu::execute_native_op(uint32 selector)
 			break;
 	#endif
 	}
-	case NATIVE_CINEPAK_DISPATCH: {
+	case NATIVE_CINEPAK_DISPATCH:
+	case NATIVE_SVQ1_DISPATCH: {
 	#if !(defined(ENABLE_GFXACCEL) && defined(SHEEPSHAVER)) \
 			&& (!defined(TARGET_OS_IPHONE) || !TARGET_OS_IPHONE)
 			gpr(3) = (uint32)-50; /* paramErr */
@@ -4060,7 +4061,7 @@ void sheepshaver_cpu::execute_native_op(uint32 selector)
 			uint32 saved_sp = gpr(1);
 			uint32 saved_r2 = gpr(2);
 
-			gpr(3) = CinepakDispatch(gpr(3));
+			gpr(3) = CinepakDispatch(gpr(3), selector == NATIVE_SVQ1_DISPATCH);
 
 			if (lr() != saved_lr) { lr() = saved_lr; }
 			if (ctr() != saved_ctr) { ctr() = saved_ctr; }

@@ -151,6 +151,7 @@ uint32 NativeOpcode(int selector)
 #if defined(ENABLE_NATIVE_CINEPAK_PATCH) \
 		&& ENABLE_NATIVE_CINEPAK_PATCH
 	case NATIVE_CINEPAK_DISPATCH:
+	case NATIVE_SVQ1_DISPATCH:
 		// FN=0: executed from the generic [opcode; blr] thunk, so fall
 		// through to the blr like the other dispatch selectors.
 		opcode = POWERPC_NATIVE_OP(0, selector);

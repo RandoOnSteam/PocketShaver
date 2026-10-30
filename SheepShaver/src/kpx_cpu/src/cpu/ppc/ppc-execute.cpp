@@ -2236,9 +2236,10 @@ void powerpc_cpu::execute_vector_arith_odd(uint32 opcode)
 
 template< class VD, class VA, class VB, int LO >
 void powerpc_cpu::execute_vector_merge(uint32 opcode)
-{
-	typename VA::type const & vA = VA::const_ref(this, opcode);
-	typename VB::type const & vB = VB::const_ref(this, opcode);
+{ /* Note: removing the & on vA/vB fixes an aliasing bug on Mac OS 9.1+ 
+		QuickDraw where text has dark cores and fringes */
+	typename VA::type const vA = VA::const_ref(this, opcode);
+	typename VB::type const vB = VB::const_ref(this, opcode);
 	typename VD::type & vD = VD::ref(this, opcode);
 	const int n_elements = 16 / VD::element_size;
 
@@ -2270,8 +2271,8 @@ void powerpc_cpu::execute_vector_merge(uint32 opcode)
 template< class VD, class VA, class VB >
 void powerpc_cpu::execute_vector_pack(uint32 opcode)
 {
-	typename VA::type const & vA = VA::const_ref(this, opcode);
-	typename VB::type const & vB = VB::const_ref(this, opcode);
+	typename VA::type const vA = VA::const_ref(this, opcode);
+	typename VB::type const vB = VB::const_ref(this, opcode);
 	typename VD::type & vD = VD::ref(this, opcode);
 	const int n_elements = 16 / VD::element_size;
 	const int n_pivot = n_elements / 2;
@@ -2297,7 +2298,7 @@ void powerpc_cpu::execute_vector_pack(uint32 opcode)
 template< int LO, class VD, class VA >
 void powerpc_cpu::execute_vector_unpack(uint32 opcode)
 {
-	typename VA::type const & vA = VA::const_ref(this, opcode);
+	typename VA::type const vA = VA::const_ref(this, opcode);
 	typename VD::type & vD = VD::ref(this, opcode);
 	const int n_elements = 16 / VD::element_size;
 
@@ -2313,8 +2314,8 @@ void powerpc_cpu::execute_vector_unpack(uint32 opcode)
 
 void powerpc_cpu::execute_vector_pack_pixel(uint32 opcode)
 {
-	powerpc_vr const & vA = vr(vA_field::extract(opcode));
-	powerpc_vr const & vB = vr(vB_field::extract(opcode));
+	powerpc_vr const vA = vr(vA_field::extract(opcode));
+	powerpc_vr const vB = vr(vB_field::extract(opcode));
 	powerpc_vr & vD = vr(vD_field::extract(opcode));
 
 	// Temp dest: guard against in-place vD (==vA or ==vB).
@@ -2333,7 +2334,7 @@ void powerpc_cpu::execute_vector_pack_pixel(uint32 opcode)
 template< int LO >
 void powerpc_cpu::execute_vector_unpack_pixel(uint32 opcode)
 {
-	powerpc_vr const & vB = vr(vB_field::extract(opcode));
+	powerpc_vr const vB = vr(vB_field::extract(opcode));
 	powerpc_vr & vD = vr(vD_field::extract(opcode));
 
 	// Temp dest: guard against in-place vD (==vB).
@@ -2365,8 +2366,8 @@ void powerpc_cpu::execute_vector_unpack_pixel(uint32 opcode)
 template< int SD >
 void powerpc_cpu::execute_vector_shift(uint32 opcode)
 {
-	powerpc_vr const & vA = vr(vA_field::extract(opcode));
-	powerpc_vr const & vB = vr(vB_field::extract(opcode));
+	powerpc_vr const vA = vr(vA_field::extract(opcode));
+	powerpc_vr const vB = vr(vB_field::extract(opcode));
 	powerpc_vr & vD = vr(vD_field::extract(opcode));
 
 	// The contents of the low-order three bits of all byte
@@ -2401,8 +2402,8 @@ void powerpc_cpu::execute_vector_shift(uint32 opcode)
 template< int SD, class VD, class VA, class VB, class SH >
 void powerpc_cpu::execute_vector_shift_octet(uint32 opcode)
 {
-	typename VA::type const & vA = VA::const_ref(this, opcode);
-	typename VB::type const & vB = VB::const_ref(this, opcode);
+	typename VA::type const vA = VA::const_ref(this, opcode);
+	typename VB::type const vB = VB::const_ref(this, opcode);
 	typename VD::type & vD = VD::ref(this, opcode);
 
 	const int sh = SH::get(this, opcode);
@@ -2469,8 +2470,8 @@ void powerpc_cpu::execute_vector_splat(uint32 opcode)
 template< int SZ, class VD, class VA, class VB >
 void powerpc_cpu::execute_vector_sum(uint32 opcode)
 {
-	typename VA::type const & vA = VA::const_ref(this, opcode);
-	typename VB::type const & vB = VB::const_ref(this, opcode);
+	typename VA::type const vA = VA::const_ref(this, opcode);
+	typename VB::type const vB = VB::const_ref(this, opcode);
 	typename VD::type & vD = VD::ref(this, opcode);
 	typename VD::element_type d;
 
@@ -2521,9 +2522,9 @@ void powerpc_cpu::execute_vector_sum(uint32 opcode)
 
 void powerpc_cpu::execute_vector_permute(uint32 opcode)
 {
-	powerpc_vr const & vA = vr(vA_field::extract(opcode));
-	powerpc_vr const & vB = vr(vB_field::extract(opcode));
-	powerpc_vr const & vC = vr(vC_field::extract(opcode));
+	powerpc_vr const vA = vr(vA_field::extract(opcode));
+	powerpc_vr const vB = vr(vB_field::extract(opcode));
+	powerpc_vr const vC = vr(vC_field::extract(opcode));
 	powerpc_vr & vD = vr(vD_field::extract(opcode));
 
 	for (int i = 0; i < 16; i++) {

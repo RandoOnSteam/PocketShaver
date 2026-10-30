@@ -870,6 +870,9 @@ static SDL_Surface *init_sdl_video(int width, int height, int depth, Uint32 flag
 			return NULL;
 		}
 		set_window_name();
+#ifdef __MACOSX__
+		disable_SDL2_macosx_menu_bar_keyboard_shortcuts();
+#endif
 	}
 	// Confining the host pointer to the window (SDL_SetWindowGrab) is for desktop
 	// fullscreen. On iOS/Mac Catalyst it is actively harmful: SDL re-applies the
@@ -2079,6 +2082,7 @@ void VideoExit(void)
 #if (defined(ENABLE_GFXACCEL) && defined(SHEEPSHAVER)) || TARGET_OS_IPHONE
 	dmc_shutdown();
 #endif
+	delete_sdl_video_window();
 
 	// Destroy locks
 	if (frame_buffer_lock)

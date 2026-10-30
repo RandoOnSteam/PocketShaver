@@ -109,6 +109,9 @@ set(SS_SHARED
 	"${B2_SRC}/audio.cpp"
 	"${B2_SRC}/cdrom.cpp"
 	"${B2_SRC}/disk.cpp"
+	"${B2_SRC}/qcow.cpp"
+	"${B2_SRC}/chd.cpp"
+	"${B2_SRC}/imageio.cpp"
 	"${B2_SRC}/extfs.cpp"
 	"${B2_SRC}/prefs.cpp"
 	"${B2_SRC}/scsi.cpp"
@@ -134,6 +137,7 @@ set(SS_CORE
 	"${SS_SRC}/rom_patches.cpp"
 	"${SS_SRC}/rsrc_patches.cpp"
 	"${SS_SRC}/emul_op.cpp"
+	"${SS_SRC}/soundinput.cpp"
 	"${B2_SRC}/joymanager.cpp"
 	"${SS_SRC}/name_registry.cpp"
 	"${SS_SRC}/usbhid.cpp"
@@ -383,6 +387,7 @@ if(ENABLE_GFXACCEL)
 		list(APPEND SS_GFXACCEL
 		"${SS_GFXACCEL_DIR}/cinepak_decoder.cpp"
 		"${SS_GFXACCEL_DIR}/cinepak_hooks.cpp"
+		"${SS_GFXACCEL_DIR}/svq1_decoder.cpp"
 		)
 	endif()
 	# Resolve backend. Explicit metal matches PocketShaver.xcodeproj
@@ -562,6 +567,20 @@ if(CMAKE_SIZEOF_VOID_P EQUAL 8 AND ENABLE_OSX_GUEST_TESTS AND (WIN32 OR CMAKE_SY
 		target_compile_definitions(OsxJitTest PRIVATE __STDC__ __WIN32__ _CRT_SECURE_NO_WARNINGS)
 	endif()
 	add_test(NAME OsxJitTest COMMAND OsxJitTest)
+	add_executable(QcowTest "${SS_SRC}/../../tools/tests/qcowtest.cpp" "${B2_SRC}/qcow.cpp" "${B2_SRC}/chd.cpp" "${B2_SRC}/imageio.cpp")
+	target_include_directories(QcowTest PRIVATE
+		${SS_PLATFORM_INC} "${SS_SRC}/include" "${B2_SRC}/include" "${B2_SRC}/CrossPlatform")
+	if(MSVC)
+		target_compile_options(QcowTest PRIVATE /Zc:__STDC__ /FImalloc.h)
+		target_compile_definitions(QcowTest PRIVATE __STDC__ __WIN32__ _CRT_SECURE_NO_WARNINGS)
+	endif()
+	add_executable(Svq1Test "${SS_SRC}/../../tools/tests/svq1test.cpp" "${SS_SRC}/gfxaccel/svq1_decoder.cpp")
+	target_include_directories(Svq1Test PRIVATE
+		${SS_PLATFORM_INC} "${SS_SRC}/include" "${SS_SRC}/gfxaccel" "${B2_SRC}/include" "${B2_SRC}/CrossPlatform")
+	if(MSVC)
+		target_compile_options(Svq1Test PRIVATE /Zc:__STDC__ /FImalloc.h)
+		target_compile_definitions(Svq1Test PRIVATE __STDC__ __WIN32__ _CRT_SECURE_NO_WARNINGS)
+	endif()
 	add_executable(OsxInputTest "${SS_SRC}/../../tools/tests/osxinput.cpp"
 		"${SS_SRC}/osxguest/osxpointer.cpp"
 		"${SS_SRC}/osxguest/osxcpu.cpp"

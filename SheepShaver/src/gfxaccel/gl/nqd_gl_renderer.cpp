@@ -669,6 +669,70 @@ void NQDMetalBitblt(uint32 p)
 	}
 }
 
+#define NQDPATTERNMAXTILE 256
+
+typedef struct NqdPattern {
+	const uint8 *data;
+	uint32 row;
+	uint32 vmask;
+	uint32 hpos;
+	uint32 vpos;
+} NqdPattern;
+
+static bool NqdReadPattern(uint32 p, NqdPattern *pattern)
+{
+	uint32 address;
+	uint32 bytes;
+	if (ReadMacInt32(p + NQD_acclSolidPattern) != 0 || ReadMacInt32(p + NQD_acclTransferMode) != 8 ||
+		ReadMacInt32(p + NQD_acclDestPixelSize) != 32)
+		return false;
+	if (ReadMacInt32(p + NQD_acclPenMode) != 8 && ReadMacInt32(p + NQD_acclPenMode) != 12)
+		return false;
+	address = ReadMacInt32(p + NQD_acclPatternAddr);
+	pattern->row = ReadMacInt32(p + NQD_acclPatternRow);
+	pattern->vmask = ReadMacInt32(p + NQD_acclPatternVMask);
+	pattern->hpos = ReadMacInt32(p + NQD_acclPatternHPos);
+	pattern->vpos = ReadMacInt32(p + NQD_acclPatternVPos);
+	bytes = pattern->vmask + 4;
+	if (pattern->row < 4 || pattern->row > NQDPATTERNMAXTILE * 4 || (pattern->row & (pattern->row - 1)) != 0 ||
+		ReadMacInt32(p + NQD_acclPatternHMask) != pattern->row - 4)
+		return false;
+	if (bytes < pattern->row || bytes > pattern->row * NQDPATTERNMAXTILE || (bytes & (bytes - 1)) != 0)
+		return false;
+	if ((pattern->hpos & 3) != 0 || pattern->hpos >= pattern->row || (pattern->vpos & (pattern->row - 1)) != 0 ||
+		pattern->vpos >= bytes)
+		return false;
+	if ((address & 3) != 0 || !nqd_range_in_buffer(address, bytes))
+		return false;
+	pattern->data = host_ptr(address);
+	return true;
+}
+
+bool NQDPatternFillAccepted(uint32 p)
+{
+	NqdPattern pattern;
+	return NqdReadPattern(p, &pattern);
+}
+
+static void NqdPatternOrigin(uint32 p, int dx, int dy, int *originx, int *originy)
+{
+	*originx = dx - ((int16)ReadMacInt16(p + NQD_acclDestRect + 2) - (int16)ReadMacInt16(p + NQD_acclDestBoundsRect + 2));
+	*originy = dy - ((int16)ReadMacInt16(p + NQD_acclDestRect + 0) - (int16)ReadMacInt16(p + NQD_acclDestBoundsRect + 0));
+}
+
+static void NqdPatternRow(const NqdPattern *pattern, int originx, int originy, int y, int width, const uint8 *mask, uint8 *target)
+{
+	const uint8 *source;
+	uint32 offset;
+	int x;
+	source = pattern->data + ((pattern->vpos + (uint32)(y + originy) * pattern->row) & pattern->vmask);
+	offset = pattern->hpos + (uint32)originx * 4;
+	for (x = 0; x < width; x++) {
+		if (mask == NULL || mask[x])
+			std::memcpy(target + (size_t)x * 4, source + ((offset + (uint32)x * 4) & (pattern->row - 4)), 4);
+	}
+}
+
 void NQDMetalFillRect(uint32 p)
 {
 	if (!nqd_metal_available) return;
@@ -699,6 +763,15 @@ void NQDMetalFillRect(uint32 p)
 	const uint32 pen = (pen_mode == 8) ? fore_pen : back_pen;
 	uint8 *dst = host_ptr(db) + (size_t)dy * drb + dst_x_bytes;
 	int pb = dps < 8 ? 1 : bpp;
+	NqdPattern pattern;
+	if (NqdReadPattern(p, &pattern)) {
+		int originx;
+		int originy;
+		NqdPatternOrigin(p, dx, dy, &originx, &originy);
+		for (int y = 0; y < h; y++)
+			NqdPatternRow(&pattern, originx, originy, y, w, NULL, dst + (size_t)y * drb);
+		return;
+	}
 	/* Arithmetic / hilite pen modes on standard depths */
 	if (((mode >= 32 && mode <= 39) || mode == 50) && dps >= 8) {
 		uint32 hilite = (mode == 50) ? nqd_pack_hilite_color(pb) : 0;
@@ -1059,6 +1132,15 @@ void NQDMetalFillMask(uint32 p)
 	const uint32 back_pen = ReadMacInt32(p + NQD_acclBackPen);
 	const uint32 pen = (pen_mode == 8) ? fore_pen : back_pen;
 	uint8 *dst = host_ptr(db) + (size_t)dy * drb + dst_x_bytes;
+	NqdPattern pattern;
+	if (NqdReadPattern(p, &pattern)) {
+		int originx;
+		int originy;
+		NqdPatternOrigin(p, dx, dy, &originx, &originy);
+		for (int y = 0; y < h; y++)
+			NqdPatternRow(&pattern, originx, originy, y, w, vec_data(mask) + (size_t)y * mask_stride, dst + (size_t)y * drb);
+		return;
+	}
 
 	/* Arithmetic 32-39 / hilite 50 through the mask (standard depths). */
 	if (((mode >= 32 && mode <= 39) || mode == 50) && pixel_cols) {

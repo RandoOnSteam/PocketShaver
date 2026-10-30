@@ -23,12 +23,17 @@
 #include "osxmachine.h"
 #include "osxguest.h"
 #include "xpram.h"
+#include "disk.h"
+#include "rom_patches.h"
 
 #define HFSFOLDERRECORD 1
 #define HFSFILERECORD 2
 #define HFSROOTFOLDER 2
 #define HFSMAXEXTENTS 512
 #define HFSMAXNAME 255
+#define ROMSCANCHUNK (1024 * 1024)
+#define ROMSCANHEADER (128 * 1024)
+#define ROMSCANLIMIT (8 * 1024 * 1024)
 #define BOOTPAGE 4096
 #define BOOTMAXRANGES 64
 #define BOOTARGSSIZE 0x200
@@ -561,8 +566,10 @@ int OsxSelectBootImage(int *diskindex, int *partition)
 	if (bootdriver == 0)
 		bootdriver = (int16)(((uint16)XPRAM[0x137a] << 8) | XPRAM[0x137b]);
 	if (wantclassic || device[0] == 0) {
-		if (bootdrive > 0 && (bootdriver == 0 || bootdriver == -63)) {
+		if (bootdrive > 0 && (bootdriver == 0 || bootdriver == DiskRefNum)) {
 			wantedindex = bootdrive - 1;
+			if (bootdrive >= DiskFirstDrive)
+				wantedindex = bootdrive - DiskFirstDrive;
 			wantclassic = 1;
 		} else if (bootdriver == -62) {
 			wantedindex = -1;
@@ -662,13 +669,10 @@ static int LookupPath(OsxHfsVolume *volume, const char *path, uint8 *record)
 	return 1;
 }
 
-static uint8 *ReadFile(OsxHfsVolume *volume, const char *path, uint32 *size)
+static uint8 *ReadRecord(OsxHfsVolume *volume, const uint8 *record, uint32 *size)
 {
-	uint8 record[248];
 	OsxHfsFork *fork;
 	uint8 *data;
-	if (!LookupPath(volume, path, record) || Big16(record) != HFSFILERECORD)
-		return NULL;
 	fork = (OsxHfsFork *)malloc(sizeof(OsxHfsFork));
 	ParseFork(record + 88, Big32(record + 8), 0, fork);
 	CompleteFork(volume, fork);
@@ -682,6 +686,99 @@ static uint8 *ReadFile(OsxHfsVolume *volume, const char *path, uint32 *size)
 	*size = (uint32)fork->logical;
 	free(fork);
 	return data;
+}
+
+static uint8 *ReadFile(OsxHfsVolume *volume, const char *path, uint32 *size)
+{
+	uint8 record[248];
+	if (!LookupPath(volume, path, record) || Big16(record) != HFSFILERECORD)
+		return NULL;
+	return ReadRecord(volume, record, size);
+}
+
+static uint8 *ScanForRom(void *file, uint32 *size)
+{
+	uint8 *chunk;
+	uint8 *rom;
+	loff_t position;
+	loff_t total;
+	uint32 got;
+	uint32 offset;
+	uint32 imageoffset;
+	uint32 imagesize;
+	chunk = (uint8 *)malloc(ROMSCANCHUNK);
+	rom = (uint8 *)malloc(ROMSCANLIMIT + 1);
+	total = SysGetFileSize(file);
+	for (position = 0; chunk && rom && position < total; position += ROMSCANCHUNK) {
+		got = (uint32)Sys_read(file, chunk, position, ROMSCANCHUNK);
+		for (offset = 0; offset + 11 <= got; offset += 512) {
+			if (memcmp(chunk + offset, "<CHRP-BOOT>", 11) != 0)
+				continue;
+			rom[Sys_read(file, rom, position + offset, ROMSCANHEADER)] = 0;
+			if (!FindChrpPayload(rom, &imageoffset, &imagesize) || imageoffset + imagesize > ROMSCANLIMIT)
+				continue;
+			*size = (uint32)Sys_read(file, rom, position + offset, imageoffset + imagesize);
+			if (*size == imageoffset + imagesize) {
+				free(chunk);
+				return rom;
+			}
+		}
+	}
+	free(chunk);
+	free(rom);
+	return NULL;
+}
+
+static const char *BootImagePath(int diskindex)
+{
+	const char *path;
+	int index;
+	int used;
+	int partition;
+	int attached;
+	if (diskindex < 0)
+		return PrefsFindString("cdrom", -1 - diskindex);
+	used = 0;
+	for (index = 0; (path = PrefsFindString("disk", index)) != NULL; index++) {
+		partition = -1;
+		ProbeBootImage(path, &partition, &attached);
+		if (attached && used == diskindex)
+			return path;
+		if (attached)
+			used++;
+	}
+	return NULL;
+}
+
+uint8 *OsxReadClassicRom(uint32 *size)
+{
+	OsxHfsVolume volume;
+	uint8 block[512];
+	uint8 record[248];
+	const char *path;
+	void *file;
+	uint8 *rom;
+	int diskindex;
+	int partition;
+	if (!(OsxSelectBootImage(&diskindex, &partition) & OSXBOOTCLASSIC))
+		return NULL;
+	path = BootImagePath(diskindex);
+	if (path == NULL)
+		return NULL;
+	if (path[0] == '*')
+		path++;
+	file = Sys_open(path, true, false);
+	if (file == NULL)
+		return NULL;
+	rom = NULL;
+	if (OpenVolume(&volume, file, partition) && ReadVolume(&volume, 1024, block, 512) &&
+		FindCatalogRecord(&volume, Big32(block + 80), "Mac OS ROM", record) && Big16(record) == HFSFILERECORD)
+		rom = ReadRecord(&volume, record, size);
+	if (rom == NULL)
+		rom = ScanForRom(file, size);
+	CloseVolume(&volume);
+	Sys_close(file);
+	return rom;
 }
 
 static int ThinPowerPC(uint8 *data, uint32 *size)

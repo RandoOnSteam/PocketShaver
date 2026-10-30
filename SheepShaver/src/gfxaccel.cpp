@@ -408,6 +408,13 @@ bool NQD_fillrect_hook(uint32 p)
 		}
 	}
 
+#if defined(GFXACCEL_USE_OPENGL)
+	if (nqd_metal_available && NQDMetalAddrInBuffer(ReadMacInt32(p + acclDestBaseAddr)) && NQDPatternFillAccepted(p)) {
+		WriteMacInt32(p + acclDrawProc, NativeTVECT(NATIVE_NQD_FILLRECT));
+		return true;
+	}
+#endif
+
 	// CPU fallback: original checks with pixel size >= 8 restriction
 	if (ReadMacInt32(p + 0x284) != 0 && ReadMacInt32(p + acclDestPixelSize) >= 8) {
 		const int transfer_mode = ReadMacInt32(p + acclTransferMode);
@@ -677,6 +684,12 @@ bool NQD_fillmask_hook(uint32 arg)
 
 	// Check 0x284 field (same as fillrect_hook)
 	if (ReadMacInt32(arg + 0x284) == 0) {
+#if defined(GFXACCEL_USE_OPENGL)
+		if (NQDPatternFillAccepted(arg)) {
+			WriteMacInt32(arg + acclDrawProc, NativeTVECT(NATIVE_NQD_FILLMASK));
+			return true;
+		}
+#endif
 		return NQD_decline_with_flush(arg);
 	}
 	if (!NQD_dest_rect_byte_aligned_for_depth(arg, ReadMacInt32(arg + acclDestPixelSize))) {

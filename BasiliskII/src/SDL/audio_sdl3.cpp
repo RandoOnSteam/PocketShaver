@@ -555,4 +555,46 @@ void PlayStartupSound() {
 	startup_thread = SDL_CreateThread(play_startup, "play_startup", NULL);
 }
 
+void *AudioCaptureOpen(int rate, int bits, int channels, int twos)
+{
+	SDL_AudioSpec spec;
+	SDL_AudioStream *stream;
+	if (!SDL_InitSubSystem(SDL_INIT_AUDIO))
+		return NULL;
+	spec.freq = rate;
+	spec.channels = channels;
+	spec.format = SDL_AUDIO_S16BE;
+	if (bits == 8)
+		spec.format = SDL_AUDIO_U8;
+	if (bits == 8 && twos)
+		spec.format = SDL_AUDIO_S8;
+	stream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_RECORDING, &spec, NULL, NULL);
+	if (stream == NULL) {
+		SDL_QuitSubSystem(SDL_INIT_AUDIO);
+		return NULL;
+	}
+	SDL_ResumeAudioStreamDevice(stream);
+	return stream;
+}
+
+uint32 AudioCaptureRead(void *capture, uint8 *buffer, uint32 bytes)
+{
+	int got;
+	got = SDL_GetAudioStreamData((SDL_AudioStream *)capture, buffer, (int)bytes);
+	if (got < 0)
+		return 0;
+	return (uint32)got;
+}
+
+void AudioCaptureClear(void *capture)
+{
+	SDL_ClearAudioStream((SDL_AudioStream *)capture);
+}
+
+void AudioCaptureClose(void *capture)
+{
+	SDL_DestroyAudioStream((SDL_AudioStream *)capture);
+	SDL_QuitSubSystem(SDL_INIT_AUDIO);
+}
+
 #endif	// SDL_VERSION_ATLEAST

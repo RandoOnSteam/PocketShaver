@@ -42,6 +42,13 @@ enum {
     NQD_acclMaskBits       = 0x018,   // mask-related field (flags/indicator)
     NQD_acclMaskAddr       = 0x128,   // mask region pointer
     NQD_acclMaskExtra      = 0x130,   // additional mask field
+    NQD_acclSolidPattern   = 0x284,
+    NQD_acclPatternAddr    = 0x294,
+    NQD_acclPatternRow     = 0x298,
+    NQD_acclPatternHMask   = 0x29c,
+    NQD_acclPatternVMask   = 0x2a0,
+    NQD_acclPatternHPos    = 0x2a4,
+    NQD_acclPatternVPos    = 0x2a8,
 };
 
 // Metal compute acceleration state
@@ -71,6 +78,9 @@ extern void NQDMetalFillRect(uint32 p);
 extern void NQDMetalInvertRect(uint32 p);
 extern void NQDMetalBltMask(uint32 p);
 extern void NQDMetalFillMask(uint32 p);
+#if defined(GFXACCEL_USE_OPENGL)
+extern bool NQDPatternFillAccepted(uint32 p);
+#endif
 
 // Check if a Mac address is within the Metal-mapped RAM region.
 // Used by callers to decide whether Metal acceleration is safe.

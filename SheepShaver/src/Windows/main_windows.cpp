@@ -413,7 +413,7 @@ static bool ClassicStart(bool firstsession)
 	HANDLE rom_fh;
 	const char *rom_path;
 	uint32 rom_size;
-	DWORD actual;
+	uint32 actual;
 	uint8 *rom_tmp;
 	if (!ClassicMemoryInit())
 		return false;
@@ -449,24 +449,28 @@ static bool ClassicStart(bool firstsession)
 						GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
 						FILE_ATTRIBUTE_NORMAL, NULL);
 
-	if (rom_fh == INVALID_HANDLE_VALUE) {
+	if (rom_fh == INVALID_HANDLE_VALUE)
 		rom_fh = CreateFile(ROM_FILE_NAME2,
 							GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
 							FILE_ATTRIBUTE_NORMAL, NULL);
-
-		if (rom_fh == INVALID_HANDLE_VALUE) {
-			ErrorAlert(GetString(STR_NO_ROM_FILE_ERR));
-			return false;
-		}
+	if (rom_fh == INVALID_HANDLE_VALUE) {
+		rom_tmp = OsxReadClassicRom(&actual);
+		rom_size = actual;
+	} else {
+		printf(GetString(STR_READING_ROM_FILE));
+		rom_size = GetFileSize(rom_fh, NULL);
+		rom_tmp = (uint8 *)malloc(ROM_SIZE);
+		ReadFile(rom_fh, (void *)rom_tmp, ROM_SIZE, (LPDWORD)&actual, NULL);
+		CloseHandle(rom_fh);
 	}
-	printf(GetString(STR_READING_ROM_FILE));
-	rom_size = GetFileSize(rom_fh, NULL);
-	rom_tmp = new uint8[ROM_SIZE];
-	ReadFile(rom_fh, (void *)rom_tmp, ROM_SIZE, &actual, NULL);
-	CloseHandle(rom_fh);
+	if (rom_tmp == NULL) {
+		ErrorAlert(GetString(STR_NO_ROM_FILE_ERR));
+		return false;
+	}
 
 	// Decode Mac ROM
 	if (!DecodeROM(rom_tmp, actual)) {
+		free(rom_tmp);
 		if (rom_size != 4*1024*1024) {
 			ErrorAlert(GetString(STR_ROM_SIZE_ERR));
 			return false;
@@ -475,7 +479,7 @@ static bool ClassicStart(bool firstsession)
 			return false;
 		}
 	}
-	delete[] rom_tmp;
+	free(rom_tmp);
 
 	// Initialize native timers
 	timer_init();

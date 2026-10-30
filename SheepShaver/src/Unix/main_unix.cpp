@@ -637,22 +637,26 @@ static bool load_mac_rom(void)
 	rom_path = objc_romPath();
 #endif
 	int rom_fd = open(rom_path && *rom_path ? rom_path : ROM_FILE_NAME, O_RDONLY);
-	if (rom_fd < 0) {
+	if (rom_fd < 0)
 		rom_fd = open(ROM_FILE_NAME2, O_RDONLY);
-		if (rom_fd < 0) {
-			ErrorAlert(GetString(STR_NO_ROM_FILE_ERR));
-			return false;
-		}
+	if (rom_fd < 0) {
+		rom_tmp = OsxReadClassicRom(&actual);
+		rom_size = actual;
+	} else {
+		printf("%s", GetString(STR_READING_ROM_FILE));
+		rom_size = SysGetDescriptorSize(rom_fd);
+		rom_tmp = (uint8 *)malloc(ROM_SIZE);
+		actual = read(rom_fd, (void *)rom_tmp, ROM_SIZE);
+		close(rom_fd);
 	}
-	
-	printf("%s", GetString(STR_READING_ROM_FILE));
-	rom_size = SysGetDescriptorSize(rom_fd);
-	rom_tmp = new uint8[ROM_SIZE];
-	actual = read(rom_fd, (void *)rom_tmp, ROM_SIZE);
-	close(rom_fd);
+	if (rom_tmp == NULL) {
+		ErrorAlert(GetString(STR_NO_ROM_FILE_ERR));
+		return false;
+	}
 	
 	// Decode Mac ROM
 	if (!DecodeROM(rom_tmp, actual)) {
+		free(rom_tmp);
 		if (rom_size != 4*1024*1024) {
 			ErrorAlert(GetString(STR_ROM_SIZE_ERR));
 			return false;
@@ -661,7 +665,7 @@ static bool load_mac_rom(void)
 			return false;
 		}
 	}
-	delete[] rom_tmp;
+	free(rom_tmp);
 	return true;
 }
 
@@ -767,6 +771,9 @@ static bool init_sdl()
 		return false;
 	}
 	atexit(SDL_Quit);
+#if SDL_PLATFORM_MACOS && SDL_VERSION_ATLEAST(2, 0, 0)
+	disable_SDL2_macosx_menu_bar_keyboard_shortcuts();
+#endif
 
 #if SDL_VERSION_ATLEAST(2, 0, 0)
 	const int SDL_EVENT_TIMEOUT = 100;
@@ -1670,10 +1677,9 @@ static void *tick_func(void *arg)
 
 			// Yes, dump registers
 			sigregs *r = &sigsegv_regs;
-			char str[256];
 			if (crash_reason == NULL)
 				crash_reason = "SIGSEGV";
-			sprintf(str, "%s\n"
+			printf("%s\n"
 				"   pc %08lx     lr %08lx    ctr %08lx    msr %08lx\n"
 				"  xer %08lx     cr %08lx  \n"
 				"   r0 %08lx     r1 %08lx     r2 %08lx     r3 %08lx\n"
@@ -1695,7 +1701,6 @@ static void *tick_func(void *arg)
 				r->gpr[20], r->gpr[21], r->gpr[22], r->gpr[23],
 				r->gpr[24], r->gpr[25], r->gpr[26], r->gpr[27],
 				r->gpr[28], r->gpr[29], r->gpr[30], r->gpr[31]);
-			printf(str);
 			VideoQuitFullScreen();
 
 #ifdef ENABLE_MON
@@ -1902,6 +1907,7 @@ void EnableInterrupt(void)
  */
 
 #if !EMULATED_PPC
+__attribute__((no_stack_protector))
 void sigusr2_handler(int sig, siginfo_t *sip, void *scp)
 {
 	machine_regs *r = MACHINE_REGISTERS(scp);
@@ -1931,8 +1937,8 @@ void sigusr2_handler(int sig, siginfo_t *sip, void *scp)
 	switch (ReadMacInt32(XLM_RUN_MODE)) {
 		case MODE_68K:
 			// 68k emulator active, trigger 68k interrupt level 1
-			WriteMacInt16(ReadMacInt32(0x67c), 1);
-			r->cr() |= ReadMacInt32(0x674);
+			WriteMacInt16(ReadMacInt32(KERNEL_DATA_BASE + 0x67c), 1);
+			r->cr() |= ReadMacInt32(KERNEL_DATA_BASE + 0x674);
 			break;
 
 #if INTERRUPTS_IN_NATIVE_MODE
@@ -1944,8 +1950,8 @@ void sigusr2_handler(int sig, siginfo_t *sip, void *scp)
 				sigaltstack(&extra_stack, NULL);
 				
 				// Prepare for 68k interrupt level 1
-				WriteMacInt16(ReadMacInt32(0x67c), 1);
-				WriteMacInt32(ReadMacInt32(0x658) + 0xdc, ReadMacInt32(ReadMacInt32(0x658) + 0xdc) | ReadMacInt32(0x674));
+				WriteMacInt16(ReadMacInt32(KERNEL_DATA_BASE + 0x67c), 1);
+				WriteMacInt32(ReadMacInt32(KERNEL_DATA_BASE + 0x658) + 0xdc, ReadMacInt32(ReadMacInt32(KERNEL_DATA_BASE + 0x658) + 0xdc) | ReadMacInt32(KERNEL_DATA_BASE + 0x674));
 
 				// Execute nanokernel interrupt routine (this will activate the 68k emulator)
 				DisableInterrupt();
@@ -2007,6 +2013,7 @@ void sigusr2_handler(int sig, siginfo_t *sip, void *scp)
  */
 
 #if !EMULATED_PPC
+__attribute__((no_stack_protector))
 static void sigsegv_handler(int sig, siginfo_t *sip, void *scp)
 {
 	machine_regs *r = MACHINE_REGISTERS(scp);
@@ -2229,7 +2236,7 @@ static void sigsegv_handler(int sig, siginfo_t *sip, void *scp)
 	// For all other errors, jump into debugger (sort of...)
 	crash_reason = (sig == SIGBUS) ? "SIGBUS" : "SIGSEGV";
 	if (!ready_for_signals) {
-		printf("%s\n");
+		printf("%s\n", crash_reason);
 		printf(" sigcontext %p, machine_regs %p\n", scp, r);
 		printf(
 			"   pc %08lx     lr %08lx    ctr %08lx    msr %08lx\n"
@@ -2242,7 +2249,6 @@ static void sigsegv_handler(int sig, siginfo_t *sip, void *scp)
 			"  r20 %08lx    r21 %08lx    r22 %08lx    r23 %08lx\n"
 			"  r24 %08lx    r25 %08lx    r26 %08lx    r27 %08lx\n"
 			"  r28 %08lx    r29 %08lx    r30 %08lx    r31 %08lx\n",
-			crash_reason,
 			r->pc(), r->lr(), r->ctr(), r->msr(),
 			r->xer(), r->cr(),
 			r->gpr(0), r->gpr(1), r->gpr(2), r->gpr(3),
@@ -2270,6 +2276,7 @@ rti:;
  *  SIGILL handler
  */
 
+__attribute__((no_stack_protector))
 static void sigill_handler(int sig, siginfo_t *sip, void *scp)
 {
 	machine_regs *r = MACHINE_REGISTERS(scp);
@@ -2404,7 +2411,7 @@ power_inst:		sprintf(str, GetString(STR_POWER_INSTRUCTION_ERR), r->pc(), r->gpr(
 	// For all other errors, jump into debugger (sort of...)
 	crash_reason = "SIGILL";
 	if (!ready_for_signals) {
-		printf("%s\n");
+		printf("%s\n", crash_reason);
 		printf(" sigcontext %p, machine_regs %p\n", scp, r);
 		printf(
 			"   pc %08lx     lr %08lx    ctr %08lx    msr %08lx\n"
@@ -2417,7 +2424,6 @@ power_inst:		sprintf(str, GetString(STR_POWER_INSTRUCTION_ERR), r->pc(), r->gpr(
 			"  r20 %08lx    r21 %08lx    r22 %08lx    r23 %08lx\n"
 			"  r24 %08lx    r25 %08lx    r26 %08lx    r27 %08lx\n"
 			"  r28 %08lx    r29 %08lx    r30 %08lx    r31 %08lx\n",
-			crash_reason,
 			r->pc(), r->lr(), r->ctr(), r->msr(),
 			r->xer(), r->cr(),
 			r->gpr(0), r->gpr(1), r->gpr(2), r->gpr(3),

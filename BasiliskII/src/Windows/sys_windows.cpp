@@ -35,6 +35,8 @@ using std::min;
 #include "prefs.h"
 #include "user_strings.h"
 #include "sys.h"
+#include "qcow.h"
+#include "chd.h"
 
 #include "cd_defs.h"
 #include "cdenable/ntcd.h"
@@ -63,6 +65,8 @@ struct file_handle {
 	bool is_media_present;
 	bool is_tray_locked;
 	HANDLE storage_ejection_handle;  // Handle used for storage ejection prevention
+	QcowImage *qcow;
+	ChdImage *chd;
 
 #if defined(BINCUE)
 	bool is_bincue;		// Flag: BIN CUE file
@@ -73,6 +77,8 @@ struct file_handle {
 		// let's have our own safeguard to prevent incrementing it more than once.
 		is_tray_locked = false;
 		storage_ejection_handle = NULL;
+		qcow = NULL;
+		chd = NULL;
 #if defined(BINCUE)
 		is_bincue = false;	// default bincue false
 #endif
@@ -565,6 +571,36 @@ void *Sys_open(const char *path_name, bool read_only, bool is_cdrom)
 		}
 #endif
 
+		QcowImage *qcow = NULL;
+		ChdImage *chd = NULL;
+		int qcowstatus = QcowOpen(path_name, read_only, &qcow);
+		int chdstatus = CHDNOTCHD;
+		if (qcowstatus == QCOWNOTQCOW)
+			chdstatus = ChdOpen(path_name, read_only, &chd);
+		if (qcowstatus == QCOWFAILED || chdstatus == CHDFAILED)
+			return NULL;
+		if (qcow || chd) {
+			fh = new file_handle;
+			fh->name = _tcsdup(name);
+			fh->fh = NULL;
+			fh->qcow = qcow;
+			fh->chd = chd;
+			fh->is_file = true;
+			if (qcow) {
+				fh->read_only = QcowReadOnly(qcow) != 0;
+				fh->file_size = QcowSize(qcow);
+			} else {
+				fh->read_only = ChdReadOnly(chd) != 0;
+				fh->file_size = ChdSize(chd);
+			}
+			fh->start_byte = 0;
+			fh->is_floppy = false;
+			fh->is_cdrom = is_cdrom;
+			fh->is_media_present = true;
+			sys_add_file_handle(fh);
+			return fh;
+		}
+
 		// Open plain disk/CD image file
 		DWORD sharemode = FILE_SHARE_READ;
 		if (read_only)
@@ -646,6 +682,10 @@ void Sys_close(void *arg)
 		CloseHandle(fh->fh);
 		fh->fh = NULL;
 	}
+	if (fh->qcow)
+		QcowClose(fh->qcow);
+	if (fh->chd)
+		ChdClose(fh->chd);
 	if (fh->name)
 		free(fh->name);
 
@@ -671,6 +711,10 @@ size_t Sys_read(void *arg, void *buffer, loff_t offset, size_t length)
 
 	DWORD bytes_read = 0;
 
+	if (fh->qcow)
+		return QcowRead(fh->qcow, buffer, offset, length);
+	if (fh->chd)
+		return ChdRead(fh->chd, buffer, offset, length);
 	if (fh->is_file) {
 		bytes_read = file_offset_read(fh->fh, offset, length, (char *)buffer);
 	}
@@ -712,6 +756,10 @@ size_t Sys_write(void *arg, void *buffer, loff_t offset, size_t length)
 
 	DWORD bytes_written = 0;
 
+	if (fh->qcow)
+		return QcowWrite(fh->qcow, buffer, offset, length);
+	if (fh->chd)
+		return ChdWrite(fh->chd, buffer, offset, length);
 	if (fh->is_file) {
 		if (!SeekFileHandle(fh->fh, offset))
 			return 0;

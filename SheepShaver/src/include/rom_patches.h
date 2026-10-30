@@ -37,6 +37,7 @@ enum {
 extern int ROMType;
 
 extern bool DecodeROM(uint8 *data, uint32 size);
+extern bool FindChrpPayload(const uint8 *data, uint32 *imageoffset, uint32 *imagesize);
 extern bool PatchROM(void);
 extern bool HasNanoKernel2(void);
 extern bool HasNewWorldV2Kernel(void);

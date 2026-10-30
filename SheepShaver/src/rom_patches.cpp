@@ -240,6 +240,22 @@ static bool DecodeParcelLibraries(const uint8 *source, uint8 *destination, uint3
  *  Decode ROM image, 4 MB plain images or NewWorld images
  */
 
+bool FindChrpPayload(const uint8 *data, uint32 *imageoffset, uint32 *imagesize)
+{
+	const char *offsetname = "constant lzss-offset";
+	const char *sizename = "constant lzss-size";
+	const char *found;
+	if (strstr((const char *)data, offsetname) == NULL) {
+		offsetname = "constant parcels-offset";
+		sizename = "constant parcels-size";
+	}
+	found = strstr((const char *)data, offsetname);
+	if (found == NULL || sscanf(found - 7, "%06x", imageoffset) != 1)
+		return false;
+	found = strstr((const char *)data, sizename);
+	return found != NULL && sscanf(found - 7, "%06x", imagesize) == 1;
+}
+
 bool DecodeROM(uint8 *data, uint32 size)
 {
 	if (size == ROM_SIZE) {
@@ -250,31 +266,7 @@ bool DecodeROM(uint8 *data, uint32 size)
 	else if (strncmp((char *)data, "<CHRP-BOOT>", 11) == 0) {
 		// CHRP compressed ROM image
 		uint32 image_offset, image_size;
-		bool decode_info_ok = false;
-		
-		char *s = strstr((char *)data, "constant lzss-offset");
-		if (s != NULL) {
-			// Probably a plain LZSS compressed ROM image
-			if (sscanf(s - 7, "%06x", &image_offset) == 1) {
-				s = strstr((char *)data, "constant lzss-size");
-				if (s != NULL && (sscanf(s - 7, "%06x", &image_size) == 1))
-					decode_info_ok = true;
-			}
-		}
-		else {
-			// Probably a MacOS 9.2.x ROM image
-			s = strstr((char *)data, "constant parcels-offset");
-			if (s != NULL) {
-				if (sscanf(s - 7, "%06x", &image_offset) == 1) {
-					s = strstr((char *)data, "constant parcels-size");
-					if (s != NULL && (sscanf(s - 7, "%06x", &image_size) == 1))
-						decode_info_ok = true;
-				}
-			}
-		}
-		
-		// No valid information to decode the ROM found?
-		if (!decode_info_ok)
+		if (!FindChrpPayload(data, &image_offset, &image_size))
 			return false;
 		
 		// Check signature, this could be a parcels-based ROM image

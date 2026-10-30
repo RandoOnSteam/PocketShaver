@@ -44,6 +44,7 @@ using std::vector;
 #include "sys.h"
 #include "prefs.h"
 #include "cdrom.h"
+#include "disk.h"
 
 #define DEBUG 0
 #include "debug.h"
@@ -513,7 +514,7 @@ int16 CDROMOpen(uint32 pb, uint32 dce)
 	drive_vec::iterator info, end = drives.end();
 	for (info = drives.begin(); info != end; ++info) {
 		
-		info->num = FindFreeDriveNumber(1);
+		info->num = FindFreeDriveNumber(DiskFirstDrive);
 		info->to_be_mounted = false;
 		
 		if (info->fh || info->init_null) {
@@ -709,8 +710,7 @@ int16 CDROMControl(uint32 pb, uint32 dce)
 			return noErr;
 			
 		case 23:		// GetDriveInfo
-			WriteMacInt32(pb + csParam, 0x00000b01);	// Unspecified external removable SCSI disk
-			return noErr;
+			return controlErr;
 		
 		// TODO: revist this section, is it necessary with DriverGestalt also in Status section?
 		case 43: {		// DriverGestalt

@@ -22,6 +22,7 @@
 #define DISK_H
 
 const int DiskRefNum = -63;				// RefNum of driver
+const int DiskFirstDrive = 3;
 const uint16 DiskDriverFlags = 0x6f04;	// Driver flags
 
 extern const uint8 DiskIcon[258];		// Icon data (copied to ROM by PatchROM())

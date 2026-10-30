@@ -77,9 +77,57 @@ const char* document_directory();
 
 #define DEBUG 0
 #include "debug.h"
+#include "qcow.h"
+#include "chd.h"
+
+struct disk_qcow : disk_generic {
+	disk_qcow(QcowImage *qcowimage) : image(qcowimage) { }
+	virtual ~disk_qcow() { QcowClose(image); }
+	virtual bool is_read_only() { return QcowReadOnly(image) != 0; }
+	virtual size_t read(void *buffer, loff_t offset, size_t length) { return QcowRead(image, buffer, offset, length); }
+	virtual size_t write(void *buffer, loff_t offset, size_t length) { return QcowWrite(image, buffer, offset, length); }
+	virtual loff_t size() { return QcowSize(image); }
+	QcowImage *image;
+};
+
+static disk_generic::status DiskQcowFactory(const char *path, bool read_only, disk_generic **disk)
+{
+	QcowImage *image;
+	int status = QcowOpen(path, read_only, &image);
+	if (status == QCOWFAILED)
+		return disk_generic::DISK_INVALID;
+	if (status == QCOWNOTQCOW)
+		return disk_generic::DISK_UNKNOWN;
+	*disk = new disk_qcow(image);
+	return disk_generic::DISK_VALID;
+}
+
+struct disk_chd : disk_generic {
+	disk_chd(ChdImage *chdimage) : image(chdimage) { }
+	virtual ~disk_chd() { ChdClose(image); }
+	virtual bool is_read_only() { return ChdReadOnly(image) != 0; }
+	virtual size_t read(void *buffer, loff_t offset, size_t length) { return ChdRead(image, buffer, offset, length); }
+	virtual size_t write(void *buffer, loff_t offset, size_t length) { return ChdWrite(image, buffer, offset, length); }
+	virtual loff_t size() { return ChdSize(image); }
+	ChdImage *image;
+};
+
+static disk_generic::status DiskChdFactory(const char *path, bool read_only, disk_generic **disk)
+{
+	ChdImage *image;
+	int status = ChdOpen(path, read_only, &image);
+	if (status == CHDFAILED)
+		return disk_generic::DISK_INVALID;
+	if (status == CHDNOTCHD)
+		return disk_generic::DISK_UNKNOWN;
+	*disk = new disk_chd(image);
+	return disk_generic::DISK_VALID;
+}
 
 static disk_factory *disk_factories[] = {
 #ifndef STANDALONE_GUI
+	DiskQcowFactory,
+	DiskChdFactory,
 	disk_sparsebundle_factory,
 #if defined(HAVE_LIBVHD)
 	disk_vhd_factory,
@@ -774,6 +822,29 @@ void Sys_close(void *arg)
 }
 
 
+static size_t TransferAll(int filedescriptor, void *buffer, loff_t offset, size_t length, int writing)
+{
+	uint8 *bytes = (uint8 *)buffer;
+	size_t done = 0;
+	ssize_t moved;
+	off_t position;
+	while (done < length) {
+		position = (off_t)(offset + (loff_t)done);
+		if ((loff_t)position != offset + (loff_t)done)
+			break;
+		if (writing)
+			moved = pwrite(filedescriptor, bytes + done, length - done, position);
+		else
+			moved = pread(filedescriptor, bytes + done, length - done, position);
+		if (moved < 0 && errno == EINTR)
+			continue;
+		if (moved <= 0)
+			break;
+		done += (size_t)moved;
+	}
+	return done;
+}
+
 /*
  *  Read "length" bytes from file/device, starting at "offset", to "buffer",
  *  returns number of bytes read (or 0)
@@ -792,13 +863,8 @@ size_t Sys_read(void *arg, void *buffer, loff_t offset, size_t length)
 
 	if (fh->generic_disk)
 		return fh->generic_disk->read(buffer, offset, length);
-	
-	// Seek to position
-	if (SysSeekDescriptor(fh->fd, offset + fh->start_byte, SEEK_SET) < 0)
-		return 0;
 
-	// Read data
-	return read(fh->fd, buffer, length);
+	return TransferAll(fh->fd, buffer, offset + fh->start_byte, length, 0);
 }
 
 
@@ -816,12 +882,7 @@ size_t Sys_write(void *arg, void *buffer, loff_t offset, size_t length)
 	if (fh->generic_disk)
 		return fh->generic_disk->write(buffer, offset, length);
 
-	// Seek to position
-	if (SysSeekDescriptor(fh->fd, offset + fh->start_byte, SEEK_SET) < 0)
-		return 0;
-
-	// Write data
-	return write(fh->fd, buffer, length);
+	return TransferAll(fh->fd, buffer, offset + fh->start_byte, length, 1);
 }
 
 

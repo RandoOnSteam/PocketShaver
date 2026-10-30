@@ -38,6 +38,7 @@
 #include "scsi.h"
 #include "video.h"
 #include "audio.h"
+#include "soundinput.h"
 #include "ether.h"
 #include "serial.h"
 #include "clip.h"
@@ -80,8 +81,8 @@ bool InitAll(const char *vmdir)
 	int startupindex;
 	int startuppartition;
 	if (OsxSelectBootImage(&startupindex, &startuppartition) == OSXBOOTCLASSIC && startupindex >= 0) {
-		XPRAM[0x1378] = (startupindex + 1) >> 8;
-		XPRAM[0x1379] = (startupindex + 1) & 0xff;
+		XPRAM[0x1378] = (startupindex + DiskFirstDrive) >> 8;
+		XPRAM[0x1379] = (startupindex + DiskFirstDrive) & 0xff;
 		XPRAM[0x137a] = (uint16)DiskRefNum >> 8;
 		XPRAM[0x137b] = DiskRefNum & 0xff;
 	}
@@ -124,6 +125,7 @@ bool InitAll(const char *vmdir)
 
 	// Init audio
 	AudioInit();
+	SoundInputInit();
 
 	// Init network
 	EtherInit();
@@ -307,6 +309,7 @@ void ExitAll(void)
 	EtherExit();
 
 	// Exit audio
+	SoundInputExit();
 	AudioExit();
 
 	// Exit ADB

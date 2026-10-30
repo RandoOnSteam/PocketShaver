@@ -76,6 +76,7 @@ prefs_desc common_prefs_items[] = {
 	{"nojoystick", TYPE_BOOLEAN, false, "don't install Joy Manager driver"},
 	{"nonet", TYPE_BOOLEAN, false,      "don't use Ethernet"},
 	{"nosound", TYPE_BOOLEAN, false,    "don't enable sound output"},
+	{"mic", TYPE_BOOLEAN, false,        "record from the host microphone"},
 	{"nogui", TYPE_BOOLEAN, false,      "disable GUI"},
 	{"noclipconversion", TYPE_BOOLEAN, false, "don't convert clipboard contents"},
 	{"ignoresegv", TYPE_BOOLEAN, false, "ignore illegal memory accesses"},
@@ -155,6 +156,7 @@ void AddPrefsDefaults(void)
 	PrefsAddBool("nojoystick", false);
 	PrefsAddBool("nonet", false);
 	PrefsAddBool("nosound", false);
+	PrefsAddBool("mic", false);
 	PrefsAddBool("nogui", false);
 	PrefsAddBool("noclipconversion", false);
 	PrefsAddBool("ignoresegv", true);

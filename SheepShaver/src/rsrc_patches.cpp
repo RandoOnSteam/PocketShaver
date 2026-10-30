@@ -86,7 +86,7 @@ static const uint8 sound_input_driver[] = {	// .AppleSoundInput driver header
 	0x4e, 0x75,							//  rts
 
 	// Close()
-	M68K_EMUL_OP_SOUNDIN_CLOSE >> 8, M68K_EMUL_OP_SOUNDIN_CLOSE & 0xff,
+	M68K_EMUL_OP_SOUNDIN_OPEN >> 8, M68K_EMUL_OP_SOUNDIN_OPEN & 0xff,
 	0x4e, 0x75,							//	rts
 };
 

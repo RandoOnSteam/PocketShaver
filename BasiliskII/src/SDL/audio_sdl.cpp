@@ -703,5 +703,66 @@ void PlayStartupSound() {
     // Not implemented
 }
 #endif
+
+#if SDL_VERSION_ATLEAST(2,0,5)
+void *AudioCaptureOpen(int rate, int bits, int channels, int twos)
+{
+	SDL_AudioSpec want;
+	SDL_AudioSpec have;
+	SDL_AudioDeviceID device;
+	if (SDL_InitSubSystem(SDL_INIT_AUDIO) != 0)
+		return NULL;
+	memset(&want, 0, sizeof(want));
+	want.freq = rate;
+	want.channels = (Uint8)channels;
+	want.samples = 512;
+	want.format = AUDIO_S16MSB;
+	if (bits == 8)
+		want.format = AUDIO_U8;
+	if (bits == 8 && twos)
+		want.format = AUDIO_S8;
+	device = SDL_OpenAudioDevice(NULL, 1, &want, &have, 0);
+	if (device == 0) {
+		SDL_QuitSubSystem(SDL_INIT_AUDIO);
+		return NULL;
+	}
+	SDL_PauseAudioDevice(device, 0);
+	return (void *)(uintptr)device;
+}
+
+uint32 AudioCaptureRead(void *capture, uint8 *buffer, uint32 bytes)
+{
+	return SDL_DequeueAudio((SDL_AudioDeviceID)(uintptr)capture, buffer, bytes);
+}
+
+void AudioCaptureClear(void *capture)
+{
+	SDL_ClearQueuedAudio((SDL_AudioDeviceID)(uintptr)capture);
+}
+
+void AudioCaptureClose(void *capture)
+{
+	SDL_CloseAudioDevice((SDL_AudioDeviceID)(uintptr)capture);
+	SDL_QuitSubSystem(SDL_INIT_AUDIO);
+}
+#else
+void *AudioCaptureOpen(int rate, int bits, int channels, int twos)
+{
+	return NULL;
+}
+
+uint32 AudioCaptureRead(void *capture, uint8 *buffer, uint32 bytes)
+{
+	return 0;
+}
+
+void AudioCaptureClear(void *capture)
+{
+}
+
+void AudioCaptureClose(void *capture)
+{
+}
+#endif
 #endif	// SDL_VERSION_ATLEAST
 

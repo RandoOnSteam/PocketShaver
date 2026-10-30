@@ -92,6 +92,7 @@ enum {
 		when someone asks for an image decompressor */
     NATIVE_FINDNEXTCOMPONENT_CINEPAK_HOOK, /* Same trigger on FindNextComponent 
 		(the path QuickTime's ICM actually uses) */
+	NATIVE_SVQ1_DISPATCH,
   #endif /* ENABLE_NATIVE_CINEPAK_PATCH */
   NATIVE_OP_MAX
 };

@@ -916,6 +916,9 @@ static SDL_Surface *init_sdl_video(int width, int height, int depth, Uint32 flag
 		SDL_SyncWindow(sdl_window); // needed for fullscreen
 #endif
 		set_window_name();
+#ifdef SDL_PLATFORM_MACOS
+		disable_SDL2_macosx_menu_bar_keyboard_shortcuts();
+#endif
 	}
 
 	// Some SDL events (regarding some native-window events), need processing
@@ -2049,6 +2052,7 @@ void VideoExit(void)
 	vector<monitor_desc *>::iterator i, end = VideoMonitors.end();
 	for (i = VideoMonitors.begin(); i != end; ++i)
 		dynamic_cast<SDL_monitor_desc *>(*i)->video_close();
+	delete_sdl_video_window();
 
 	// Destroy locks
 	if (frame_buffer_lock)
@@ -2957,9 +2961,7 @@ static void handle_events(void)
 				if (code >= 0) {
 					if (!emul_suspended) {
 						code = modify_opt_cmd(code);
-						if (code == 0x39)
-							(SDL_GetModState() & SDL_KMOD_CAPS ? ADBKeyDown : ADBKeyUp)(code);
-						else
+						if (code != 0x39)
 							ADBKeyDown(code);
 						if (code == 0x36)
 							ctrl_down = true;
@@ -2984,6 +2986,10 @@ static void handle_events(void)
 				if (code >= 0) {
 					code = modify_opt_cmd(code);
 					if (code != 0x39)
+						ADBKeyUp(code);
+					else if (SDL_GetModState() & SDL_KMOD_CAPS)
+						ADBKeyDown(code);
+					else
 						ADBKeyUp(code);
 					if (code == 0x36)
 						ctrl_down = false;

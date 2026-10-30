@@ -60,6 +60,11 @@ extern void audio_set_main_volume(uint32 vol);
 extern void audio_set_speaker_mute(bool mute);
 extern void audio_set_speaker_volume(uint32 vol);
 
+extern void *AudioCaptureOpen(int rate, int bits, int channels, int twos);
+extern uint32 AudioCaptureRead(void *capture, uint8 *buffer, uint32 bytes);
+extern void AudioCaptureClear(void *capture);
+extern void AudioCaptureClose(void *capture);
+
 // Current audio status
 struct audio_status {
 	uint32 sample_rate;		// 16.16 fixed point
@@ -67,6 +72,7 @@ struct audio_status {
 	uint32 channels;		// 1 (mono) or 2 (stereo)
 	uint32 mixer;			// Mac address of Apple Mixer
 	int num_sources;		// Number of active sources
+	void *soundinput;
 };
 extern struct audio_status AudioStatus;
 

@@ -46,6 +46,7 @@
 #include "thunks.h"
 #include "main.h"
 #include "cinepak_decoder.h"
+#include "svq1_decoder.h"
 #include "cinepak_hooks.h"
 #include "gfx_log.h"
 
@@ -73,7 +74,7 @@ static inline void CINEPAK_LOG(const char *format, ...)
 	vsnprintf(message, sizeof(message), format, args);
 	va_end(args);
 	message[sizeof(message) - 1] = '\0';
-	::gfx_debug::emit("[CINEPAK:", "%s]", message);
+	gfx_log_emit("[CINEPAK:", "%s]", message);
 }
 #else
 #define CINEPAK_LOG(...) do { } while (0)
@@ -91,6 +92,7 @@ static inline uint32 MAKE_FOURCC(char a, char b, char c, char d)
 
 #define FOURCC_IMDC MAKE_FOURCC('i','m','d','c')
 #define FOURCC_CVID MAKE_FOURCC('c','v','i','d')
+#define FOURCC_SVQ1 MAKE_FOURCC('S','V','Q','1')
 #define FOURCC_APPL MAKE_FOURCC('a','p','p','l')
 
 /* pascal ComponentResult (*)(ComponentParameters *, Handle):
@@ -173,7 +175,7 @@ static inline int16 read_mac_int16(uint32 addr)
 
 static bool s_registered = false;
 static bool s_register_in_progress = false;
-static SheepRoutineDescriptor *s_entry_rd = NULL;
+static SheepRoutineDescriptor *s_entry_rd[2] = {NULL, NULL};
 
 struct HookSite {
 	const char *name;
@@ -236,20 +238,25 @@ static bool CinepakEnsureRegistered(void)
 		return false;
 	}
 
-	if (s_entry_rd == NULL)
-		s_entry_rd = new SheepRoutineDescriptor(kComponentRoutineProcInfo,
+	if (s_entry_rd[0] == NULL)
+		s_entry_rd[0] = new SheepRoutineDescriptor(kComponentRoutineProcInfo,
 		                                        NativeTVECT(NATIVE_CINEPAK_DISPATCH));
+	if (s_entry_rd[1] == NULL)
+		s_entry_rd[1] = new SheepRoutineDescriptor(kComponentRoutineProcInfo,
+		                                        NativeTVECT(NATIVE_SVQ1_DISPATCH));
 
 	SheepVar cd_var(20);
 	const uint32 cd = cd_var.addr();
 	WriteMacInt32(cd + 0,  FOURCC_IMDC);  // componentType
-	WriteMacInt32(cd + 4,  FOURCC_CVID);  // componentSubType
+	WriteMacInt32(cd + 4,  FOURCC_SVQ1);
 	WriteMacInt32(cd + 8,  FOURCC_APPL);  // componentManufacturer
 	WriteMacInt32(cd + 12, 0);            // componentFlags
 	WriteMacInt32(cd + 16, 0);            // componentFlagsMask
+	uint32 svq1 = call_macos6(reg_tvect, cd, s_entry_rd[1]->addr(), 1, 0, 0, 0);
+	WriteMacInt32(cd + 4,  FOURCC_CVID);  // componentSubType
 
 	/* RegisterComponent(cd, entryPoint, global, name, info, icon) */
-	uint32 comp = call_macos6(reg_tvect, cd, s_entry_rd->addr(), 1, 0, 0, 0);
+	uint32 comp = call_macos6(reg_tvect, cd, s_entry_rd[0]->addr(), 1, 0, 0, 0);
 	s_register_in_progress = false;
 
 	if (comp == 0) {
@@ -257,8 +264,8 @@ static bool CinepakEnsureRegistered(void)
 		return false;
 	}
 
-	CINEPAK_LOG("native 'imdc'/'cvid' component registered: %08x (entry RD %08x)\n",
-	            comp, s_entry_rd->addr());
+	CINEPAK_LOG("native 'imdc'/'cvid' component registered: %08x (entry RD %08x), 'SVQ1' %08x\n",
+	            comp, s_entry_rd[0]->addr(), svq1);
 	s_registered = true;
 
 	/* Triggers are no longer needed. */
@@ -290,7 +297,7 @@ uint32 CinepakFindNextComponentHook(uint32 aComponent, uint32 lookingDesc)
 	if (lookingDesc != 0) {
 		const uint32 type = ReadMacInt32(lookingDesc + 0);
 		const uint32 sub  = ReadMacInt32(lookingDesc + 4);
-		if (type == FOURCC_IMDC || sub == FOURCC_CVID) {
+		if (type == FOURCC_IMDC || sub == FOURCC_CVID || sub == FOURCC_SVQ1) {
 			static int logged = 0;
 			if (logged < 8) {
 				logged++;
@@ -386,6 +393,7 @@ void CinepakResetForReboot(void)
 struct SeqSlot {
 	uint32 seq_id;
 	cinepak_context_t *ctx;
+	Svq1Decoder *svq1;
 	uint32 stamp;
 	bool in_use;
 };
@@ -393,40 +401,65 @@ struct SeqSlot {
 static SeqSlot s_slots[8];
 static uint32 s_lru_stamp = 0;
 
-static cinepak_context_t *get_context(uint32 seq_id, int width, int height)
+static void ReleaseSlot(SeqSlot *slot)
+{
+	if (slot->ctx)
+		cinepak_destroy(slot->ctx);
+	if (slot->svq1)
+		Svq1Destroy(slot->svq1);
+	slot->ctx = NULL;
+	slot->svq1 = NULL;
+	slot->in_use = false;
+}
+
+static void CreateSlot(SeqSlot *slot, uint32 codec, int width, int height)
+{
+	if (codec == FOURCC_SVQ1)
+		slot->svq1 = Svq1Create(width, height);
+	else
+		slot->ctx = cinepak_create(width, height);
+	slot->in_use = slot->ctx != NULL || slot->svq1 != NULL;
+}
+
+static SeqSlot *get_slot(uint32 seq_id, uint32 codec, int width, int height)
 {
 	SeqSlot *victim = NULL;
 	for (int i = 0; i < 8; i++) {
 		SeqSlot &sl = s_slots[i];
 		if (sl.in_use && sl.seq_id == seq_id) {
-			if (cinepak_width(sl.ctx) != width || cinepak_height(sl.ctx) != height) {
-				cinepak_destroy(sl.ctx);
-				sl.ctx = cinepak_create(width, height);
+			if ((codec == FOURCC_SVQ1 && sl.svq1 == NULL) || (codec != FOURCC_SVQ1 && (sl.ctx == NULL ||
+				cinepak_width(sl.ctx) != width || cinepak_height(sl.ctx) != height))) {
+				ReleaseSlot(&sl);
+				CreateSlot(&sl, codec, width, height);
 			}
 			sl.stamp = ++s_lru_stamp;
-			return sl.ctx;
+			if (!sl.in_use)
+				return NULL;
+			return &sl;
 		}
 		if (victim == NULL || !sl.in_use ||
 		    (victim->in_use && sl.stamp < victim->stamp))
 			victim = &sl;
 	}
-	if (victim->in_use && victim->ctx)
-		cinepak_destroy(victim->ctx);
+	ReleaseSlot(victim);
 	victim->seq_id = seq_id;
-	victim->ctx = cinepak_create(width, height);
+	CreateSlot(victim, codec, width, height);
 	victim->stamp = ++s_lru_stamp;
-	victim->in_use = (victim->ctx != NULL);
-	return victim->ctx;
+	if (!victim->in_use)
+		return NULL;
+	return victim;
 }
 
 /* ----------------------------------------------------------------------
  *  Component protocol
  * ---------------------------------------------------------------------- */
 
-static void fill_codec_info(uint32 info)
+static void fill_codec_info(uint32 info, uint32 codec)
 {
-	static const char name[] = "Cinepak";
-	const int name_len = (int)(sizeof(name) - 1);
+	const char *name = "Cinepak";
+	if (codec == FOURCC_SVQ1)
+		name = "Sorenson Video";
+	const int name_len = (int)strlen(name);
 	WriteMacInt8(info + 0, name_len);
 	for (int i = 0; i < 31; i++)
 		WriteMacInt8(info + 1 + i, i < name_len ? name[i] : 0);
@@ -473,7 +506,7 @@ static void dump_params_once(const char *tag, uint32 p)
 static void dump_params_once(const char *, uint32) { }
 #endif
 
-static uint32 cinepak_pre_decompress(uint32 p)
+static uint32 cinepak_pre_decompress(uint32 p, uint32 codec)
 {
 	if (p == 0)
 		return kParamErr;
@@ -484,7 +517,7 @@ static uint32 cinepak_pre_decompress(uint32 p)
 		return kParamErr;
 	const uint32 id = ReadMacInt32(id_h);
 	const uint32 ctype = ReadMacInt32(id + O_ID_CTYPE);
-	if (ctype != FOURCC_CVID)
+	if (ctype != codec)
 		return kNoCodecErr;
 
 	const int16 width  = read_mac_int16(id + O_ID_WIDTH);
@@ -505,8 +538,14 @@ static uint32 cinepak_pre_decompress(uint32 p)
 			(dst_pix_size == 32 || dst_pix_size == 16) ? dst_pix_size : 16;
 		WriteMacInt32(caps + O_CAP_FLAGS, 0);
 		WriteMacInt16(caps + O_CAP_WANTED_PIXSZ, wanted);
-		WriteMacInt16(caps + O_CAP_EXTEND_WIDTH, (4 - (width & 3)) & 3);
-		WriteMacInt16(caps + O_CAP_EXTEND_HEIGHT, (4 - (height & 3)) & 3);
+		int extendwidth = (4 - (width & 3)) & 3;
+		int extendheight = (4 - (height & 3)) & 3;
+		if (codec == FOURCC_SVQ1) {
+			extendwidth = 0;
+			extendheight = 0;
+		}
+		WriteMacInt16(caps + O_CAP_EXTEND_WIDTH, extendwidth);
+		WriteMacInt16(caps + O_CAP_EXTEND_HEIGHT, extendheight);
 		WriteMacInt16(caps + O_CAP_BAND_MIN, height);
 		WriteMacInt16(caps + O_CAP_BAND_INC, height);
 		WriteMacInt16(caps + O_CAP_PAD, 0);
@@ -515,7 +554,7 @@ static uint32 cinepak_pre_decompress(uint32 p)
 	return kNoErr;
 }
 
-static uint32 cinepak_band_decompress(uint32 p)
+static uint32 cinepak_band_decompress(uint32 p, uint32 codec)
 {
 	if (p == 0)
 		return kParamErr;
@@ -525,11 +564,11 @@ static uint32 cinepak_band_decompress(uint32 p)
 	if (id_h == 0)
 		return kParamErr;
 	const uint32 id = ReadMacInt32(id_h);
-	if (ReadMacInt32(id + O_ID_CTYPE) != FOURCC_CVID)
+	if (ReadMacInt32(id + O_ID_CTYPE) != codec)
 		return kNoCodecErr;
 
-	const int width  = read_mac_int16(id + O_ID_WIDTH);
-	const int height = read_mac_int16(id + O_ID_HEIGHT);
+	int width  = read_mac_int16(id + O_ID_WIDTH);
+	int height = read_mac_int16(id + O_ID_HEIGHT);
 	const uint32 seq_id = ReadMacInt32(p + O_P_SEQUENCE_ID);
 	const uint32 data = ReadMacInt32(p + O_P_DATA);
 	const uint32 buffer_size = ReadMacInt32(p + O_P_BUFFER_SIZE);
@@ -537,12 +576,24 @@ static uint32 cinepak_band_decompress(uint32 p)
 	if (width <= 0 || height <= 0 || data == 0 || buffer_size < 10)
 		return kNoCodecErr;
 
-	cinepak_context_t *ctx = get_context(seq_id, width, height);
-	if (ctx == NULL)
+	SeqSlot *slot = get_slot(seq_id, codec, width, height);
+	if (slot == NULL)
 		return kNoCodecErr;
+	cinepak_context_t *ctx = slot->ctx;
 
 	const uint8 *src = Mac2HostAddr(data);
-	if (cinepak_decode_frame(ctx, src, buffer_size) < 0) {
+	const uint32_t *frame = NULL;
+	if (slot->svq1) {
+		if (Svq1Decode(slot->svq1, src, buffer_size) == 0)
+			frame = (const uint32_t *)Svq1Frame(slot->svq1);
+		width = Svq1Width(slot->svq1);
+		height = Svq1Height(slot->svq1);
+	} else if (cinepak_decode_frame(ctx, src, buffer_size) >= 0)
+		frame = cinepak_frame(ctx);
+	int keyframe = 0;
+	if (ctx)
+		keyframe = cinepak_last_frame_was_key(ctx);
+	if (frame == NULL) {
 		CINEPAK_LOG("decode FAILED: seq=%08x frame=%d size=%u\n",
 		            seq_id, (int)ReadMacInt32(p + O_P_FRAME_NUM), buffer_size);
 		return kNoCodecErr;
@@ -638,7 +689,7 @@ static uint32 cinepak_band_decompress(uint32 p)
 		            seq_id, width, height, base_addr, row_bytes,
 		            (int)b_top, (int)b_left, (int)b_bottom, (int)b_right,
 		            pixel_size, start_line, stop_line,
-		            cinepak_last_frame_was_key(ctx), matrix,
+		            keyframe, matrix,
 		            (int)read_mac_int16(p + O_P_SRC_RECT + 0),
 		            (int)read_mac_int16(p + O_P_SRC_RECT + 2),
 		            (int)read_mac_int16(p + O_P_SRC_RECT + 4),
@@ -654,7 +705,6 @@ static uint32 cinepak_band_decompress(uint32 p)
 		}
 	}
 
-	const uint32_t *frame = cinepak_frame(ctx);
 	uint8 *dst_base = Mac2HostAddr(base_addr);
 #if DESCENT_HITCH_DEBUG
 	if (blit_logged <= 4)
@@ -769,9 +819,12 @@ static uint32 cinepak_band_decompress(uint32 p)
 	return kNoErr;
 }
 
-uint32 CinepakDispatch(uint32 componentParameters)
+uint32 CinepakDispatch(uint32 componentParameters, int svq1)
 {
 	const uint32 cp = componentParameters;
+	uint32 codec = FOURCC_CVID;
+	if (svq1)
+		codec = FOURCC_SVQ1;
 	if (cp == 0)
 		return kParamErr;
 
@@ -801,13 +854,13 @@ uint32 CinepakDispatch(uint32 componentParameters)
 	case codecGetCodecInfo:
 		if (param0 == 0)
 			return kParamErr;
-		fill_codec_info(param0);
+		fill_codec_info(param0, codec);
 		CINEPAK_LOG("GetCodecInfo served\n");
 		return kNoErr;
 	case codecPreDecompress:
-		return cinepak_pre_decompress(param0);
+		return cinepak_pre_decompress(param0, codec);
 	case codecBandDecompress:
-		return cinepak_band_decompress(param0);
+		return cinepak_band_decompress(param0, codec);
 	case codecBusy:
 		return kNoErr;
 

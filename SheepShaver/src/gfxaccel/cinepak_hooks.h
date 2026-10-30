@@ -55,7 +55,7 @@ extern uint32 CinepakFindNextComponentHook(uint32 aComponent,
 /* Component entry point: pascal ComponentResult (ComponentParameters *cp,
  * Handle storage). MixedMode marshals cp into r3 via the routine
  * descriptor's procInfo. */
-extern uint32 CinepakDispatch(uint32 componentParameters);
+extern uint32 CinepakDispatch(uint32 componentParameters, int svq1);
 
 #ifdef __cplusplus
 }
