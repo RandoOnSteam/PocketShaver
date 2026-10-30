@@ -37,27 +37,40 @@
 
 typedef struct BenchSuite {
 	const char *name;
+	const char *description;
 	unsigned long flag;
 	void (*run)(Bench *bench);
 } BenchSuite;
 
-typedef struct BenchOptions {
-	unsigned long suites;
-	Boolean jitoff;
-	Boolean quick;
-	Boolean shutdown;
-	Boolean automatic;
-} BenchOptions;
-
 static const BenchSuite benchsuites[BENCHSUITECOUNT] = {
-	{"cpu", BENCHSUITECPU, SuiteCpu},
-	{"68k", BENCHSUITE68K, Suite68k},
-	{"memory", BENCHSUITEMEMORY, SuiteMemory},
-	{"mmu", BENCHSUITEMMU, SuiteMmu},
-	{"quickdraw", BENCHSUITEQUICKDRAW, SuiteQuickDraw},
-	{"3d", BENCHSUITE3D, Suite3d},
-	{"disk", BENCHSUITEDISK, SuiteDisk}
+	{"cpu", "PowerPC loops, C kernels, AltiVec, FPU integrity", BENCHSUITECPU, SuiteCpu},
+	{"68k", "68k loops run by the ROM's 68k emulator", BENCHSUITE68K, Suite68k},
+	{"memory", "copy, BlockMove, fill and load latency, 4 KB to 16 MB", BENCHSUITEMEMORY, SuiteMemory},
+	{"mmu", "page-stride loads, first touch, self-modifying code", BENCHSUITEMMU, SuiteMmu},
+	{"quickdraw", "13 drawing operations at three sizes, pixel-checked", BENCHSUITEQUICKDRAW, SuiteQuickDraw},
+	{"3d", "RAVE engines and a QuickDraw 3D scene", BENCHSUITE3D, Suite3d},
+	{"disk", "sequential and random I/O on each writable volume", BENCHSUITEDISK, SuiteDisk}
 };
+
+int BenchSuiteCount(void)
+{
+	return BENCHSUITECOUNT;
+}
+
+const char *BenchSuiteName(int index)
+{
+	return benchsuites[index].name;
+}
+
+const char *BenchSuiteDescription(int index)
+{
+	return benchsuites[index].description;
+}
+
+unsigned long BenchSuiteFlag(int index)
+{
+	return benchsuites[index].flag;
+}
 
 static unsigned long BenchParseSuites(const char *text)
 {
@@ -125,34 +138,6 @@ static Boolean BenchReadAuto(BenchOptions *options)
 	return true;
 }
 
-static void BenchAsk(Bench *bench, BenchOptions *options)
-{
-	char answer[200];
-	int index;
-	printf("Suites:");
-	for (index = 0; index < BENCHSUITECOUNT; index++)
-		printf(" %s", benchsuites[index].name);
-	printf("\nWhich suites (Return for all)? ");
-	fflush(stdout);
-	answer[0] = 0;
-	fgets(answer, sizeof(answer), stdin);
-	options->suites = BenchParseSuites(answer);
-	if (options->suites == 0)
-		options->suites = BENCHSUITEALL;
-	printf("Quick run (y/N)? ");
-	fflush(stdout);
-	answer[0] = 0;
-	fgets(answer, sizeof(answer), stdin);
-	options->quick = answer[0] == 'y' || answer[0] == 'Y';
-	if (BenchHostIs(bench, "benchswitch", "1") && BenchHostIs(bench, "jit", "on")) {
-		printf("Also run with the JIT off (y/N)? ");
-		fflush(stdout);
-		answer[0] = 0;
-		fgets(answer, sizeof(answer), stdin);
-		options->jitoff = answer[0] == 'y' || answer[0] == 'Y';
-	}
-}
-
 static void BenchHostLines(Bench *bench)
 {
 	char line[200];
@@ -198,9 +183,12 @@ static void BenchRunPass(Bench *bench)
 {
 	int index;
 	char line[80];
+	bench->suiteindex = 0;
 	for (index = 0; index < BENCHSUITECOUNT && !bench->cancelled; index++) {
 		if (!(bench->suites & benchsuites[index].flag))
 			continue;
+		bench->suiteindex++;
+		bench->suitename = benchsuites[index].name;
 		snprintf(line, sizeof(line), "starting %s suite", benchsuites[index].name);
 		if (bench->pass == BENCHPASSJITOFF)
 			strcat(line, " [JIT off]");
@@ -270,23 +258,25 @@ static void BenchWriteRow(short file, BenchRow *row)
 	FSWrite(file, &count, line);
 }
 
-static void BenchWriteReport(Bench *bench)
+OSErr BenchWriteReport(Bench *bench, const FSSpec *spec)
 {
-	FSSpec spec;
 	short file;
 	long count;
 	int index;
+	OSErr err;
 	const char *header;
-	FSMakeFSSpec(0, 0, "\pSheepBench Report", &spec);
-	FSpDelete(&spec);
-	if (FSpCreate(&spec, 'ttxt', 'TEXT', smSystemScript) != noErr || FSpOpenDF(&spec, fsRdWrPerm, &file) != noErr)
-		return;
+	FSpDelete(spec);
+	err = FSpCreate(spec, 'ttxt', 'TEXT', smSystemScript);
+	if (err == noErr)
+		err = FSpOpenDF(spec, fsRdWrPerm, &file);
+	if (err != noErr)
+		return err;
 	header = "suite\ttest\tunit\tvalue\tnoise_pct\treps\tnative\tpct_native\tjit_off\tstatus\twhy\r";
 	count = (long)strlen(header);
 	FSWrite(file, &count, header);
 	for (index = 0; index < bench->rowcount; index++)
 		BenchWriteRow(file, &bench->rows[index]);
-	FSClose(file);
+	return FSClose(file);
 }
 
 static OSErr BenchShutDown(void)
@@ -311,25 +301,22 @@ static OSErr BenchShutDown(void)
 	return err;
 }
 
-int main(void)
+void BenchRun(Bench *bench, const BenchOptions *options)
 {
-	Bench *bench;
-	BenchOptions options;
+	FSSpec spec;
 	char line[128];
-	bench = (Bench *)NewPtrClear(sizeof(Bench));
-	if (bench == NULL)
-		return 1;
-	bench->rows = (BenchRow *)NewPtrClear(sizeof(BenchRow) * BENCHMAXROWS);
-	if (bench->rows == NULL)
-		return 1;
-	bench->mailbox = ShearsOpen();
-	BenchHostRefresh(bench);
-	BenchCalibrate(bench);
-	memset(&options, 0, sizeof(options));
-	if (!BenchReadAuto(&options))
-		BenchAsk(bench, &options);
-	bench->suites = options.suites;
-	bench->quick = options.quick;
+	int index;
+	bench->rowcount = 0;
+	bench->failures = 0;
+	bench->cancelled = false;
+	bench->suites = options->suites;
+	bench->quick = options->quick;
+	bench->jitoff = options->jitoff;
+	bench->suitecount = 0;
+	for (index = 0; index < BENCHSUITECOUNT; index++) {
+		if (bench->suites & benchsuites[index].flag)
+			bench->suitecount++;
+	}
 	BenchRules(bench);
 	snprintf(line, sizeof(line), "SheepBench %s", BENCHVERSION);
 	BenchLine(bench, line);
@@ -338,7 +325,7 @@ int main(void)
 	BenchHostLines(bench);
 	bench->pass = BENCHPASSMAIN;
 	BenchRunPass(bench);
-	if (options.jitoff && !bench->cancelled) {
+	if (options->jitoff && !bench->cancelled) {
 		if (BenchHostIs(bench, "benchswitch", "1") && BenchHostSetJit(bench, false)) {
 			bench->pass = BENCHPASSJITOFF;
 			BenchRunPass(bench);
@@ -349,16 +336,41 @@ int main(void)
 			BenchLine(bench, "JIT-off pass skipped: the host did not allow switching (pref benchswitch)");
 	}
 	if (bench->cancelled)
-		BenchLine(bench, "stopped with Command-period");
-	BenchWriteReport(bench);
+		BenchLine(bench, "stopped");
+	FSMakeFSSpec(0, 0, "\pSheepBench Report", &spec);
+	BenchWriteReport(bench, &spec);
 	snprintf(line, sizeof(line), "done: %d failures", bench->failures);
 	BenchLine(bench, line);
-	if (options.automatic) {
+}
+
+int main(void)
+{
+	Bench *bench;
+	BenchOptions options;
+	bench = (Bench *)NewPtrClear(sizeof(Bench));
+	if (bench == NULL)
+		return 1;
+	bench->rows = (BenchRow *)NewPtrClear(sizeof(BenchRow) * BENCHMAXROWS);
+	if (bench->rows == NULL)
+		return 1;
+	bench->mailbox = ShearsOpen();
+	BenchHostRefresh(bench);
+	BenchCalibrate(bench);
+	memset(&options, 0, sizeof(options));
+	options.suites = BENCHSUITEALL;
+	if (!BenchUiOpen(bench))
+		return 1;
+	if (BenchReadAuto(&options)) {
+		BenchRun(bench, &options);
+		BenchUiClose(bench);
 		if (options.shutdown)
 			BenchShutDown();
 		return 0;
 	}
-	printf("Press Return to quit.\n");
-	getchar();
+	while (BenchUiMenu(bench, &options)) {
+		BenchRun(bench, &options);
+		BenchUiDone(bench);
+	}
+	BenchUiClose(bench);
 	return 0;
 }

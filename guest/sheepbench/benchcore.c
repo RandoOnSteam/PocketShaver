@@ -78,8 +78,7 @@ void BenchCalibrate(Bench *bench)
 void BenchLine(Bench *bench, const char *text)
 {
 	char line[340];
-	printf("%s\n", text);
-	fflush(stdout);
+	BenchUiLine(bench, text);
 	if (bench->mailbox) {
 		snprintf(line, sizeof(line), "SheepBench: %s\n", text);
 		ShearsCall(bench->mailbox, SHEARSCMDREPORT, line, strlen(line));
@@ -115,6 +114,9 @@ Boolean BenchCancelled(Bench *bench)
 {
 	KeyMap keys;
 	unsigned char *bytes;
+	if (bench->cancelled)
+		return true;
+	BenchUiPoll(bench);
 	if (bench->cancelled)
 		return true;
 	GetKeys(keys);
@@ -267,10 +269,20 @@ static Boolean BenchHigherIsBetter(int unit)
 	return unit == BENCHUNITMPERSEC || unit == BENCHUNITMBPERSEC || unit == BENCHUNITPERSEC;
 }
 
+static const char *BenchPassName(Bench *bench)
+{
+	if (bench->pass == BENCHPASSJITOFF)
+		return " [JIT off]";
+	return "";
+}
+
 BenchRow *BenchBegin(Bench *bench, const char *suite, const char *test, int unit)
 {
 	BenchRow *row;
+	char status[120];
 	int index;
+	snprintf(status, sizeof(status), "%s: %s%s", suite, test, BenchPassName(bench));
+	BenchUiStatus(bench, status);
 	for (index = 0; index < bench->rowcount; index++) {
 		row = &bench->rows[index];
 		if (strcmp(row->suite, suite) == 0 && strcmp(row->test, test) == 0)
@@ -288,13 +300,6 @@ BenchRow *BenchBegin(Bench *bench, const char *suite, const char *test, int unit
 	row->value[1] = BENCHNOVALUE;
 	row->native = BENCHNOVALUE;
 	return row;
-}
-
-static const char *BenchPassName(Bench *bench)
-{
-	if (bench->pass == BENCHPASSJITOFF)
-		return " [JIT off]";
-	return "";
 }
 
 void BenchRecord(Bench *bench, BenchRow *row, const BenchMeasurement *measurement, double work)

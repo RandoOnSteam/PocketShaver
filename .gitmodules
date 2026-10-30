@@ -1,0 +1,4 @@
+[submodule "guest/pdcurses"]
+	path = guest/pdcurses
+	url = https://github.com/RandoOnSteam/PDCursesMod.git
+	branch = master

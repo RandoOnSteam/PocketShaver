@@ -12,7 +12,7 @@ cmake -S guest/sheepbench -B build-sheepbench -G Ninja -DCMAKE_TOOLCHAIN_FILE=$T
 
 The SheepBench build also needs the build machine's `cc` - it runs `sbexpected.c` to compute the kernel checksums into `sbexpected.h`. It also needs Retro68's `m68k-apple-macos-as`/`objcopy` (the 68k kernels) and `xxd`.
 
-Copy `SheepShears.bin`, `SheepShearsInstaller.bin` and `SheepBench.bin` into the extfs folder with `emumonitor deploy`.
+Copy `SheepShears.bin`, `SheepShearsInstaller.bin`, `SheepBench.bin` and `SheepBenchCurses.bin` into the extfs folder with `emumonitor deploy`.
 
 ### SheepShears
 
@@ -20,7 +20,7 @@ Background-only tool that needs to be put in Startup Items on the guest. `SheepS
 
 ### SheepBench
 
-Just a standard guest app, you can put anywhere. It asks which suites to run, whether to do a quick run, and (when the host allows it) whether to repeat everything with the JIT off.
+Just a standard guest app, you can put anywhere. It asks which suites to run, whether to do a quick run, and (when the host allows it) whether to repeat everything with the JIT off. The same build also makes `SheepBenchCurses`, the same benchmark with a windowed text UI through PDCursesMod's Mac port (the `guest/pdcurses` submodule; run `git submodule update --init` first). It is the same source compiled with `SHEEPBENCHCURSES` (`benchui.c` holds both front ends). 
 
 ## Program Descriptions
 
@@ -67,3 +67,14 @@ Both talk to the host through `shearsclient.h`: SheepShaver writes `'SHRS'` at l
 | native | 8 | runs a `sbkernels.c` kernel natively: checksum and time per iteration (median of up to five timed runs of at least 2 ms) |
 | setjit | 9 | JIT off (0) or back on (1); refused unless `benchswitch true` |
 | report | 10 | a SheepBench result line, appended to `SheepBench.txt` |
+
+`SheepBenchCurses` also has the following features:
+
+- a menu to tick the suites, quick mode and the JIT-off pass, then Run;
+- a run view with the live result log, the current test and a progress bar (Esc or Command-period stops between repetitions);
+- View results: a scrollable table with value, noise, % of native, the JIT-off value and the speedup;
+- Host information: what the host reported (JIT state, switching, disks and their image types);
+- Save report: the tab-separated report under a name you pick;
+- Compare: pick a saved report and see it next to the current results with the change in percent.
+
+Keys: Up/Down and Space/Return in the menu, or R run, V results, H host, S save, C compare, Q quit; mouse clicks select menu lines.

@@ -23,6 +23,7 @@
 
 #include <MacTypes.h>
 #include <Memory.h>
+#include <Files.h>
 #include <stdint.h>
 #include "../shearsclient.h"
 #include "sbkernels.h"
@@ -83,8 +84,20 @@ typedef struct BenchMemory {
 	Handle temporary;
 } BenchMemory;
 
+typedef struct BenchOptions {
+	unsigned long suites;
+	Boolean jitoff;
+	Boolean quick;
+	Boolean shutdown;
+	Boolean automatic;
+} BenchOptions;
+
 typedef struct Bench {
 	ShearsMailbox *mailbox;
+	void *ui;
+	int suiteindex;
+	int suitecount;
+	const char *suitename;
 	double timebase;
 	int failures;
 	int pass;
@@ -130,6 +143,20 @@ Boolean BenchExpected(uint32_t kernel, uint32_t param, uint32_t *iterations, uin
 Boolean BenchKernelTest(Bench *bench, const char *suite, const char *test, uint32_t kernel, uint32_t param, int unit,
 	double work);
 long BenchCall3(const void *code, long first, long second, long third);
+
+int BenchSuiteCount(void);
+const char *BenchSuiteName(int index);
+const char *BenchSuiteDescription(int index);
+unsigned long BenchSuiteFlag(int index);
+void BenchRun(Bench *bench, const BenchOptions *options);
+OSErr BenchWriteReport(Bench *bench, const FSSpec *spec);
+Boolean BenchUiOpen(Bench *bench);
+void BenchUiClose(Bench *bench);
+void BenchUiLine(Bench *bench, const char *text);
+void BenchUiStatus(Bench *bench, const char *text);
+void BenchUiPoll(Bench *bench);
+Boolean BenchUiMenu(Bench *bench, BenchOptions *options);
+void BenchUiDone(Bench *bench);
 
 void SuiteCpu(Bench *bench);
 void Suite68k(Bench *bench);

@@ -16,7 +16,16 @@ add_custom_command(
 	WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 	DEPENDS kernels68k.s
 	VERBATIM)
-add_application(SheepBench main.c benchcore.c suitecpu.c suite68k.c suitememory.c suitemmu.c suitequickdraw.c suite3d.c
+set(SHEEPBENCHSOURCES main.c benchcore.c benchui.c suitecpu.c suite68k.c suitememory.c suitemmu.c suitequickdraw.c suite3d.c
+	suiteqd3d.c suitedisk.c sbaltivec.c sbkernels.c ${CMAKE_CURRENT_BINARY_DIR}/sbexpected.h ${CMAKE_CURRENT_BINARY_DIR}/k68code.h)
+set(PDCURSESDIR ${CMAKE_CURRENT_SOURCE_DIR}/../pdcurses)
+file(GLOB PDCURSESSOURCES ${PDCURSESDIR}/pdcurses/*.c ${PDCURSESDIR}/mac/*.c)
+add_application(SheepBenchCurses ${SHEEPBENCHSOURCES} ${PDCURSESSOURCES} sheepbenchcurses.r CREATOR "ShBc")
+target_include_directories(SheepBenchCurses PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR} ${PDCURSESDIR}
+	${PDCURSESDIR}/mac ${PDCURSESDIR}/common)
+target_compile_definitions(SheepBenchCurses PRIVATE SHEEPBENCHCURSES)
+target_compile_options(SheepBenchCurses PRIVATE -O2 -Wno-multichar -ffp-contract=off -Wno-pointer-sign -Wno-unused-function)
+add_application(SheepBench main.c benchcore.c benchui.c suitecpu.c suite68k.c suitememory.c suitemmu.c suitequickdraw.c suite3d.c
 	suiteqd3d.c suitedisk.c sbaltivec.c sbkernels.c ${CMAKE_CURRENT_BINARY_DIR}/sbexpected.h ${CMAKE_CURRENT_BINARY_DIR}/k68code.h
 	CONSOLE CREATOR "ShBn")
 target_include_directories(SheepBench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
