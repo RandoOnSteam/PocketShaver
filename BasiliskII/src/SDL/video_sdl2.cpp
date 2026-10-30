@@ -72,6 +72,9 @@
 #include <cpu_emulation.h>
 #include "main.h"
 #include "adb.h"
+#ifdef SHEEPSHAVER
+#include "shears.h"
+#endif
 #ifdef ENABLE_EMULATOR_MONITOR
 #include "emulator_monitor.h"
 #endif
@@ -3342,6 +3345,10 @@ static void handle_events(void)
 			// Window "close" widget clicked
 			case SDL_QUIT:
 				if (SDL_GetModState() & (KMOD_LALT | KMOD_RALT)) break;
+#ifdef SHEEPSHAVER
+				if (ShearsRequestShutdown())
+					break;
+#endif
 				ADBKeyDown(0x7f);	// Power key
 				ADBKeyUp(0x7f);
 				break;

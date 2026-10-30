@@ -38,8 +38,6 @@ struct basic_block_info
 	uintptr				end_pc;
 	int32				count;
 	uint32				size;
-	uint32				c1;
-	uint32				c2;
 
 	// List of blocks we depend on
 	dependency			dep[MAX_TARGETS];

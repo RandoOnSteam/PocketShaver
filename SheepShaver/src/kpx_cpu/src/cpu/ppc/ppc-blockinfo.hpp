@@ -60,6 +60,7 @@ struct powerpc_block_info
 #endif
 #endif
 	uintptr				min_pc, max_pc;
+	bool				usesfp;
 
 	void init(uintptr start_pc);
 	bool intersect(uintptr start, uintptr end);
@@ -71,6 +72,7 @@ inline void
 powerpc_block_info::init(uintptr start_pc)
 {
 	basic_block_info::init(start_pc);
+	usesfp = false;
 #if PPC_DECODE_CACHE
 	di = NULL;
 #endif

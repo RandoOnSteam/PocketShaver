@@ -741,6 +741,36 @@ void * PF_CONVENTION powerpc_cpu::compile_chain_block(block_info *sbi)
 }
 #endif
 
+#define PPC_MSR_FLOAT 0x2000u
+
+bool powerpc_cpu::is_float_instruction(uint32 opcode)
+{
+	const uint32 primary = opcode >> 26;
+	uint32 extended;
+	if (primary >= 48 && primary <= 55)
+		return true;
+	if (primary == 59 || primary == 63)
+		return true;
+	if (primary != 31)
+		return false;
+	extended = (opcode >> 1) & 0x3ff;
+	return extended == 535 || extended == 567 || extended == 599 || extended == 631 || extended == 663 ||
+		extended == 695 || extended == 727 || extended == 759 || extended == 983;
+}
+
+void powerpc_cpu::step_fp_block()
+{
+	for (;;) {
+		const uint32 opcode = vm_read_memory_4(pc());
+		const instr_info_t *ii = decode(opcode);
+		if (!(msr() & PPC_MSR_FLOAT) && is_float_instruction(opcode) && fp_unavailable_eligible() && deliver_fp_unavailable())
+			return;
+		ii->execute(this, opcode);
+		if (instruction_ends_dispatch_block(ii, opcode))
+			return;
+	}
+}
+
 void powerpc_cpu::execute(uint32 entry)
 {
 	bool invalidated_cache = false;
@@ -836,6 +866,8 @@ void powerpc_cpu::execute(uint32 entry)
 				di->opcode = opcode;
 				di->execute = ii->execute;
 				di++;
+				if (is_float_instruction(opcode))
+					bi->usesfp = true;
 #if PPC_EXECUTE_DUMP_STATE
 				if (dump_state) {
 					di->opcode = 0;
@@ -879,6 +911,9 @@ void powerpc_cpu::execute(uint32 entry)
 			// Execute all cached blocks
 		  pdi_execute:
 			for (;;) {
+				if (bi->usesfp && !(msr() & PPC_MSR_FLOAT))
+					step_fp_block();
+				else
 #if PPC_NATIVE_JIT
 				if (bi->nativeentry) {
 #if PPC_NATIVEJIT_VERIFY

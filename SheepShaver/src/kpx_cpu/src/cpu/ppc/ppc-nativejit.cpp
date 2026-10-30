@@ -1,4 +1,24 @@
+/*
+ *  ppc-nativejit.cpp - Native JIT (as opposed to dynjit)
+ * 
+ *	(C) 2026 RandoOnSteam (battlemageloveryt@gmail.com)
+ *
+ *  This program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation; either version 2 of the License, or
+ *  (at your option) any later version.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program; if not, write to the Free Software
+ *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ */
 #include "sysdeps.h"
+#include <fenv.h>
 #include "cpu/ppc/ppc-cpu.hpp"
 
 #if PPC_NATIVE_JIT
@@ -1313,6 +1333,7 @@ void* powerpc_cpu::NativeJitCompileBlock(block_info* bi)
 	block_info::decode_info* decode;
 	block_info::decode_info* decodeinfo;
 	uint8* codestart;
+	uint8* floatenabled;
 #if PPC_NATIVEJIT_VERIFY
 	int verifiable;
 	verifiable = 1;
@@ -1353,6 +1374,16 @@ void* powerpc_cpu::NativeJitCompileBlock(block_info* bi)
 	}
 #endif
 	loopstart = NativeJitLabel(&emitter);
+	if (bi->usesfp)
+	{
+		NativeJitLoadRegister(&emitter, NATIVEJIT_T0, (int)((uint8*)&msr() - base));
+		NativeJitOperateImmediate(&emitter, NATIVEJIT_ALU_AND, NATIVEJIT_T0, 0x2000);
+		NativeJitOperateImmediate(&emitter, NATIVEJIT_ALU_XOR, NATIVEJIT_T0, 0x2000);
+		floatenabled = NativeJitBranchIfZero(&emitter, NATIVEJIT_T0);
+		NativeJitStoreRegisterImmediate(&emitter, layout.mPc, bi->pc);
+		NativeJitJumpToCode(&emitter, nativejit->mExit);
+		NativeJitBranchLand(&emitter, floatenabled);
+	}
 	translated = 0;
 	syncedpc = bi->pc;
 	address = bi->pc;
@@ -1478,6 +1509,7 @@ void powerpc_cpu::NativeJitReset()
 	base = (uint8*)regs_ptr();
 	NativeJitBegin(&emitter, nativejit->mCode, (uint8*)nativejit + NATIVEJIT_CODE_SIZE, 0, 0);
 	NativeJitIndirectExit(&emitter, (int)((uint8*)&regs().pc - base), (int)((uint8*)&regs().spcflags - base), nativejit);
+	nativejit->mExit = emitter.mCode;
 	NativeJitEpilogue(&emitter);
 	nativejit->mReturnStub = emitter.mCode;
 	NativeJitReturnStub(&emitter, (int)((uint8*)&regs().pc - base), nativejit);
@@ -1588,6 +1620,14 @@ static void NativeJitVerifyRestore(const NATIVEJITVERIFYSTATE* state, powerpc_re
 	registers->pc = state->mPc;
 	registers->reserve_valid = state->mReserveValid;
 	registers->reserve_addr = state->mReserveAddress;
+	if ((state->mFpscr & 3) == 1)
+		fesetround(FE_TOWARDZERO);
+	else if ((state->mFpscr & 3) == 2)
+		fesetround(FE_UPWARD);
+	else if ((state->mFpscr & 3) == 3)
+		fesetround(FE_DOWNWARD);
+	else
+		fesetround(FE_TONEAREST);
 }
 
 static int NativeJitVerifyExtendedAccess(uint32 extended, uint32* size)

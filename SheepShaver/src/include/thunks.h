@@ -81,9 +81,8 @@ enum {
   NATIVE_USB_UIM_POLL,     /* the Expert's idle work and node publishing */
   NATIVE_USB_UIM_COMPLETE, /* hands finished transfers back to the family */
   NATIVE_USB_EXPORT_HOOK,  /* sits on a watched library export */
-  NATIVE_USB_EXPERT_NOTIFY, /* sits in front of the USB Expert's notification
-                               routine; the only call the family makes into
-                               the Expert, so the only place to watch it */
+  NATIVE_USB_EXPERT_NOTIFY, /* sits in front of the USB Expert's notification */
+  NATIVE_SHEARS,
   #if defined(ENABLE_NATIVE_CINEPAK_PATCH) \
 			&& ENABLE_NATIVE_CINEPAK_PATCH
 	NATIVE_CINEPAK_DISPATCH, /* QuickTime Cinepak ('cvid') 

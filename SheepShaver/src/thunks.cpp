@@ -146,6 +146,7 @@ uint32 NativeOpcode(int selector)
 		opcode = POWERPC_NATIVE_OP(1, selector);
 		break;
 	case NATIVE_USB_EXPERT_NOTIFY:
+	case NATIVE_SHEARS:
 		opcode = POWERPC_NATIVE_OP(0, selector);
 		break;
 #if defined(ENABLE_NATIVE_CINEPAK_PATCH) \

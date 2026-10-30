@@ -138,6 +138,8 @@ set(SS_CORE
 	"${SS_SRC}/rsrc_patches.cpp"
 	"${SS_SRC}/emul_op.cpp"
 	"${SS_SRC}/soundinput.cpp"
+	"${SS_SRC}/shears.cpp"
+	"${SS_SRC}/../../guest/sheepbench/sbkernels.c"
 	"${B2_SRC}/joymanager.cpp"
 	"${SS_SRC}/name_registry.cpp"
 	"${SS_SRC}/usbhid.cpp"
@@ -584,6 +586,7 @@ if(CMAKE_SIZEOF_VOID_P EQUAL 8 AND ENABLE_OSX_GUEST_TESTS AND (WIN32 OR CMAKE_SY
 	add_executable(OsxInputTest "${SS_SRC}/../../tools/tests/osxinput.cpp"
 		"${SS_SRC}/osxguest/osxpointer.cpp"
 		"${SS_SRC}/osxguest/osxcpu.cpp"
+		"${SS_SRC}/osxguest/osxcpu970.cpp"
 		"${SS_SRC}/osxguest/osxfpu.cpp"
 		"${SS_SRC}/osxguest/osxvec.cpp"
 		"${SS_SRC}/osxguest/osxjit.cpp")

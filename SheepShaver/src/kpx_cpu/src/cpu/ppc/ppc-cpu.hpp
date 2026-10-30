@@ -129,6 +129,10 @@ protected:
 	// vectors override this; the base implementation retains the legacy
 	// register-copy callback for non-native execution modes.
 	virtual bool external_interrupt();
+	virtual bool fp_unavailable_eligible() { return false; }
+	virtual bool deliver_fp_unavailable() { return false; }
+	static bool is_float_instruction(uint32 opcode);
+	void step_fp_block();
 #ifdef SHEEPSHAVER
 	virtual void watch_event_queue() { }
 #endif

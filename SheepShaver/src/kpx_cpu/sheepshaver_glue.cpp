@@ -43,6 +43,7 @@ extern "C" void catalyst_pump_appkit_events(void);
 #include "cpu/ppc/ppc-operations.hpp"
 #include "cpu/ppc/ppc-instructions.hpp"
 #include "thunks.h"
+#include "shears.h"
 #include "osxguest.h"
 
 // Used for NativeOp trampolines
@@ -255,6 +256,8 @@ public:
 	void return_from_exception(uint32 saved_pc, uint32 saved_msr);
 	bool decrementer_exception();
 	bool external_interrupt();
+	bool fp_unavailable_eligible();
+	bool deliver_fp_unavailable();
 #if PPC_DEBUG_TRACE
 	void watch_event_queue(void);
 #endif
@@ -1121,6 +1124,8 @@ static const uint32 PPC_EXTERNAL_HANDLER_SLOT = 0x14;
 static const uint32 PPC_PROGRAM_HANDLER_SLOT = 0x1c;
 static const uint32 PPC_DECREMENTER_HANDLER_SLOT = 0x24;
 static const uint32 PPC_TRACE_HANDLER_SLOT = 0x34;
+static const uint32 PPC_FLOAT_UNAVAILABLE_VECTOR = 0x00300800;
+static const uint32 PPC_FLOAT_UNAVAILABLE_HANDLER_SLOT = 0x20;
 static const uint32 PPC_VECTOR_TAG_OFFSET = 0x24;
 
 static const char *ppc_exception_vector_name(uint32 vector)
@@ -2344,6 +2349,23 @@ bool sheepshaver_cpu::external_interrupt()
 	external_interrupt_accepted_count++;
 	external_interrupt_native_vector_count++;
 	return true;
+}
+
+bool sheepshaver_cpu::fp_unavailable_eligible()
+{
+	if (!nanokernel2)
+		return false;
+	if (!newworldv2 && current_execute_depth() != 1)
+		return false;
+	if (newworldv2 && nestedframekind == NESTEDFRAME68K)
+		return false;
+	return pc() < emulatorstubstart || pc() >= emulatorstubend;
+}
+
+bool sheepshaver_cpu::deliver_fp_unavailable()
+{
+	return enter_exception_vector(PPC_FLOAT_UNAVAILABLE_VECTOR, PPC_FLOAT_UNAVAILABLE_HANDLER_SLOT, pc(),
+		ppc_exception_srr1(msr(), 0)) == NULL;
 }
 
 bool sheepshaver_cpu::DeliverSystemCall(void)
@@ -3669,6 +3691,9 @@ void sheepshaver_cpu::execute_native_op(uint32 selector)
 		break;
 	}
 #endif /* #ifdef ENABLE_USB */
+	case NATIVE_SHEARS:
+		gpr(3) = ShearsCall(gpr(3));
+		break;
 	case NATIVE_EXCEPTION_STEP:
 		exception_step();
 		break;
