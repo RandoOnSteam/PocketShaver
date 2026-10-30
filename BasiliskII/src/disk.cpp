@@ -28,6 +28,7 @@
 
 #include "sysdeps.h"
 
+#include <stdio.h>
 #include <string.h>
 #include <vector>
 
@@ -301,6 +302,24 @@ void DiskInit(void)
 /*
  *  Deinitialization
  */
+
+int DiskDescribe(char *text, int capacity)
+{
+	drive_vec::iterator info;
+	drive_vec::iterator end;
+	int length;
+	int added;
+	length = 0;
+	end = drives.end();
+	for (info = drives.begin(); info != end; ++info) {
+		added = snprintf(text + length, capacity - length, "disk drive=%d kind=%s ro=%d\n", info->num, SysImageKind(info->fh),
+			(int)info->read_only);
+		if (added < 0 || added >= capacity - length)
+			break;
+		length += added;
+	}
+	return length;
+}
 
 void DiskExit(void)
 {

@@ -508,6 +508,7 @@ private:
 
 #if PPC_NATIVE_JIT
 	NATIVEJITSTATE * nativejit;
+	bool nativejitpaused;
 	void * NativeJitCompileBlock(block_info * bi);
 	void NativeJitLinkTo(block_info * bi);
 	void NativeJitReset();
@@ -525,6 +526,10 @@ private:
 public:
 	static void NativeJitInterpret(void * cpu, const void * decodeinfo);
 	void EnableNativeJit();
+	bool NativeJitAvailable() const { return nativejit != NULL; }
+	bool NativeJitRunning() const { return nativejit != NULL && !nativejitpaused; }
+	bool NativeJitSwitchPending() { return spcflags().test(SPCFLAG_JIT_SWITCH) != 0; }
+	void NativeJitPause(bool paused) { nativejitpaused = paused; spcflags().set(SPCFLAG_JIT_SWITCH); }
 private:
 #endif
 

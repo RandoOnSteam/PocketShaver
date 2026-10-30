@@ -924,6 +924,27 @@ bool SysIsReadOnly(void *arg)
 }
 
 
+const char *SysImageKind(void *arg)
+{
+	file_handle *fh = (file_handle *)arg;
+	if (!fh)
+		return "none";
+	if (fh->qcow)
+		return "qcow2";
+	if (fh->chd)
+		return "chd";
+#if defined(BINCUE)
+	if (fh->is_bincue)
+		return "bincue";
+#endif
+	if (fh->is_cdrom)
+		return "cdrom";
+	if (fh->is_file)
+		return "raw";
+	return "device";
+}
+
+
 /*
  *  Check if the given file handle refers to a fixed or a removable disk
  */

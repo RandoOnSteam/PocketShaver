@@ -672,6 +672,12 @@ bool powerpc_cpu::check_spcflags()
 	// One read and a compare unless the Event Manager queue actually moved.
 	watch_event_queue();
 #endif
+#if PPC_NATIVE_JIT
+	if (spcflags().test(SPCFLAG_JIT_SWITCH) && execute_depth == 1) {
+		spcflags().clear(SPCFLAG_JIT_SWITCH);
+		invalidate_cache();
+	}
+#endif
 	if (spcflags().test(SPCFLAG_CPU_DECREMENTER))
 		spcflags().clear(SPCFLAG_CPU_DECREMENTER);
 	// Host wakeups (notably the 60 Hz tick) also provide a bounded polling
@@ -898,7 +904,7 @@ void powerpc_cpu::execute(uint32 entry)
 			my_block_cache.add_to_active_list(bi);
 			decode_cache_p += bi->size;
 #if PPC_NATIVE_JIT
-			if (nativejit) {
+			if (nativejit && !nativejitpaused) {
 				bi->nativeentry = NativeJitCompileBlock(bi);
 				if (bi->nativeentry)
 					decode_cache_p -= bi->size;
@@ -1031,6 +1037,7 @@ void powerpc_cpu::init_decode_cache()
 	decode_cache_end_p = decode_cache + DECODE_CACHE_MAX_ENTRIES;
 #if PPC_NATIVE_JIT
 	nativejit = NULL;
+	nativejitpaused = false;
 #endif
 #if FLIGHT_RECORDER
 	// Leave enough room to last call to record_step()

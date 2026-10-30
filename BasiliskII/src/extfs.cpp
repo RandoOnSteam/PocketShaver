@@ -130,6 +130,11 @@ const int CLUMP_SIZE = 0x4000;
 // Drive number of our pseudo-drive
 static int drive_number;
 
+int ExtFSDriveNumber(void)
+{
+	return drive_number;
+}
+
 
 // Disk/drive icon
 const uint8 ExtFSIcon[256] = {

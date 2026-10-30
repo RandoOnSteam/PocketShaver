@@ -83,6 +83,7 @@ prefs_desc common_prefs_items[] = {
 	{"ignoreillegal", TYPE_BOOLEAN, false, "ignore illegal instructions"},
 	{"ppcexceptions", TYPE_BOOLEAN, false, "deliver taken PPC traps to the MacOS exception handler chain"},
 	{"jit", TYPE_BOOLEAN, false,        "enable JIT compiler"},
+	{"benchswitch", TYPE_BOOLEAN, false, "allow SheepBench to switch the JIT off and on while running"},
 	{"jit68k", TYPE_BOOLEAN, false,     "enable 68k DR emulator"},
 	{"keyboardtype", TYPE_INT32, false, "hardware keyboard type"},
 	{"hardcursor", TYPE_BOOLEAN, false, "hardware mouse cursor"},

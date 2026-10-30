@@ -1053,6 +1053,42 @@ bool SysIsReadOnly(void *arg)
 }
 
 
+const char *SysImageKind(void *arg)
+{
+	mac_file_handle *fh = (mac_file_handle *)arg;
+	struct stat info;
+	unsigned char magic[8];
+	FILE *file;
+	size_t got;
+	if (!fh)
+		return "none";
+#if defined(BINCUE)
+	if (fh->is_bincue)
+		return "bincue";
+#endif
+	if (fh->is_cdrom)
+		return "cdrom";
+	if (fh->name == NULL || stat(fh->name, &info) != 0)
+		return "device";
+	if (S_ISDIR(info.st_mode))
+		return "sparsebundle";
+	if (!S_ISREG(info.st_mode))
+		return "device";
+	file = fopen(fh->name, "rb");
+	if (file == NULL)
+		return "raw";
+	got = fread(magic, 1, sizeof(magic), file);
+	fclose(file);
+	if (got >= 4 && memcmp(magic, "QFI\xfb", 4) == 0)
+		return "qcow2";
+	if (got == 8 && memcmp(magic, "MComprHD", 8) == 0)
+		return "chd";
+	if (got == 8 && memcmp(magic, "conectix", 8) == 0)
+		return "vhd";
+	return "raw";
+}
+
+
 /*
  *  Check if the given file handle refers to a fixed or a removable disk
  */

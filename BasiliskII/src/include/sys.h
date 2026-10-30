@@ -60,6 +60,7 @@ extern loff_t SysGetDescriptorSize(int filedescriptor);
 extern void SysEject(void *fh);
 extern bool SysFormat(void *fh);
 extern bool SysIsReadOnly(void *fh);
+extern const char *SysImageKind(void *fh);
 extern bool SysIsFixedDisk(void *fh);
 extern bool SysIsDiskInserted(void *fh);
 

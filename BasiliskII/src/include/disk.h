@@ -31,6 +31,7 @@ extern uint32 DiskIconAddr;				// Icon address (Mac address space, set by PatchR
 
 extern void DiskInit(void);
 extern void DiskExit(void);
+extern int DiskDescribe(char *text, int capacity);
 
 extern void DiskInterrupt(void);
 

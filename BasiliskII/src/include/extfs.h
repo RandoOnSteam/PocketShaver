@@ -23,6 +23,7 @@
 
 extern void ExtFSInit(void);
 extern void ExtFSExit(void);
+extern int ExtFSDriveNumber(void);
 
 extern void InstallExtFS(void);
 

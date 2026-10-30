@@ -35,6 +35,7 @@ enum {
 	SPCFLAG_JIT_EXEC_RETURN			= 1 << 4,	// Return from compiled code
 	SPCFLAG_CPU_DECREMENTER			= 1 << 5,	// Recheck the PowerPC decrementer
 	SPCFLAG_CPU_STOP				= 1 << 6,
+	SPCFLAG_JIT_SWITCH				= 1 << 7,
 };
 
 // Flags are set from other threads (e.g. the 60 Hz tick thread triggering

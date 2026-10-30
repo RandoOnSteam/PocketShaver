@@ -207,6 +207,9 @@ if(NOT EXISTS "${SS_PPC_EXECUTE_IMPL}")
 	message(FATAL_ERROR "Missing ${SS_PPC_EXECUTE_IMPL}")
 endif()
 list(APPEND SS_DYNGEN_INC "${SS_SRC}/Unix/dyngen_precompiled")
+if(NOT MSVC)
+	set_source_files_properties("${SS_SRC}/../../guest/sheepbench/sbkernels.c" PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
+endif()
 set_source_files_properties(
 	"${SS_KPX}/src/cpu/ppc/ppc-execute.cpp"
 	PROPERTIES OBJECT_DEPENDS "${SS_PPC_EXECUTE_IMPL}")

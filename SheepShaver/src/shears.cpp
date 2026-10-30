@@ -27,12 +27,16 @@
 #include "prefs.h"
 #include "thunks.h"
 #include "shears.h"
+#include "disk.h"
+#include "extfs.h"
 #include "../../guest/sheepbench/sbkernels.h"
 
 #define SHEARSPOLLTICKS 30
 #define SHEARSCONTACTMS 3000
 #define SHEARSCAPSHUTDOWN 2
-#define SHEARSNATIVEBUDGETUS 20000
+#define SHEARSNATIVEMINUS 2000
+#define SHEARSNATIVEMAXUS 50000
+#define SHEARSNATIVEREPEATS 5
 #define SHEARSREPORTFILE "SheepBench.txt"
 #if defined(_WIN32)
 #define SHEARSHOSTNAME "windows"
@@ -83,6 +87,16 @@ static void Report(const char *text)
 	fflush(stdout);
 }
 
+static uint64 NativeTime(uint32 kernel, uint32 iterations, uint32 param, void *scratch, uint32 repeats)
+{
+	uint64 start;
+	uint32 index;
+	start = GetTicks_usec();
+	for (index = 0; index < repeats; index++)
+		SbRun(kernel, iterations, param, scratch);
+	return GetTicks_usec() - start;
+}
+
 static void Native(uint32 mailbox)
 {
 	uint32 words[3];
@@ -91,8 +105,11 @@ static void Native(uint32 mailbox)
 	uint32 param;
 	uint32 repeats;
 	uint32 index;
-	uint64 start;
+	uint32 other;
+	uint32 position;
 	uint64 elapsed;
+	uint64 swap;
+	uint64 samples[SHEARSNATIVEREPEATS];
 	uint64 picoseconds;
 	void *scratch;
 	kernel = ReadMacInt32(mailbox + SHEARSHEADER);
@@ -111,28 +128,75 @@ static void Native(uint32 mailbox)
 	words[0] = SbRun(kernel, iterations, param, scratch);
 	repeats = 1;
 	for (;;) {
-		start = GetTicks_usec();
-		for (index = 0; index < repeats; index++)
-			SbRun(kernel, iterations, param, scratch);
-		elapsed = GetTicks_usec() - start;
-		if (elapsed >= SHEARSNATIVEBUDGETUS || repeats >= 0x10000000u)
+		elapsed = NativeTime(kernel, iterations, param, scratch, repeats);
+		if (elapsed >= SHEARSNATIVEMINUS || repeats >= 0x10000000u)
 			break;
 		repeats *= 2;
 	}
+	samples[0] = elapsed;
+	for (index = 1; index < SHEARSNATIVEREPEATS; index++) {
+		if (elapsed * (index + 1) > SHEARSNATIVEMAXUS)
+			break;
+		samples[index] = NativeTime(kernel, iterations, param, scratch, repeats);
+	}
 	free(scratch);
+	for (other = 1; other < index; other++) {
+		swap = samples[other];
+		position = other;
+		while (position > 0 && samples[position - 1] > swap) {
+			samples[position] = samples[position - 1];
+			position--;
+		}
+		samples[position] = swap;
+	}
+	elapsed = samples[index / 2];
 	picoseconds = elapsed * 1000000 / ((uint64)repeats * iterations);
 	words[1] = (uint32)(picoseconds >> 32);
 	words[2] = (uint32)picoseconds;
 	ReplyWords(mailbox, SHEARSOK, words, 3);
 }
 
+static const char *JitName(int state)
+{
+	if (state == PPCJITON)
+		return "on";
+	if (state == PPCJITOFF)
+		return "off";
+	if (state == PPCJITPENDING)
+		return "pending";
+	return "none";
+}
+
 static void Info(uint32 mailbox)
 {
-	char text[512];
+	char text[SHEARSMAXPAYLOAD];
 	int length;
-	length = snprintf(text, sizeof(text), "version=1\npvr=%08x\ntimebase=%lld\nram=%u\njit=%d\nhost=%s\n", PVR,
-		(long long)TimebaseSpeed, RAMSize, (int)PrefsFindBool("jit"), SHEARSHOSTNAME);
+	int state;
+	state = PPCNativeJitState();
+	length = snprintf(text, sizeof(text),
+		"version=2\npvr=%08x\ntimebase=%lld\nram=%u\njit=%s\njit_at_start=%d\nswitch_pending=%d\nbenchswitch=%d\nhost=%s\n",
+		PVR, (long long)TimebaseSpeed, RAMSize, JitName(state), (int)PrefsFindBool("jit"), (int)(state == PPCJITPENDING),
+		(int)PrefsFindBool("benchswitch"), SHEARSHOSTNAME);
+	if (length > 0 && length < (int)sizeof(text))
+		length += DiskDescribe(text + length, (int)sizeof(text) - length);
+	if (length > 0 && length < (int)sizeof(text) - 32 && PrefsFindBool("enableextfs"))
+		length += snprintf(text + length, sizeof(text) - length, "extfs drive=%d kind=extfs ro=0\n", ExtFSDriveNumber());
 	ReplyText(mailbox, text, (uint32)length);
+}
+
+static void SetJit(uint32 mailbox)
+{
+	if (!PrefsFindBool("benchswitch")) {
+		ReplyWords(mailbox, SHEARSDISABLED, NULL, 0);
+		return;
+	}
+	if (!PPCNativeJitSet(ReadMacInt32(mailbox + SHEARSHEADER) != 0)) {
+		ReplyWords(mailbox, SHEARSUNSUPPORTED, NULL, 0);
+		return;
+	}
+	printf("Sheep Shears: SheepBench switched the JIT %s\n", ReadMacInt32(mailbox + SHEARSHEADER) ? "on" : "off");
+	fflush(stdout);
+	ReplyWords(mailbox, SHEARSOK, NULL, 0);
 }
 
 void ShearsInit(void)
@@ -183,6 +247,8 @@ uint32 ShearsCall(uint32 mailbox)
 		Info(mailbox);
 	else if (command == SHEARSCMDNATIVE)
 		Native(mailbox);
+	else if (command == SHEARSCMDSETJIT)
+		SetJit(mailbox);
 	else if (command == SHEARSCMDREPORT) {
 		CopyText(mailbox, length, text, sizeof(text));
 		Report(text);

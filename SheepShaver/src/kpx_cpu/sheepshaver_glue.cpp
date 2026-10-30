@@ -2750,6 +2750,33 @@ void PPCExceptionStallSample(void)
 #endif
 }
 
+int PPCNativeJitState(void)
+{
+#if PPC_NATIVE_JIT
+	if (ppc_cpu == NULL || !ppc_cpu->NativeJitAvailable())
+		return PPCJITNONE;
+	if (ppc_cpu->NativeJitSwitchPending())
+		return PPCJITPENDING;
+	if (ppc_cpu->NativeJitRunning())
+		return PPCJITON;
+	return PPCJITOFF;
+#else
+	return PPCJITNONE;
+#endif
+}
+
+bool PPCNativeJitSet(bool on)
+{
+#if PPC_NATIVE_JIT
+	if (ppc_cpu == NULL || !ppc_cpu->NativeJitAvailable())
+		return false;
+	ppc_cpu->NativeJitPause(!on);
+	return true;
+#else
+	return false;
+#endif
+}
+
 void FlushCodeCache(uintptr start, uintptr end)
 {
 	D(bug("FlushCodeCache(%08x, %08x)\n", start, end));

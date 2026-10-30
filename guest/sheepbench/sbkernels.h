@@ -32,7 +32,13 @@
 #define SBKERNELDOUBLE 6
 #define SBKERNELCALL 7
 #define SBKERNELFLOAT 8
-#define SBKERNELCOUNT 9
+#define SBKERNELCOMPARE 9
+#define SBKERNELDIRECT 10
+#define SBKERNELATOMIC 11
+#define SBKERNELDOUBLETHRU 12
+#define SBKERNELVEC 13
+#define SBKERNELWORDCOPY 14
+#define SBKERNELCOUNT 15
 
 #ifdef __cplusplus
 extern "C" {
@@ -42,6 +48,8 @@ const char *SbName(uint32_t kernel);
 size_t SbScratchBytes(uint32_t kernel, uint32_t param);
 void SbPrepare(uint32_t kernel, uint32_t param, void *scratch);
 uint32_t SbRun(uint32_t kernel, uint32_t iterations, uint32_t param, void *scratch);
+void SbVecArrays(void *scratch, uint32_t param, float **x, float **y);
+uint32_t SbVecChecksum(void *scratch, uint32_t param);
 
 #ifdef __cplusplus
 }
