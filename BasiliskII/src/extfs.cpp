@@ -1256,7 +1256,7 @@ static int16 fs_set_vol(uint32 pb, bool hfs, uint32 vcb)
 }
 
 // Query file attributes (HFileParam)
-static int16 fs_get_file_info(uint32 pb, bool hfs, uint32 dirID)
+static int16 fs_get_file_info(uint32 pb, uint32 dirID)
 {
 	D(bug(" fs_get_file_info(%08lx), vRefNum %d, name %.31s, idx %d, dirID %d\n", pb, ReadMacInt16(pb + ioVRefNum), Mac2HostAddr(ReadMacInt32(pb + ioNamePtr) + 1), ReadMacInt16(pb + ioFDirIndex), dirID));
 
@@ -1327,7 +1327,7 @@ read_next_de:
 #endif
 	WriteMacInt32(pb + ioFlMdDat, TimeToMacTime(st.st_mtime));
 
-	get_finfo(full_path, pb + ioFlFndrInfo, hfs ? pb + ioFlXFndrInfo : 0, false);
+	get_finfo(full_path, pb + ioFlFndrInfo, 0, false);
 
 	WriteMacInt16(pb + ioFlStBlk, 0);
 	uint32 file_size = (uint32) st.st_size;
@@ -1337,17 +1337,11 @@ read_next_de:
 	uint32 rf_size = get_rfork_size(full_path);
 	WriteMacInt32(pb + ioFlRLgLen, rf_size);
 	WriteMacInt32(pb + ioFlRPyLen, (rf_size | (AL_BLK_SIZE - 1)) + 1);
-
-	if (hfs) {
-		WriteMacInt32(pb + ioFlBkDat, 0);
-		WriteMacInt32(pb + ioFlParID, fs_item->parent_id);
-		WriteMacInt32(pb + ioFlClpSiz, 0);
-	}
 	return noErr;
 }
 
 // Set file attributes (HFileParam)
-static int16 fs_set_file_info(uint32 pb, bool hfs, uint32 dirID)
+static int16 fs_set_file_info(uint32 pb, uint32 dirID)
 {
 	D(bug(" fs_set_file_info(%08lx), vRefNum %d, name %.31s, idx %d, dirID %d\n", pb, ReadMacInt16(pb + ioVRefNum), Mac2HostAddr(ReadMacInt32(pb + ioNamePtr) + 1), ReadMacInt16(pb + ioFDirIndex), dirID));
 
@@ -1365,7 +1359,7 @@ static int16 fs_set_file_info(uint32 pb, bool hfs, uint32 dirID)
 		return fnfErr;
 
 	// Set Finder info
-	set_finfo(full_path, pb + ioFlFndrInfo, hfs ? pb + ioFlXFndrInfo : 0, false);
+	set_finfo(full_path, pb + ioFlFndrInfo, 0, false);
 
 	//!! times
 	return noErr;
@@ -2178,10 +2172,10 @@ int16 ExtFSHFS(uint32 vcb, uint16 selectCode, uint32 paramBlock, uint32 globalsP
 			return fs_rename(paramBlock, hfs ? ReadMacInt32(paramBlock + ioDirID) : 0);
 
 		case kFSMGetFileInfo:
-			return fs_get_file_info(paramBlock, hfs, hfs ? ReadMacInt32(paramBlock + ioDirID) : 0);
+			return fs_get_file_info(paramBlock, hfs ? ReadMacInt32(paramBlock + ioDirID) : 0);
 
 		case kFSMSetFileInfo:
-			return fs_set_file_info(paramBlock, hfs, hfs ? ReadMacInt32(paramBlock + ioDirID) : 0);
+			return fs_set_file_info(paramBlock, hfs ? ReadMacInt32(paramBlock + ioDirID) : 0);
 
 		case kFSMUnmountVol:
 			return fs_unmount_vol(vcb);
