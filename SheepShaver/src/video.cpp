@@ -45,9 +45,9 @@
 #include "MiscellaneousSettingsObjCCppHeader.h"
 #include "gfx_color_policy.h"
 #endif
+#include "dsp_pixmap_offsets.h"
 #if (defined(ENABLE_GFXACCEL) && defined(SHEEPSHAVER)) || TARGET_OS_IPHONE
 #include "display_mode_controller.h"
-#include "dsp_pixmap_offsets.h"
 #include "dsp_video_status_policy.h"
 #include "metal_compositor.h"
 #endif
@@ -190,8 +190,6 @@ void VideoInstallDisplay(void)
 				CallMacOS3(displayinitproc, initroutine, private_data->driverreference, video_rel_depth_from_abs(private_data->saveMode), bootdevice);
 				CallMacOS1(displayselectproc, selectroutine, bootdevice);
 			}
-			private_data->displayregistrationactive = false;
-			return;
 		}
 	}
 	typedef int16 (*displaybeginproc)(uint32 *);
