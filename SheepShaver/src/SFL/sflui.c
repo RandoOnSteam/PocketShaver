@@ -1014,12 +1014,14 @@ static void SflUiOnRun(SFLUIAPP *pThis)
 		#if defined(SFLMONITORENABLED)
 			SflUiStartMonitor(pThis);
 		#endif
+		WSTimerBeginPeriod(1);
 		pThis->tickercreated = WSTicker_Create(&pThis->ticker,
 			&pThis->window, SFLUITICKMS, SflUiOnTicker);
 
 		if (pThis->tickercreated) {
 			SflEmulatorStart();
 			WSTicker_Destroy(&pThis->ticker);
+			WSTimerEndPeriod(1);
 			pThis->tickercreated = FALSE;
 			SflEmulatorStop();
 		}

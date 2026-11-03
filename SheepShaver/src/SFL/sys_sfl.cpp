@@ -28,6 +28,9 @@
 #include "bincue.h"
 #include "gui.h"
 #include "file.h"
+extern "C" {
+#include "drive.h"
+}
 
 #define SFLSYSLAYOUTBYTES 256
 
@@ -126,7 +129,7 @@ static bool SflDiskOpenFile(SFLDISK *disk, const char *path, bool readonly)
 {
 	uint8 layout[SFLSYSLAYOUTBYTES];
 	loff_t size;
-	if (readonly || !WSFile_Create(&disk->file, path, FILE_READWRITE | FILE_BINARY)) {
+	if ((readonly && !disk->cdrom) || !WSFile_Create(&disk->file, path, FILE_READWRITE | FILE_BINARY)) {
 		readonly = true;
 		if (!WSFile_Create(&disk->file, path, FILE_READ | FILE_BINARY))
 			return false;
@@ -292,6 +295,26 @@ static void *SflDiskBinCue(void *fh)
 	if (fh == NULL)
 		return NULL;
 	return ((SFLDISK *)fh)->bincue;
+}
+
+int SysCDReadSector(void *fh, void *buffer, uint32 sector, uint8 type, uint8 flags)
+{
+	SFLDISK *disk;
+	CDROMDRIVE drive;
+	disk = (SFLDISK *)fh;
+	if (disk->bincue)
+		return ReadCDSectorBinCue(disk->bincue, buffer, sector, type, flags);
+	if (!disk->cdrom || !WSFile_IsCreated(&disk->file))
+		return -1;
+	memset(&drive, 0, sizeof(drive));
+#if defined(_WIN32)
+	drive.mFd = WSFile_GetHandle(&disk->file);
+#elif !defined(macintosh)
+	drive.mFd = (int)(intptr)WSFile_GetHandle(&disk->file);
+#else
+	return -1;
+#endif
+	return CdromDrive_ReadSector(&drive, buffer, CDROMDRIVE_SECTOR_BUFFER_SIZE, sector, type, flags);
 }
 
 bool SysCDReadTOC(void *fh, uint8 *toc)

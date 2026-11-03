@@ -1211,6 +1211,35 @@ void SysAllowRemoval(void *arg)
  *  Read CD-ROM TOC (binary MSF format, 804 bytes max.)
  */
 
+int SysCDReadSector(void *arg, void *buffer, uint32 sector, uint8 type, uint8 flags)
+{
+	mac_file_handle *fh;
+	fh = (mac_file_handle *)arg;
+#if defined(BINCUE)
+	if (fh->is_bincue)
+		return ReadCDSectorBinCue(fh->bincue_fd, buffer, sector, type, flags);
+#endif
+#if defined(__linux__)
+	cdrom_generic_command packet;
+	memset(&packet, 0, sizeof(packet));
+	packet.cmd[0] = 0xbe;
+	packet.cmd[1] = type << 2;
+	packet.cmd[2] = (uint8)(sector >> 24);
+	packet.cmd[3] = (uint8)(sector >> 16);
+	packet.cmd[4] = (uint8)(sector >> 8);
+	packet.cmd[5] = (uint8)sector;
+	packet.cmd[8] = 1;
+	packet.cmd[9] = flags;
+	packet.buffer = (unsigned char *)buffer;
+	packet.buflen = 2352;
+	packet.data_direction = CGC_DATA_READ;
+	packet.timeout = 30000;
+	if (ioctl(fh->fd, CDROM_SEND_PACKET, &packet) == 0)
+		return (int)packet.buflen;
+#endif
+	return -1;
+}
+
 bool SysCDReadTOC(void *arg, uint8 *toc)
 {
 	mac_file_handle *fh = (mac_file_handle *)arg;

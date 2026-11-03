@@ -67,6 +67,14 @@ extern bool SysIsDiskInserted(void *fh);
 extern void SysPreventRemoval(void *fh);
 extern void SysAllowRemoval(void *fh);
 extern bool SysCDReadTOC(void *fh, uint8 *toc);
+#ifndef HAVE_SYS_CD_READ_SECTOR
+#if defined(_WIN32) || defined(__linux__) || defined(USE_SFL)
+#define HAVE_SYS_CD_READ_SECTOR 1
+#else
+#define HAVE_SYS_CD_READ_SECTOR 0
+#endif
+#endif
+extern int SysCDReadSector(void *fh, void *buffer, uint32 sector, uint8 type, uint8 flags);
 extern bool SysCDGetPosition(void *fh, uint8 *pos);
 extern bool SysCDPlay(void *fh, uint8 start_m, uint8 start_s, uint8 start_f, uint8 end_m, uint8 end_s, uint8 end_f);
 extern bool SysCDPause(void *fh);

@@ -21,6 +21,7 @@
 #include "sysdeps.h"
 
 #include <winioctl.h>
+#include <ntddscsi.h>
 #include <io.h>
 
 #include <string>
@@ -1030,6 +1031,37 @@ void SysAllowRemoval(void *arg)
 /*
  *  Read CD-ROM TOC (binary MSF format, 804 bytes max.)
  */
+
+int SysCDReadSector(void *arg, void *buffer, uint32 sector, uint8 type, uint8 flags)
+{
+	file_handle *fh;
+	SCSI_PASS_THROUGH_DIRECT packet;
+	DWORD returned;
+	fh = (file_handle *)arg;
+#if defined(BINCUE)
+	if (fh->is_bincue)
+		return ReadCDSectorBinCue(fh->bincue_fd, buffer, sector, type, flags);
+#endif
+	memset(&packet, 0, sizeof(packet));
+	packet.Length = sizeof(packet);
+	packet.CdbLength = 12;
+	packet.DataIn = SCSI_IOCTL_DATA_IN;
+	packet.DataTransferLength = 2352;
+	packet.TimeOutValue = 30;
+	packet.DataBuffer = buffer;
+	packet.Cdb[0] = 0xbe;
+	packet.Cdb[1] = type << 2;
+	packet.Cdb[2] = (uint8)(sector >> 24);
+	packet.Cdb[3] = (uint8)(sector >> 16);
+	packet.Cdb[4] = (uint8)(sector >> 8);
+	packet.Cdb[5] = (uint8)sector;
+	packet.Cdb[8] = 1;
+	packet.Cdb[9] = flags;
+	if (!DeviceIoControl(fh->fh, IOCTL_SCSI_PASS_THROUGH_DIRECT, &packet, sizeof(packet),
+		&packet, sizeof(packet), &returned, NULL) || packet.ScsiStatus != 0)
+		return -1;
+	return (int)packet.DataTransferLength;
+}
 
 bool SysCDReadTOC(void *arg, uint8 *toc)
 {

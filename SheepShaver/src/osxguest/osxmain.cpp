@@ -1615,8 +1615,7 @@ static void DestroySession(OsxSession *session)
 		}
 		for (busindex = 0; busindex < OSXATABUSES; busindex++) {
 			for (unitindex = 0; unitindex < 2; unitindex++) {
-				if (machine->ata[busindex].drives[unitindex].file)
-					Sys_close(machine->ata[busindex].drives[unitindex].file);
+				OsxAtaCloseMedia(&machine->ata[busindex].drives[unitindex]);
 			}
 			free(machine->ata[busindex].buffer);
 		}

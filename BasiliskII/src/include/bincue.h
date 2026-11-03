@@ -28,6 +28,7 @@ extern bool IsCueSheetPath(const char *path);
 extern void *OpenCDImage(const char *path);
 extern bool readtoc_bincue(void *, uint8 *);
 extern size_t read_bincue(void *, void *, loff_t,  size_t);
+extern int ReadCDSectorBinCue(void *, void *, uint32, uint8, uint8);
 extern loff_t size_bincue(void *);
 extern void close_bincue(void *);
 

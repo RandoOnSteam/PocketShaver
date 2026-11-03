@@ -20,6 +20,9 @@
 #include "sysdeps.h"
 #include "sys.h"
 #include "osxmachine.h"
+#if defined(BINCUE)
+#include "bincue.h"
+#endif
 
 #define ATABUSY 0x80
 #define ATAREADY 0x40
@@ -230,10 +233,10 @@ static void BuildIdentify(OsxAtaDrive *drive, uint8 *identify)
 static int OpenMedia(OsxAtaDrive *drive, const char *path, int atapi)
 {
 	loff_t size;
-	drive->file = Sys_open(path, atapi != 0, false);
+	drive->file = Sys_open(path, atapi != 0, atapi != 0);
 	if (drive->file == NULL) {
 		drive->readonly = 1;
-		drive->file = Sys_open(path, true, false);
+		drive->file = Sys_open(path, true, atapi != 0);
 		if (drive->file == NULL)
 			return 0;
 	} else {
@@ -245,8 +248,26 @@ static int OpenMedia(OsxAtaDrive *drive, const char *path, int atapi)
 	else
 		drive->sectors = (uint64)size / OSXATASECTOR;
 	drive->dvd = atapi && drive->sectors > OSXATAPICDSECTORS;
+#if defined(BINCUE)
+	if (atapi)
+		drive->imagepath = strdup(path);
+#endif
 	drive->mediapresent = 1;
 	return 1;
+}
+
+void OsxAtaCloseMedia(OsxAtaDrive *drive)
+{
+#if defined(BINCUE)
+	if (drive->cdimage)
+		close_bincue(drive->cdimage);
+#endif
+	if (drive->file)
+		Sys_close(drive->file);
+	free(drive->imagepath);
+	drive->file = NULL;
+	drive->cdimage = NULL;
+	drive->imagepath = NULL;
 }
 
 int OsxAtaAttach(OsxMachine *machine, int busindex, int unit, const char *path, int atapi)
@@ -277,8 +298,7 @@ static void EjectMedia(OsxMachine *machine, OsxAtaDrive *drive)
 {
 	if (!drive->mediapresent)
 		return;
-	Sys_close(drive->file);
-	drive->file = NULL;
+	OsxAtaCloseMedia(drive);
 	drive->mediapresent = 0;
 	drive->mediachanged = 1;
 	drive->sectors = 0;
@@ -354,6 +374,23 @@ static void ApplyPatches(OsxAtaBus *bus, OsxAtaDrive *drive, uint8 *data, uint64
 	}
 }
 
+static int ReadCDSector(OsxAtaDrive *drive, void *buffer, uint32 sector, uint8 type, uint8 flags)
+{
+#if defined(BINCUE)
+	if (drive->imagepath) {
+		drive->cdimage = OpenCDImage(drive->imagepath);
+		free(drive->imagepath);
+		drive->imagepath = NULL;
+	}
+	if (drive->cdimage)
+		return ReadCDSectorBinCue(drive->cdimage, buffer, sector, type, flags);
+#endif
+#if HAVE_SYS_CD_READ_SECTOR
+	return SysCDReadSector(drive->file, buffer, sector, type, flags);
+#else
+	return -1;
+#endif
+}
 static int FillBuffer(OsxAtaBus *bus, OsxAtaDrive *drive)
 {
 	uint32 sectors;
@@ -364,9 +401,24 @@ static int FillBuffer(OsxAtaBus *bus, OsxAtaDrive *drive)
 	bytes = sectors * bus->sectorsize;
 	if (bus->lba + sectors > drive->sectors)
 		return 0;
-	if (Sys_read(drive->file, bus->buffer, (loff_t)(bus->lba * bus->sectorsize), bytes) != bytes)
-		return 0;
-	ApplyPatches(bus, drive, bus->buffer, bus->lba * bus->sectorsize, bytes);
+	if (drive->atapi && bus->packet[0] == 0xbe) {
+		int length;
+		uint32 sector;
+		bytes = 0;
+		for (sector = 0; sector < sectors; sector++) {
+			length = ReadCDSector(drive, bus->buffer + bytes, (uint32)(bus->lba + sector),
+				(bus->packet[1] >> 2) & 7, bus->packet[9]);
+			if (length < 0)
+				return 0;
+			if (length == OSXATAPISECTOR)
+				ApplyPatches(bus, drive, bus->buffer + bytes, (bus->lba + sector) * OSXATAPISECTOR, length);
+			bytes += length;
+		}
+	} else {
+		if (Sys_read(drive->file, bus->buffer, (loff_t)(bus->lba * bus->sectorsize), bytes) != bytes)
+			return 0;
+		ApplyPatches(bus, drive, bus->buffer, bus->lba * bus->sectorsize, bytes);
+	}
 	bus->lba += sectors;
 	bus->remaining -= sectors;
 	bus->bufferlength = bytes;
@@ -394,7 +446,7 @@ static void DataInBlockDone(OsxMachine *machine, OsxAtaBus *bus)
 {
 	OsxAtaDrive *drive;
 	drive = SelectedDrive(bus);
-	if (bus->bufferposition >= bus->bufferlength) {
+	while (bus->bufferposition >= bus->bufferlength) {
 		if (bus->remaining == 0) {
 			if (bus->atapitransfer) {
 				AtapiComplete(machine, bus, drive, 0);
@@ -564,69 +616,81 @@ static void PutAddress(uint8 *data, uint32 lba, int msf)
 
 static uint32 BuildToc(OsxAtaDrive *drive, uint8 *data, uint8 *packet)
 {
+	uint8 toc[804];
+	uint8 *entry;
 	uint32 length;
 	uint32 format;
 	uint32 frames;
+	uint32 address;
+	int index;
+	int tracks;
 	int msf;
 	msf = (packet[1] & 2) != 0;
 	format = packet[2] & 0x0f;
 	if (format == 0)
 		format = packet[9] >> 6;
-	if (format == 1) {
-		memset(data, 0, 12);
-		data[1] = 10;
-		data[2] = 1;
-		data[3] = 1;
-		data[5] = 0x14;
-		data[6] = 1;
-		PutAddress(data + 8, 0, msf);
-		return 12;
+	memset(toc, 0, sizeof(toc));
+	if (!SysCDReadTOC(drive->file, toc)) {
+		toc[2] = 1;
+		toc[3] = 1;
+		toc[5] = 0x14;
+		toc[6] = 1;
+		PutAddress(toc + 8, 0, 1);
+		toc[13] = 0x14;
+		toc[14] = 0xaa;
+		PutAddress(toc + 16, (uint32)drive->sectors, 1);
 	}
-	if (format == 2) {
-		memset(data, 0, 4 + 11 * 4);
-		data[2] = 1;
-		data[3] = 1;
-		length = 4;
-		data[length] = 1;
-		data[length + 1] = 0x14;
-		data[length + 3] = 0xa0;
-		data[length + 8] = 1;
-		length += 11;
-		data[length] = 1;
-		data[length + 1] = 0x14;
-		data[length + 3] = 0xa1;
-		data[length + 8] = 1;
-		length += 11;
-		data[length] = 1;
-		data[length + 1] = 0x14;
-		data[length + 3] = 0xa2;
-		frames = (uint32)drive->sectors + 150;
-		data[length + 8] = (uint8)(frames / (75 * 60));
-		data[length + 9] = (uint8)((frames / 75) % 60);
-		data[length + 10] = (uint8)(frames % 75);
-		length += 11;
-		data[length] = 1;
-		data[length + 1] = 0x14;
-		data[length + 3] = 1;
-		data[length + 9] = 2;
-		length += 11;
-		PutBig16(data, length - 2);
-		return length;
-	}
-	memset(data, 0, 20);
-	data[2] = 1;
-	data[3] = 1;
+	tracks = toc[3] - toc[2] + 1;
+	memset(data, 0, 4 + 11 * 102);
+	data[2] = toc[2];
+	data[3] = toc[3];
 	length = 4;
-	if (packet[6] <= 1) {
-		data[length + 1] = 0x14;
-		data[length + 2] = 1;
-		PutAddress(data + length + 4, 0, msf);
+	if (format == 1) {
+		data[2] = 1;
+		data[3] = 1;
+		memcpy(data + 4, toc + 4, 8);
+		if (!msf) {
+			frames = ((uint32)toc[9] * 60 + toc[10]) * 75 + toc[11];
+			PutBig32(data + 8, frames - 150);
+		}
 		length += 8;
+	} else if (format == 2) {
+		data[2] = 1;
+		data[3] = 1;
+		for (index = 0; index < 3; index++) {
+			data[length] = 1;
+			data[length + 1] = toc[5];
+			data[length + 3] = (uint8)(0xa0 + index);
+			if (index == 0)
+				data[length + 8] = toc[2];
+			else if (index == 1)
+				data[length + 8] = toc[3];
+			else
+				memcpy(data + length + 8, toc + 4 + tracks * 8 + 5, 3);
+			length += 11;
+		}
+		for (index = 0; index < tracks; index++) {
+			entry = toc + 4 + index * 8;
+			data[length] = 1;
+			data[length + 1] = entry[1];
+			data[length + 3] = entry[2];
+			memcpy(data + length + 8, entry + 5, 3);
+			length += 11;
+		}
+	} else if (format == 0) {
+		for (index = 0; index <= tracks; index++) {
+			entry = toc + 4 + index * 8;
+			if (entry[2] < packet[6])
+				continue;
+			memcpy(data + length, entry, 8);
+			frames = ((uint32)entry[5] * 60 + entry[6]) * 75 + entry[7];
+			address = frames - 150;
+			PutAddress(data + length + 4, address, msf);
+			length += 8;
+		}
+	} else {
+		return 0;
 	}
-	data[length + 1] = 0x14;
-	data[length + 2] = 0xaa;
-	PutAddress(data + length + 4, (uint32)drive->sectors, msf);
-	length += 8;
 	PutBig16(data, length - 2);
 	return length;
 }
@@ -742,59 +806,6 @@ static uint32 BuildDvdStructure(OsxAtaDrive *drive, uint8 *data, uint32 format)
 	return 0;
 }
 
-static uint8 ToBcd(uint32 value)
-{
-	return (uint8)(((value / 10) << 4) | (value % 10));
-}
-
-static int BuildRawSectors(OsxAtaBus *bus, OsxAtaDrive *drive, uint32 lba, uint32 count, uint8 flags)
-{
-	uint32 sector;
-	uint32 frames;
-	uint32 size;
-	uint8 *output;
-	size = 0;
-	if (flags & 0x80)
-		size += 12;
-	if (flags & 0x20)
-		size += 4;
-	if (flags & 0x10)
-		size += OSXATAPISECTOR;
-	if (flags & 0x08)
-		size += 288;
-	if (size == 0 || size * count > OSXATABUFFER || (uint64)lba + count > drive->sectors)
-		return 0;
-	output = bus->buffer;
-	for (sector = 0; sector < count; sector++) {
-		if (flags & 0x80) {
-			memset(output, 0xff, 12);
-			output[0] = 0;
-			output[11] = 0;
-			output += 12;
-		}
-		if (flags & 0x20) {
-			frames = lba + sector + 150;
-			output[0] = ToBcd(frames / (75 * 60));
-			output[1] = ToBcd((frames / 75) % 60);
-			output[2] = ToBcd(frames % 75);
-			output[3] = 1;
-			output += 4;
-		}
-		if (flags & 0x10) {
-			if (Sys_read(drive->file, output, (loff_t)(lba + sector) * OSXATAPISECTOR, OSXATAPISECTOR) != OSXATAPISECTOR)
-				return 0;
-			output += OSXATAPISECTOR;
-		}
-		if (flags & 0x08) {
-			memset(output, 0, 288);
-			output += 288;
-		}
-	}
-	bus->remaining = 0;
-	bus->bufferlength = size * count;
-	return 1;
-}
-
 static void AtapiExecute(OsxMachine *machine, OsxAtaBus *bus)
 {
 	OsxAtaDrive *drive;
@@ -904,12 +915,8 @@ static void AtapiExecute(OsxMachine *machine, OsxAtaBus *bus)
 			count = ((uint32)packet[6] << 24) | ((uint32)packet[7] << 16) | ((uint32)packet[8] << 8) | packet[9];
 		else
 			count = ((uint32)packet[6] << 16) | ((uint32)packet[7] << 8) | packet[8];
-		if (packet[0] == 0xbe && (packet[9] & 0xf8) != 0x10) {
-			if (!BuildRawSectors(bus, drive, lba, count, packet[9])) {
-				AtapiFail(machine, bus, drive, SENSEILLEGALREQUEST, 0x24);
-				return;
-			}
-			BeginBufferIn(machine, bus, bus->bufferlength, length, dma);
+		if (packet[0] == 0xbe && (((packet[1] >> 2) & 7) > 5 || (packet[9] & 7) || packet[10])) {
+			AtapiFail(machine, bus, drive, SENSEILLEGALREQUEST, 0x24);
 			return;
 		}
 		if ((uint64)lba + count > drive->sectors) {
@@ -920,7 +927,10 @@ static void AtapiExecute(OsxMachine *machine, OsxAtaBus *bus)
 			AtapiComplete(machine, bus, drive, 0);
 			return;
 		}
-		BeginSectorsIn(machine, bus, lba, count, OSXATAPISECTOR, length, dma);
+		if (packet[0] == 0xbe)
+			BeginSectorsIn(machine, bus, lba, count, 2352, length, dma);
+		else
+			BeginSectorsIn(machine, bus, lba, count, OSXATAPISECTOR, length, dma);
 		return;
 	case 0x43:
 		count = BuildToc(drive, data, packet);

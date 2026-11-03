@@ -162,6 +162,8 @@ typedef struct OsxBmac {
 
 typedef struct OsxAtaDrive {
 	void *file;
+	void *cdimage;
+	char *imagepath;
 	uint64 sectors;
 	int present;
 	int atapi;
@@ -571,6 +573,7 @@ void OsxDbdmaKick(OsxMachine *machine, int channel);
 
 void OsxAtaReset(OsxMachine *machine);
 int OsxAtaAttach(OsxMachine *machine, int bus, int unit, const char *path, int atapi);
+void OsxAtaCloseMedia(OsxAtaDrive *drive);
 uint32 OsxAtaRead(OsxMachine *machine, int bus, uint32 offset, int size);
 void OsxAtaWrite(OsxMachine *machine, int bus, uint32 offset, int size, uint32 value);
 void OsxAtaDmaReady(OsxMachine *machine, int bus);

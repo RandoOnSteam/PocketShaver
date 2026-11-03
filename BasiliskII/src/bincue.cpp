@@ -443,8 +443,8 @@ static bool ParseCueSheet(FILE *fh, CueSheet *cs, const char *cuefile)
 				} else if (!strcmp("MODE2/2352", field)) { // yellow-book CD-ROM standard
 					curr->tcf = DATA;
 					cs->raw_sector_size = 2352;
-					cs->cooked_sector_size = 2336; // no error bytes at end
-					cs->header_size = 16;
+					cs->cooked_sector_size = 2048;
+					cs->header_size = 24;
 				} else if (!strcmp("MODE1/2048", field)) { // pure data CD-ROM
 					curr->tcf = DATA;
 					cs->raw_sector_size = 2048;
@@ -641,7 +641,7 @@ static bool LoadImageSheet(const char *imagefile, CueSheet *cs)
 		cs->raw_sector_size = 2352;
 		cs->header_size = 16;
 		if (firstsector[15] == 2)
-			cs->cooked_sector_size = 2336;
+			cs->header_size = 24;
 	}
 
 	cs->length = (unsigned int)(imagelength / cs->raw_sector_size);
@@ -788,68 +788,230 @@ void close_bincue(void *fh)
  * valid bytes as possible from that raw sector (available)
  */
 
-size_t read_bincue(void *fh, void *b, loff_t offset, size_t len)
+static void EncodeCDParity(uint8 *sector, int majorcount, int minorcount, int majormult, int minorincrement, int offset)
 {
-	CueSheet *cs = (CueSheet *) fh;
-
-	size_t bytes_read = 0;						// bytes read so far
-	unsigned char *buf = (unsigned char *) b;	// target buffer
-	/* MSVC has no VLAs; raw CD sectors are at most 2352 bytes. */
-	unsigned char secbuf[2352];
-
-	if (cs == NULL || (b == NULL && len != 0) || offset < 0 ||
-	    cs->binfh < 0 || cs->raw_sector_size <= 0 ||
-	    cs->cooked_sector_size <= 0 || cs->header_size < 0 ||
-	    cs->header_size > cs->raw_sector_size - cs->cooked_sector_size ||
-	    (size_t)cs->raw_sector_size > sizeof(secbuf))
-		return (size_t)-1;
-
-	loff_t sec = ((offset/cs->cooked_sector_size) * cs->raw_sector_size);
-	loff_t secoff = offset % cs->cooked_sector_size;
-
-	// sec contains location (in bytes) of next raw sector to read
-	// secoff contains offset within that sector at which to start
-	// reading since we can request a read that starts in the middle
-	// of a sector
-
-	if (SysSeekDescriptor(cs->binfh, sec, SEEK_SET) < 0) {
-		return (size_t)-1;
+	uint8 forward[256];
+	uint8 backward[256];
+	uint8 first;
+	uint8 second;
+	uint8 value;
+	int index;
+	int minor;
+	int major;
+	int doubled;
+	int size;
+	for (index = 0; index < 256; index++) {
+		doubled = index << 1;
+		if (index & 0x80)
+			doubled ^= 0x11d;
+		forward[index] = (uint8)doubled;
+		backward[index ^ doubled] = (uint8)index;
 	}
-	while (len) {
-
-		// bytes available in next raw sector or len (bytes)
-		// we want whichever is less
-
-		size_t available = cs->cooked_sector_size - secoff;
-		available = (available > len) ? len : available;
-
-		// read the next raw sector
-
-		if (read(cs->binfh, secbuf, cs->raw_sector_size) != cs->raw_sector_size) {
-			return bytes_read;
+	size = majorcount * minorcount;
+	for (major = 0; major < majorcount; major++) {
+		index = (major >> 1) * majormult + (major & 1);
+		first = 0;
+		second = 0;
+		for (minor = 0; minor < minorcount; minor++) {
+			value = sector[12 + index];
+			index += minorincrement;
+			if (index >= size)
+				index -= size;
+			first ^= value;
+			second ^= value;
+			first = forward[first];
 		}
-
-		// copy cooked sector bytes (skip header if needed, typically 16 bytes)
-		// we want out of those available
-
-		bcopy(&secbuf[cs->header_size+secoff], &buf[bytes_read], available);
-
-		// next sector we start at the beginning
-
-		secoff = 0;
-
-		// increment running count decrement request
-
-		bytes_read += available;
-		len -= available;
+		first = backward[forward[first] ^ second];
+		sector[offset + major] = first;
+		sector[offset + major + majorcount] = first ^ second;
 	}
-	return bytes_read;
+}
+
+static void EncodeCDMode1(uint8 *sector, uint32 lba)
+{
+	uint32 checksum;
+	uint32 address;
+	uint32 value;
+	int index;
+	int bit;
+	memset(sector, 0xff, 12);
+	sector[0] = 0;
+	sector[11] = 0;
+	address = lba + 150;
+	value = address / 4500;
+	sector[12] = (uint8)((value / 10) * 16 + value % 10);
+	value = address / 75 % 60;
+	sector[13] = (uint8)((value / 10) * 16 + value % 10);
+	value = address % 75;
+	sector[14] = (uint8)((value / 10) * 16 + value % 10);
+	sector[15] = 1;
+	checksum = 0;
+	for (index = 0; index < 2064; index++) {
+		checksum ^= sector[index];
+		for (bit = 0; bit < 8; bit++) {
+			if (checksum & 1)
+				checksum = (checksum >> 1) ^ 0xd8018001;
+			else
+				checksum >>= 1;
+		}
+	}
+	for (index = 0; index < 4; index++)
+		sector[2064 + index] = (uint8)(checksum >> (index * 8));
+	memset(sector + 2068, 0, 8);
+	EncodeCDParity(sector, 86, 24, 2, 86, 2076);
+	EncodeCDParity(sector, 52, 43, 86, 88, 2248);
+}
+
+int ReadCDSectorBinCue(void *fh, void *buffer, uint32 lba, uint8 expectedtype, uint8 flags)
+{
+	CueSheet *sheet;
+	Track *track;
+	uint8 sector[2352];
+	uint8 *output;
+	loff_t offset;
+	uint32 position;
+	int trackindex;
+	int type;
+	int header;
+	int useroffset;
+	int userlength;
+	int checklength;
+	int length;
+	int index;
+	sheet = (CueSheet *)fh;
+	output = (uint8 *)buffer;
+	if (flags & 7 || expectedtype > 5)
+		return -1;
+	trackindex = PositionToTrack(sheet, lba);
+	if (trackindex >= sheet->tcnt)
+		return -1;
+	track = &sheet->tracks[trackindex];
+	position = lba - track->start;
+	memset(sector, 0, sizeof(sector));
+	if (position >= track->pregap) {
+		offset = track->fileoffset + (loff_t)(position - track->pregap) * sheet->raw_sector_size;
+		if (SysSeekDescriptor(sheet->binfh, offset, SEEK_SET) < 0)
+			return -1;
+		if (sheet->raw_sector_size == 2048) {
+			if (read(sheet->binfh, sector + 16, 2048) != 2048)
+				return -1;
+		} else if (read(sheet->binfh, sector, 2352) != 2352) {
+			return -1;
+		}
+	}
+	if (track->tcf == AUDIO) {
+		if (expectedtype != 0 && expectedtype != 1)
+			return -1;
+		if (!(flags & 0x10))
+			return 0;
+		memcpy(output, sector, 2352);
+		if (sheet->big_endian_audio) {
+			for (index = 0; index < 2352; index += 2) {
+				output[index] = sector[index + 1];
+				output[index + 1] = sector[index];
+			}
+		}
+		return 2352;
+	}
+	if (sheet->raw_sector_size == 2048) {
+		if (flags == 0x10 && (expectedtype == 0 || expectedtype == 2)) {
+			memcpy(output, sector + 16, 2048);
+			return 2048;
+		}
+		EncodeCDMode1(sector, lba);
+	}
+	if (sector[15] == 1) {
+		type = 2;
+		useroffset = 16;
+		userlength = 2048;
+		checklength = 288;
+	} else if (sector[15] == 2) {
+		type = 3;
+		useroffset = 16;
+		userlength = 2336;
+		checklength = 0;
+		if (memcmp(sector + 16, sector + 20, 4) == 0) {
+			type = 4;
+			useroffset = 24;
+			userlength = 2048;
+			checklength = 280;
+			if (sector[18] & 0x20) {
+				type = 5;
+				userlength = 2324;
+				checklength = 4;
+			}
+		}
+	} else {
+		return -1;
+	}
+	if (expectedtype != 0 && expectedtype != type)
+		return -1;
+	length = 0;
+	if (flags & 0x80) {
+		memcpy(output, sector, 12);
+		length += 12;
+	}
+	header = (flags >> 5) & 3;
+	if (header == 1 || header == 3) {
+		memcpy(output + length, sector + 12, 4);
+		length += 4;
+	}
+	if ((header == 2 || header == 3) && type >= 4) {
+		memcpy(output + length, sector + 16, 8);
+		length += 8;
+	}
+	if (flags & 0x10) {
+		memcpy(output + length, sector + useroffset, userlength);
+		length += userlength;
+	}
+	if (flags & 0x08) {
+		memcpy(output + length, sector + useroffset + userlength, checklength);
+		length += checklength;
+	}
+	return length;
+}
+
+size_t read_bincue(void *fh, void *buffer, loff_t offset, size_t length)
+{
+	CueSheet *sheet;
+	uint8 sector[2352];
+	uint8 *output;
+	size_t copied;
+	size_t available;
+	size_t position;
+	int count;
+	sheet = (CueSheet *)fh;
+	if (sheet->raw_sector_size == 2048) {
+		if (SysSeekDescriptor(sheet->binfh, offset, SEEK_SET) < 0)
+			return 0;
+		count = read(sheet->binfh, buffer, length);
+		if (count < 0)
+			return 0;
+		return (size_t)count;
+	}
+	output = (uint8 *)buffer;
+	copied = 0;
+	position = (size_t)(offset % 2048);
+	while (length > 0) {
+		count = ReadCDSectorBinCue(fh, sector, (uint32)(offset / 2048), 0, 0x10);
+		if (count != 2048)
+			return copied;
+		available = 2048 - position;
+		if (available > length)
+			available = length;
+		memcpy(output + copied, sector + position, available);
+		copied += available;
+		offset += available;
+		length -= available;
+		position = 0;
+	}
+	return copied;
 }
 
 loff_t size_bincue(void *fh)
 {
 	if (fh) {
-		return (loff_t)((CueSheet *)fh)->length * ((CueSheet *)fh)->cooked_sector_size;
+		return (loff_t)((CueSheet *)fh)->length * 2048;
 	}
 	return 0;
 }
@@ -865,7 +1027,7 @@ bool readtoc_bincue(void *fh, unsigned char *toc)
 		*p++ = cs->tracks[cs->tcnt - 1].number;
 		for (int i = 0; i < cs->tcnt; i++) {
 
-			FramesToMSF(cs->tracks[i].start, &msf);
+			FramesToMSF(cs->tracks[i].start + 150, &msf);
 			*p++ = 0;
 			*p++ = 0x10 | cs->tracks[i].tcf;
 			*p++ = cs->tracks[i].number;
@@ -875,7 +1037,7 @@ bool readtoc_bincue(void *fh, unsigned char *toc)
 			*p++ = msf.s;
 			*p++ = msf.f;
 		}
-		FramesToMSF(cs->length, &msf);
+		FramesToMSF(cs->length + 150, &msf);
 		if (msf.m > 255) {
 			msf.m = 255;
 			msf.s = 59;
@@ -890,9 +1052,9 @@ bool readtoc_bincue(void *fh, unsigned char *toc)
 		*p++ = msf.s;
 		*p++ = msf.f;
 
-		int toc_size = p - toc;
-		*toc++ = toc_size >> 8;
-		*toc++ = toc_size & 0xff;
+		int tocsize = p - toc - 2;
+		*toc++ = tocsize >> 8;
+		*toc++ = tocsize & 0xff;
 		return true;
 	}
 	return false;
@@ -911,7 +1073,7 @@ bool GetPosition_bincue(void *fh, uint8 *pos)
 		if (!(player->audio_enabled))
 			return false;
 
-		FramesToMSF(fpos, &abs);
+		FramesToMSF(fpos + 150, &abs);
 		if (trackno < cs->tcnt) {
 			// compute position relative to start of frame
 
@@ -1052,8 +1214,8 @@ bool CDPlay_bincue(void *fh, uint8 start_m, uint8 start_s, uint8 start_f,
 		{
 			MSF start_msf = { start_m, start_s, start_f };
 			MSF end_msf = { end_m, end_s, end_f };
-			player->audiostart = MSFToFrames(start_msf);
-			player->audioend   = MSFToFrames(end_msf);
+			player->audiostart = MSFToFrames(start_msf) - 150;
+			player->audioend   = MSFToFrames(end_msf) - 150;
 		}
 
 		track = PositionToTrack(player->cs, player->audiostart);
@@ -1118,7 +1280,7 @@ bool CDScan_bincue(void *fh, uint8 start_m, uint8 start_s, uint8 start_f, bool r
 
 	if (cs && player) {
 		MSF goto_msf = { start_m, start_s, start_f };
-		int goto_frame = MSFToFrames(goto_msf);
+		int goto_frame = MSFToFrames(goto_msf) - 150;
 
 		int scan_starting_track = PositionToTrack(cs, goto_frame);
 		if (scan_starting_track >= cs->tcnt ||

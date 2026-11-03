@@ -689,6 +689,11 @@ void SysAllowRemoval(void *arg)
  *  Read CD-ROM TOC (binary MSF format, 804 bytes max.)
  */
 
+int SysCDReadSector(void *arg, void *buffer, uint32 sector, uint8 type, uint8 flags)
+{
+	return -1;
+}
+
 bool SysCDReadTOC(void *arg, uint8 *toc)
 {
 	file_handle *fh = (file_handle *)arg;
