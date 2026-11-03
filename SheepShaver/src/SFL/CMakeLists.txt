@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 3.16)
-project(SheepShaverSFL C CXX)
+if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
+	project(SheepShaverSFL C CXX)
+else()
+	unset(CMAKE_C_STANDARD)
+endif()
 option(SFL_MONITOR "Build the emulator monitor server" OFF)
 
 set(CMAKE_CXX_STANDARD 98)
