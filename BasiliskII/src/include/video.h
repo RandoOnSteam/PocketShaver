@@ -39,7 +39,7 @@ using std::vector;
    multiscan monitors, Apple introduced another type of "mode", also having
    numbers starting from 0x80 but refrerring to the resolution and/or video
    timing of the display (it's possible to have two modes with the same
-   dimension but different refresh rates). We call this a "resolution ID". 
+   dimension but different refresh rates). We call this a "resolution ID".
    The combination of "Apple mode" and "ID" corresponds to a Basilisk II
    "video mode". To make the confusion worse, the video driver control call
    that sets the color depth is called "SetMode" while the one that sets
@@ -251,7 +251,7 @@ public:
 
 	// Called by the video driver to set the color palette (in indexed modes)
 	virtual void set_palette(uint8 *pal, int num) = 0;
-	
+
 	// Called by the video driver to set the gamma table
 	virtual void set_gamma(uint8 *gamma, int num) = 0;
 };
@@ -273,5 +273,6 @@ extern void VideoQuitFullScreen(void);
 
 extern void VideoInterrupt(void);
 extern void VideoRefresh(void);
+extern void VideoPumpEvents(void);
 
 #endif

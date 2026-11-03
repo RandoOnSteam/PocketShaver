@@ -44,34 +44,24 @@
 #ifndef O_BINARY
 #define O_BINARY 0
 #endif
-/* MSVC has no libgen.h / unistd.h; provide dirname for cue FILE path join. */
-static char *bincue_dirname(char *path)
-{
-	if (!path || !*path)
-		return path;
-	char *slash = strrchr(path, '/');
-	char *bslash = strrchr(path, '\\');
-	char *sep = slash;
-	if (bslash && (!sep || bslash > sep))
-		sep = bslash;
-	if (!sep) {
-		path[0] = '.';
-		path[1] = '\0';
-		return path;
-	}
-	if (sep == path) {
-		/* Root path like "C:\" or "\" - keep one separator */
-		sep[1] = '\0';
-	} else {
-		*sep = '\0';
-	}
-	return path;
-}
-#define dirname bincue_dirname
-#else
-#include <libgen.h>
+#elif !defined(USE_SFL)
 #include <unistd.h>
 #endif
+
+#if defined(USE_SFL)
+#define BINCUE_SEPARATORS "/\\:"
+#else
+#define BINCUE_SEPARATORS "/\\"
+#endif
+
+static size_t BinCueDirectoryLength(const char *path)
+{
+	size_t length;
+	length = strlen(path);
+	while (length > 0 && strchr(BINCUE_SEPARATORS, path[length - 1]) == NULL)
+		length--;
+	return length;
+}
 
 #include <list>
 #include <vector>
@@ -99,6 +89,10 @@ static int bincue_core_audio_callback(void);
 
 #include "bincue.h"
 #include "sys.h"
+#if defined(USE_SFL)
+#include "main.h"
+#include "posix_emu.h"
+#endif
 
 #if defined(QD3D_AUDIO_LOGGING_ENABLED) && QD3D_AUDIO_LOGGING_ENABLED
 #include "gfx_log.h"
@@ -181,7 +175,7 @@ typedef struct CDPlayer {
 #if defined(USE_SDL_AUDIO) && !defined(USE_SDL1)
 	SDL_AudioStream *stream;
 #endif
-#if defined(USE_SDL_AUDIO) && defined(USE_SDL1)
+#if (defined(USE_SDL_AUDIO) && defined(USE_SDL1)) || defined(USE_SFL)
 	uint32 resampleposition;
 	int16 previousframe[2];
 #endif
@@ -215,6 +209,19 @@ static OutputSettings current_output_settings;
 static std::list<CDPlayer*> players;
 CDPlayer* currently_playing = NULL;
 
+#if defined(USE_SFL)
+static B2_mutex *player_lock;
+#define LOCK_PLAYER		B2_lock_mutex(player_lock)
+#define UNLOCK_PLAYER	B2_unlock_mutex(player_lock)
+
+void InitBinCue() {
+	player_lock = B2_create_mutex();
+}
+
+void ExitBinCue() {
+	B2_delete_mutex(player_lock);
+}
+#else
 #if SDL_VERSION_ATLEAST(3, 0, 0)
 static SDL_Mutex *player_lock;
 #else
@@ -230,6 +237,7 @@ void InitBinCue() {
 void ExitBinCue() {
 	SDL_DestroyMutex(player_lock);
 }
+#endif
 
 CDPlayer* CSToPlayer(CueSheet* cs)
 {
@@ -381,28 +389,16 @@ static bool ParseCueSheet(FILE *fh, CueSheet *cs, const char *cuefile)
 					bool absolute = filename[0] == '/' || filename[0] == '\\';
 #if defined(_WIN32) || defined(WIN32)
 					absolute = absolute || (isalpha((unsigned char)filename[0]) && filename[1] == ':');
-					const char separator = '\\';
-#else
-					const char separator = '/';
 #endif
 					if (absolute) {
 						cs->binfile = strdup(filename);
 					} else {
-						char *tmp = strdup(cuefile);
-						if (!tmp) goto fail;
-						char *b = dirname(tmp);
-						const size_t dir_len = strlen(b);
-						const bool has_separator = dir_len != 0 &&
-							(b[dir_len - 1] == '/' || b[dir_len - 1] == '\\');
-						cs->binfile = (char *)malloc(dir_len + strlen(filename) +
-						                                  (has_separator ? 1 : 2));
+						const size_t dir_len = BinCueDirectoryLength(cuefile);
+						cs->binfile = (char *)malloc(dir_len + strlen(filename) + 1);
 						if (cs->binfile) {
-							if (has_separator)
-								sprintf(cs->binfile, "%s%s", b, filename);
-							else
-								sprintf(cs->binfile, "%s%c%s", b, separator, filename);
+							memcpy(cs->binfile, cuefile, dir_len);
+							strcpy(cs->binfile + dir_len, filename);
 						}
-						free(tmp);
 					}
 					if (!cs->binfile) goto fail;
 				}
@@ -595,7 +591,7 @@ static bool LoadCueSheet(const char *cuefile, CueSheet *cs)
 	return false;
 }
 
-#ifdef USE_SDL_AUDIO
+#if defined(USE_SDL_AUDIO) || defined(USE_SFL)
 	static void OpenPlayerStream(CDPlayer * player);
 	static void ClosePlayerStream(CDPlayer * player);
 #endif
@@ -709,7 +705,7 @@ static void *AttachPlayer(CueSheet *cs)
 	if (player->audiofh < 0)
 		player->audio_enabled = false;
 
-#ifdef USE_SDL_AUDIO
+#if defined(USE_SDL_AUDIO) || defined(USE_SFL)
 	OpenPlayerStream(player);
 #endif
 
@@ -761,7 +757,7 @@ void close_bincue(void *fh)
 
 		players.remove(player);
 
-#ifdef USE_SDL_AUDIO
+#if defined(USE_SDL_AUDIO) || defined(USE_SFL)
 		ClosePlayerStream(player);
 #endif
 		if (player->audiofh >= 0)
@@ -1314,13 +1310,13 @@ static uint8 *fill_buffer(int stream_len, CDPlayer* player)
 }
 
 
-#ifdef USE_SDL_AUDIO
+#if defined(USE_SDL_AUDIO) || defined(USE_SFL)
 
 bool HaveAudioToMix_bincue() {
 	return currently_playing != NULL;
 }
 
-#ifndef USE_SDL1
+#if !defined(USE_SDL1) && !defined(USE_SFL)
 void MixAudio_bincue(uint8 *stream, int dest_stream_len)
 {
 	if (!dest_stream_len) return;
@@ -1417,14 +1413,48 @@ static void ClosePlayerStream(CDPlayer * player)
 #define BINCUE_SOURCE_RATE 44100
 #define BINCUE_MIX_FRAMES 1024
 #define BINCUE_MAX_STEP 4
+#if defined(USE_SFL)
+#define BINCUE_AUDIO_U8 BINCUE_SFL_AUDIO_U8
+#define BINCUE_AUDIO_S16MSB BINCUE_SFL_AUDIO_S16MSB
+
+static void MixCDAudio(uint8 *destination, const uint8 *source, int bytes, int volume, int format)
+{
+	int index;
+	int mixed;
+	if (format == BINCUE_AUDIO_U8) {
+		for (index = 0; index < bytes; index++) {
+			mixed = destination[index] + (((int)source[index] - 128) * volume >> 7);
+			if (mixed < 0)
+				mixed = 0;
+			if (mixed > 255)
+				mixed = 255;
+			destination[index] = (uint8)mixed;
+		}
+		return;
+	}
+	for (index = 0; index + 1 < bytes; index += 2) {
+		mixed = (int16)((destination[index] << 8) | destination[index + 1])
+			+ ((int16)((source[index] << 8) | source[index + 1]) * volume >> 7);
+		if (mixed < -32768)
+			mixed = -32768;
+		if (mixed > 32767)
+			mixed = 32767;
+		destination[index] = (uint8)(mixed >> 8);
+		destination[index + 1] = (uint8)mixed;
+	}
+}
+#else
+#define BINCUE_AUDIO_U8 AUDIO_U8
+#define BINCUE_AUDIO_S16MSB AUDIO_S16MSB
+#endif
 
 static inline uint8 *WriteCDSample(uint8 *destination, int sample, int format)
 {
-	if (format == AUDIO_U8) {
+	if (format == BINCUE_AUDIO_U8) {
 		*destination = (uint8)((sample >> 8) + 128);
 		return destination + 1;
 	}
-	if (format == AUDIO_S16MSB) {
+	if (format == BINCUE_AUDIO_S16MSB) {
 		destination[0] = (uint8)(sample >> 8);
 		destination[1] = (uint8)sample;
 		return destination + 2;
@@ -1483,7 +1513,7 @@ void MixAudio_bincue(uint8 *stream, int dest_stream_len)
 	player = currently_playing;
 	const OutputSettings &output = current_output_settings;
 	framebytes = output.channels;
-	if (output.format != AUDIO_U8)
+	if (output.format != BINCUE_AUDIO_U8)
 		framebytes *= 2;
 	step = (uint32)(((uint64)BINCUE_SOURCE_RATE << 16) / output.freq);
 	volume = player->volume_mono;
@@ -1501,7 +1531,11 @@ void MixAudio_bincue(uint8 *stream, int dest_stream_len)
 		if (source == NULL)
 			break;
 		ResampleCDAudio(player, source, sourceframes, mixbuffer, frames, step, output);
+#if defined(USE_SFL)
+		MixCDAudio(stream, mixbuffer, frames * framebytes, volume, output.format);
+#else
 		SDL_MixAudio(stream, mixbuffer, frames * framebytes, volume);
+#endif
 		stream += frames * framebytes;
 		remaining -= frames;
 	}
@@ -1532,7 +1566,7 @@ void OpenAudio_bincue(int freq, int format, int channels, uint8 silence, int vol
 	current_output_settings.channels = channels;
 	current_output_settings.default_cd_player_volume = volume;
 	have_current_output_settings = true;
-#if SDL_VERSION_ATLEAST(3, 0, 0)
+#if defined(USE_SDL3)
 	D(bug("OpenAudio_bincue freq %d format %s channels %d volume %d\n",
 		current_output_settings.freq, SDL_GetAudioFormatName((SDL_AudioFormat)current_output_settings.format),
 		current_output_settings.channels, current_output_settings.default_cd_player_volume));

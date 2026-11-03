@@ -44,7 +44,14 @@ fd_set *global_readfds, *global_writefds, *global_xfds;
 
 char slirp_hostname[33];
 
-#ifdef _WIN32
+#if defined(USE_SFL)
+
+static int get_dns_addr(struct in_addr *pdns_addr)
+{
+    return SflSockGetDnsServer(pdns_addr);
+}
+
+#elif defined(_WIN32)
 
 static int get_dns_addr(struct in_addr *pdns_addr)
 {
@@ -164,7 +171,7 @@ static int get_dns_addr(struct in_addr *pdns_addr)
 
 #endif
 
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(USE_SFL)
 void slirp_cleanup(void)
 {
     WSACleanup();
@@ -178,7 +185,7 @@ int slirp_init(void)
 
 	load_host_domains();
     
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(USE_SFL)
     {
         WSADATA Data;
         WSAStartup(MAKEWORD(2,0), &Data);

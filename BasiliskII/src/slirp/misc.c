@@ -179,7 +179,7 @@ strerror(error)
 #endif
 
 
-#ifdef _WIN32
+#if defined(_WIN32) || defined(USE_SFL)
 
 int
 fork_exec(so, ex, do_pty)

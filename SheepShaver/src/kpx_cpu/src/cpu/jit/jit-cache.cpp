@@ -160,6 +160,9 @@ bool jit_wx_selftest(void)
 
 #if defined(__APPLE__)
 #include <sys/mman.h>
+#endif
+
+#if defined(__APPLE__) && defined(MAP_JIT)
 
 // MEM_BULK's vm_acquire() carves from the guest bulk arena (and needs
 // vm_init() to have run) — host-side code memory must come straight from

@@ -2,3 +2,7 @@
 	path = guest/pdcurses
 	url = https://github.com/RandoOnSteam/PDCursesMod.git
 	branch = master
+[submodule "thirdparty/sfl"]
+	path = thirdparty/sfl
+	url = https://codeberg.org/RandoOnSteam/sfl.git
+	branch = main

@@ -1312,7 +1312,7 @@ read_next_de:
 		return fnfErr;
 
 	// Fill in struct from fs_item and stats
-	if (ReadMacInt32(pb + ioNamePtr))
+	if (dir_index > 0 && ReadMacInt32(pb + ioNamePtr))
 		cstr2pstr((char *)Mac2HostAddr(ReadMacInt32(pb + ioNamePtr)), fs_item->guest_name);
 	WriteMacInt16(pb + ioFRefNum, 0);
 	WriteMacInt8(pb + ioFlAttrib, access(full_path, W_OK) == 0 ? 0 : faLocked);
@@ -1430,7 +1430,7 @@ read_next_de:
 		return dirNFErr;
 
 	// Fill in struct from fs_item and stats
-	if (ReadMacInt32(pb + ioNamePtr))
+	if (dir_index != 0 && ReadMacInt32(pb + ioNamePtr))
 		cstr2pstr((char *)Mac2HostAddr(ReadMacInt32(pb + ioNamePtr)), fs_item->guest_name);
 	WriteMacInt16(pb + ioFRefNum, 0);
 	WriteMacInt8(pb + ioFlAttrib, (S_ISDIR(st.st_mode) ? faIsDir : 0) | (access(full_path, W_OK) == 0 ? 0 : faLocked));

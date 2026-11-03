@@ -2308,10 +2308,7 @@ bool sheepshaver_cpu::external_interrupt()
 	}
 
 
-#ifdef USE_SDL_VIDEO
-	// SDL requires event pumping on the thread which established video mode.
-	SDL_PumpEvents();
-#endif
+	VideoPumpEvents();
 #if TARGET_OS_MACCATALYST
 	catalyst_pump_appkit_events();
 #endif
@@ -3040,10 +3037,10 @@ static void ppc_report_context(const char *what, uint32 pc, uint32 ea)
 			char msg[500];
 			if (!guest_addr_ok(base, 0x20))
 				continue;
-			o = snprintf(msg, sizeof(msg), 
+			o = snprintf(msg, sizeof(msg),
 				"[bad-ea] a%d %08x:", reg, base);
 			for (k = 0; k < 0x20; k += 4)
-				o += snprintf(msg + o, sizeof(msg) - o, 
+				o += snprintf(msg + o, sizeof(msg) - o,
 					" %08x", ReadMacInt32(base + k));
 			bug("%s\n", msg);
 		}
@@ -3321,6 +3318,7 @@ static void dump_crash_context(sheepshaver_cpu *cpu)
 	RsrcLocksDumpOnCrash();
 }
 
+#if !defined(USE_SFL)
 sigsegv_return_t sigsegv_handler(sigsegv_info_t *sip)
 {
 #if ENABLE_VOSF
@@ -3420,6 +3418,7 @@ sigsegv_return_t sigsegv_handler(sigsegv_info_t *sip)
 
 	return SIGSEGV_RETURN_FAILURE;
 }
+#endif
 
 /*
  *  Initialize CPU emulation
@@ -3558,10 +3557,7 @@ bool HandleInterrupt(powerpc_registers *r)
 		return false;
 	}
 
-#ifdef USE_SDL_VIDEO
-	// We must fill in the events queue in the same thread that did call SDL_SetVideoMode()
-	SDL_PumpEvents();
-#endif
+	VideoPumpEvents();
 #if TARGET_OS_MACCATALYST
 	// Keep UIKit responsive while the emulator owns the main thread on Catalyst.
 	// Runs on the emul/main thread (~60Hz for interpreter and JIT), reentrancy-

@@ -23,7 +23,7 @@
 #include <stdio.h>
 #include <math.h>
 #include <time.h>
-#if defined(__MINGW64__) || defined(_MSC_VER) || defined(__GLIBC__) || defined(__APPLE__)
+#if defined(__MINGW64__) || defined(_MSC_VER) || defined(__GLIBC__) || defined(__APPLE__) || defined(HAVE_FENV_H)
 #include <fenv.h>
 #endif
 #include "cpu/vm.hpp"
@@ -1573,7 +1573,7 @@ static const uint32 PPC_MSR_EE = 0x00008000;
  *  more trip around it.
  */
 
-#if defined(_WIN32)
+#if defined(_WIN32) && !defined(USE_SFL)
 
 #include <windows.h>
 
@@ -1631,6 +1631,74 @@ static void decrementer_timer_wait(powerpc_decrementer_timer *t, uint64 usec)
 	LeaveCriticalSection(&t->mutex);
 	WaitForSingleObject(t->wakeup, msec);
 	EnterCriticalSection(&t->mutex);
+}
+
+#elif defined(USE_SFL)
+
+#include "thread.h"
+
+struct powerpc_decrementer_timer {
+	WSCRITICALSECTION mutex;
+	WSSIGNAL wakeup;
+	WSSIGNAL exited;
+	WSTHREAD thread;
+	powerpc_cpu *cpu;
+};
+
+static WSTHREADENTRYCALLBACK(decrementer_timer_entry)
+{
+	powerpc_decrementer_timer *t = (powerpc_decrementer_timer *)cbparam;
+	t->cpu->decrementer_timer_loop();
+	WSSignal_Raise(&t->exited);
+	return WSTHREADENTRYPROCRETCODE(0);
+}
+
+static powerpc_decrementer_timer *decrementer_timer_create(void)
+{
+	powerpc_decrementer_timer *t = new powerpc_decrementer_timer;
+	WSCriticalSection_Construct(&t->mutex);
+	WSSignal_Create(&t->wakeup);
+	WSSignal_Create(&t->exited);
+	t->cpu = NULL;
+	return t;
+}
+
+static void decrementer_timer_spawn(powerpc_decrementer_timer *t,
+									powerpc_cpu *cpu)
+{
+	t->cpu = cpu;
+	WSThread_Create(&t->thread, decrementer_timer_entry, t);
+}
+
+static void decrementer_timer_join(powerpc_decrementer_timer *t)
+{
+	WSSignal_Wait(&t->exited, -1);
+	WSThread_Destroy(&t->thread);
+	WSSignal_Destroy(&t->exited);
+	WSSignal_Destroy(&t->wakeup);
+	WSCriticalSection_Destruct(&t->mutex);
+	delete t;
+}
+
+static void decrementer_timer_lock(powerpc_decrementer_timer *t)
+	{ WSCriticalSection_Lock(&t->mutex); }
+static void decrementer_timer_unlock(powerpc_decrementer_timer *t)
+	{ WSCriticalSection_Unlock(&t->mutex); }
+static void decrementer_timer_signal(powerpc_decrementer_timer *t)
+	{ WSSignal_Raise(&t->wakeup); }
+
+static void decrementer_timer_wait(powerpc_decrementer_timer *t, uint64 usec)
+{
+	int msec;
+	msec = -1;
+	if (usec != ~(uint64)0) {
+		msec = (int)((usec + 999) / 1000);
+		if (msec == 0)
+			msec = 1;
+	}
+	WSCriticalSection_Unlock(&t->mutex);
+	WSSignal_Wait(&t->wakeup, msec);
+	WSCriticalSection_Lock(&t->mutex);
 }
 
 #else

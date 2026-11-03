@@ -366,7 +366,7 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 #if (defined(ENABLE_GFXACCEL) && defined(SHEEPSHAVER)) || TARGET_OS_IPHONE
 			GfxAccelResetForReboot();
 #endif
-#ifdef USE_SDL_AUDIO
+#if defined(USE_SDL_AUDIO) || defined(USE_SFL)
 			PlayStartupSound();
 #endif
 			// Enable DR emulator (disabled for now)
@@ -421,7 +421,7 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 						SonyInterrupt();
 						DiskInterrupt();
 						CDROMInterrupt();
-#ifdef _WIN32
+#if defined(_WIN32) || defined(USE_SFL)
 						ClipInterrupt();
 #endif
 					}

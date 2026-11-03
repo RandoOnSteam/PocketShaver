@@ -67,7 +67,7 @@
 
 /* Define if iovec needs to be declared */
 #undef DECLARE_IOVEC
-#ifdef _WIN32
+#if defined(_WIN32) || defined(USE_SFL)
 #define DECLARE_IOVEC
 #endif
 
@@ -115,7 +115,7 @@
 
 /* Define if you DON'T have unix-domain sockets */
 #undef NO_UNIX_SOCKETS
-#ifdef _WIN32
+#if defined(_WIN32) || defined(USE_SFL)
 #define NO_UNIX_SOCKETS
 #endif
 

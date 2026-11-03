@@ -617,6 +617,9 @@ void powerpc_registers::interrupt_copy(powerpc_registers &oregs, powerpc_registe
 	}
 }
 
+#ifdef USE_SFL
+extern void SflEmulatorPump(void);
+#endif
 #ifdef SHEEPSHAVER
 bool powerpc_cpu::external_interrupt()
 {
@@ -646,6 +649,9 @@ bool powerpc_cpu::check_spcflags()
 	if (spcflags().test(SPCFLAG_CPU_TRIGGER_INTERRUPT)) {
 		spcflags().clear(SPCFLAG_CPU_TRIGGER_INTERRUPT);
 		spcflags().set(SPCFLAG_CPU_HANDLE_INTERRUPT);
+#ifdef USE_SFL
+		SflEmulatorPump();
+#endif
 	}
 	if (spcflags().test(SPCFLAG_CPU_HANDLE_INTERRUPT)) {
 		static bool processing_interrupt = false;

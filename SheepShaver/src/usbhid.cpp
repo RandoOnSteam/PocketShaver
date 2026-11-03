@@ -40,7 +40,7 @@
 #include <stdarg.h>
 #include <string.h>
 
-#ifdef WIN32
+#if defined(WIN32) && !defined(USE_SFL)
 #include <windows.h>
 #endif
 

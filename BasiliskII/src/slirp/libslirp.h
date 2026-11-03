@@ -1,7 +1,9 @@
 #ifndef _LIBSLIRP_H
 #define _LIBSLIRP_H
 
-#ifdef _WIN32
+#if defined(USE_SFL)
+#include "sflsocket.h"
+#elif defined(_WIN32)
 #ifdef __MINGW32__
 #if _WIN32_WINNT < 0x501
 #undef _WIN32_WINNT

@@ -295,7 +295,7 @@ static void adb_log_firebird(const char *why)
 	GetADBInfo(XXX, GetIndADB(i)). This is problematic for Thrustmaster
 	because ADB addresses are assigned dynamically.
 */
-#ifdef USE_SDL
+#if defined(USE_SDL) || defined(USE_SFL)
 #include "joymanager.h"
 /* Have to copy this block because ether_defs.h is SheepShaver-only
 * and slirp.h brings in too much */
@@ -1602,6 +1602,7 @@ static void joy_adb_reset_addr(void) {}
 static int  joy_adb_find(uint8 adr) { (void)adr; return -1; }
 static void joy_adb_sync_table(uint32 adb_base) { (void)adb_base; }
 static bool joy_adb_owns_cursor(void) { return false; }
+static void joy_adb_op(int i, uint8 cmd, uint8 reg, uint8 *data) { (void)i; (void)cmd; (void)reg; (void)data; }
 #endif /* #ifdef USE_SDL */
 
 /* The emulated ADB mouse: it reports movement counts when the host mouse is
@@ -2845,7 +2846,7 @@ static void adb_log_firebird_zone(void)
 	current[2] = current[3] = current[4] = -1;			/* packed axes, button byte */
 	for (i = 34; i < 42; i++)
 		current[i] = -1;				/* delivered packet bytes */
-#ifdef USE_SDL
+#if defined(USE_SDL) || defined(USE_SFL)
 #if JOY_HARDWARE_FIREBIRD
 	for (i = 0; i < joy_adb_count; i++)
 		if (joy_adb_devs[i].real_devtype == JOY_FIREBIRD_DEVTYPE) {
@@ -2938,7 +2939,7 @@ static void adb_log_firebird_zone(void)
 
 /* Log one joystick poll: the raw input, the packet built from it, and
    whether that packet was sent to the driver. */
-#ifdef USE_SDL
+#if defined(USE_SDL) || defined(USE_SFL)
 static void adb_log_joy(int i, uint8 reg, const uint8 *pkt, int n, bool unchanged)
 {
 	char axis_text[256], button_text[80], hex[32];
@@ -3069,7 +3070,7 @@ void ADBVBL(void)
 	   the cursor back once it stops moving the thing itself. */
 	mouse_adb_tick(adb_base, adb_mouse_base, tmp_data);
 
-	#if defined(USE_SDL)
+	#if defined(USE_SDL) || defined(USE_SFL)
 	for (i = 0; i < joy_adb_count; i++) {
 		uint8 pkt[8];
 		uint8 n, j, reg, cmdlow;

@@ -33,6 +33,11 @@
 const uint16 JoyManagerDriverFlags = 0x4c00;
 const uint32 JOY_INTPOLL_OFFSET = 0x56;
 
+#define JOYMANAGER_HAT_UP 0x01
+#define JOYMANAGER_HAT_RIGHT 0x02
+#define JOYMANAGER_HAT_DOWN 0x04
+#define JOYMANAGER_HAT_LEFT 0x08
+
 /* high level API for client JoyManagerXXX() */
 extern uint32 JoyManagerGuestStorageSize(void);
 extern bool JoyManagerPrepare(void);

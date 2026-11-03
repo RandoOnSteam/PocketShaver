@@ -42,8 +42,12 @@ extern bool CDScan_bincue(void *, uint8, uint8, uint8, bool);
 extern void CDSetVol_bincue(void *, uint8, uint8);
 extern void CDGetVol_bincue(void *, uint8 *, uint8 *);
 
-#ifdef USE_SDL_AUDIO
+#if defined(USE_SDL_AUDIO) || defined(USE_SFL)
 extern void OpenAudio_bincue(int, int, int, uint8, int);
+#if defined(USE_SFL)
+#define BINCUE_SFL_AUDIO_U8 0x0008
+#define BINCUE_SFL_AUDIO_S16MSB 0x9010
+#endif
 extern bool HaveAudioToMix_bincue(void);
 extern void MixAudio_bincue(uint8 *, int);
 extern void CloseAudio_bincue(void);

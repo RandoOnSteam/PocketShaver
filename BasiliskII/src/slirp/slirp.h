@@ -11,7 +11,9 @@
 #include "config.h"
 #include "slirp_config.h"
 
-#ifdef _WIN32
+#if defined(USE_SFL)
+#include "sflsocket.h"
+#elif defined(_WIN32)
 # include <inttypes.h>
 
 typedef uint8_t u_int8_t;
@@ -141,7 +143,7 @@ typedef u_int32_t uint32;
 # include <strings.h>
 #endif
 
-#ifndef _WIN32
+#if !defined(_WIN32) && !defined(USE_SFL)
 #include <sys/uio.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -186,7 +188,7 @@ int inet_aton _P((const char *cp, struct in_addr *ia));
 #ifdef HAVE_SYS_SIGNAL_H
 # include <sys/signal.h>
 #endif
-#ifndef _WIN32
+#if !defined(_WIN32) && !defined(USE_SFL)
 #include <sys/socket.h>
 #endif
 
@@ -316,7 +318,7 @@ extern int do_echo;
  extern inline void remque_32(void *);
 #endif
 
-#ifndef _WIN32
+#if !defined(_WIN32) && !defined(USE_SFL)
 #include <netdb.h>
 #endif
 
@@ -384,7 +386,7 @@ void unload_host_domains();
 #define max(x,y) ((x) > (y) ? (x) : (y))
 #endif
 
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(USE_SFL)
 #undef errno
 #define errno (WSAGetLastError())
 #endif

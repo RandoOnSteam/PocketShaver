@@ -2274,6 +2274,10 @@ void VideoInterrupt(void)
 	LOCK_FRAME_BUFFER;
 }
 #endif
+void VideoPumpEvents(void)
+{
+	SDL_PumpEvents();
+}
 
 
 /*

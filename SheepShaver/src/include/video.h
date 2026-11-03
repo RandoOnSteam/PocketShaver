@@ -201,6 +201,7 @@ void video_guest_show_cursor(void);
 extern int16 VSLDoInterruptService(uint32 arg1);
 extern bool VideoDriverInitialized(void);
 extern void VideoInstallDisplay(void);
+extern void VideoPumpEvents(void);
 extern void NQDMisc(uint32 arg1, uintptr arg2);
 
 // Native QuickDraw acceleration callbacks
