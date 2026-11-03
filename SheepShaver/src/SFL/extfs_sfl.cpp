@@ -186,7 +186,7 @@ void get_finfo(const char *path, uint32 finfo, uint32 fxinfo, bool is_dir)
 	int fd;
 	SflExtFSDefaultInfo(path, finfo, fxinfo, is_dir);
 #if defined(WSFILE_HASFORKS)
-	if (WSFileGetFinderInfo(path, info) != WSFILEERR_NONE)
+	if (WSFileGetFinderInfo(path, info) != WSFILE_ERROR_NONE)
 		return;
 	if (ReadMacInt32(finfo + fdType) != 0 && *(uint32 *)info == 0)
 		return;

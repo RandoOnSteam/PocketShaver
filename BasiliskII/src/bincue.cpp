@@ -532,7 +532,7 @@ static bool LoadCueSheet(const char *cuefile, CueSheet *cs)
 	Track *tlast = NULL;
 
 	if (cs) {
-		bzero(cs, sizeof(*cs));
+		memset(cs, 0, sizeof(*cs));
 		if (!(fh = fopen(cuefile, "r"))) {
 			return false;
 		}
@@ -617,7 +617,7 @@ static bool LoadImageSheet(const char *imagefile, CueSheet *cs)
 	int imagefh;
 	Track *datatrack;
 
-	bzero(cs, sizeof(*cs));
+	memset(cs, 0, sizeof(*cs));
 #ifdef WIN32
 	imagefh = open(imagefile, O_RDONLY | O_BINARY);
 #else

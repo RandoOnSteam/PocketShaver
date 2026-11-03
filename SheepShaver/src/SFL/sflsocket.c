@@ -419,7 +419,7 @@ int SflSockGetSockName(int fd, struct SflSockAddr *addr, int *length)
 
 	errkind = WSSocket_GetLocalAddr(&entry->socket, &local);
 	if (errkind != WSSOCKET_ERRORKIND_NONE)
-		return SflSockFail(SflSockErrno(entry));
+		return SflSockFail(SflSockErrno(errkind));
 	SflSockFromAddr(&local, addr, length);
 	return 0;
 }

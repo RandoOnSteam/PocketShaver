@@ -5,6 +5,11 @@ option(SFL_MONITOR "Build the emulator monitor server" OFF)
 set(CMAKE_CXX_STANDARD 98)
 set(CMAKE_CXX_STANDARD_REQUIRED OFF)
 
+if(CMAKE_HOST_WIN32 AND CMAKE_SYSTEM_NAME MATCHES RetroCarbon)
+	add_compile_definitions(__STRINGS__)
+	add_compile_options("SHELL:-include bsdstrings.h")
+endif()
+
 get_filename_component(SSROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
 set(SSSRC "${SSROOT}/src")
 set(B2SRC "${SSROOT}/../BasiliskII/src")
