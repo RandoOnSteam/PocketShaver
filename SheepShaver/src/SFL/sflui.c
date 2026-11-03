@@ -342,6 +342,13 @@ static void SflUiMouseDeliver(SFLUIAPP *pThis, guipos_t x, guipos_t y)
 
 static void SflUiMouse(SFLUIAPP *pThis, guipos_t x, guipos_t y)
 {
+#if defined(WSMACCLASSICORCARBON)
+	guipos_t originx = 0;
+	guipos_t originy = 0;
+	WSWindow_ClientToScreen(&pThis->window, &originx, &originy);
+	x -= originx;
+	y -= originy;
+#endif
 	pThis->mousex = x;
 	pThis->mousey = y;
 	pThis->mousepending = TRUE;
@@ -1007,8 +1014,12 @@ IMPLEMENT_WSAPP(SFLUIAPP, SflUiOnInit, SflUiOnIdle,
 #else
 static void SflUiOnRun(SFLUIAPP *pThis)
 {
-	if (!SflEmulatorSetup(pThis->super.mArgc, pThis->super.mArgv))
+	if (!WSEventLoop_Create(&pThis->super.mEventLoop))
 		return;
+	if (!SflEmulatorSetup(pThis->super.mArgc, pThis->super.mArgv)) {
+		WSEventLoop_Destroy(&pThis->super.mEventLoop);
+		return;
+	}
 	if (pThis->windowopen)
 	{
 		#if defined(SFLMONITORENABLED)
@@ -1030,6 +1041,7 @@ static void SflUiOnRun(SFLUIAPP *pThis)
 		#endif
 	}
 	SflUiClose();
+	WSEventLoop_Destroy(&pThis->super.mEventLoop);
 }
 IMPLEMENT_WSAPP_CUSTOMRUN(SFLUIAPP, SflUiOnInit, SflUiOnExit, SflUiOnRun)
 #endif

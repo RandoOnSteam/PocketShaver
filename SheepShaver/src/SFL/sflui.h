@@ -35,6 +35,7 @@ void SflUiSetFrame(unsigned char *buffer, int width, int height, int rowbytes, i
 void SflUiSetPalette(const unsigned char *rgb, int count);
 void SflUiAlert(const char *title, const char *text);
 void SflUiRequestQuit(void);
+void SflUiPumpEvents(void);
 int SflUiGetStatus(int *width, int *height, int *depth, int *hostwidth, int *hostheight);
 unsigned char *SflUiCopyFrame(int host, int *width, int *height);
 void SflUiHostMouse(int x, int y);

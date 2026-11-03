@@ -32,6 +32,5 @@
 #include "device.h"
 #define WSDISPLAY_IMPLEMENTATION
 #include "display.h"
-
-#define DRIVE_SECTOR_IMPLEMENTATION
+#define DRIVE_IMPLEMENTATION
 #include "drive.h"

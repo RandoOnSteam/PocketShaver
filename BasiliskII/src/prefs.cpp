@@ -428,7 +428,7 @@ void LoadPrefsFromStream(FILE *f)
 	while(fgets(line, sizeof(line), f)) {
 		// Remove newline, if present
 		int len = strlen(line);
-		if (len > 0 && line[len-1] == '\n') {
+		while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r')) {
 			line[len-1] = '\0';
 			len--;
 		}

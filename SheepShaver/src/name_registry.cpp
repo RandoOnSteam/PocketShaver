@@ -205,9 +205,10 @@ void DoPatchNameRegistry(void)
 		RegistryPropertyCreate(device_tree.addr(), "clock-frequency", u32.addr(), 4);
 #ifdef CLASSICMACHINENEWWORLD
 		RegistryPropertyCreateStr(device_tree.addr(), "model", "PowerMac3,1");
-		SheepArray<37> compatible;
-		memcpy(Mac2HostAddr(compatible.addr()), "PowerMac3,1\0MacRISC\0Power Macintosh", 37);
-		RegistryPropertyCreate(device_tree.addr(), "compatible", compatible.addr(), 37);
+		const char compatibility[] = "PowerMac3,1\0MacRISC\0Power Macintosh";
+		SheepArray<sizeof(compatibility)> compatible;
+		memcpy(Mac2HostAddr(compatible.addr()), compatibility, sizeof(compatibility));
+		RegistryPropertyCreate(device_tree.addr(), "compatible", compatible.addr(), sizeof(compatibility));
 #else
 		RegistryPropertyCreateStr(device_tree.addr(), "model", "Power Macintosh");
 #endif

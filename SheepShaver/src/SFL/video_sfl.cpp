@@ -194,7 +194,6 @@ void VideoVBL(void)
 		VSLDoInterruptService(private_data->vslServiceID);
 }
 
-extern "C" void SflUiPumpEvents(void);
 void VideoPumpEvents(void)
 {
 	SflUiPumpEvents();
