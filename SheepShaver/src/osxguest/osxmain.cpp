@@ -782,7 +782,6 @@ static void PresentFrame(OsxSession *session)
 	SDL_Rect rects[OSXPRESENTRUNS];
 #endif
 #if SDL_VERSION_ATLEAST(3, 0, 0)
-	SDL_Rect scaled;
 	SDL_Surface *window;
 	int pixelwidth;
 	int pixelheight;
@@ -844,22 +843,21 @@ static void PresentFrame(OsxSession *session)
 #if OSXPROFILE
 	session->tmpframes += runs != 0;
 #endif
+#if SDL_VERSION_ATLEAST(3, 0, 0)
+	if (window != session->screen) {
+		if (runs) {
+			SDL_BlitSurfaceScaled(session->screen, NULL, window, NULL, SDL_SCALEMODE_LINEAR);
+			SDL_UpdateWindowSurface(sdl_window);
+		}
+		return;
+	}
+#endif
 #if SDL_VERSION_ATLEAST(2, 0, 0)
 	for (index = 0; index < runs; index++) {
 		rects[index].x = 0;
 		rects[index].y = (int)runstart[index];
 		rects[index].w = (int)machine->width;
 		rects[index].h = (int)(runend[index] - runstart[index] + 1);
-#if SDL_VERSION_ATLEAST(3, 0, 0)
-		if (window != session->screen) {
-			scaled.x = 0;
-			scaled.y = (int)(runstart[index] * (uint32)window->h / machine->height);
-			scaled.w = window->w;
-			scaled.h = (int)((runend[index] + 1) * (uint32)window->h / machine->height) - scaled.y;
-			SDL_BlitSurfaceScaled(session->screen, &rects[index], window, &scaled, SDL_SCALEMODE_LINEAR);
-			rects[index] = scaled;
-		}
-#endif
 	}
 	if (runs)
 		SDL_UpdateWindowSurfaceRects(sdl_window, rects, runs);
