@@ -22,13 +22,19 @@
 #include "prefs.h"
 #include "sflmain.h"
 
+#ifdef SHEEPSHAVER
 #define SFLPREFSFILENAME "SheepShaver_prefs"
+#else
+#define SFLPREFSFILENAME "BasiliskII_prefs"
+#endif
 
 prefs_desc platform_prefs_items[] = {
 	{"idlewait", TYPE_BOOLEAN, false, "sleep when idle"},
 	{"enableextfs", TYPE_BOOLEAN, false, "enable extfs system"},
+#ifdef SHEEPSHAVER
 	{"ether", TYPE_STRING, false, "network mode (slirp or udptunnel)"},
 	{"udpport", TYPE_INT32, false, "UDP port of the network tunnel"},
+#endif
 	{NULL, TYPE_END, false, NULL}
 };
 
@@ -68,5 +74,7 @@ void AddPlatformPrefsDefaults(void)
 	PrefsAddBool("idlewait", true);
 	PrefsReplaceBool("enableextfs", false);
 	PrefsReplaceString("extfs", "");
+#ifdef SHEEPSHAVER
 	PrefsAddInt32("udpport", 6066);
+#endif
 }

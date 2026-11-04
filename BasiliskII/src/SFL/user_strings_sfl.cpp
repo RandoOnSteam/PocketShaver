@@ -26,6 +26,7 @@ static const char *SflPlatformString(int num)
 	switch (num) {
 	case STR_EXTFS_VOLUME_NAME:
 		return "Host";
+#ifdef SHEEPSHAVER
 	case STR_RAM_MMAP_ERR:
 		return "Cannot allocate Mac RAM.";
 	case STR_ROM_MMAP_ERR:
@@ -36,12 +37,15 @@ static const char *SflPlatformString(int num)
 		return "Cannot allocate the DR Cache.";
 	case STR_SHEEP_MEM_MMAP_ERR:
 		return "Cannot allocate the SheepShaver data area.";
+#endif
 	case STR_NO_AUDIO_WARN:
 		return "No audio device found, audio output will be disabled.";
 	case STR_OPEN_WINDOW_ERR:
 		return "Cannot open Mac window.";
+#ifdef SHEEPSHAVER
 	case STR_SFL_ADDRESS_SPACE_ERR:
 		return "Cannot allocate the guest address space table.";
+#endif
 	}
 	return NULL;
 }

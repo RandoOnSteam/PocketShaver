@@ -639,7 +639,7 @@ int SflUiOpen(const char *title, int width, int height, int fullscreen, int fram
 	pThis = SflUiApp;
 	WSASSERT(pThis != NULL);
 	WSRect_Construct(&bounds, WSDEFAULTPOSITION, WSDEFAULTPOSITION, width, height);
-	if (!WSWndClass_Create(&pThis->wc, &pThis->super, NULL, SflUiWindowMessages, "SheepShaverSFL"))
+	if (!WSWndClass_Create(&pThis->wc, &pThis->super, NULL, SflUiWindowMessages, SFL_APP_NAME))
 		return 0;
 	if (!WSWindow_Create(&pThis->window, &pThis->super, &bounds, title, NULL, &pThis->wc))
 		return 0;

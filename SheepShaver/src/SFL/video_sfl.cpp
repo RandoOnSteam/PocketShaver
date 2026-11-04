@@ -194,11 +194,6 @@ void VideoVBL(void)
 		VSLDoInterruptService(private_data->vslServiceID);
 }
 
-void VideoPumpEvents(void)
-{
-	SflUiPumpEvents();
-}
-
 int16 video_mode_change(VidLocals *csSave, uint32 ParamPtr)
 {
 	uint16 requested;
@@ -266,35 +261,6 @@ bool video_get_framebuffer_drawable_rect(int *outx, int *outy, int *outwidth, in
 
 void video_set_dirty_area(int x, int y, int w, int h)
 {
-}
-
-void SflEmulatorKey(int code, int down)
-{
-	if (down)
-		ADBKeyDown(code);
-	else
-		ADBKeyUp(code);
-}
-
-void SflEmulatorMouse(int x, int y)
-{
-	ADBMouseMoved(x, y);
-}
-
-void SflEmulatorButton(int down)
-{
-	if (down)
-		ADBMouseDown(0);
-	else
-		ADBMouseUp(0);
-}
-
-void SflEmulatorMouseButton(int button, int down)
-{
-	if (down)
-		ADBMouseDown(button);
-	else
-		ADBMouseUp(button);
 }
 
 void SflEmulatorClose(void)

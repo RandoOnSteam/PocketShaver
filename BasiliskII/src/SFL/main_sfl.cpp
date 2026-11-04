@@ -25,7 +25,9 @@
 #include "prefs_editor.h"
 #include "cpu_emulation.h"
 #include "emul_op.h"
+#ifdef SHEEPSHAVER
 #include "xlowmem.h"
+#endif
 #include "xpram.h"
 #include "timer.h"
 #include "adb.h"
@@ -34,8 +36,12 @@
 #include "macos_util.h"
 #include "rom_patches.h"
 #include "user_strings.h"
+#ifdef SHEEPSHAVER
 #include "usbuim.h"
 #include "sflmem.h"
+#else
+#include "newcpu.h"
+#endif
 #include "sflmain.h"
 #include "sflui.h"
 #include "gui.h"
@@ -78,6 +84,7 @@ typedef struct SFLMAIN
 
 static SFLMAIN SflMain;
 
+#ifdef SHEEPSHAVER
 uint32 RAMBase;
 uint32 RAMSize;
 uint32 ROMBase;
@@ -90,8 +97,6 @@ int64 BusClockSpeed;
 int64 TimebaseSpeed;
 uint8 *RAMBaseHost;
 uint8 *ROMBaseHost;
-volatile uint32 InterruptFlags = 0;
-bool tick_inhibit;
 
 uint32 SheepMem::page_size;
 uintptr SheepMem::zero_page = 0;
@@ -103,6 +108,20 @@ extern void emul_ppc(uint32 start);
 extern void init_emul_ppc(void);
 extern void exit_emul_ppc(void);
 void jump_to_rom(uint32 entry);
+#else
+int CPUType;
+bool CPUIs68060;
+int FPUType;
+bool TwentyFourBitAddressing;
+uint32 InterruptFlags;
+uint16 emulated_ticks;
+#endif
+
+#ifdef SHEEPSHAVER
+volatile uint32 InterruptFlags = 0;
+#endif
+bool tick_inhibit;
+
 #if defined(__cplusplus)
 extern "C" {
 #endif
@@ -113,16 +132,23 @@ const char *SflMainPrefsPath(void)
 
 void SflMainStopEmulator(void)
 {
+#ifdef SHEEPSHAVER
 	StopEmulation();
+#else
+	QuitEmulator();
+#endif
 }
 #if defined(__cplusplus)
 }
 #endif
 
+#ifdef SHEEPSHAVER
 uintptr SignalStackBase(void)
 {
 	return SflMain.sigstack + SFLMAINSIGSTACKSIZE;
 }
+
+#endif
 
 void SflMainParseArguments(int argc, char **argv)
 {
@@ -152,6 +178,7 @@ int SflMainCompactArguments(int argc, char **argv)
 	return target;
 }
 
+#ifdef SHEEPSHAVER
 bool SflMainMapMemory(void)
 {
 	RAMSize = PrefsFindInt32("ramsize");
@@ -190,6 +217,24 @@ bool SflMainMapMemory(void)
 	return true;
 }
 
+#else
+bool SflMainMapMemory(void)
+{
+	int32 configured = PrefsFindInt32("ramsize");
+	if (configured > 0 && configured <= 1000)
+		configured *= 1024 * 1024;
+	if (configured < 1024 * 1024)
+		configured = 1024 * 1024;
+	RAMSize = configured & ~0xffff;
+	RAMBaseHost = (uint8 *)calloc(1, RAMSize + 0x10000);
+	if (RAMBaseHost == NULL) {
+		ErrorAlert(GetString(STR_NO_RAM_AREA_ERR));
+		return false;
+	}
+	return true;
+}
+#endif
+
 uint8 *SflMainReadRomFile(const char *path, uint32 *size)
 {
 	WSFILE file;
@@ -210,7 +255,9 @@ bool SflMainLoadRom(void)
 	const char *path;
 	uint8 *data;
 	uint32 size;
+#ifdef SHEEPSHAVER
 	bool decoded;
+#endif
 	path = PrefsFindString("rom");
 	data = NULL;
 	size = 0;
@@ -224,6 +271,7 @@ bool SflMainLoadRom(void)
 		ErrorAlert(GetString(STR_NO_ROM_FILE_ERR));
 		return false;
 	}
+#ifdef SHEEPSHAVER
 	decoded = DecodeROM(data, size);
 	free(data);
 	if (!decoded) {
@@ -233,6 +281,16 @@ bool SflMainLoadRom(void)
 			ErrorAlert(GetString(STR_ROM_FILE_READ_ERR));
 		return false;
 	}
+#else
+	if (size != 64 * 1024 && size != 128 * 1024 && size != 256 * 1024
+		&& size != 512 * 1024 && size != 1024 * 1024) {
+		free(data);
+		ErrorAlert(GetString(STR_ROM_SIZE_ERR));
+		return false;
+	}
+	ROMBaseHost = data;
+	ROMSize = size;
+#endif
 	return true;
 }
 
@@ -245,7 +303,11 @@ void SflMainPark(void)
 
 void SflEmulatorStart()
 {
+#ifdef SHEEPSHAVER
 	jump_to_rom(ROMBase + 0x310000);
+#else
+	Start680x0();
+#endif
 }
 #if !defined(SFLMAINRUNEMULATORONMAINTHREAD)
 WSTHREADENTRYCALLBACK(SflMainEmulatorThread)
@@ -270,6 +332,7 @@ int SflEmulatorSetup(int argc, char **argv)
 	SflMainParseArguments(argc, argv);
 	argc = SflMainCompactArguments(argc, argv);
 	PrefsInit(NULL, argc, argv);
+#ifdef SHEEPSHAVER
 	PVR = 0x000c0000;
 	CPUClockSpeed = 100000000;
 	BusClockSpeed = 100000000;
@@ -280,6 +343,7 @@ int SflEmulatorSetup(int argc, char **argv)
 		ErrorAlert(GetString(STR_SFL_ADDRESS_SPACE_ERR));
 		return 0;
 	}
+#endif
 	if (!SflMainMapMemory())
 		return 0;
 	timer_init();
@@ -311,13 +375,22 @@ void SflEmulatorStop(void)
 	}
 #endif /* #if !defined(SFLMAINRUNEMULATORONMAINTHREAD) */
 	if (SflMain.initialized) {
+#ifdef SHEEPSHAVER
 		exit_emul_ppc();
+#else
+		Exit680x0();
+#endif
 		ExitAll();
 		SysExit();
 		SflMain.initialized = false;
 	}
+#ifdef SHEEPSHAVER
 	SheepMem::Exit();
 	SflMemExit();
+#else
+	free(ROMBaseHost);
+	free(RAMBaseHost);
+#endif
 	PrefsExit();
 }
 
@@ -326,9 +399,15 @@ void SflEmulatorTick(void)
 	if (!SflMain.emulatorrunning || tick_inhibit)
 		return;
 	wsatomicintinc(&SflMain.pendingticks);
+#ifndef SHEEPSHAVER
+	if (ROMVersion != ROM_VERSION_CLASSIC || HasMacStarted())
+		SetInterruptFlag(INTFLAG_60HZ);
+#endif
 	TriggerInterrupt();
+#ifdef SHEEPSHAVER
 	USBUIMSampleGuest();
 	PPCExceptionStallSample();
+#endif
 }
 
 void SflEmulatorPump(void)
@@ -337,11 +416,16 @@ void SflEmulatorPump(void)
 	ticks = wsatomicintswap(&SflMain.pendingticks, 0);
 	if (ticks == 0)
 		return;
+#ifdef SHEEPSHAVER
 	SetInterruptFlag(INTFLAG_VIA);
+#endif
 	SflMain.secondticks += ticks;
 	if (SflMain.secondticks > SFLMAINSECONDTICKS) {
 		SflMain.secondticks = 0;
 		WriteMacInt32(0x20c, TimerDateTime());
+#ifndef SHEEPSHAVER
+		SetInterruptFlag(INTFLAG_1HZ);
+#endif
 	}
 	SflMain.nvramticks += ticks;
 	if (SflMain.nvramticks > SFLMAINNVRAMTICKS) {
@@ -370,16 +454,22 @@ int SflEmulatorPrefBool(const char *name)
 	return 0;
 }
 
+#ifdef SHEEPSHAVER
 void jump_to_rom(uint32 entry)
 {
 	init_emul_ppc();
 	emul_ppc(entry);
 }
 
+#endif
+
 void QuitEmulator(void)
 {
 	SflUiRequestQuit();
-#if defined(SFLMAINRUNEMULATORONMAINTHREAD)
+#if !defined(SHEEPSHAVER)
+	m68k_setstopped(0);
+	m68k_emulop_return();
+#elif defined(SFLMAINRUNEMULATORONMAINTHREAD)
 	StopEmulation(); /* SPCFLAG_CPU_STOP; see 642-645 in ppc-cpu.cpp */
 #else
 	if (SflMain.emulatorrunning && WSThreadGetCurrentID() == SflMain.emulatorid)
@@ -387,6 +477,7 @@ void QuitEmulator(void)
 #endif /* #if !defined(SFLMAINRUNEMULATORONMAINTHREAD) */
 }
 
+#ifdef SHEEPSHAVER
 void Dump68kRegs(M68kRegisters *r)
 {
 	int index;
@@ -400,6 +491,20 @@ void MakeExecutable(int dummy, uint32 start, uint32 length)
 		return;
 	FlushCodeCache(start, start + length);
 }
+
+#else
+void FlushCodeCache(void *start, uint32 size)
+{
+}
+
+void cpu_do_check_ticks(void)
+{
+	VideoPumpEvents();
+	SflEmulatorPump();
+	if (InterruptFlags)
+		TriggerInterrupt();
+}
+#endif
 
 struct B2_mutex {
 	WSCRITICALSECTION lock;
@@ -443,6 +548,7 @@ void ClearInterruptFlag(uint32 flag)
 	WSCriticalSection_Unlock(&SflMain.intflags);
 }
 
+#ifdef SHEEPSHAVER
 void DisableInterrupt(void)
 {
 	WriteMacInt32(XLM_IRQ_NEST, int32(ReadMacInt32(XLM_IRQ_NEST)) + 1);
@@ -470,6 +576,8 @@ void SheepMem::Exit(void)
 {
 	data = 0;
 }
+
+#endif
 
 void ErrorAlert(const char *text)
 {

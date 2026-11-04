@@ -25,7 +25,9 @@
 #include "cpu_emulation.h"
 #include "main.h"
 #include "emul_op.h"
+#ifdef SHEEPSHAVER
 #include "thunks.h"
+#endif
 #include "sflroman.h"
 #include "gui.h"
 #include "sflui.h"
@@ -65,7 +67,7 @@ static bool SflClipMatches(const char *slot, size_t slotlength, const char *text
 	return memcmp(slot, text, length) == 0;
 }
 
-void ClipInit(void)
+static const uint8 *SflClipCode(size_t *length)
 {
 	static const uint8 putscrap[] = {
 		0x59, 0x8f,
@@ -77,7 +79,17 @@ void ClipInit(void)
 		0x58, 0x8f,
 		uint8(M68K_RTS >> 8), uint8(M68K_RTS)
 	};
-	SflClip.proc = SheepProc(putscrap, sizeof(putscrap));
+	*length = sizeof(putscrap);
+	return putscrap;
+}
+
+void ClipInit(void)
+{
+#ifdef SHEEPSHAVER
+	size_t length;
+	const uint8 *code = SflClipCode(&length);
+	SflClip.proc = SheepProc(code, length);
+#endif
 	SflClip.weputthis = false;
 }
 
@@ -138,7 +150,7 @@ void GetScrap(void **handle, uint32 type, int32 offset)
 	size_t converted;
 	uint32 scrap;
 	M68kRegisters r;
-	if (type != SFLCLIPTEXT || SflClip.proc == 0)
+	if (type != SFLCLIPTEXT)
 		return;
 	if (!SflUiClipboardGet(&text, &length))
 		return;
@@ -149,11 +161,27 @@ void GetScrap(void **handle, uint32 type, int32 offset)
 		scrap = r.a[0];
 		if (scrap != 0) {
 			converted = SflUtf8ToRoman(text, length, Mac2HostAddr(scrap), length, true);
-			WriteMacInt32(SflClip.proc + 6, (uint32)converted);
-			WriteMacInt32(SflClip.proc + 12, type);
-			WriteMacInt32(SflClip.proc + 18, scrap);
-			SflClip.weputthis = true;
-			Execute68k(SflClip.proc, &r);
+			uint32 procedure = SflClip.proc;
+#ifndef SHEEPSHAVER
+			size_t codelength;
+			const uint8 *code = SflClipCode(&codelength);
+			r.d[0] = (uint32)codelength;
+			Execute68kTrap(0xa71e, &r);
+			procedure = r.a[0];
+			if (procedure)
+				Host2Mac_memcpy(procedure, code, codelength);
+#endif
+			if (procedure) {
+				WriteMacInt32(procedure + 6, (uint32)converted);
+				WriteMacInt32(procedure + 12, type);
+				WriteMacInt32(procedure + 18, scrap);
+				SflClip.weputthis = true;
+				Execute68k(procedure, &r);
+#ifndef SHEEPSHAVER
+				r.a[0] = procedure;
+				Execute68kTrap(0xa01f, &r);
+#endif
+			}
 			r.a[0] = scrap;
 			Execute68kTrap(0xa01f, &r);
 		}

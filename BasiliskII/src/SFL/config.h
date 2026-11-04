@@ -21,12 +21,21 @@
 #ifndef MACEMU_CONFIG_H
 #define MACEMU_CONFIG_H
 
+#ifdef SHEEPSHAVER
 #define PACKAGE "SheepShaver"
 #define PACKAGE_NAME "SheepShaver"
 #define PACKAGE_STRING "SheepShaver 2.3"
 #define PACKAGE_TARNAME "SheepShaver"
 #define PACKAGE_VERSION "2.3"
 #define VERSION "2.3"
+#else
+#define PACKAGE "BasiliskII"
+#define PACKAGE_NAME "Basilisk II"
+#define PACKAGE_STRING "Basilisk II 1.0"
+#define PACKAGE_TARNAME "BasiliskII"
+#define PACKAGE_VERSION "1.0"
+#define VERSION "1.0"
+#endif
 #define PACKAGE_BUGREPORT ""
 #define PACKAGE_URL ""
 
@@ -39,7 +48,9 @@
 #define HAVE_FENV_H 1
 
 #define USE_SFL 1
+#ifdef SHEEPSHAVER
 #define SFL_PAGED_ADDRESSING 1
+#endif
 
 #if defined(__BIG_ENDIAN__) || defined(__ppc__) || defined(__powerpc__) || defined(__POWERPC__) \
 	|| defined(powerc) || defined(__m68k__) \

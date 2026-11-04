@@ -23,7 +23,11 @@
 #include "prefs.h"
 #include "file.h"
 
+#ifdef SHEEPSHAVER
 #define SFLXPRAMFILENAME "SheepShaver_nvram.dat"
+#else
+#define SFLXPRAMFILENAME "BasiliskII_xpram.dat"
+#endif
 
 static const char *SflXpramPath(void)
 {

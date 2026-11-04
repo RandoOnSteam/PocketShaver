@@ -31,7 +31,7 @@
 #include <string.h>
 #include <time.h>
 
-#define SHEEPSHAVER 1
+#ifdef SHEEPSHAVER
 #define POWERPC_ROM 1
 #define EMULATED_PPC 1
 
@@ -48,6 +48,12 @@
 #define PPC_ENABLE_JIT 0
 #define USE_ETHER_FULL_DRIVER 1
 #define PPC_NATIVE_JIT 0
+#else
+#define EMULATED_68K 1
+#define ROM_IS_WRITE_PROTECTED 1
+#define REAL_ADDRESSING 0
+#define DIRECT_ADDRESSING 0
+#endif
 
 typedef unsigned char uint8;
 typedef signed char int8;
@@ -135,6 +141,62 @@ typedef struct rgb_color {
 	uint8 alpha;
 } rgb_color;
 
+#ifndef SHEEPSHAVER
+#define uae_u8 uint8
+#define uae_s8 int8
+#define uae_u16 uint16
+#define uae_s16 int16
+#define uae_u32 uint32
+#define uae_s32 int32
+#define uae_u64 uint64
+#define uae_s64 int64
+typedef uae_u32 uaecptr;
+#ifdef _MSC_VER
+#define __inline__ inline
+#endif
+#define CPU_EMU_SIZE 0
+#define FPU_IEEE 1
+#define IEEE_FLOAT_FORMAT 1
+#define USE_PREFETCH_BUFFER 0
+#define SUPPORTS_EXTFS 1
+#define ASM_SYM(name)
+#define write_log printf
+#define call_mem_get_func(func, addr) ((*func)(addr))
+#define call_mem_put_func(func, addr, value) ((*func)(addr, value))
+#define ENUMDECL typedef enum
+#define ENUMNAME(name) name
+#define REGPARAM
+#define REGPARAM2
+#define do_get_mem_byte(address) (*(const uint8 *)(address))
+#define do_put_mem_byte(address, value) (*(uint8 *)(address) = (uint8)(value))
+#define do_get_mem_word_unswapped(address) (*(const uint16 *)(address))
+
+static inline uint16 do_get_mem_word(const void *address)
+{
+	uint16 value;
+	memcpy(&value, address, sizeof(value));
+	return tswap16(value);
+}
+
+static inline uint32 do_get_mem_long(const void *address)
+{
+	uint32 value;
+	memcpy(&value, address, sizeof(value));
+	return tswap32(value);
+}
+
+static inline void do_put_mem_word(void *address, uint16 value)
+{
+	value = tswap16(value);
+	memcpy(address, &value, sizeof(value));
+}
+
+static inline void do_put_mem_long(void *address, uint32 value)
+{
+	value = tswap32(value);
+	memcpy(address, &value, sizeof(value));
+}
+#else
 #define CallMacOS(type, tvect) call_macos((uintptr)tvect)
 #define CallMacOS1(type, tvect, arg1) call_macos1((uintptr)tvect, (uintptr)arg1)
 #define CallMacOS2(type, tvect, arg1, arg2) call_macos2((uintptr)tvect, (uintptr)arg1, (uintptr)arg2)
@@ -158,6 +220,8 @@ extern uint32 call_macos7(uint32 tvect, uint32 arg1, uint32 arg2, uint32 arg3, u
 extern uint32 call_macos8(uint32 tvect, uint32 arg1, uint32 arg2, uint32 arg3, uint32 arg4, uint32 arg5, uint32 arg6, uint32 arg7, uint32 arg8);
 #ifdef __cplusplus
 }
+#endif
+
 #endif
 
 #endif
