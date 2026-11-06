@@ -190,6 +190,14 @@ static void StoreBlock(OsxAudio *audio, uint32 length)
 	}
 }
 
+#if defined(USE_SFL)
+void OsxAudioOpenForCdrom(OsxMachine *machine)
+{
+	if (!machine->audio.disabled && !machine->audio.stream)
+		OpenHost(machine);
+}
+#endif
+
 void OsxAudioPoll(OsxMachine *machine, uint64 now)
 {
 	OsxAudio *audio;

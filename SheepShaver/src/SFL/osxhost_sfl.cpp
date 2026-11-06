@@ -24,6 +24,7 @@
 #include "sflnet.h"
 #include "gui.h"
 #include "thread.h"
+#include "bincue.h"
 
 struct OsxHostVideo {
 	uint8 *pixels;
@@ -103,6 +104,8 @@ void OsxHostSleep(uint32 milliseconds)
 	WSThreadSleep(milliseconds);
 }
 
+#define AUDIOCDVOLUME 128
+
 struct OsxSflAudio {
 	WSCRITICALSECTION lock;
 	void *device;
@@ -114,19 +117,34 @@ static void AudioFill(void *context, unsigned char *buffer, int length)
 	OsxSflAudio *stream = (OsxSflAudio *)context;
 	OsxAudio *audio = stream->guest;
 	uint32 count;
-	uint32 index;
+	uint32 first;
+	uint32 offset;
+#ifndef WORDS_BIGENDIAN
+	int index;
+	unsigned char swap;
+#endif
 	WSCriticalSection_Lock(&stream->lock);
 	count = audio->head - audio->tail;
 	if (count > (uint32)length)
 		count = length;
 	count &= ~1U;
-	for (index = 0; index < count; index += 2) {
-		buffer[index] = audio->ring[(audio->tail + index + 1) & (OSXAUDIORING - 1)];
-		buffer[index + 1] = audio->ring[(audio->tail + index) & (OSXAUDIORING - 1)];
-	}
+	offset = audio->tail & (OSXAUDIORING - 1);
+	first = OSXAUDIORING - offset;
+	if (first > count)
+		first = count;
+	memcpy(buffer, audio->ring + offset, first);
+	memcpy(buffer + first, audio->ring, count - first);
 	audio->tail += count;
 	WSCriticalSection_Unlock(&stream->lock);
 	memset(buffer + count, 0, length - count);
+	MixAudio_bincue(buffer, length);
+#ifndef WORDS_BIGENDIAN
+	for (index = 0; index + 1 < length; index += 2) {
+		swap = buffer[index];
+		buffer[index] = buffer[index + 1];
+		buffer[index + 1] = swap;
+	}
+#endif
 }
 
 void OsxAudioLockHost(OsxAudio *audio)
@@ -144,6 +162,7 @@ void OsxAudioCloseHost(OsxAudio *audio)
 	OsxSflAudio *stream = (OsxSflAudio *)audio->stream;
 	if (stream) {
 		SflAudioClose(stream->device);
+		CloseAudio_bincue();
 		WSCriticalSection_Destruct(&stream->lock);
 		delete stream;
 		audio->stream = NULL;
@@ -155,8 +174,10 @@ void *OsxAudioStartHost(OsxAudio *audio)
 	OsxSflAudio *stream = new OsxSflAudio;
 	stream->guest = audio;
 	WSCriticalSection_Construct(&stream->lock);
+	OpenAudio_bincue((int)audio->rate, BINCUE_SFL_AUDIO_S16MSB, 2, 0, AUDIOCDVOLUME);
 	stream->device = SflAudioOpen((int)audio->rate, 2, 16, 4096, AudioFill, stream);
 	if (!stream->device) {
+		CloseAudio_bincue();
 		WSCriticalSection_Destruct(&stream->lock);
 		delete stream;
 		return NULL;

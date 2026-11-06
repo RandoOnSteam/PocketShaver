@@ -146,7 +146,7 @@ static bool SflDiskOpenFile(SFLDISK *disk, const char *path, bool readonly)
 	return true;
 }
 
-static const char *SflDiskDrivePath(const char *path)
+static const char *SflCdromDrivePath(const char *path)
 {
 #if defined(_WIN32)
 	if (strncmp(path, "\\\\.\\", 4) == 0)
@@ -169,7 +169,7 @@ static const char *SflDiskDrivePath(const char *path)
 #endif
 }
 
-static loff_t SflDriveSize(SFLDISK *disk)
+static loff_t SflCdromDriveSize(SFLDISK *disk)
 {
 	CDROMDRIVETOC toc;
 	CDROMDRIVETOCTRACKDATA *leadout;
@@ -183,7 +183,7 @@ static loff_t SflDriveSize(SFLDISK *disk)
 	return (loff_t)frames * 2048;
 }
 
-static size_t SflDriveRead(SFLDISK *disk, void *buffer, loff_t offset, size_t length)
+static size_t SflCdromDriveRead(SFLDISK *disk, void *buffer, loff_t offset, size_t length)
 {
 	uint8 sector[CDROMDRIVE_SECTOR_BUFFER_SIZE];
 	uint8 *output;
@@ -230,12 +230,12 @@ void *Sys_open(const char *name, bool read_only, bool is_cdrom)
 	disk->hasdrive = false;
 	disk->startbyte = 0;
 	disk->size = 0;
-	if (is_cdrom && SflDiskDrivePath(path) != NULL) {
+	if (is_cdrom && SflCdromDrivePath(path) != NULL) {
 		memset(&disk->drive, 0, sizeof(disk->drive));
-		disk->hasdrive = CdromDrive_Create(&disk->drive, SflDiskDrivePath(path)) != 0;
+		disk->hasdrive = CdromDrive_Create(&disk->drive, SflCdromDrivePath(path)) != 0;
 		if (disk->hasdrive) {
 			disk->readonly = true;
-			disk->size = SflDriveSize(disk);
+			disk->size = SflCdromDriveSize(disk);
 			return disk;
 		}
 	}
@@ -286,7 +286,7 @@ size_t Sys_read(void *fh, void *buffer, loff_t offset, size_t length)
 	if (disk->bincue != NULL)
 		return read_bincue(disk->bincue, buffer, offset, length);
 	if (disk->hasdrive)
-		return SflDriveRead(disk, buffer, offset, length);
+		return SflCdromDriveRead(disk, buffer, offset, length);
 	if (!SflDiskSeek(disk, offset + disk->startbyte, FILE_FROMSTART))
 		return 0;
 	return WSFile_Read(&disk->file, buffer, length);
@@ -370,7 +370,7 @@ bool SysIsFixedDisk(void *fh)
 	return !disk->cdrom;
 }
 
-static CDROMDRIVE *SflDiskDrive(void *fh)
+static CDROMDRIVE *SflDiskCdromDrive(void *fh)
 {
 	SFLDISK *disk;
 	disk = (SFLDISK *)fh;
@@ -381,21 +381,21 @@ static CDROMDRIVE *SflDiskDrive(void *fh)
 
 bool SysIsDiskInserted(void *fh)
 {
-	if (SflDiskDrive(fh) != NULL)
-		return CdromDrive_IsDiskInDrive(SflDiskDrive(fh)) != 0;
+	if (SflDiskCdromDrive(fh) != NULL)
+		return CdromDrive_IsDiskInDrive(SflDiskCdromDrive(fh)) != 0;
 	return fh != NULL;
 }
 
 void SysPreventRemoval(void *fh)
 {
-	if (SflDiskDrive(fh) != NULL)
-		CdromDrive_AllowRemoval(SflDiskDrive(fh), FALSE);
+	if (SflDiskCdromDrive(fh) != NULL)
+		CdromDrive_AllowRemoval(SflDiskCdromDrive(fh), FALSE);
 }
 
 void SysAllowRemoval(void *fh)
 {
-	if (SflDiskDrive(fh) != NULL)
-		CdromDrive_AllowRemoval(SflDiskDrive(fh), TRUE);
+	if (SflDiskCdromDrive(fh) != NULL)
+		CdromDrive_AllowRemoval(SflDiskCdromDrive(fh), TRUE);
 }
 
 static void *SflDiskBinCue(void *fh)
@@ -419,8 +419,8 @@ int SysCDReadSector(void *fh, void *buffer, uint32 sector, uint8 type, uint8 fla
 bool SysCDReadTOC(void *fh, uint8 *toc)
 {
 	void *bincue;
-	if (SflDiskDrive(fh) != NULL)
-		return CdromDrive_FillTOC(SflDiskDrive(fh), (CDROMDRIVETOC *)toc) != 0;
+	if (SflDiskCdromDrive(fh) != NULL)
+		return CdromDrive_FillTOC(SflDiskCdromDrive(fh), (CDROMDRIVETOC *)toc) != 0;
 	bincue = SflDiskBinCue(fh);
 	if (bincue == NULL)
 		return false;
@@ -430,8 +430,8 @@ bool SysCDReadTOC(void *fh, uint8 *toc)
 bool SysCDGetPosition(void *fh, uint8 *pos)
 {
 	void *bincue;
-	if (SflDiskDrive(fh) != NULL) {
-		if (!CdromDrive_ReadPosition(SflDiskDrive(fh), pos))
+	if (SflDiskCdromDrive(fh) != NULL) {
+		if (!CdromDrive_ReadPosition(SflDiskCdromDrive(fh), pos))
 			return false;
 		if (pos[1] == 0)
 			pos[1] = 0x15;
@@ -446,9 +446,9 @@ bool SysCDGetPosition(void *fh, uint8 *pos)
 bool SysCDPlay(void *fh, uint8 start_m, uint8 start_s, uint8 start_f, uint8 end_m, uint8 end_s, uint8 end_f)
 {
 	void *bincue;
-	if (SflDiskDrive(fh) != NULL) {
+	if (SflDiskCdromDrive(fh) != NULL) {
 		int start = CdromDriveMSFToFrames(start_m, start_s, start_f);
-		return CdromDrive_Play(SflDiskDrive(fh), start,
+		return CdromDrive_Play(SflDiskCdromDrive(fh), start,
 			CdromDriveMSFToFrames(end_m, end_s, end_f) - start) != 0;
 	}
 	bincue = SflDiskBinCue(fh);
@@ -460,8 +460,8 @@ bool SysCDPlay(void *fh, uint8 start_m, uint8 start_s, uint8 start_f, uint8 end_
 bool SysCDPause(void *fh)
 {
 	void *bincue;
-	if (SflDiskDrive(fh) != NULL)
-		return CdromDrive_Pause(SflDiskDrive(fh)) != 0;
+	if (SflDiskCdromDrive(fh) != NULL)
+		return CdromDrive_Pause(SflDiskCdromDrive(fh)) != 0;
 	bincue = SflDiskBinCue(fh);
 	if (bincue == NULL)
 		return false;
@@ -471,8 +471,8 @@ bool SysCDPause(void *fh)
 bool SysCDResume(void *fh)
 {
 	void *bincue;
-	if (SflDiskDrive(fh) != NULL)
-		return CdromDrive_Resume(SflDiskDrive(fh)) != 0;
+	if (SflDiskCdromDrive(fh) != NULL)
+		return CdromDrive_Resume(SflDiskCdromDrive(fh)) != 0;
 	bincue = SflDiskBinCue(fh);
 	if (bincue == NULL)
 		return false;
@@ -482,8 +482,8 @@ bool SysCDResume(void *fh)
 bool SysCDStop(void *fh, uint8 lead_out_m, uint8 lead_out_s, uint8 lead_out_f)
 {
 	void *bincue;
-	if (SflDiskDrive(fh) != NULL)
-		return CdromDrive_Stop(SflDiskDrive(fh)) != 0;
+	if (SflDiskCdromDrive(fh) != NULL)
+		return CdromDrive_Stop(SflDiskCdromDrive(fh)) != 0;
 	bincue = SflDiskBinCue(fh);
 	if (bincue == NULL)
 		return false;
@@ -493,8 +493,8 @@ bool SysCDStop(void *fh, uint8 lead_out_m, uint8 lead_out_s, uint8 lead_out_f)
 bool SysCDScan(void *fh, uint8 start_m, uint8 start_s, uint8 start_f, bool reverse)
 {
 	void *bincue;
-	if (SflDiskDrive(fh) != NULL)
-		return CdromDrive_Scan(SflDiskDrive(fh), CdromDriveMSFToFrames(start_m, start_s, start_f) - 150,
+	if (SflDiskCdromDrive(fh) != NULL)
+		return CdromDrive_Scan(SflDiskCdromDrive(fh), CdromDriveMSFToFrames(start_m, start_s, start_f) - 150,
 			reverse, 0, 10000) != 0;
 	bincue = SflDiskBinCue(fh);
 	if (bincue == NULL)
@@ -505,8 +505,8 @@ bool SysCDScan(void *fh, uint8 start_m, uint8 start_s, uint8 start_f, bool rever
 void SysCDSetVolume(void *fh, uint8 left, uint8 right)
 {
 	void *bincue;
-	if (SflDiskDrive(fh) != NULL) {
-		CdromDrive_SetVolume(SflDiskDrive(fh), left, right);
+	if (SflDiskCdromDrive(fh) != NULL) {
+		CdromDrive_SetVolume(SflDiskCdromDrive(fh), left, right);
 		return;
 	}
 	bincue = SflDiskBinCue(fh);
@@ -519,8 +519,8 @@ void SysCDGetVolume(void *fh, uint8 &left, uint8 &right)
 	void *bincue;
 	left = 0;
 	right = 0;
-	if (SflDiskDrive(fh) != NULL) {
-		CdromDrive_GetVolume(SflDiskDrive(fh), &left, &right);
+	if (SflDiskCdromDrive(fh) != NULL) {
+		CdromDrive_GetVolume(SflDiskCdromDrive(fh), &left, &right);
 		return;
 	}
 	bincue = SflDiskBinCue(fh);
@@ -530,43 +530,43 @@ void SysCDGetVolume(void *fh, uint8 &left, uint8 &right)
 
 bool SysCDReadSubcodes(void *fh, void *buffer, uint32 sector, uint32 count)
 {
-	if (SflDiskDrive(fh) == NULL)
+	if (SflDiskCdromDrive(fh) == NULL)
 		return false;
-	return CdromDrive_ReadSubcodes(SflDiskDrive(fh), buffer, sector, count) != 0;
+	return CdromDrive_ReadSubcodes(SflDiskCdromDrive(fh), buffer, sector, count) != 0;
 }
 
 bool SysCDReadMCN(void *fh, char *mcn)
 {
-	if (SflDiskDrive(fh) == NULL)
+	if (SflDiskCdromDrive(fh) == NULL)
 		return false;
-	return CdromDrive_ReadMCN(SflDiskDrive(fh), mcn) != 0;
+	return CdromDrive_ReadMCN(SflDiskCdromDrive(fh), mcn) != 0;
 }
 
 bool SysCDReadISRC(void *fh, int track, char *isrc)
 {
-	if (SflDiskDrive(fh) == NULL)
+	if (SflDiskCdromDrive(fh) == NULL)
 		return false;
-	return CdromDrive_ReadISRC(SflDiskDrive(fh), track, isrc) != 0;
+	return CdromDrive_ReadISRC(SflDiskCdromDrive(fh), track, isrc) != 0;
 }
 
 bool SysCDGetSpeed(void *fh, unsigned int *kbps)
 {
-	if (SflDiskDrive(fh) == NULL)
+	if (SflDiskCdromDrive(fh) == NULL)
 		return false;
-	return CdromDrive_GetSpeed(SflDiskDrive(fh), kbps) != 0;
+	return CdromDrive_GetSpeed(SflDiskCdromDrive(fh), kbps) != 0;
 }
 
 bool SysCDSetSpeed(void *fh, uint32 kbps)
 {
-	if (SflDiskDrive(fh) == NULL)
+	if (SflDiskCdromDrive(fh) == NULL)
 		return false;
-	return CdromDrive_SetSpeed(SflDiskDrive(fh), kbps) != 0;
+	return CdromDrive_SetSpeed(SflDiskCdromDrive(fh), kbps) != 0;
 }
 
 bool SysCDGetFeatures(void *fh, unsigned int *maxkbps, unsigned int *flags)
 {
 	CDROMDRIVEFEATURES features;
-	if (SflDiskDrive(fh) == NULL || !CdromDrive_GetFeatures(SflDiskDrive(fh), &features))
+	if (SflDiskCdromDrive(fh) == NULL || !CdromDrive_GetFeatures(SflDiskCdromDrive(fh), &features))
 		return false;
 	*maxkbps = features.maxspeed;
 	*flags = features.flags;

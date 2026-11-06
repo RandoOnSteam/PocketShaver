@@ -1126,24 +1126,24 @@ D(bug(" AudioStop postype %d, pos %08lx\n", ReadMacInt16(pb + csParam), ReadMacI
 #if defined(USE_SFL)
 		case 110:		// ReadMCN
 		case 111: {		// ReadISRC
-			char code[16];
+			char identifier[16];
 			bool found;
 			int length;
-			memset(code, 0, sizeof(code));
+			memset(identifier, 0, sizeof(identifier));
 			if (ReadMacInt8(info->status + dsDiskInPlace) == 0)
 				return offLinErr;
 			if (ReadMacInt16(pb + csCode) == 110) {
-				found = SysCDReadMCN(info->fh, code);
+				found = SysCDReadMCN(info->fh, identifier);
 				length = 13;
 			} else {
-				found = SysCDReadISRC(info->fh, bcd2bin[ReadMacInt16(pb + csParam) & 0xff], code);
+				found = SysCDReadISRC(info->fh, bcd2bin[ReadMacInt16(pb + csParam) & 0xff], identifier);
 				length = 12;
 			}
 			Mac_memset(pb + csParam, 0, 14);
 			if (found) {
 				WriteMacInt8(pb + csParam, length);
 				for (int index = 0; index < length; index++)
-					WriteMacInt8(pb + csParam + 1 + index, code[index]);
+					WriteMacInt8(pb + csParam + 1 + index, identifier[index]);
 			}
 			return noErr;
 		}
@@ -1444,9 +1444,8 @@ int16 CDROMStatus(uint32 pb, uint32 dce)
 			WriteMacInt32(pb + csParam, (info->num & 0xff) << 8);
 			return noErr;
 			
-		case 121:		// Get CD features
+		case 121: {		// Get CD features
 #if defined(USE_SFL)
-		{
 			unsigned int maxkbps = 0;
 			unsigned int flags = 0;
 			if (SysCDGetFeatures(info->fh, &maxkbps, &flags) && maxkbps != 0) {
@@ -1454,11 +1453,11 @@ int16 CDROMStatus(uint32 pb, uint32 dce)
 				WriteMacInt16(pb + csParam + 2, flags);
 				return noErr;
 			}
-		}
 #endif
 			WriteMacInt16(pb + csParam, 0x0200);	// 300 KB/s
 			WriteMacInt16(pb + csParam + 2, 0x0c00);	// SCSI-2, stereo
 			return noErr;
+		}
 			
 		default:
 			printf("WARNING: Unknown CDROMStatus(%d)\n", code);

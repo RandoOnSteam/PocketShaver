@@ -749,7 +749,7 @@ static uint32 BuildModePages(OsxAtaDrive *drive, uint8 *data, uint32 page)
 static uint32 BuildSubChannel(OsxAtaDrive *drive, uint8 *data, const uint8 *packet)
 {
 	uint8 position[16];
-	char code[16];
+	char identifier[16];
 	uint32 frames;
 	memset(data, 0, 32);
 	data[1] = 0x15;
@@ -775,20 +775,20 @@ static uint32 BuildSubChannel(OsxAtaDrive *drive, uint8 *data, const uint8 *pack
 	case 0x02:
 		data[3] = 20;
 		data[4] = 2;
-		memset(code, 0, sizeof(code));
-		if (SysCDReadMCN(drive->file, code)) {
+		memset(identifier, 0, sizeof(identifier));
+		if (SysCDReadMCN(drive->file, identifier)) {
 			data[8] = 0x80;
-			memcpy(data + 9, code, 13);
+			memcpy(data + 9, identifier, 13);
 		}
 		return 24;
 	case 0x03:
 		data[3] = 20;
 		data[4] = 3;
 		data[6] = packet[6];
-		memset(code, 0, sizeof(code));
-		if (SysCDReadISRC(drive->file, packet[6], code)) {
+		memset(identifier, 0, sizeof(identifier));
+		if (SysCDReadISRC(drive->file, packet[6], identifier)) {
 			data[8] = 0x80;
-			memcpy(data + 9, code, 12);
+			memcpy(data + 9, identifier, 12);
 		}
 		return 24;
 	}
@@ -886,22 +886,23 @@ static uint32 BuildDvdStructure(OsxAtaDrive *drive, uint8 *data, uint32 format)
 #if defined(USE_SFL)
 static void AtapiPlay(OsxMachine *machine, OsxAtaBus *bus, OsxAtaDrive *drive, const uint8 *packet)
 {
-	uint32 start;
-	uint32 count;
-	uint32 end;
+	uint32 startframe;
+	uint32 framecount;
+	uint32 endframe;
 	int result;
+	OsxAudioOpenForCdrom(machine);
 	if (packet[0] == 0x47)
 		result = SysCDPlay(drive->file, packet[3], packet[4], packet[5], packet[6], packet[7], packet[8]);
 	else {
-		start = ((uint32)packet[2] << 24) | ((uint32)packet[3] << 16) | ((uint32)packet[4] << 8) | packet[5];
+		startframe = ((uint32)packet[2] << 24) | ((uint32)packet[3] << 16) | ((uint32)packet[4] << 8) | packet[5];
 		if (packet[0] == 0x45)
-			count = ((uint32)packet[7] << 8) | packet[8];
+			framecount = ((uint32)packet[7] << 8) | packet[8];
 		else
-			count = ((uint32)packet[6] << 24) | ((uint32)packet[7] << 16) | ((uint32)packet[8] << 8) | packet[9];
-		start += 150;
-		end = start + count;
-		result = SysCDPlay(drive->file, (uint8)(start / 4500), (uint8)((start / 75) % 60), (uint8)(start % 75),
-			(uint8)(end / 4500), (uint8)((end / 75) % 60), (uint8)(end % 75));
+			framecount = ((uint32)packet[6] << 24) | ((uint32)packet[7] << 16) | ((uint32)packet[8] << 8) | packet[9];
+		startframe += 150;
+		endframe = startframe + framecount;
+		result = SysCDPlay(drive->file, (uint8)(startframe / 4500), (uint8)((startframe / 75) % 60), (uint8)(startframe % 75),
+			(uint8)(endframe / 4500), (uint8)((endframe / 75) % 60), (uint8)(endframe % 75));
 	}
 	if (result)
 		AtapiComplete(machine, bus, drive, 0);
@@ -912,6 +913,9 @@ static void AtapiPlay(OsxMachine *machine, OsxAtaBus *bus, OsxAtaDrive *drive, c
 #endif
 static void AtapiExecute(OsxMachine *machine, OsxAtaBus *bus)
 {
+#if defined(USE_SFL)
+	bool audioresult;
+#endif
 	OsxAtaDrive *drive;
 	uint8 *packet;
 	uint8 *data;
@@ -972,10 +976,10 @@ static void AtapiExecute(OsxMachine *machine, OsxAtaBus *bus)
 		return;
 	case 0x4b:
 		if (packet[8] & 1)
-			count = SysCDResume(drive->file);
+			audioresult = SysCDResume(drive->file);
 		else
-			count = SysCDPause(drive->file);
-		if (count)
+			audioresult = SysCDPause(drive->file);
+		if (audioresult)
 			AtapiComplete(machine, bus, drive, 0);
 		else
 			AtapiFail(machine, bus, drive, SENSEILLEGALREQUEST, 0x64);
@@ -1091,7 +1095,7 @@ static void AtapiExecute(OsxMachine *machine, OsxAtaBus *bus)
 			AtapiComplete(machine, bus, drive, 0);
 			return;
 		}
-		if (packet[0] == 0xbe)
+		if (packet[0] == 0xbe && !(packet[9] == 0x10 && ((packet[1] >> 2) & 7) == 2))
 			BeginSectorsIn(machine, bus, lba, count, 2352, length, dma);
 		else
 			BeginSectorsIn(machine, bus, lba, count, OSXATAPISECTOR, length, dma);

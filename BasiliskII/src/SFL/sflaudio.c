@@ -66,11 +66,19 @@ static WSTHREADENTRYCALLBACK(SflAudioPump)
 	return WSTHREADENTRYPROCRETCODE(0);
 }
 
+static void SflAudioSilenceProc(void *userdata, uint8_t *buffer, size_t size)
+{
+	int silence;
+	silence = *(int *)userdata;
+	memset(buffer, silence, size);
+}
+
 static void *SflAudioCreate(int rate, int channels, int bits, int bufferbytes, int flags, SFLAUDIOFILL fill,
 	void *context)
 {
 	SFLAUDIO *pThis;
 	WSAUDIOSPEC spec;
+	int silence;
 	WSASSERT(fill != NULL);
 	pThis = WSALLOC1(SFLAUDIO);
 	if (pThis == NULL)
@@ -89,6 +97,11 @@ static void *SflAudioCreate(int rate, int channels, int bits, int bufferbytes, i
 	}
 	WSSignal_Create(&pThis->exited);
 	WSAudio_Play(&pThis->audio);
+	silence = 0;
+	if (bits == 8)
+		silence = 0x80;
+	while (WSAudio_ProcessWithLock(&pThis->audio, SflAudioSilenceProc, &silence))
+		;
 	if (!WSThread_Create(&pThis->thread, SflAudioPump, pThis)) {
 		WSSignal_Destroy(&pThis->exited);
 		WSAudio_Destroy(&pThis->audio);
