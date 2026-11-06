@@ -19,6 +19,7 @@
  */
 #include "sysdeps.h"
 #include "osxmachine.h"
+#include "osxhost.h"
 
 #if OSXG5
 
@@ -1200,7 +1201,7 @@ static void GmacTransmit(OsxMachine *machine)
 				gmac->txdata[stuff + 1] = (uint8)checksum;
 			}
 			if (machine->bmac.ready)
-				EtherSlirpSend(gmac->txdata, (int)gmac->txsize);
+				OsxHostNetSend(machine->bmac.slirpthread, gmac->txdata, (int)gmac->txsize);
 			machine->bmac.busydeadline = OsxCpuTimebase(machine->cpu) + OSXTIMEBASEFREQUENCY * 2;
 			gmac->txsize = 0;
 			gmac->txfirst = 0;
@@ -1280,7 +1281,7 @@ void OsxG5GmacReceive(OsxMachine *machine)
 	bmac = &machine->bmac;
 	while (bmac->ready && (gmac->rxdma[GMACRXCFG >> 2] & 1) && (gmac->mac[GMACMACRXCFG >> 2] & 1)) {
 		if (bmac->pendinglength == 0) {
-			length = EtherSlirpReceive(bmac->pending);
+			length = OsxHostNetReceive(bmac->slirpthread, bmac->pending);
 			if (length <= 0)
 				return;
 			if (length > 1514)

@@ -265,6 +265,8 @@ void video_set_dirty_area(int x, int y, int w, int h)
 
 void SflEmulatorClose(void)
 {
+	if (SflUiQueueInput(SFLUIINPUTQUIT, 0, 0))
+		return;
 	if (ShearsRequestShutdown())
 		return;
 	ADBKeyDown(SFLVIDEOPOWERKEY);

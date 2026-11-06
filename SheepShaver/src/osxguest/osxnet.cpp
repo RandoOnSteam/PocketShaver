@@ -20,6 +20,7 @@
 #include "sysdeps.h"
 #include "prefs.h"
 #include "osxmachine.h"
+#include "osxhost.h"
 
 #define BMACSTAT 0x200
 #define BMACINTDISABLE 0x210
@@ -88,7 +89,7 @@ void OsxBmacReset(OsxMachine *machine)
 	machine->dbdma[OSXDBDMABMACTX].irq = OSXIRQBMACTXDMA;
 	machine->dbdma[OSXDBDMABMACRX].irq = OSXIRQBMACRXDMA;
 	if (!bmac->attached && PrefsFindString("ether") && strcmp(PrefsFindString("ether"), "slirp") == 0) {
-		bmac->slirpthread = EtherSlirpOpen();
+		bmac->slirpthread = OsxHostNetOpen(BmacAddress);
 		bmac->attached = bmac->slirpthread != NULL;
 	}
 	if (machine->log)
@@ -100,7 +101,7 @@ static int BackendReady(OsxBmac *bmac)
 	int state;
 	if (bmac->ready || !bmac->attached)
 		return bmac->ready;
-	state = EtherSlirpReady(bmac->slirpthread);
+	state = OsxHostNetReady(bmac->slirpthread);
 	if (state > 0)
 		bmac->ready = 1;
 	else if (state < 0)
@@ -264,7 +265,7 @@ void OsxBmacTransmit(OsxMachine *machine)
 #if OSXNETTRACE
 			NetTrace(machine, "tx", bmac->frame, length);
 #endif
-			EtherSlirpSend(bmac->frame, length);
+			OsxHostNetSend(bmac->slirpthread, bmac->frame, length);
 			bmac->busydeadline = OsxCpuTimebase(machine->cpu) + BMACBUSYPERIOD;
 		}
 		RaiseDevice(machine, BMACFRAMESENT);
@@ -278,7 +279,7 @@ void OsxBmacReceive(OsxMachine *machine)
 	bmac = &machine->bmac;
 	while (BackendReady(bmac) && (bmac->registers[BMACRXCFG >> 4] & BMACRXENABLE)) {
 		if (bmac->pendinglength == 0) {
-			length = EtherSlirpReceive(bmac->pending);
+			length = OsxHostNetReceive(bmac->slirpthread, bmac->pending);
 			if (length <= 0)
 				return;
 #if OSXNETTRACE
@@ -320,7 +321,7 @@ void OsxBmacPoll(OsxMachine *machine, uint64 now)
 		bmac->polldeadline = now + BMACBUSYPOLL;
 	else
 		bmac->polldeadline = now + BMACIDLEPOLL;
-	EtherSlirpPoll();
+	OsxHostNetPoll(bmac->slirpthread);
 #if OSXG5
 	if (machine->g5) {
 		OsxG5GmacReceive(machine);

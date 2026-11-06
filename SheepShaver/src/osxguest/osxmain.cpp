@@ -18,12 +18,13 @@
  *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 #include "sysdeps.h"
-#include "my_sdl.h"
+#include "osxhost.h"
 #include "sys.h"
 #include "prefs.h"
 #include "osxmachine.h"
 #include "xpram.h"
 #include "osxguest.h"
+#include "osxglbridge.h"
 #if OSXHOSTX64
 #include <tmmintrin.h>
 #endif
@@ -32,40 +33,25 @@
 #else
 #define OSXSSSE3
 #endif
-#ifdef _WIN32
-#include <mmsystem.h>
-#pragma comment(lib, "winmm.lib")
-#endif
-#ifdef ENABLE_EMULATOR_MONITOR
-#include "../../../BasiliskII/src/SDL/emulator_monitor.h"
-#endif
 
 #define OSXSLICE 262144
 
-SDL_Surface *SDLSetVideoModeQuietly(int width, int height, int depth, Uint32 flags);
-#if SDL_VERSION_ATLEAST(2, 0, 0)
-extern SDL_Window *sdl_window;
-#define OSXVIDEOFLAGS 0
-#else
-#define OSXVIDEOFLAGS SDL_SWSURFACE
-#endif
 #define OSXDEFAULTRAM (256 * 1024 * 1024)
 #define OSXFRAMERATE 60
-#define OSXPRESENTRUNS 16
 #define OSXSETTLEMS 3000
 #define OSXAMPSETTLEMS 225
 
-typedef struct OsxKeyMapping {
-	int sdlkey;
-	int adbcode;
-} OsxKeyMapping;
-
 typedef struct OsxSession {
 	OsxMachine *machine;
-	SDL_Surface *screen;
+	OsxHostVideo *video;
+#if OSXGLBRIDGE
+	OsxGlBridge *gl;
+	OsxQuartzBridge *quartz;
+	uint32 glbase;
+	uint32 glsegment;
+#endif
 	uint8 *shadow;
 	int nvramready;
-	int sdlready;
 	int pixelshuffle;
 	FILE *slicelog;
 	FILE *script;
@@ -122,76 +108,6 @@ int OsxGuestRequested(void)
 	int partition;
 	XPRAMInit(NULL);
 	return OsxSelectBootImage(&diskindex, &partition) == OSXBOOTNATIVE;
-}
-
-#if SDL_VERSION_ATLEAST(2, 0, 0) /* SDL2+ -> SDL1 names we use */
-	#define SDLK_KP0 SDLK_KP_0
-	#define SDLK_KP1 SDLK_KP_1
-	#define SDLK_KP2 SDLK_KP_2
-	#define SDLK_KP3 SDLK_KP_3
-	#define SDLK_KP4 SDLK_KP_4
-	#define SDLK_KP5 SDLK_KP_5
-	#define SDLK_KP6 SDLK_KP_6
-	#define SDLK_KP7 SDLK_KP_7
-	#define SDLK_KP8 SDLK_KP_8
-	#define SDLK_KP9 SDLK_KP_9
-	#define SDLK_LSUPER SDLK_LGUI
-	#define SDLK_RSUPER SDLK_RGUI
-#endif /* SDL_VERSION_ATLEAST(2, 0, 0) */
-#if SDL_VERSION_ATLEAST(3, 0, 0)
-#define OSXSDLSUCCESS true
-#define OSXEVENTQUIT SDL_EVENT_QUIT
-#define OSXEVENTMOTION SDL_EVENT_MOUSE_MOTION
-#define OSXEVENTBUTTONDOWN SDL_EVENT_MOUSE_BUTTON_DOWN
-#define OSXEVENTBUTTONUP SDL_EVENT_MOUSE_BUTTON_UP
-#define OSXEVENTWHEEL SDL_EVENT_MOUSE_WHEEL
-#define OSXEVENTWINDOW SDL_EVENT_WINDOW_EXPOSED
-#define OSXEVENTKEYDOWN SDL_EVENT_KEY_DOWN
-#define OSXEVENTKEYUP SDL_EVENT_KEY_UP
-#define OSXEVENTKEY(event) ((event).key.key)
-#else
-#define OSXSDLSUCCESS 0
-#define OSXEVENTQUIT SDL_QUIT
-#define OSXEVENTMOTION SDL_MOUSEMOTION
-#define OSXEVENTBUTTONDOWN SDL_MOUSEBUTTONDOWN
-#define OSXEVENTBUTTONUP SDL_MOUSEBUTTONUP
-#define OSXEVENTWHEEL SDL_MOUSEWHEEL
-#define OSXEVENTWINDOW SDL_WINDOWEVENT
-#define OSXEVENTKEYDOWN SDL_KEYDOWN
-#define OSXEVENTKEYUP SDL_KEYUP
-#define OSXEVENTKEY(event) ((event).key.keysym.sym)
-#endif
-static int MapKey(int key)
-{
-	static const OsxKeyMapping mappings[] = {
-		{ 'a', 0x00 }, { 's', 0x01 }, { 'd', 0x02 }, { 'f', 0x03 }, { 'h', 0x04 },
-		{ 'g', 0x05 }, { 'z', 0x06 }, { 'x', 0x07 }, { 'c', 0x08 }, { 'v', 0x09 },
-		{ 'b', 0x0b }, { 'q', 0x0c }, { 'w', 0x0d }, { 'e', 0x0e }, { 'r', 0x0f },
-		{ 'y', 0x10 }, { 't', 0x11 }, { SDLK_1, 0x12 }, { SDLK_2, 0x13 }, { SDLK_3, 0x14 },
-		{ SDLK_4, 0x15 }, { SDLK_6, 0x16 }, { SDLK_5, 0x17 }, { SDLK_EQUALS, 0x18 }, { SDLK_9, 0x19 },
-		{ SDLK_7, 0x1a }, { SDLK_MINUS, 0x1b }, { SDLK_8, 0x1c }, { SDLK_0, 0x1d }, { SDLK_RIGHTBRACKET, 0x1e },
-		{ 'o', 0x1f }, { 'u', 0x20 }, { SDLK_LEFTBRACKET, 0x21 }, { 'i', 0x22 }, { 'p', 0x23 },
-		{ SDLK_RETURN, 0x24 }, { 'l', 0x25 }, { 'j', 0x26 }, { '\'', 0x27 }, { 'k', 0x28 },
-		{ SDLK_SEMICOLON, 0x29 }, { SDLK_BACKSLASH, 0x2a }, { SDLK_COMMA, 0x2b }, { SDLK_SLASH, 0x2c },
-		{ 'n', 0x2d }, { 'm', 0x2e }, { SDLK_PERIOD, 0x2f }, { SDLK_TAB, 0x30 }, { SDLK_SPACE, 0x31 },
-		{ '`', 0x32 }, { SDLK_BACKSPACE, 0x33 }, { SDLK_ESCAPE, 0x35 }, { SDLK_LCTRL, 0x36 },
-		{ SDLK_RCTRL, 0x36 }, { SDLK_LALT, 0x37 }, { SDLK_RALT, 0x37 }, { SDLK_LSHIFT, 0x38 },
-		{ SDLK_RSHIFT, 0x38 }, { SDLK_CAPSLOCK, 0x39 }, { SDLK_LSUPER, 0x3a }, { SDLK_RSUPER, 0x3a },
-		{ SDLK_LEFT, 0x3b }, { SDLK_RIGHT, 0x3c }, { SDLK_DOWN, 0x3d }, { SDLK_UP, 0x3e },
-		{ SDLK_KP_PERIOD, 0x41 }, { SDLK_KP_MULTIPLY, 0x43 }, { SDLK_KP_PLUS, 0x45 }, { SDLK_KP_DIVIDE, 0x4b },
-		{ SDLK_KP_ENTER, 0x4c }, { SDLK_KP_MINUS, 0x4e }, { SDLK_KP_EQUALS, 0x51 }, { SDLK_KP0, 0x52 },
-		{ SDLK_KP1, 0x53 }, { SDLK_KP2, 0x54 }, { SDLK_KP3, 0x55 }, { SDLK_KP4, 0x56 }, { SDLK_KP5, 0x57 },
-		{ SDLK_KP6, 0x58 }, { SDLK_KP7, 0x59 }, { SDLK_KP8, 0x5b }, { SDLK_KP9, 0x5c }, { SDLK_F5, 0x60 },
-		{ SDLK_F6, 0x61 }, { SDLK_F7, 0x62 }, { SDLK_F3, 0x63 }, { SDLK_F8, 0x64 }, { SDLK_F9, 0x65 },
-		{ SDLK_F11, 0x67 }, { SDLK_F10, 0x6d }, { SDLK_F12, 0x6f }, { SDLK_HOME, 0x73 }, { SDLK_PAGEUP, 0x74 },
-		{ SDLK_DELETE, 0x75 }, { SDLK_F4, 0x76 }, { SDLK_END, 0x77 }, { SDLK_F2, 0x78 }, { SDLK_PAGEDOWN, 0x79 },
-		{ SDLK_F1, 0x7a }
-	};
-	int index;
-	for (index = 0; index < (int)(sizeof(mappings) / sizeof(mappings[0])); index++)
-		if (mappings[index].sdlkey == key)
-			return mappings[index].adbcode;
-	return -1;
 }
 
 static void ConsoleCharacter(OsxSession *session, int character);
@@ -686,59 +602,30 @@ static void PressButton(OsxSession *session, int button, int down)
 	OsxCudaMouse(session->machine, 0, 0, session->buttons);
 }
 
-static int HostButton(int button)
+static void HostInput(void *context, int operation, int first, int second)
 {
-	if (button == SDL_BUTTON_LEFT)
-		return 0;
-	if (button == SDL_BUTTON_RIGHT)
-		return 1;
-	if (button == SDL_BUTTON_MIDDLE)
-		return 2;
-#if !SDL_VERSION_ATLEAST(2, 0, 0)
-	if (button == SDL_BUTTON_WHEELUP)
-		return 3;
-	if (button == SDL_BUTTON_WHEELDOWN)
-		return 4;
-#endif
-	return -1;
-}
-#if SDL_VERSION_ATLEAST(2, 0, 0)
-static int HostWheelButton(int wheely)
-{
-	if (wheely > 0)
-		return 3; /* up */
-	if (wheely < 0)
-		return 4; /* down */
-	return -1;
-}
-#endif
-#ifdef ENABLE_EMULATOR_MONITOR
-static void MonitorInput(void *context, int operation, int first, int second)
-{
-	OsxSession *session;
-	session = (OsxSession *)context;
+	OsxSession *session = (OsxSession *)context;
 	switch (operation) {
-	case EMULATOR_MONITOR_MOUSE:
+	case OSXHOSTQUIT:
+		session->machine->quit = 1;
+		break;
+	case OSXHOSTMOUSE:
 		MovePointer(session, first, second);
 		break;
-	case EMULATOR_MONITOR_MOUSEDOWN:
-		PressButton(session, first, 1);
+	case OSXHOSTBUTTON:
+		PressButton(session, first, second);
 		break;
-	case EMULATOR_MONITOR_MOUSEUP:
-		PressButton(session, first, 0);
-		break;
-	case EMULATOR_MONITOR_WHEEL:
+	case OSXHOSTWHEEL:
 		OsxCudaWheel(session->machine, first);
 		break;
-	case EMULATOR_MONITOR_KEYDOWN:
-		OsxCudaKey(session->machine, first, 1);
+	case OSXHOSTKEY:
+		OsxCudaKey(session->machine, first, second);
 		break;
-	case EMULATOR_MONITOR_KEYUP:
-		OsxCudaKey(session->machine, first, 0);
+	case OSXHOSTREDRAW:
+		memset(session->shadow, 0xff, session->machine->rowbytes * session->machine->height);
 		break;
 	}
 }
-#endif
 
 #if OSXHOSTX64
 static OSXSSSE3 uint32 ShufflePixels(uint32 *target, const uint8 *source, uint32 width)
@@ -771,46 +658,52 @@ static void ConvertPixels(uint32 *target, const uint8 *source, uint32 width, int
 static void PresentFrame(OsxSession *session)
 {
 	OsxMachine *machine;
-	uint8 *source;
+	const uint8 *source;
 	uint8 *shadowrow;
 	uint32 *target;
 	uint32 row;
 	uint32 rowbytes;
-	uint32 runstart[OSXPRESENTRUNS];
-	uint32 runend[OSXPRESENTRUNS];
-#if SDL_VERSION_ATLEAST(2, 0, 0)
-	SDL_Rect rects[OSXPRESENTRUNS];
-#endif
-#if SDL_VERSION_ATLEAST(3, 0, 0)
-	SDL_Surface *window;
-	int pixelwidth;
-	int pixelheight;
-#endif
+	uint32 runstart[OSXHOSTRUNS];
+	uint32 runend[OSXHOSTRUNS];
+	uint8 *pixels;
+	int pitch;
+	int raw;
 	int runs;
 	int open;
 	uint32 openrow;
-	int index;
+	int presented;
+#if OSXGLBRIDGE
+	const uint8 *glpixels;
+#endif
 	machine = session->machine;
 	rowbytes = machine->rowbytes;
+#if OSXGLBRIDGE
+	glpixels = NULL;
+	if (session->gl)
+		glpixels = GlBridgeFrame(session->gl);
+	if (session->quartz) {
+		const uint8 *quartzpixels;
+		quartzpixels = QuartzBridgeFrame(session->quartz);
+		if (quartzpixels)
+			glpixels = quartzpixels;
+	}
+#endif
 	runs = 0;
 	open = 0;
 	openrow = 0;
-#if SDL_VERSION_ATLEAST(3, 0, 0)
-	window = SDL_GetWindowSurface(sdl_window);
-	SDL_GetWindowSizeInPixels(sdl_window, &pixelwidth, &pixelheight);
-	if (pixelwidth == (int)machine->width)
-		session->screen = window;
-	if (window == NULL)
-		return;
-#endif
-	if (session->screen == NULL || session->screen->w < (int)machine->width || session->screen->h < (int)machine->height || SDL_LockSurface(session->screen) != OSXSDLSUCCESS)
+	pixels = OsxHostLock(session->video, &pitch, &raw);
+	if (!pixels)
 		return;
 	for (row = 0; row < machine->height; row++) {
 		source = machine->vram + row * rowbytes;
+#if OSXGLBRIDGE
+		if (glpixels)
+			source = glpixels + (machine->height - row - 1) * machine->width * 4;
+#endif
 		shadowrow = session->shadow + row * rowbytes;
 		if (memcmp(source, shadowrow, machine->width * 4) == 0) {
 			if (open) {
-				if (runs < OSXPRESENTRUNS) {
+				if (runs < OSXHOSTRUNS) {
 					runstart[runs] = openrow;
 					runend[runs] = row - 1;
 					runs++;
@@ -824,122 +717,34 @@ static void PresentFrame(OsxSession *session)
 #if OSXPROFILE
 		session->tmprows++;
 #endif
-		target = (uint32 *)((uint8 *)session->screen->pixels + row * session->screen->pitch);
-		ConvertPixels(target, source, machine->width, session->pixelshuffle);
+		target = (uint32 *)(pixels + row * pitch);
+		if (raw)
+			memcpy(target, source, machine->width * 4);
+		else
+			ConvertPixels(target, source, machine->width, session->pixelshuffle);
 		if (!open) {
 			openrow = row;
 			open = 1;
 		}
 	}
 	if (open) {
-		if (runs < OSXPRESENTRUNS) {
+		if (runs < OSXHOSTRUNS) {
 			runstart[runs] = openrow;
 			runend[runs] = machine->height - 1;
 			runs++;
 		} else
 			runend[runs - 1] = machine->height - 1;
 	}
-	SDL_UnlockSurface(session->screen);
+	presented = OsxHostPresent(session->video, runstart, runend, runs);
+	if (presented && runs && machine->log)
+		fprintf(machine->log, "saver frame %llu\n", (unsigned long long)OsxHostNanoseconds());
 #if OSXPROFILE
-	session->tmpframes += runs != 0;
+	session->tmpframes += presented;
 #endif
-#if SDL_VERSION_ATLEAST(3, 0, 0)
-	if (window != session->screen) {
-		if (runs) {
-			SDL_BlitSurfaceScaled(session->screen, NULL, window, NULL, SDL_SCALEMODE_LINEAR);
-			SDL_UpdateWindowSurface(sdl_window);
-		}
-		return;
-	}
+#if OSXGLBRIDGE
+	if (presented && glpixels && session->gl && !session->quartz)
+		GlBridgePresented(session->gl, machine->log);
 #endif
-#if SDL_VERSION_ATLEAST(2, 0, 0)
-	for (index = 0; index < runs; index++) {
-		rects[index].x = 0;
-		rects[index].y = (int)runstart[index];
-		rects[index].w = (int)machine->width;
-		rects[index].h = (int)(runend[index] - runstart[index] + 1);
-	}
-	if (runs)
-		SDL_UpdateWindowSurfaceRects(sdl_window, rects, runs);
-#else
-	for (index = 0; index < runs; index++)
-		SDL_UpdateRect(session->screen, 0, runstart[index], machine->width, runend[index] - runstart[index] + 1);
-#endif
-}
-
-static void HandleEvents(OsxSession *session, void *monitor)
-{
-	SDL_Event event;
-	int code;
-#if SDL_VERSION_ATLEAST(3, 0, 0)
-	int width;
-	int height;
-#endif
-	while (SDL_PollEvent(&event)) {
-#ifdef ENABLE_EMULATOR_MONITOR
-		if (monitor) {
-			EmulatorMonitorView view;
-			view.inputfunction = MonitorInput;
-			view.inputcontext = session;
-			view.framebuffer = session->machine->vram;
-			view.palette = NULL;
-			view.window = NULL;
-			view.width = (int)session->machine->width;
-			view.height = (int)session->machine->height;
-			view.depth = 32;
-			view.rowbytes = (int)session->machine->rowbytes;
-			view.hostsurface = session->screen;
-			view.hostwidth = view.width;
-			view.hostheight = view.height;
-			if (((EmulatorMonitor *)monitor)->HandleEvent(event, view))
-				continue;
-		}
-#endif
-		switch (event.type) {
-		case OSXEVENTQUIT:
-			session->machine->quit = 1;
-			break;
-		case OSXEVENTMOTION:
-#if SDL_VERSION_ATLEAST(3, 0, 0)
-			SDL_GetWindowSize(sdl_window, &width, &height);
-			event.motion.x = event.motion.x * session->machine->width / width;
-			event.motion.y = event.motion.y * session->machine->height / height;
-#endif
-			MovePointer(session, (int)event.motion.x, (int)event.motion.y);
-			break;
-		case OSXEVENTBUTTONDOWN:
-			PressButton(session, HostButton(event.button.button), 1);
-			break;
-		case OSXEVENTBUTTONUP:
-			PressButton(session, HostButton(event.button.button), 0);
-			break;
-		#if SDL_VERSION_ATLEAST(2, 0, 0)
-		case OSXEVENTWHEEL:
-			PressButton(session, HostWheelButton((int)event.wheel.y), 1);
-			break;
-		#if SDL_VERSION_ATLEAST(3, 0, 0)
-		case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
-		case SDL_EVENT_WINDOW_RESTORED:
-		#endif
-		case OSXEVENTWINDOW:
-#if !SDL_VERSION_ATLEAST(3, 0, 0)
-			session->screen = SDL_GetWindowSurface(sdl_window);
-#endif
-			memset(session->shadow, 0xff, session->machine->rowbytes * session->machine->height);
-			break;
-		#endif
-		case OSXEVENTKEYDOWN:
-			code = MapKey(OSXEVENTKEY(event));
-			if (code >= 0)
-				OsxCudaKey(session->machine, code, 1);
-			break;
-		case OSXEVENTKEYUP:
-			code = MapKey(OSXEVENTKEY(event));
-			if (code >= 0)
-				OsxCudaKey(session->machine, code, 0);
-			break;
-		}
-	}
 }
 
 static void ParseScreen(OsxMachine *machine)
@@ -993,7 +798,7 @@ static void AttachDisks(OsxMachine *machine, const char **bootimage, int *bootbu
 	}
 }
 
-static int SyscallObserver(OsxCpu *cpu, void *context)
+static int SyscallObserver(OsxCpu *cpu, void *context, uint32 instruction)
 {
 	OsxSession *session;
 	uint32 key;
@@ -1005,6 +810,62 @@ static int SyscallObserver(OsxCpu *cpu, void *context)
 	uint32 header[6];
 #endif
 	session = (OsxSession *)context;
+#if OSXGLBRIDGE
+	if (session->machine->quartz && (cpu->msr & OSXMSRPR) &&
+		(instruction & 0xfffc00ffu) == OSXQUARTZTRAP) {
+		if (!session->quartz)
+			session->quartz = CreateQuartzBridge(session->machine->width, session->machine->height);
+		if (session->quartz && QuartzBridgeCall(session->quartz, cpu,
+			session->machine->quartztails, (instruction >> 8) & 1023, session->machine->log))
+			return 1;
+	}
+	if (session->machine->flurry && (cpu->msr & OSXMSRPR) &&
+		(instruction & 0xffff00ffu) == OSXFLURRYTRAP) {
+		uint32 call;
+		uint32 stub;
+		uint32 base;
+		uint32 segment;
+		uint32 next;
+		int handled;
+		call = (instruction >> 8) & 255;
+		segment = cpu->sr[cpu->pc >> 28];
+		if (!call) {
+			float width;
+			float height;
+			base = cpu->pc - session->machine->flurryinit;
+			memcpy(&width, &cpu->gpr[7], sizeof(width));
+			memcpy(&height, &cpu->gpr[8], sizeof(height));
+			if (!(base & 4095)) {
+				if (width == session->machine->width && height == session->machine->height) {
+					if (session->gl)
+						DestroyGlBridge(session->gl);
+					session->gl = CreateGlBridge(session->machine->width, session->machine->height);
+					session->glbase = base;
+					session->glsegment = segment;
+				}
+				cpu->gpr[0] = cpu->lr;
+				return 1;
+			}
+		} else if (call < sizeof(session->machine->flurrystubs) / sizeof(uint32)) {
+			stub = session->machine->flurrystubs[call];
+			base = cpu->pc - stub;
+			if (stub && !(base & 4095)) {
+				next = cpu->nextpc;
+				handled = session->gl && base == session->glbase && segment == session->glsegment &&
+					GlBridgeCall(session->gl, cpu, call);
+				if (cpu->nextpc != next)
+					return 1;
+				if (handled) {
+					cpu->nextpc = cpu->lr & ~3u;
+					if (call == OSXFLURRYFLUSH)
+						PresentFrame(session);
+				} else
+					cpu->nextpc = cpu->ctr & ~3u;
+				return 1;
+			}
+		}
+	}
+#endif
 	if (OsxClipSyscall(session->machine, cpu))
 		return 1;
 	if (cpu->gpr[0] == 4 && session->machine->log && session->writelogs < 2000) {
@@ -1160,7 +1021,7 @@ static void ParseDiskPatches(OsxMachine *machine)
 	int index;
 	unsigned int value;
 	count = 0;
-	patches = (OsxDiskPatch *)calloc(128, sizeof(OsxDiskPatch));
+	patches = (OsxDiskPatch *)calloc(OSXDISKPATCHES, sizeof(OsxDiskPatch));
 	for (index = 0; (text = PrefsFindString("osxpatch", index)) != NULL && count < 128; index++) {
 		if (strncmp(text, "cdrom:", 6) == 0) {
 			patches[count].atapionly = 1;
@@ -1306,7 +1167,7 @@ static void ExecuteScriptCommand(OsxSession *session, const char *command)
 #endif
 	machine = session->machine;
 	if (machine->log)
-		fprintf(machine->log, "script %llu host %u %s", (unsigned long long)OsxCpuTimebase(machine->cpu), (unsigned)SDL_GetTicks(), command);
+		fprintf(machine->log, "script %llu host %u %s", (unsigned long long)OsxCpuTimebase(machine->cpu), (unsigned)(OsxHostNanoseconds() / 1000000), command);
 	if (sscanf(command, "mouse %d %d", &first, &second) == 2)
 		MovePointer(session, first, second);
 	else if (sscanf(command, "down %d", &first) == 1)
@@ -1403,12 +1264,13 @@ static void TmpDumpForms(FILE *log, OsxCpu *cpu)
 }
 #endif
 
-static void RunMachine(OsxSession *session, void *monitor)
+static void RunMachine(OsxSession *session)
 {
 	OsxMachine *machine;
 	OsxCpu *cpu;
 	uint64 now;
 	uint64 nextframe;
+	int presentnow;
 	uint64 frameticks;
 	uint64 nextevent;
 	uint64 eventticks;
@@ -1456,12 +1318,14 @@ static void RunMachine(OsxSession *session, void *monitor)
 		OsxCpuCheckInterrupts(cpu, now);
 #endif
 		if (cpu->halted) {
-			waitticks = frameticks;
-			if (nextevent <= now)
-				waitticks = 0;
-			else if (nextevent - now < waitticks)
-				waitticks = nextevent - now;
-			eventwait = waitticks;
+			waitticks = 0;
+			if (nextframe > now)
+				waitticks = nextframe - now;
+			eventwait = 0;
+			if (nextevent > now)
+				eventwait = nextevent - now;
+			if (eventwait < waitticks)
+				waitticks = eventwait;
 			if (cpu->decdeadline != OSXNEVER && cpu->decdeadline > now && cpu->decdeadline - now < waitticks)
 				waitticks = cpu->decdeadline - now;
 			cudadeadline = OsxCudaNextDeadline(machine);
@@ -1484,12 +1348,12 @@ static void RunMachine(OsxSession *session, void *monitor)
 					waitticks = atadeadline - now;
 			}
 			milliseconds = (uint32)(waitticks * 1000 / OSXTIMEBASEFREQUENCY);
-			if (waitticks == eventwait)
+			if (waitticks == eventwait && now + waitticks + OSXTIMEBASEFREQUENCY / 1000 <= nextframe)
 				milliseconds = (uint32)((waitticks * 1000 + OSXTIMEBASEFREQUENCY - 1) / OSXTIMEBASEFREQUENCY);
 			if (cpu->deterministic)
 				cpu->virtualticks += waitticks + 1;
 			else if (milliseconds > 0)
-				SDL_Delay(milliseconds);
+				OsxHostSleep(milliseconds);
 			now = OsxCpuTimebase(cpu);
 		} else {
 			runstart = now;
@@ -1535,10 +1399,18 @@ static void RunMachine(OsxSession *session, void *monitor)
 		RunScript(session, now);
 		if (now >= nextevent) {
 			nextevent = now + eventticks;
-			HandleEvents(session, monitor);
+			OsxHostEvents(session->video, machine->vram);
 		}
-		if (now >= nextframe) {
-			nextframe = now + frameticks;
+		presentnow = now >= nextframe;
+#if OSXGLBRIDGE
+		if (session->quartz && QuartzBridgeFresh(session->quartz))
+			presentnow = 1;
+#endif
+		if (presentnow) {
+			if (now >= nextframe)
+				nextframe = now + frameticks - (now - nextframe) % frameticks;
+			else
+				nextframe = now + frameticks;
 			PresentFrame(session);
 		}
 		if (now >= nextstatus) {
@@ -1599,6 +1471,8 @@ static void DestroySession(OsxSession *session)
 	machine = session->machine;
 	if (machine) {
 		OsxAudioExit(machine);
+		if (machine->bmac.slirpthread)
+			OsxHostNetClose(machine->bmac.slirpthread);
 		if (machine->cpu) {
 			OsxJitDestroy(machine->cpu);
 #if OSXG5
@@ -1641,14 +1515,14 @@ static void DestroySession(OsxSession *session)
 		fclose(session->tmpsamplefile);
 #endif
 	free(session->shadow);
-#if SDL_VERSION_ATLEAST(3, 0, 0)
-	if (session->screen && session->screen != SDL_GetWindowSurface(sdl_window))
-		SDL_DestroySurface(session->screen);
+#if OSXGLBRIDGE
+	if (session->gl)
+		DestroyGlBridge(session->gl);
+	if (session->quartz)
+		DestroyQuartzBridge(session->quartz);
 #endif
-	if (session->sdlready)
-		SDL_Quit();
-	if (session->nvramready)
-		XPRAMExit();
+	if (session->video)
+		OsxHostClose(session->video);
 }
 
 static int RunSession(OsxSession *session)
@@ -1660,7 +1534,6 @@ static int RunSession(OsxSession *session)
 	int bootbus;
 	int bootunit;
 	FILE *dump;
-	void *monitor;
 	int32 ramsize;
 #if OSXG5
 	Osx970 *core;
@@ -1737,6 +1610,10 @@ static int RunSession(OsxSession *session)
 	OsxFlashLoad(machine, "osx_nvram.bin");
 	AttachDisks(machine, &bootimage, &bootbus, &bootunit);
 	ParseDiskPatches(machine);
+#if OSXGLBRIDGE
+	machine->flurry = PrefsFindBool("osxflurry");
+	machine->quartz = PrefsFindBool("osxquartz");
+#endif
 	if (bootimage == NULL) {
 		fprintf(stderr, "osx: no cdrom or disk image configured\n");
 		return 1;
@@ -1828,52 +1705,22 @@ static int RunSession(OsxSession *session)
 		else
 			fprintf(machine->log, "cpu interpreter\n");
 	}
-	if (SDL_Init(SDL_INIT_VIDEO) != OSXSDLSUCCESS) {
-		fprintf(stderr, "osx: SDL_Init failed: %s\n", SDL_GetError());
-		return 1;
-	}
-	session->sdlready = 1;
 #if OSXHOSTX64
 	session->pixelshuffle = OsxHostFeature(OSXFEATURESSSE3);
 #endif
-#if !SDL_VERSION_ATLEAST(2, 0, 0)
-	SDL_WM_SetCaption("SheepShaver - Mac OS X", "SheepShaver");
-#endif
-	session->screen = SDLSetVideoModeQuietly((int)machine->width, (int)machine->height, 32, OSXVIDEOFLAGS);
-	if (session->screen == NULL) {
-		fprintf(stderr, "osx: SDL_SetVideoMode failed: %s\n", SDL_GetError());
+	session->video = OsxHostOpen((int)machine->width, (int)machine->height, HostInput, session);
+	if (!session->video) {
+		fprintf(stderr, "osx: cannot open host video\n");
 		return 1;
 	}
-#if SDL_VERSION_ATLEAST(2, 0, 0)
-	SDL_SetWindowTitle(sdl_window, "SheepShaver - Mac OS X");
-#endif
-#if SDL_VERSION_ATLEAST(3, 0, 0)
-	SDL_HideCursor();
-#else
-	SDL_ShowCursor(SDL_DISABLE);
-#endif
 	session->shadow = (uint8 *)malloc(machine->rowbytes * machine->height);
 	if (session->shadow == NULL)
 		return 1;
 	memset(session->shadow, 0xff, machine->rowbytes * machine->height);
-	monitor = NULL;
-#ifdef ENABLE_EMULATOR_MONITOR
-	monitor = new EmulatorMonitor();
-	if (!((EmulatorMonitor *)monitor)->Start()) {
-		delete (EmulatorMonitor *)monitor;
-		monitor = NULL;
-	}
-#endif
-#ifdef _WIN32
-	timeBeginPeriod(1);
-#endif
 #if OSXPROFILE
 	session->tmpsamplefile = fopen("osxsamples.bin", "wb");
 #endif
-	RunMachine(session, monitor);
-#ifdef _WIN32
-	timeEndPeriod(1);
-#endif
+	RunMachine(session);
 	OsxNvramFinishBoot(machine, XPRAM + 0x1378);
 	OsxNvramRestoreOldWorld(machine->nvram, machine->nvramclassic);
 	memcpy(XPRAM, machine->nvram, OSXNVRAMSIZE);
@@ -1887,10 +1734,6 @@ static int RunSession(OsxSession *session)
 			fclose(dump);
 		}
 	}
-#ifdef ENABLE_EMULATOR_MONITOR
-	if (monitor)
-		delete (EmulatorMonitor *)monitor;
-#endif
 	if (machine->quit == 2)
 		return 2;
 	return 0;

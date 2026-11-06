@@ -181,11 +181,14 @@ typedef struct OsxAtaDrive {
 	char model[41];
 } OsxAtaDrive;
 
+#define OSXDISKPATCHES 2048
+
 typedef struct OsxDiskPatch {
 	uint64 offset;
 	uint8 bytes[16];
 	int length;
 	int atapionly;
+	const OsxAtaDrive *drive;
 } OsxDiskPatch;
 
 typedef struct OsxAtaBus {
@@ -530,6 +533,11 @@ struct OsxMachine {
 	uint32 kernelentry;
 	uint32 bootargs;
 	int bootpartition;
+	int flurry;
+	int quartz;
+	uint32 quartztails[760];
+	uint32 flurrystubs[86];
+	uint32 flurryinit;
 	uint32 kernelend;
 	uint32 scratch;
 	uint8 *kernelimage;
@@ -599,11 +607,7 @@ void OsxAudioWrite(OsxMachine *machine, uint32 offset, uint32 value);
 void OsxAudioPoll(OsxMachine *machine, uint64 now);
 void OsxAudioExit(OsxMachine *machine);
 
-void *EtherSlirpOpen(void);
-int EtherSlirpReady(void *thread);
-void EtherSlirpPoll(void);
-int EtherSlirpReceive(uint8 *packet);
-void EtherSlirpSend(const uint8 *packet, int length);
+
 
 uint32 OsxFlashRead(OsxMachine *machine, uint32 offset, int size);
 void OsxFlashWrite(OsxMachine *machine, uint32 offset, int size, uint32 value);

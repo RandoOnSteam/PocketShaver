@@ -543,6 +543,7 @@ static void CompareFloat(OsxCpu *cpu, uint32 *result, const uint32 *left, const 
 static float RoundFloat(float value, uint32 kind)
 {
 	double source;
+	uint32 bits;
 	double rounded;
 	source = value;
 	if (IsNan(value))
@@ -551,6 +552,9 @@ static float RoundFloat(float value, uint32 kind)
 		rounded = floor(source + 0.5);
 		if (rounded - source == 0.5 && fmod(rounded, 2.0) != 0.0)
 			rounded -= 1.0;
+		memcpy(&bits, &value, sizeof(bits));
+		if (rounded == 0.0 && (bits & 0x80000000u))
+			rounded = -0.0;
 		return (float)rounded;
 	}
 	if (kind == 586) {
@@ -645,8 +649,12 @@ static void FloatVector(OsxCpu *cpu, uint32 *result, const uint32 *left, const u
 			SetFloat(result, index, (float)(log((double)GetFloat(right, index)) / log(2.0)));
 		return;
 	case 522: case 586: case 650: case 714:
-		for (index = 0; index < 4; index++)
-			SetFloat(result, index, RoundFloat(GetFloat(right, index), kind));
+		for (index = 0; index < 4; index++) {
+			if (IsNan(GetFloat(right, index)))
+				result[index] = right[index] | 0x00400000u;
+			else
+				SetFloat(result, index, RoundFloat(GetFloat(right, index), kind));
+		}
 		return;
 	case 778:
 		for (index = 0; index < 4; index++)

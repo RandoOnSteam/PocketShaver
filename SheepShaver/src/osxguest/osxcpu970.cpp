@@ -1881,7 +1881,7 @@ static void Execute(Osx970 *core, uint32 instruction)
 	case 17:
 		if (core->cpu->syscallobserver) {
 			Mirror(core);
-			index = core->cpu->syscallobserver(core->cpu, core->cpu->syscallcontext);
+			index = core->cpu->syscallobserver(core->cpu, core->cpu->syscallcontext, instruction);
 			Absorb(core);
 			if (index)
 				return;

@@ -32,6 +32,7 @@
 #endif
 #define OSXFEATURESSSE3 36
 #define OSXFEATUREAVX2 40
+#define OSXFEATURESSE41 37
 
 #define OSXTLBBITS 10
 #define OSXTLBSIZE (1 << OSXTLBBITS)
@@ -125,8 +126,8 @@ typedef struct OsxFaultRecord {
 	int instruction;
 } OsxFaultRecord;
 
-#define OSXPROFILE 0
-#define OSXPROFILEJIT 0
+#define OSXPROFILE 1
+#define OSXPROFILEJIT 1
 #define OSXMSGTRACE 0
 #define OSXNETTRACE 0
 #ifndef OSXG5
@@ -137,7 +138,7 @@ typedef struct OsxCpu OsxCpu;
 
 typedef void (*OsxHookFunction)(OsxCpu *cpu, void *context, uint32 address);
 typedef void (OSXJITABI *OsxVectorFunction)(OsxCpu *cpu, uint32 instruction);
-typedef int (*OsxSyscallFunction)(OsxCpu *cpu, void *context);
+typedef int (*OsxSyscallFunction)(OsxCpu *cpu, void *context, uint32 instruction);
 typedef uint32 (*OsxBusReadFunction)(void *context, uint32 address, int size);
 typedef void (*OsxBusWriteFunction)(void *context, uint32 address, int size, uint32 value);
 

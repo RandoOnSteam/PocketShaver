@@ -86,6 +86,7 @@ typedef struct OsxNativeState {
 	uint64 interpreted;
 	int shuffle;
 	int fused;
+	int rounding;
 	uint32 vectorconstants[9][4];
 #if OSXPROFILEJIT
 	FILE *tmpmap;
@@ -113,6 +114,7 @@ typedef struct OsxNativeEmitter {
 	uint32 vectorvalue;
 	int shuffle;
 	int fused;
+	int rounding;
 	int bytemask;
 	const uint32 (*vectorconstants)[4];
 	uint8 *misses[OSXJITMISSES];
@@ -314,14 +316,15 @@ static void TranslateThunk(OsxNativeEmitter *emitter, uint8 *fillthunk, int stor
 	uint8 *page;
 	uint8 *again;
 	retry = emitter->cursor;
-	RegisterOp(emitter, 0x89, 1, 0, 0);
-	if (limit != 0xfff)
-		ImmediateOp(emitter, 0, 1, 0xfff - limit);
+	if (limit == 0xfff) {
+		RegisterOp(emitter, 0x89, 1, 0, 0);
+	} else {
+		Byte(emitter, 0x8d); Byte(emitter, 0x48); Byte(emitter, 0xfff - limit);
+	}
 	ImmediateOp(emitter, 4, 1, 0xfffff000);
 	RegisterOp(emitter, 0x89, 2, 0, 0);
-	Shift(emitter, 5, 2, 12);
-	ImmediateOp(emitter, 4, 2, OSXTLBMASK);
-	Shift(emitter, 4, 2, 4);
+	Shift(emitter, 5, 2, 8);
+	ImmediateOp(emitter, 4, 2, OSXTLBMASK << 4);
 	if (store)
 		CpuMemory(emitter, 0x8b, 8, OSXJITOFFSET(writetlb), 1);
 	else
@@ -386,9 +389,8 @@ static void EmitThunks(OsxNativeState *state)
 	misses[0] = Jump(&emitter, 5);
 	CpuMemory(&emitter, 0x8b, 0, OSXJITOFFSET(fetchtlb), 1);
 	RegisterOp(&emitter, 0x89, 2, 11, 0);
-	Shift(&emitter, 5, 2, 12);
-	ImmediateOp(&emitter, 4, 2, OSXTLBMASK);
-	Shift(&emitter, 4, 2, 4);
+	Shift(&emitter, 5, 2, 8);
+	ImmediateOp(&emitter, 4, 2, OSXTLBMASK << 4);
 	RegisterOp(&emitter, 0x01, 0, 2, 1);
 	RegisterOp(&emitter, 0x89, 1, 11, 0);
 	ImmediateOp(&emitter, 4, 1, 0xfffff000);
@@ -1231,6 +1233,240 @@ static void VectorSumAcross(OsxNativeEmitter *emitter, uint32 target, uint32 lef
 static void VectorAllOnes(OsxNativeEmitter *emitter, int reg)
 {
 	VectorOperation(emitter, 0x75, reg, reg);
+}
+
+static void VectorFloatOperation(OsxNativeEmitter *emitter, uint32 opcode, int target, int source)
+{
+	Byte(emitter, 0x0f);
+	Byte(emitter, opcode);
+	Byte(emitter, 0xc0 | (target << 3) | source);
+}
+
+static int VectorFloat(OsxNativeEmitter *emitter, uint32 instruction, int count)
+{
+	uint32 kind;
+	uint32 form;
+	uint32 target;
+	uint32 operation;
+	int reg;
+	kind = instruction & 0x7ff;
+	form = instruction & 0x3f;
+	if (form != 46 && form != 47 && kind != 10 && kind != 74 &&
+		kind != 1034 && kind != 1098 && kind != 266 && kind != 842 && (kind & 0x3ff) != 198 &&
+		(kind & 0x3ff) != 454 && (kind & 0x3ff) != 710)
+		return 0;
+	VectorEnabled(emitter, count);
+	emitter->bytemask = 0;
+	target = OSXJITOFFSET(vr) + ((instruction >> 21) & 31) * 16;
+	VectorMemory(emitter, 0, 0, OSXJITOFFSET(vr) + ((instruction >> 16) & 31) * 16);
+	VectorMemory(emitter, 0, 1, OSXJITOFFSET(vr) + ((instruction >> 11) & 31) * 16);
+	if (form == 46 || form == 47)
+		VectorMemory(emitter, 0, 2, OSXJITOFFSET(vr) + ((instruction >> 6) & 31) * 16);
+	for (reg = 0; form != 6 && kind != 842 && reg < 2 + (form == 46 || form == 47); reg++) {
+		VectorOperation(emitter, 0x6f, 3, reg);
+		VectorFloatOperation(emitter, 0xc2, 3, reg);
+		Byte(emitter, 3);
+		VectorFloatOperation(emitter, 0x50, 0, 3);
+		RegisterOp(emitter, 0x85, 0, 0, 0);
+		Miss(emitter, 5, count);
+	}
+	if (form == 46 || form == 47) {
+		for (reg = 0; reg < 3; reg++) {
+			VectorFloatOperation(emitter, 0x12, reg + 3, reg);
+			VectorFloatOperation(emitter, 0x5a, reg, reg);
+			VectorFloatOperation(emitter, 0x5a, reg + 3, reg + 3);
+		}
+		VectorOperation(emitter, 0x59, 0, 2);
+		VectorOperation(emitter, 0x59, 3, 5);
+		operation = 0x58;
+		if (form == 47)
+			operation = 0x5c;
+		VectorOperation(emitter, operation, 0, 1);
+		VectorOperation(emitter, operation, 3, 4);
+		if (form == 47) {
+			VectorAllOnes(emitter, 2);
+			VectorShift(emitter, 0x73, 6, 2, 63);
+			VectorOperation(emitter, 0xef, 0, 2);
+			VectorOperation(emitter, 0xef, 3, 2);
+		}
+		VectorOperation(emitter, 0x5a, 0, 0);
+		VectorOperation(emitter, 0x5a, 3, 3);
+		VectorFloatOperation(emitter, 0x16, 0, 3);
+	} else if (kind == 266 || kind == 842) {
+		operation = 0x3f800000;
+		if (kind == 842)
+			operation -= ((instruction >> 16) & 31) << 23;
+		Immediate(emitter, 0, operation);
+		VectorOperation(emitter, 0x6e, 0, 0);
+		VectorOperation(emitter, 0x70, 0, 0);
+		Byte(emitter, 0);
+		if (kind == 266)
+			VectorFloatOperation(emitter, 0x5e, 0, 1);
+		else {
+			VectorFloatOperation(emitter, 0x5b, 1, 1);
+			VectorFloatOperation(emitter, 0x59, 0, 1);
+		}
+	} else if (kind == 10 || kind == 74 || kind == 1034 || kind == 1098) {
+		operation = 0x58;
+		if (kind == 74)
+			operation = 0x5c;
+		else if (kind == 1034)
+			operation = 0x5f;
+		else if (kind == 1098)
+			operation = 0x5d;
+		VectorFloatOperation(emitter, operation, 0, 1);
+	} else {
+		operation = 0;
+		if ((kind & 0x3ff) == 454)
+			operation = 2;
+		else if ((kind & 0x3ff) == 710)
+			operation = 1;
+		VectorFloatOperation(emitter, 0xc2, 1, 0);
+		Byte(emitter, operation);
+		VectorOperation(emitter, 0x6f, 0, 1);
+		if (kind & 0x400) {
+			VectorFloatOperation(emitter, 0x50, 0, 0);
+			ImmediateOp(emitter, 7, 0, 15);
+			Setcc(emitter, 4, 1);
+			Byte(emitter, 0x0f); Byte(emitter, 0xb6); Byte(emitter, 0xc9);
+			Shift(emitter, 4, 1, 7);
+			RegisterOp(emitter, 0x85, 0, 0, 0);
+			Setcc(emitter, 4, 0);
+			Shift(emitter, 4, 0, 5);
+			RegisterOp(emitter, 0x09, 0, 1, 0);
+			CpuMemory(emitter, 0x8b, 1, OSXJITOFFSET(cr), 0);
+			ImmediateOp(emitter, 4, 1, ~0xf0u);
+			RegisterOp(emitter, 0x09, 0, 1, 0);
+			CpuMemory(emitter, 0x89, 0, OSXJITOFFSET(cr), 0);
+		}
+	}
+	VectorMemory(emitter, 1, 0, target);
+	emitter->vectorvalue = target;
+	return 1;
+}
+
+static void VectorBroadcast(OsxNativeEmitter *emitter, int reg, uint32 value)
+{
+	Immediate(emitter, 0, value);
+	VectorOperation(emitter, 0x6e, reg, 0);
+	VectorOperation(emitter, 0x70, reg, reg);
+	Byte(emitter, 0);
+}
+
+static void VectorTruncate(OsxNativeEmitter *emitter, int target, int source)
+{
+	Byte(emitter, 0xf3); Byte(emitter, 0x0f); Byte(emitter, 0x5b);
+	Byte(emitter, 0xc0 | (target << 3) | source);
+}
+
+static void VectorCompare(OsxNativeEmitter *emitter, int target, int source, int predicate)
+{
+	VectorFloatOperation(emitter, 0xc2, target, source);
+	Byte(emitter, predicate);
+}
+
+static void VectorSaturationMask(OsxNativeEmitter *emitter, int mask, int other, int zero)
+{
+	VectorOperation(emitter, 0xeb, mask, other);
+	VectorOperation(emitter, 0xef, zero, zero);
+	VectorOperation(emitter, 0x76, mask, zero);
+	VectorSaturated(emitter, mask);
+}
+
+static int VectorConvert(OsxNativeEmitter *emitter, uint32 instruction, int count)
+{
+	uint32 kind;
+	uint32 target;
+	uint32 scale;
+	uint32 mode;
+	kind = instruction & 0x7ff;
+	switch (kind) {
+	case 78: case 778: case 906: case 970:
+		break;
+	case 522: case 586: case 650: case 714:
+		if (!emitter->rounding)
+			return 0;
+		break;
+	default:
+		return 0;
+	}
+	VectorEnabled(emitter, count);
+	emitter->bytemask = 0;
+	target = OSXJITOFFSET(vr) + ((instruction >> 21) & 31) * 16;
+	scale = ((instruction >> 16) & 31) << 23;
+	VectorMemory(emitter, 0, 1, OSXJITOFFSET(vr) + ((instruction >> 11) & 31) * 16);
+	if (kind == 78) {
+		VectorMemory(emitter, 0, 0, OSXJITOFFSET(vr) + ((instruction >> 16) & 31) * 16);
+		VectorShift(emitter, 0x72, 6, 0, 16);
+		VectorShift(emitter, 0x72, 4, 0, 16);
+		VectorShift(emitter, 0x72, 6, 1, 16);
+		VectorShift(emitter, 0x72, 4, 1, 16);
+		VectorOperation(emitter, 0x6b, 0, 1);
+		Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x70); Byte(emitter, 0xc0); Byte(emitter, 0xb1);
+		Byte(emitter, 0xf3); Byte(emitter, 0x0f); Byte(emitter, 0x70); Byte(emitter, 0xc0); Byte(emitter, 0xb1);
+	} else if (kind == 778) {
+		VectorOperation(emitter, 0x6f, 0, 1);
+		VectorShift(emitter, 0x72, 2, 0, 16);
+		VectorShift(emitter, 0x72, 6, 1, 16);
+		VectorShift(emitter, 0x72, 2, 1, 16);
+		VectorFloatOperation(emitter, 0x5b, 0, 0);
+		VectorFloatOperation(emitter, 0x5b, 1, 1);
+		VectorBroadcast(emitter, 2, 0x47800000u);
+		VectorFloatOperation(emitter, 0x59, 0, 2);
+		VectorFloatOperation(emitter, 0x58, 0, 1);
+		if (scale) {
+			VectorBroadcast(emitter, 2, 0x3f800000u - scale);
+			VectorFloatOperation(emitter, 0x59, 0, 2);
+		}
+	} else if (kind == 906 || kind == 970) {
+		if (scale) {
+			VectorBroadcast(emitter, 2, 0x3f800000u + scale);
+			VectorFloatOperation(emitter, 0x59, 1, 2);
+		}
+		if (kind == 970) {
+			VectorFloatOperation(emitter, 0x28, 3, 1);
+			VectorCompare(emitter, 3, 1, 7);
+			VectorBroadcast(emitter, 4, 0x4f000000u);
+			VectorCompare(emitter, 4, 1, 2);
+			VectorBroadcast(emitter, 2, 0xcf000000u);
+			VectorFloatOperation(emitter, 0x28, 5, 1);
+			VectorCompare(emitter, 5, 2, 1);
+			VectorTruncate(emitter, 0, 1);
+			VectorOperation(emitter, 0xef, 0, 4);
+			VectorOperation(emitter, 0xdb, 0, 3);
+		} else {
+			VectorBroadcast(emitter, 2, 0xbf800000u);
+			VectorFloatOperation(emitter, 0x28, 5, 1);
+			VectorCompare(emitter, 5, 2, 2);
+			VectorBroadcast(emitter, 4, 0x4f800000u);
+			VectorCompare(emitter, 4, 1, 2);
+			VectorOperation(emitter, 0xef, 3, 3);
+			VectorFloatOperation(emitter, 0x5f, 1, 3);
+			VectorBroadcast(emitter, 2, 0x4f000000u);
+			VectorFloatOperation(emitter, 0x28, 3, 2);
+			VectorCompare(emitter, 3, 1, 2);
+			VectorFloatOperation(emitter, 0x54, 2, 3);
+			VectorFloatOperation(emitter, 0x5c, 1, 2);
+			VectorTruncate(emitter, 0, 1);
+			VectorShift(emitter, 0x72, 6, 3, 31);
+			VectorOperation(emitter, 0xef, 0, 3);
+			VectorOperation(emitter, 0xeb, 0, 4);
+		}
+		VectorSaturationMask(emitter, 4, 5, 3);
+	} else {
+		mode = 1;
+		if (kind == 522)
+			mode = 0;
+		else if (kind == 586)
+			mode = 3;
+		else if (kind == 650)
+			mode = 2;
+		VectorOperation(emitter, 0x3a08, 0, 1);
+		Byte(emitter, mode | 8);
+	}
+	VectorMemory(emitter, 1, 0, target);
+	emitter->vectorvalue = target;
+	return 1;
 }
 
 static int VectorExtra(OsxNativeEmitter *emitter, uint32 instruction, int count)
@@ -2214,7 +2450,7 @@ static int Emit(OsxNativeEmitter *emitter, uint32 instruction, int count)
 	if (opcode == 4) {
 		handler = OsxCpuVectorHandler(instruction);
 		if (handler) {
-			if (VectorExtra(emitter, instruction, count) || VectorNative(emitter, instruction, count))
+			if (VectorFloat(emitter, instruction, count) || VectorConvert(emitter, instruction, count) || VectorExtra(emitter, instruction, count) || VectorNative(emitter, instruction, count))
 				return 1;
 			emitter->vectorvalue = 0;
 			VectorCall(emitter, instruction, handler, count);
@@ -2457,6 +2693,7 @@ int OsxJitCreate(OsxCpu *cpu)
 	state->pagecount = (cpu->ramsize + 4095) >> 12;
 	state->shuffle = OsxHostFeature(OSXFEATURESSSE3);
 	state->fused = OsxHostFeature(OSXFEATUREAVX2);
+	state->rounding = OsxHostFeature(OSXFEATURESSE41);
 	for (index = 0; index < 4; index++) {
 		state->vectorconstants[0][index] = 0x00010203u + (uint32)index * 0x04040404u;
 		state->vectorconstants[1][index] = 0x1f1f1f1fu;
@@ -2607,6 +2844,7 @@ static void Compile(OsxCpu *cpu, OsxNativeState *state, OsxNativeBlock *block, u
 	emitter.enabled = 0;
 	emitter.vectorvalue = 0;
 	emitter.shuffle = state->shuffle;
+	emitter.rounding = state->rounding;
 	emitter.fused = state->fused;
 	emitter.bytemask = 0;
 	emitter.vectorconstants = state->vectorconstants;

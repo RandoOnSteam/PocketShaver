@@ -425,6 +425,57 @@ static void VectorInstructions(OsxJitTest *test)
 	}
 }
 
+static void VectorFloatCases(OsxJitTest *test)
+{
+	static const uint32 values[] = {
+		0, 0x80000000u, 1, 0x80000001u, 0x007fffffu, 0x00800000u,
+		0x3f800000u, 0xbf800000u, 0x3f000000u, 0x40000000u,
+		0x3f800001u, 0x3f7fffffu, 0x4f000000u, 0xcf000000u,
+		0x7f7fffffu, 0xff7fffffu, 0x7f800000u, 0xff800000u,
+		0x7fc12345u, 0xffc54321u, 0x7f812345u, 0xff854321u
+	};
+	static const uint32 kinds[] = { 10, 74, 1034, 1098, 46, 47, 198, 454, 710, 1222, 1478, 1734, 266, 842, 778, 906, 970, 522, 586, 650, 714, 78 };
+	uint32 left;
+	uint32 right;
+	uint32 kind;
+	uint32 instruction;
+	uint32 target;
+	uint32 lane;
+	uint32 reg;
+	uint32 bits;
+	uint32 count;
+	count = sizeof(values) / sizeof(values[0]);
+	for (kind = 0; kind < sizeof(kinds) / sizeof(kinds[0]); kind++) {
+		for (left = 0; left < count; left++) {
+			for (right = 0; right < count; right++) {
+				Reset(test);
+				for (reg = 4; reg <= 6; reg++) {
+					for (lane = 0; lane < 4; lane++) {
+						bits = values[(left + lane) % count];
+						if (reg == 5)
+							bits = values[(right + lane) % count];
+						else if (reg == 6)
+							bits = values[(left + right + lane) % count];
+						test->reference->vr[reg][lane] = bits;
+						test->native->vr[reg][lane] = bits;
+					}
+				}
+				target = 3 + (left + right) % 4;
+				instruction = (4u << 26) | (target << 21) | (4u << 16) | (5u << 11) | kinds[kind];
+				if (kinds[kind] == 46 || kinds[kind] == 47)
+					instruction |= 6u << 6;
+				if (kinds[kind] == 842 || kinds[kind] == 778 || kinds[kind] == 906 || kinds[kind] == 970)
+					instruction = (instruction & ~(31u << 16)) | (((left + right) & 31) << 16);
+				test->reference->altivec = 1;
+				test->native->altivec = 1;
+				test->reference->msr = OSXMSRFP | OSXMSRVEC;
+				test->native->msr = OSXMSRFP | OSXMSRVEC;
+				Run(test, instruction, 1, "vector floating edge cases and aliases");
+			}
+		}
+	}
+}
+
 static void ExtendedMemory(OsxJitTest *test)
 {
 	OsxCpu *cpu;
@@ -975,7 +1026,8 @@ static void VectorSequences(OsxJitTest *test)
 	uint32 draw2;
 	static const uint32 kinds[] = {
 		0, 64, 128, 1024, 1088, 1152, 1028, 1092, 1156, 1220, 1284,
-		12, 76, 140, 268, 332, 396, 524, 588, 652, 32, 33, 42, 43, 44, 270
+		12, 76, 140, 268, 332, 396, 524, 588, 652, 32, 33, 42, 43, 44, 270,
+		10, 74, 1034, 1098, 46, 47, 198, 454, 710, 1222, 1478, 1734, 266, 842
 	};
 	OsxCpu *cpu;
 	uint32 instruction;
@@ -998,7 +1050,7 @@ static void VectorSequences(OsxJitTest *test)
 		for (step = 0; step < 32; step++) {
 			kind = kinds[Random(test) % (sizeof(kinds) / sizeof(kinds[0]))];
 			instruction = (draw0 = Random(test), draw1 = Random(test), draw2 = Random(test), (4u << 26) | ((draw0 & 31) << 21) | ((draw1 & 31) << 16) | ((draw2 & 31) << 11) | kind);
-			if (kind >= 32 && kind <= 44)
+			if (kind >= 32 && kind <= 47)
 				instruction |= (Random(test) & 31) << 6;
 			if (step == 16 && (scenario & 1))
 				instruction = (31u << 26) | (5u << 21) | (146u << 1);
@@ -1541,6 +1593,7 @@ int main(void)
 	FloatVectorMemory(&test);
 	FloatArithmetic(&test);
 	VectorInstructions(&test);
+	VectorFloatCases(&test);
 	ExtendedMemory(&test);
 	MachineState(&test);
 	InlineStops(&test);

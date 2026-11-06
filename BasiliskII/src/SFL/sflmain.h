@@ -22,6 +22,7 @@
 #define SFLMAIN_H
 
 #define SFLMAINRUNEMULATORONMAINTHREAD
+#define SFLNATIVEBOOT 2
 #define SFLMAINVIDEOBASE 0x52000000
 
 #if defined(__cplusplus)

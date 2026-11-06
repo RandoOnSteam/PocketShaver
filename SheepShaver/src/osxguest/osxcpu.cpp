@@ -179,6 +179,8 @@ int OsxHostFeature(int feature)
 #elif OSXHOSTX64
 	if (feature == OSXFEATURESSSE3)
 		return __builtin_cpu_supports("ssse3") != 0;
+	if (feature == OSXFEATURESSE41)
+		return __builtin_cpu_supports("sse4.1") != 0;
 	return __builtin_cpu_supports("avx2") != 0;
 #else
 	return 0;
@@ -2138,7 +2140,7 @@ static OSXFORCEINLINE void Execute(OsxCpu *cpu, uint32 instruction)
 			cpu->lr = cpu->pc + 4;
 		return;
 	case 17:
-		if (cpu->syscallobserver && cpu->syscallobserver(cpu, cpu->syscallcontext))
+		if (cpu->syscallobserver && cpu->syscallobserver(cpu, cpu->syscallcontext, instruction))
 			return;
 		OsxCpuRaiseException(cpu, OSXVECTORSYSCALL, 0, cpu->pc + 4);
 		return;

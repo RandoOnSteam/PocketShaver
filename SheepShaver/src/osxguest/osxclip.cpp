@@ -18,7 +18,7 @@
  *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 #include "sysdeps.h"
-#include "my_sdl.h"
+#include "osxhost.h"
 #include "osxmachine.h"
 
 #define CLIPMACHMSG 0xffffffe1u
@@ -164,80 +164,22 @@ static char *Utf8FromGuest(const uint8 *data, uint32 length)
 
 static uint8 *ReadHostClipboard(uint32 *length)
 {
+	char *text = OsxHostClipboardGet();
 	uint8 *data;
-#if SDL_VERSION_ATLEAST(2, 0, 0)
-	char *text;
-	if (!SDL_HasClipboardText())
-		return NULL;
-	text = SDL_GetClipboardText();
-	if (text == NULL)
+	if (!text)
 		return NULL;
 	data = GuestFromUtf8(text, length);
-	SDL_free(text);
-#elif defined(_WIN32)
-	HANDLE handle;
-	const wchar_t *wide;
-	char *text;
-	int size;
-	data = NULL;
-	if (!IsClipboardFormatAvailable(CF_UNICODETEXT) || !OpenClipboard(NULL))
-		return NULL;
-	handle = GetClipboardData(CF_UNICODETEXT);
-	wide = NULL;
-	if (handle)
-		wide = (const wchar_t *)GlobalLock(handle);
-	if (wide) {
-		size = WideCharToMultiByte(CP_UTF8, 0, wide, -1, NULL, 0, NULL, NULL);
-		text = (char *)malloc(size + 1);
-		if (text && size > 0 && WideCharToMultiByte(CP_UTF8, 0, wide, -1, text, size, NULL, NULL) > 0)
-			data = GuestFromUtf8(text, length);
-		free(text);
-		GlobalUnlock(handle);
-	}
-	CloseClipboard();
-#else
-	data = NULL;
-	*length = 0;
-#endif
+	free(text);
 	return data;
 }
 
 static void WriteHostClipboard(const uint8 *data, uint32 length)
 {
-	char *text;
-#if !SDL_VERSION_ATLEAST(2, 0, 0) && defined(_WIN32)
-	HGLOBAL handle;
-	wchar_t *wide;
-	int size;
-	int index;
-	int used;
-#endif
-	text = Utf8FromGuest(data, length);
-	if (text == NULL)
-		return;
-#if SDL_VERSION_ATLEAST(2, 0, 0)
-	SDL_SetClipboardText(text);
-#elif defined(_WIN32)
-	size = MultiByteToWideChar(CP_UTF8, 0, text, -1, NULL, 0);
-	handle = GlobalAlloc(GMEM_MOVEABLE, (size_t)size * 2 * sizeof(wchar_t));
-	if (handle && OpenClipboard(NULL)) {
-		wide = (wchar_t *)GlobalLock(handle);
-		MultiByteToWideChar(CP_UTF8, 0, text, -1, wide + size, size);
-		used = 0;
-		for (index = 0; index < size; index++) {
-			if (wide[size + index] == L'\n')
-				wide[used++] = L'\r';
-			wide[used++] = wide[size + index];
-		}
-		GlobalUnlock(handle);
-		EmptyClipboard();
-		if (!SetClipboardData(CF_UNICODETEXT, handle))
-			GlobalFree(handle);
-		CloseClipboard();
-	} else if (handle)
-		GlobalFree(handle);
-#endif
-	free(text);
+	char *text = Utf8FromGuest(data, length);
+	if (text) {
+		OsxHostClipboardSet(text);
+		free(text);
+	}
 }
 
 static uint8 *GuestHost(OsxCpu *cpu, uint32 address, int kind)

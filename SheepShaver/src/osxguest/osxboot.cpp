@@ -22,6 +22,7 @@
 #include "prefs.h"
 #include "osxmachine.h"
 #include "osxguest.h"
+#include "osxglbridge.h"
 #include "xpram.h"
 #include "disk.h"
 #include "rom_patches.h"
@@ -694,6 +695,378 @@ static uint8 *ReadFile(OsxHfsVolume *volume, const char *path, uint32 *size)
 	if (!LookupPath(volume, path, record) || Big16(record) != HFSFILERECORD)
 		return NULL;
 	return ReadRecord(volume, record, size);
+}
+
+static int AddGuestFilePatch(OsxHfsVolume *volume, const OsxHfsFork *fork, OsxAtaBus *bus,
+	const OsxAtaDrive *drive, uint32 offset, const uint8 *bytes, int length)
+{
+	uint64 extentbytes;
+	int extent;
+	OsxDiskPatch *patch;
+	if (!bus->patches || bus->patchcount >= OSXDISKPATCHES)
+		return 0;
+	for (extent = 0; extent < fork->extentcount; extent++) {
+		extentbytes = (uint64)fork->extents[extent].count * volume->blocksize;
+		if (offset < extentbytes) {
+			if (length > extentbytes - offset)
+				return 0;
+			patch = &bus->patches[bus->patchcount++];
+			patch->offset = volume->base + (uint64)fork->extents[extent].start * volume->blocksize + offset;
+			patch->length = length;
+			patch->atapionly = 0;
+			patch->drive = drive;
+			memcpy(patch->bytes, bytes, length);
+			return 1;
+		}
+		offset -= (uint32)extentbytes;
+	}
+	return 0;
+}
+
+static uint64 GuestFileHash(const uint8 *image, uint32 size)
+{
+	uint32 index;
+	uint64 hash;
+	hash = 14695981039346656037ULL;
+	for (index = 0; index < size; index++)
+		hash = (hash ^ image[index]) * 1099511628211ULL;
+	return hash;
+}
+
+static int PrepareFlurry(OsxMachine *machine, OsxHfsVolume *volume, int bootbus, int bootunit)
+{
+	uint8 record[248];
+	uint8 replacement[16];
+	uint8 *image;
+	uint32 size;
+	uint32 index;
+	uint32 call;
+	uint32 stub;
+	uint32 stubstart;
+	uint32 stubsize;
+	uint32 stubcount;
+	uint32 symboltable;
+	uint32 symbolbias;
+	uint32 slicebase;
+	uint32 interval;
+	uint32 initoffset;
+	uint64 hash;
+	int originalcount;
+	OsxHfsFork *fork;
+	OsxAtaBus *bus;
+	const OsxAtaDrive *drive;
+	if (!LookupPath(volume, "/System/Library/Screen Savers/Flurry.saver/Contents/MacOS/Flurry", record) ||
+		Big16(record) != HFSFILERECORD || Big32(record + 88) != 0)
+		return 0;
+	size = Big32(record + 92);
+	if (size != 64020 && size != 60524 && size != 60584 && size != 140032)
+		return 0;
+	image = ReadRecord(volume, record, &size);
+	if (!image)
+		return 0;
+	hash = GuestFileHash(image, size);
+	stubstart = OSXFLURRYSTUB;
+	stubsize = OSXFLURRYSTUBSIZE;
+	stubcount = OSXFLURRYSTUBCOUNT;
+	interval = 0xadd8;
+	slicebase = 0;
+	switch (hash) {
+	case 0xc77ec9fd0cbf6851ULL:
+		initoffset = 0x14a8;
+		stubstart = 0x95ec;
+		stubsize = 36;
+		symboltable = 59344;
+		symbolbias = 99;
+		break;
+	case 0x709f32ff31048fadULL:
+		initoffset = 0x1568;
+		symboltable = 58156;
+		symbolbias = 0;
+		break;
+	case 0x6d58e084d36befc7ULL:
+		initoffset = 0x1560;
+		symboltable = 58180;
+		symbolbias = 2;
+		break;
+	case 0xdfc6e7005e22bd2fULL:
+		initoffset = 0x110c;
+		slicebase = 0x12000;
+		stubstart = 0x9518;
+		stubcount = 69;
+		symboltable = slicebase + 58316;
+		symbolbias = 4;
+		interval = 0x1cdb8;
+		break;
+	default:
+		free(image);
+		return 0;
+	}
+	fork = (OsxHfsFork *)malloc(sizeof(OsxHfsFork));
+	if (!fork) {
+		free(image);
+		return 0;
+	}
+	ParseFork(record + 88, Big32(record + 8), 0, fork);
+	CompleteFork(volume, fork);
+	bus = &machine->ata[bootbus];
+	drive = &bus->drives[bootunit];
+	originalcount = bus->patchcount;
+	for (index = 0; index < stubcount; index++) {
+		call = Big32(image + symboltable + index * 4) - symbolbias;
+		if (call < 45 || call > 85 || call == 63 || call == 84)
+			continue;
+		stub = stubstart + (index + 1) * stubsize - 4;
+		StoreBig32(replacement, OSXFLURRYTRAP | (call << 8));
+		if (!AddGuestFilePatch(volume, fork, bus, drive, slicebase + stub, replacement, 4))
+			break;
+		machine->flurrystubs[call] = stub;
+	}
+	StoreBig32(replacement, OSXFLURRYTRAP);
+	if (index == stubcount && AddGuestFilePatch(volume, fork, bus, drive, slicebase + initoffset, replacement, 4)) {
+		StoreBig32(replacement, 0x3f911111);
+		StoreBig32(replacement + 4, 0x11111111);
+		if (AddGuestFilePatch(volume, fork, bus, drive, interval, replacement, 8))
+			machine->flurryinit = initoffset;
+	}
+	if (!machine->flurryinit)
+		bus->patchcount = originalcount;
+	free(fork);
+	free(image);
+	return bus->patchcount != originalcount;
+}
+
+static int AddGuestFileBytes(OsxHfsVolume *volume, const OsxHfsFork *fork, OsxAtaBus *bus,
+	const OsxAtaDrive *drive, uint32 offset, const uint8 *bytes, uint32 length)
+{
+	uint32 chunk;
+	while (length) {
+		chunk = 16;
+		if (chunk > length)
+			chunk = length;
+		if (!AddGuestFilePatch(volume, fork, bus, drive, offset, bytes, (int)chunk))
+			return 0;
+		offset += chunk;
+		bytes += chunk;
+		length -= chunk;
+	}
+	return 1;
+}
+
+static int PatchGuestFileBytes(OsxHfsVolume *volume, OsxAtaBus *bus, const OsxAtaDrive *drive,
+	const char *path, uint32 offset, const uint8 *bytes, uint32 length)
+{
+	uint8 record[248];
+	OsxHfsFork *fork;
+	int result;
+	if (!LookupPath(volume, path, record) || Big16(record) != HFSFILERECORD)
+		return 0;
+	fork = (OsxHfsFork *)malloc(sizeof(OsxHfsFork));
+	if (!fork)
+		return 0;
+	ParseFork(record + 88, Big32(record + 8), 0, fork);
+	CompleteFork(volume, fork);
+	result = AddGuestFileBytes(volume, fork, bus, drive, offset, bytes, length);
+	free(fork);
+	return result;
+}
+
+static int PatchSaverFile(OsxHfsVolume *volume, OsxAtaBus *bus, const OsxAtaDrive *drive,
+	const char *path, uint32 expectedsize, uint64 expectedhash, const uint32 patches[][2], int count)
+{
+	uint8 record[248];
+	uint8 replacement[4];
+	uint8 *image;
+	uint32 size;
+	uint64 hash;
+	int index;
+	int originalcount;
+	OsxHfsFork *fork;
+	if (!LookupPath(volume, path, record) || Big16(record) != HFSFILERECORD ||
+		Big32(record + 88) != 0 || Big32(record + 92) != expectedsize)
+		return 0;
+	image = ReadRecord(volume, record, &size);
+	if (!image)
+		return 0;
+	hash = GuestFileHash(image, size);
+	free(image);
+	if (hash != expectedhash)
+		return 0;
+	fork = (OsxHfsFork *)malloc(sizeof(OsxHfsFork));
+	if (!fork)
+		return 0;
+	ParseFork(record + 88, Big32(record + 8), 0, fork);
+	CompleteFork(volume, fork);
+	originalcount = bus->patchcount;
+	for (index = 0; index < count; index++) {
+		StoreBig32(replacement, patches[index][1]);
+		if (!AddGuestFilePatch(volume, fork, bus, drive, patches[index][0], replacement, 4))
+			break;
+	}
+	if (index != count)
+		bus->patchcount = originalcount;
+	free(fork);
+	return index == count;
+}
+
+static uint64 GuestForkHash(OsxHfsVolume *volume, OsxHfsFork *fork, uint32 offset, uint32 length)
+{
+	uint8 bytes[512];
+	uint32 count;
+	uint32 index;
+	uint64 hash;
+	hash = 14695981039346656037ULL;
+	while (length) {
+		count = sizeof(bytes);
+		if (count > length)
+			count = length;
+		if (!ReadFork(volume, fork, offset, bytes, count))
+			return 0;
+		for (index = 0; index < count; index++)
+			hash = (hash ^ bytes[index]) * 1099511628211ULL;
+		offset += count;
+		length -= count;
+	}
+	return hash;
+}
+
+static void PatchQuartzCache(OsxHfsVolume *volume, OsxAtaBus *bus, const OsxAtaDrive *drive,
+	const uint32 patches[][2], uint32 count, const uint32 contextpatch[][2], uint32 contextcount,
+	const uint8 *bytes, uint32 offset, uint32 length)
+{
+	uint8 record[248];
+	uint8 replacement[4];
+	OsxHfsFork *fork;
+	uint32 index;
+	int originalcount;
+	if (!LookupPath(volume, "/private/var/db/dyld/dyld_shared_cache_ppc", record) ||
+		Big16(record) != HFSFILERECORD || Big32(record + 88) || Big32(record + 92) != 137904128)
+		return;
+	fork = (OsxHfsFork *)malloc(sizeof(*fork));
+	if (!fork)
+		return;
+	ParseFork(record + 88, Big32(record + 8), 0, fork);
+	CompleteFork(volume, fork);
+	if (GuestForkHash(volume, fork, 0x1769000, 0x25000) != 0x767b13011ccf4130ULL ||
+		GuestForkHash(volume, fork, 0x19d7000, 0xe000) != 0x4e9f689e66092e94ULL) {
+		free(fork);
+		return;
+	}
+	originalcount = bus->patchcount;
+	for (index = 0; index < count; index++) {
+		StoreBig32(replacement, patches[index][1]);
+		if (!AddGuestFilePatch(volume, fork, bus, drive, 0x1768000 + patches[index][0], replacement, 4))
+			break;
+	}
+	if (index == count) {
+		for (index = 0; index < contextcount; index++) {
+			StoreBig32(replacement, contextpatch[index][1]);
+			if (!AddGuestFilePatch(volume, fork, bus, drive, 0x19d6000 + contextpatch[index][0], replacement, 4))
+				break;
+		}
+		if (index != contextcount || !AddGuestFileBytes(volume, fork, bus, drive, 0x1768000 + offset, bytes, length))
+			bus->patchcount = originalcount;
+	} else
+		bus->patchcount = originalcount;
+	free(fork);
+}
+
+static int PrepareQuartz(OsxMachine *machine, OsxHfsVolume *volume, OsxAtaBus *bus, const OsxAtaDrive *drive)
+{
+	static const uint32 contextpatch[][2] = {
+		{0xa220, OSXQUARTZTRAP | (1023u << 8)},
+		{0x5b88, OSXQUARTZTRAP | (1021u << 8)},
+		{0x5c94, OSXQUARTZTRAP | (1022u << 8)},
+		{0x9870, OSXQUARTZTRAP | (1020u << 8)},
+		{0x8920, OSXQUARTZTRAP | (1019u << 8)}
+	};
+	static const uint32 rendererpatch[][2] = {
+		{0x13090, 0x38000f00},
+		{0x13094, 0x3840075d},
+		{0x130b0, 0x91230034},
+		{0x130c8, 0x91230030},
+		{0x12094, 0x3b8005d8},
+		{0x12564, 0x61290f00},
+		{0x12628, 0x614a0f00},
+		{0x126c4, 0x60000f00},
+		{0x13124, 0x38400f00}
+	};
+	static const uint32 enginepatch[][2] = {
+		{0x3200, 0x2f800f00},
+		{0x3324, 0x38600f00},
+		{0x332c, 0x3ba00f00}
+	};
+	static const uint32 patches[][2] = {
+#include "osxquartzpatches.h"
+	};
+	static const char extensions[] = OSXQUARTZEXTENSIONS;
+	uint8 strings[OSXQUARTZSTRINGEND - OSXQUARTZSTRINGS];
+	uint32 index;
+	uint32 slot;
+	int originalcount;
+	int renderercount;
+	memset(strings, 0, sizeof(strings));
+	memcpy(strings, extensions, sizeof(extensions));
+#if OSXGLBRIDGE
+	QuartzHostStrings((char *)strings + OSXQUARTZRENDERERSTRING - OSXQUARTZSTRINGS,
+		(char *)strings + OSXQUARTZVENDORSTRING - OSXQUARTZSTRINGS, OSXQUARTZVENDORSTRING - OSXQUARTZRENDERERSTRING);
+#endif
+	originalcount = bus->patchcount;
+	if (!PatchSaverFile(volume, bus, drive,
+		"/System/Library/Frameworks/OpenGL.framework/Versions/A/Libraries/libGL.dylib",
+		911568, 0xe2126cc30982d74eULL, patches, sizeof(patches) / sizeof(patches[0])) ||
+		!PatchGuestFileBytes(volume, bus, drive,
+		"/System/Library/Frameworks/OpenGL.framework/Versions/A/Libraries/libGL.dylib",
+		4096 + OSXQUARTZSTRINGS, strings, sizeof(strings))) {
+		bus->patchcount = originalcount;
+		return 0;
+	}
+	if (!PatchSaverFile(volume, bus, drive,
+		"/System/Library/Frameworks/OpenGL.framework/Versions/A/OpenGL",
+		352320, 0xf99dedef23643215ULL, contextpatch, sizeof(contextpatch) / sizeof(contextpatch[0]))) {
+		bus->patchcount = originalcount;
+		return 0;
+	}
+	for (index = 0; index < sizeof(patches) / sizeof(patches[0]); index++) {
+		slot = (patches[index][1] >> 8) & 1023;
+		machine->quartztails[slot] = patches[index][0] - 4096;
+	}
+	PatchQuartzCache(volume, bus, drive, patches, sizeof(patches) / sizeof(patches[0]),
+		contextpatch, sizeof(contextpatch) / sizeof(contextpatch[0]),
+		strings, 4096 + OSXQUARTZSTRINGS, sizeof(strings));
+	renderercount = bus->patchcount;
+	if (!PatchSaverFile(volume, bus, drive,
+		"/System/Library/Frameworks/OpenGL.framework/Versions/A/Resources/GLEngine.bundle/GLEngine",
+		7204432, 0xaedd8ac3552c17bbULL, enginepatch, sizeof(enginepatch) / sizeof(enginepatch[0])) ||
+		!PatchSaverFile(volume, bus, drive,
+		"/System/Library/Frameworks/OpenGL.framework/Versions/A/Resources/GLRendererFloat.bundle/GLRendererFloat",
+		573388, 0x295fd7ed200daf77ULL, rendererpatch, sizeof(rendererpatch) / sizeof(rendererpatch[0])))
+		bus->patchcount = renderercount;
+	if (machine->log)
+		fprintf(machine->log, "quartz prepared %d disk overlays\n", bus->patchcount - originalcount);
+	return 1;
+}
+
+static void PrepareSaverSoftware(OsxHfsVolume *volume, OsxAtaBus *bus, const OsxAtaDrive *drive)
+{
+	const char *pictures = "/System/Library/Frameworks/ScreenSaver.framework/Versions/A/Resources/Pictures Folder.saver/Contents/MacOS/Pictures Folder";
+	const char *quartz = "/System/Library/Frameworks/ScreenSaver.framework/Versions/A/Resources/.Quartz Composer.saver/Contents/MacOS/.Quartz Composer";
+	const char *framework = "/System/Library/Frameworks/ScreenSaver.framework/Versions/A/ScreenSaver";
+	const uint32 picturepatches[][2] = { { 0xd9b44, 5 }, { 0xd9b48, 0 }, { 0xd9b6c, 0 },
+		{ 0xd9b80, 5 }, { 0xd9b84, 0 } };
+	const uint32 tigerquartz[][2] = { { 0x1250, 0x38600001 }, { 0x1360, 0x38000005 }, { 0x137c, 0x38000005 } };
+	const uint32 tigerframework[][2] = { { 0x26cc, 0x38600001 }, { 0x2a3c, 0x38600001 } };
+	const uint32 leopardquartz[][2] = { { 0x14828, 0x38600001 } };
+	const uint32 leopardframework[][2] = { { 0x27f44, 0x38600001 } };
+	int originalcount;
+	PatchSaverFile(volume, bus, drive, pictures, 1014160, 0x42c190735c60f442ULL, picturepatches, 5);
+	originalcount = bus->patchcount;
+	if (PatchSaverFile(volume, bus, drive, quartz, 33976, 0x4c766095c8d63338ULL, tigerquartz, 3)) {
+		if (!PatchSaverFile(volume, bus, drive, framework, 60652, 0xc090355bd97bedcbULL, tigerframework, 2))
+			bus->patchcount = originalcount;
+	} else if (PatchSaverFile(volume, bus, drive, quartz, 121728, 0x720742ad028b4e2fULL, leopardquartz, 1)) {
+		if (!PatchSaverFile(volume, bus, drive, framework, 293936, 0x580d148d44d3a1ebULL, leopardframework, 1))
+			bus->patchcount = originalcount;
+	}
 }
 
 static uint8 *ScanForRom(void *file, uint32 *size)
@@ -2485,6 +2858,17 @@ int OsxBootLoad(OsxMachine *machine, const char *imagepath, int bootbus, int boo
 		mkext = AddDisplayDrivers(&volume, mkext, &mkextsize);
 	if (mkext)
 		mkext = AddOldWorldDrivers(mkext, &mkextsize, imagepath);
+#if OSXG5
+	if (!machine->g5)
+#endif
+	if (ContainsBytes(kernel, kernelsize, "Darwin Kernel Version 9.") &&
+	    (!mkext || !OsxMkextHasBundle(mkext, mkextsize, "com.apple.driver.AppleGossamerPE"))) {
+		fprintf(stderr, "osx: Leopard needs the Old World platform drivers; attach a Mac OS X 10.4 installation disc as a CD-ROM.\n");
+		free(mkext);
+		free(kernel);
+		CloseVolume(&volume);
+		return 0;
+	}
 	if (mkext) {
 		address = Allocate(&state, mkextsize);
 		memcpy(machine->ram + address, mkext, mkextsize);
@@ -2496,6 +2880,11 @@ int OsxBootLoad(OsxMachine *machine, const char *imagepath, int bootbus, int boo
 		fprintf(stderr, "osx: no Extensions.mkext, booting without drivers\n");
 	}
 	FindClipboardFunctions(machine, &volume);
+	PrepareSaverSoftware(&volume, &machine->ata[bootbus], &machine->ata[bootbus].drives[bootunit]);
+	if (machine->flurry)
+		machine->flurry = PrepareFlurry(machine, &volume, bootbus, bootunit);
+	if (machine->quartz)
+		machine->quartz = PrepareQuartz(machine, &volume, &machine->ata[bootbus], &machine->ata[bootbus].drives[bootunit]);
 	CloseVolume(&volume);
 	machine->bootargs = Allocate(&state, BOOTARGSSIZE);
 	AddRange(&state, "BootArgs", machine->bootargs, BOOTARGSSIZE);

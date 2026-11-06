@@ -131,6 +131,8 @@ set(SS_XPLAT
 	"${B2_SRC}/CrossPlatform/video_blit.cpp"
 )
 
+include("${SS_SRC}/osxguest/osxguest.cmake")
+
 set(SS_CORE
 	"${SS_SRC}/main.cpp"
 	"${SS_SRC}/prefs_items.cpp"
@@ -146,24 +148,10 @@ set(SS_CORE
 	"${SS_SRC}/macio_escc.cpp"
 	"${SS_SRC}/mmio.cpp"
 	"${SS_SRC}/pcibridge.cpp"
-	"${SS_SRC}/osxguest/osxcpu.cpp"
-	"${SS_SRC}/osxguest/osxcpu970.cpp"
-	"${SS_SRC}/osxguest/osxjit.cpp"
-	"${SS_SRC}/osxguest/osxfpu.cpp"
-	"${SS_SRC}/osxguest/osxvec.cpp"
-	"${SS_SRC}/osxguest/osxtest.cpp"
-	"${SS_SRC}/osxguest/osxbus.cpp"
-	"${SS_SRC}/osxguest/osxg5.cpp"
-	"${SS_SRC}/osxguest/osxclip.cpp"
-	"${SS_SRC}/osxguest/osxata.cpp"
-	"${SS_SRC}/osxguest/osxcuda.cpp"
-	"${SS_SRC}/osxguest/osxpointer.cpp"
-	"${SS_SRC}/osxguest/osxboot.cpp"
-	"${SS_SRC}/osxguest/osxmain.cpp"
-	"${SS_SRC}/osxguest/osxkext.cpp"
-	"${SS_SRC}/osxguest/osxnet.cpp"
-	"${SS_SRC}/osxguest/osxaudio.cpp"
-	"${SS_SRC}/osxguest/osxflash.cpp"
+	${OSXGUEST_SOURCES}
+	"${SS_SRC}/osxguest/SDL/osxvideo_sdl.cpp"
+	"${SS_SRC}/osxguest/SDL/osxaudio_sdl.cpp"
+	"${SS_SRC}/osxguest/SDL/osxclip_sdl.cpp"
 	"${SS_SRC}/usbuim.cpp"
 	"${SS_SRC}/macos_util.cpp"
 	"${SS_SRC}/gfxaccel.cpp"
@@ -527,8 +515,9 @@ if(ENABLE_GFXACCEL)
 		"${SS_GFXACCEL_DIR}/gl/dsp_gl_renderer.cpp"
 		"${SS_GFXACCEL_DIR}/gl/glide_gl_renderer.cpp"
 	)
-	if(USE_SDL1)
+	if(USE_SDL1 AND NOT WIN32)
 		list(APPEND SS_GFXACCEL "${SS_GFXACCEL_DIR}/gl/glcontext.c")
+		list(APPEND SS_GFXACCEL_DEFS OSXGLBRIDGE=1)
 	endif()
 	if(WIN32)
 		list(APPEND SS_GFXACCEL_LIBS opengl32)
@@ -603,6 +592,12 @@ if(CMAKE_SIZEOF_VOID_P EQUAL 8 AND ENABLE_OSX_GUEST_TESTS AND (WIN32 OR CMAKE_SY
 	add_test(NAME OsxInputTest COMMAND OsxInputTest)
 endif()
 
+set_source_files_properties(
+	"${SS_SRC}/osxguest/SDL/osxvideo_sdl.cpp"
+	"${SS_SRC}/osxguest/SDL/osxaudio_sdl.cpp"
+	"${SS_SRC}/osxguest/SDL/osxclip_sdl.cpp"
+	PROPERTIES INCLUDE_DIRECTORIES "${B2_SRC}/SDL")
+
 function(sheepshaver_configure_target SHEEPSHAVER_EXECUTABLE)
 	target_include_directories(${SHEEPSHAVER_EXECUTABLE} PRIVATE
 		# Platform sysdeps (Windows/ Unix/ MacOSX/config) must come first
@@ -671,6 +666,12 @@ function(sheepshaver_configure_target SHEEPSHAVER_EXECUTABLE)
 	endif()
 
 	macemu_apply_common(${SHEEPSHAVER_EXECUTABLE})
+
+	if(WIN32)
+		target_sources(${SHEEPSHAVER_EXECUTABLE} PRIVATE "${SS_GFXACCEL_DIR}/gl/glcontext.c")
+		target_compile_definitions(${SHEEPSHAVER_EXECUTABLE} PRIVATE OSXGLBRIDGE=1)
+		target_link_libraries(${SHEEPSHAVER_EXECUTABLE} PRIVATE opengl32 glu32)
+	endif()
 
 	if(SS_GFXACCEL_LIBS)
 		target_link_libraries(${SHEEPSHAVER_EXECUTABLE} PRIVATE ${SS_GFXACCEL_LIBS})

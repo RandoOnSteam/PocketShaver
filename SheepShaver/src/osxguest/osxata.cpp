@@ -368,6 +368,8 @@ static void ApplyPatches(OsxAtaBus *bus, OsxAtaDrive *drive, uint8 *data, uint64
 		patch = &bus->patches[index];
 		if (patch->atapionly && !drive->atapi)
 			continue;
+		if ((patch->drive && patch->drive != drive) || patch->offset >= start + length || patch->offset + patch->length <= start)
+			continue;
 		for (byte = 0; byte < patch->length; byte++)
 			if (patch->offset + byte >= start && patch->offset + byte < start + length)
 				data[patch->offset + byte - start] = patch->bytes[byte];

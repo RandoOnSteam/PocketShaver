@@ -1107,6 +1107,8 @@ void GLContext_CreateCleanup_(GLCONTEXT* pThis)
 int GLContext_CreateWindowClass(GLCONTEXT* pThis, HINSTANCE hInstance)
 {
 	WNDCLASSA wc;
+	char classname[48];
+	wsprintfA(classname, "GLWrapper%p", pThis);
 	wc.style = CS_HREDRAW | CS_VREDRAW | CS_OWNDC;
 	wc.lpfnWndProc = DefWindowProcA;
 	wc.cbClsExtra = 0;
@@ -1116,7 +1118,7 @@ int GLContext_CreateWindowClass(GLCONTEXT* pThis, HINSTANCE hInstance)
 	wc.hCursor = NULL; /* A.K.A. LoadCursor((HINSTANCE)NULL, IDC_ARROW); */
 	wc.hbrBackground = NULL;
 	wc.lpszMenuName = NULL;
-	wc.lpszClassName = "GLWrapper";
+	wc.lpszClassName = classname;
 	pThis->mAtom = RegisterClassA(&wc); /* !atom == error */
 	if(pThis->mAtom == 0)
 	{

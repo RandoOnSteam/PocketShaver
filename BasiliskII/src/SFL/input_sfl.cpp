@@ -9,6 +9,8 @@ void VideoPumpEvents(void)
 
 void SflEmulatorKey(int code, int down)
 {
+	if (SflUiQueueInput(SFLUIINPUTKEY, code, down))
+		return;
 	if (down)
 		ADBKeyDown(code);
 	else
@@ -17,6 +19,8 @@ void SflEmulatorKey(int code, int down)
 
 void SflEmulatorMouse(int x, int y)
 {
+	if (SflUiQueueInput(SFLUIINPUTMOUSE, x, y))
+		return;
 	ADBMouseMoved(x, y);
 }
 
@@ -27,6 +31,8 @@ void SflEmulatorButton(int down)
 
 void SflEmulatorMouseButton(int button, int down)
 {
+	if (SflUiQueueInput(SFLUIINPUTBUTTON, button, down))
+		return;
 	if (down)
 		ADBMouseDown(button);
 	else

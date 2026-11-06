@@ -39,6 +39,7 @@
 #ifdef SHEEPSHAVER
 #include "usbuim.h"
 #include "sflmem.h"
+#include "osxguest.h"
 #else
 #include "newcpu.h"
 #endif
@@ -80,6 +81,9 @@ typedef struct SFLMAIN
 	int nvramticks;
 	bool emulatorrunning;
 	bool initialized;
+#ifdef SHEEPSHAVER
+	bool nativeboot;
+#endif
 } SFLMAIN;
 
 static SFLMAIN SflMain;
@@ -132,6 +136,10 @@ const char *SflMainPrefsPath(void)
 
 void SflMainStopEmulator(void)
 {
+#ifdef SHEEPSHAVER
+	if (SflMain.nativeboot)
+		return;
+#endif
 #ifdef SHEEPSHAVER
 	StopEmulation();
 #else
@@ -304,6 +312,12 @@ void SflMainPark(void)
 void SflEmulatorStart()
 {
 #ifdef SHEEPSHAVER
+	if (SflMain.nativeboot) {
+		OsxGuestMain();
+		return;
+	}
+#endif
+#ifdef SHEEPSHAVER
 	jump_to_rom(ROMBase + 0x310000);
 #else
 	Start680x0();
@@ -332,6 +346,14 @@ int SflEmulatorSetup(int argc, char **argv)
 	SflMainParseArguments(argc, argv);
 	argc = SflMainCompactArguments(argc, argv);
 	PrefsInit(NULL, argc, argv);
+#ifdef SHEEPSHAVER
+	SflMain.nativeboot = OsxGuestRequested() != 0;
+	if (SflMain.nativeboot) {
+		timer_init();
+		SysInit();
+		return SFLNATIVEBOOT;
+	}
+#endif
 #ifdef SHEEPSHAVER
 	PVR = 0x000c0000;
 	CPUClockSpeed = 100000000;
@@ -374,6 +396,13 @@ void SflEmulatorStop(void)
 			return;
 	}
 #endif /* #if !defined(SFLMAINRUNEMULATORONMAINTHREAD) */
+#ifdef SHEEPSHAVER
+	if (SflMain.nativeboot) {
+		SysExit();
+		PrefsExit();
+		return;
+	}
+#endif
 	if (SflMain.initialized) {
 #ifdef SHEEPSHAVER
 		exit_emul_ppc();
@@ -466,6 +495,10 @@ void jump_to_rom(uint32 entry)
 void QuitEmulator(void)
 {
 	SflUiRequestQuit();
+#ifdef SHEEPSHAVER
+	if (SflMain.nativeboot)
+		return;
+#endif
 #if !defined(SHEEPSHAVER)
 	m68k_setstopped(0);
 	m68k_emulop_return();

@@ -36,6 +36,15 @@ void SflUiSetPalette(const unsigned char *rgb, int count);
 void SflUiAlert(const char *title, const char *text);
 void SflUiRequestQuit(void);
 void SflUiPumpEvents(void);
+#define SFLUIINPUTMOUSE 1
+#define SFLUIINPUTBUTTON 2
+#define SFLUIINPUTKEY 3
+#define SFLUIINPUTQUIT 4
+typedef void (*SFLUIINPUT)(void *context, int operation, int first, int second);
+void SflUiSetInput(SFLUIINPUT input, void *context);
+int SflUiQueueInput(int operation, int first, int second);
+int SflUiIsQuitting(void);
+int SflUiPresent(int firstrow, int lastrow);
 int SflUiGetStatus(int *width, int *height, int *depth, int *hostwidth, int *hostheight);
 unsigned char *SflUiCopyFrame(int host, int *width, int *height);
 void SflUiHostMouse(int x, int y);

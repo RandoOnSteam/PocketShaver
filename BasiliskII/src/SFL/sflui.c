@@ -45,6 +45,14 @@ typedef struct SFLUIKEY
 	int adb;
 } SFLUIKEY;
 
+#define SFLUIINPUTCOUNT 256
+
+typedef struct SFLUIINPUTEVENT {
+	int operation;
+	int first;
+	int second;
+} SFLUIINPUTEVENT;
+
 typedef struct SFLUIAPP
 {
 	WSAPP super;
@@ -68,6 +76,12 @@ typedef struct SFLUIAPP
 	int ocwidth;
 	int ocheight;
 	unsigned char palette[SFLUIPALETTESIZE * 3];
+	SFLUIINPUT input;
+	void *inputcontext;
+	SFLUIINPUTEVENT inputs[SFLUIINPUTCOUNT];
+	unsigned int inputread;
+	unsigned int inputwrite;
+	unsigned int paints;
 	unsigned char keys[SFLUIADBCOUNT];
 	int buttondown;
 	guipos_t mousex;
@@ -106,6 +120,41 @@ static void SflUiRefresh(SFLUIAPP *pThis);
 static void SflUiUpdateClientSize(SFLUIAPP *pThis);
 static void SflUiToggleFullScreen(SFLUIAPP *pThis);
 
+int SflUiQueueInput(int operation, int first, int second)
+{
+	SFLUIAPP *pThis = SflUiApp;
+	SFLUIINPUTEVENT *event;
+	int active;
+	WSCriticalSection_Lock(&pThis->lock);
+	active = pThis->input != NULL;
+	if (active && pThis->inputwrite - pThis->inputread < SFLUIINPUTCOUNT) {
+		event = &pThis->inputs[pThis->inputwrite++ % SFLUIINPUTCOUNT];
+		event->operation = operation;
+		event->first = first;
+		event->second = second;
+	}
+	WSCriticalSection_Unlock(&pThis->lock);
+	return active;
+}
+
+int SflUiIsQuitting(void)
+{
+	return wsatomicintload(&SflUiApp->quit);
+}
+
+static void SflUiDeliverInput(SFLUIAPP *pThis)
+{
+	SFLUIINPUTEVENT event;
+	WSCriticalSection_Lock(&pThis->lock);
+	while (pThis->inputread != pThis->inputwrite) {
+		event = pThis->inputs[pThis->inputread++ % SFLUIINPUTCOUNT];
+		WSCriticalSection_Unlock(&pThis->lock);
+		pThis->input(pThis->inputcontext, event.operation, event.first, event.second);
+		WSCriticalSection_Lock(&pThis->lock);
+	}
+	WSCriticalSection_Unlock(&pThis->lock);
+}
+
 void SflUiPumpEvents(void)
 { /* when SFLMAINRUNEMULATORONMAINTHREAD is off the UI thread handles
   all this. */
@@ -126,6 +175,7 @@ void SflUiPumpEvents(void)
 		SflUiApplySize(pThis);
 		SflUiUpdateClientSize(pThis);
 	}
+	SflUiDeliverInput(pThis);
 	SflUiRefresh(pThis);                             /* video_refresh() */
 #endif
 }
@@ -300,6 +350,7 @@ static void SflUiDraw(SFLUIAPP *pThis, WSDC *dc)
 	WSRect_Construct(&source, 0, 0, pThis->framewidth, pThis->frameheight);
 	WSWindow_GetClientRect(&pThis->window, &target);
 	WSOC_Blt(&pThis->oc, dc, &target, &source);
+	pThis->paints++;
 	WSCriticalSection_Unlock(&pThis->lock);
 }
 
@@ -440,7 +491,7 @@ static void SflUiClipboardSync(SFLUIAPP *pThis)
 	WSCriticalSection_Unlock(&pThis->lock);
 }
 
-static wsbool SflUiScanFrame(SFLUIAPP *pThis)
+static wsbool SflUiScanFrame(SFLUIAPP *pThis, int firstrow, int lastrow)
 {
 	size_t bytes;
 	size_t offset;
@@ -460,7 +511,16 @@ static wsbool SflUiScanFrame(SFLUIAPP *pThis)
 			WSMemoryCopy(pThis->shadow, pThis->frame, bytes);
 		pThis->fullconvert = TRUE;
 	}
-	for (y = 0; y < pThis->frameheight && pThis->shadow != NULL; y++) {
+	if (firstrow >= 0 && pThis->shadow != NULL) {
+		offset = (size_t)firstrow * pThis->framerowbytes;
+		bytes = (size_t)(lastrow - firstrow + 1) * pThis->framerowbytes;
+		WSMemoryCopy(pThis->shadow + offset, pThis->frame + offset, bytes);
+		if (firstrow < pThis->dirtytop)
+			pThis->dirtytop = firstrow;
+		if (lastrow > pThis->dirtybottom)
+			pThis->dirtybottom = lastrow;
+	}
+	for (y = 0; firstrow < 0 && y < pThis->frameheight && pThis->shadow != NULL; y++) {
 		offset = (size_t)y * pThis->framerowbytes;
 		if (memcmp(pThis->shadow + offset, pThis->frame + offset, pThis->framerowbytes) == 0)
 			continue;
@@ -475,6 +535,17 @@ static wsbool SflUiScanFrame(SFLUIAPP *pThis)
 	return changed;
 }
 
+int SflUiPresent(int firstrow, int lastrow)
+{
+	SFLUIAPP *pThis = SflUiApp;
+	unsigned int paints = pThis->paints;
+	if (!pThis->windowopen || !SflUiScanFrame(pThis, firstrow, lastrow))
+		return 0;
+	WSWindow_Invalidate(&pThis->window);
+	WSWindow_Update(&pThis->window);
+	return pThis->paints != paints;
+}
+
 static void SflUiRefresh(SFLUIAPP *pThis)
 {
 	if (!wsatomicintload(&pThis->repaint) || !pThis->windowopen)
@@ -484,7 +555,7 @@ static void SflUiRefresh(SFLUIAPP *pThis)
 	pThis->frameticks++;
 	if (pThis->frameticks >= pThis->frameskip) {
 		pThis->frameticks = 0;
-		if (SflUiScanFrame(pThis))
+		if (!pThis->input && SflUiScanFrame(pThis, -1, -1))
 			WSWindow_Invalidate(&pThis->window);
 	}
 	pThis->clipboardrepaints++;
@@ -555,6 +626,23 @@ WSTICKEREVENT_CALLBACK(SflUiOnTicker)
 		wsatomicintstore(&SflUiApp->repaint, 1);
 	}
 	return WSTICKEREVENT_UNHANDLED;
+}
+
+void SflUiSetInput(SFLUIINPUT input, void *context)
+{
+	SFLUIAPP *pThis = SflUiApp;
+	WSCriticalSection_Lock(&pThis->lock);
+	pThis->input = input;
+	pThis->inputcontext = context;
+	pThis->inputread = pThis->inputwrite;
+	WSCriticalSection_Unlock(&pThis->lock);
+	if (input) {
+		pThis->tickercreated = WSTicker_Create(&pThis->ticker,
+			&pThis->window, SFLUITICKMS, SflUiOnTicker);
+	} else if (pThis->tickercreated) {
+		WSTicker_Destroy(&pThis->ticker);
+		pThis->tickercreated = FALSE;
+	}
 }
 
 BEGIN_WINDOW_MESSAGES(SflUiWindowMessages)
@@ -896,6 +984,11 @@ static wsbool SflUiOnInit(SFLUIAPP *pThis)
 	pThis->ocwidth = 0;
 	pThis->ocheight = 0;
 	pThis->buttondown = 0;
+	pThis->input = NULL;
+	pThis->inputcontext = NULL;
+	pThis->inputread = 0;
+	pThis->inputwrite = 0;
+	pThis->paints = 0;
 	pThis->mousex = 0;
 	pThis->mousey = 0;
 	pThis->mousepending = FALSE;
@@ -1014,13 +1107,24 @@ IMPLEMENT_WSAPP(SFLUIAPP, SflUiOnInit, SflUiOnIdle,
 #else
 static void SflUiOnRun(SFLUIAPP *pThis)
 {
+	int mode;
 	if (!WSEventLoop_Create(&pThis->super.mEventLoop))
 		return;
-	if (!SflEmulatorSetup(pThis->super.mArgc, pThis->super.mArgv)) {
+	mode = SflEmulatorSetup(pThis->super.mArgc, pThis->super.mArgv);
+	if (!mode) {
 		WSEventLoop_Destroy(&pThis->super.mEventLoop);
 		return;
 	}
-	if (pThis->windowopen)
+	if (mode == SFLNATIVEBOOT) {
+#if defined(SFLMONITORENABLED)
+		SflUiStartMonitor(pThis);
+#endif
+		SflEmulatorStart();
+#if defined(SFLMONITORENABLED)
+		SflUiStopMonitor(pThis);
+#endif
+		SflEmulatorStop();
+	} else if (pThis->windowopen)
 	{
 		#if defined(SFLMONITORENABLED)
 			SflUiStartMonitor(pThis);

@@ -1,0 +1,22 @@
+set(OSXGUEST_DIR "${CMAKE_CURRENT_LIST_DIR}")
+set(OSXGUEST_SOURCES
+	"${OSXGUEST_DIR}/osxcpu.cpp"
+	"${OSXGUEST_DIR}/osxcpu970.cpp"
+	"${OSXGUEST_DIR}/osxjit.cpp"
+	"${OSXGUEST_DIR}/osxfpu.cpp"
+	"${OSXGUEST_DIR}/osxvec.cpp"
+	"${OSXGUEST_DIR}/osxtest.cpp"
+	"${OSXGUEST_DIR}/osxbus.cpp"
+	"${OSXGUEST_DIR}/osxg5.cpp"
+	"${OSXGUEST_DIR}/osxclip.cpp"
+	"${OSXGUEST_DIR}/osxata.cpp"
+	"${OSXGUEST_DIR}/osxcuda.cpp"
+	"${OSXGUEST_DIR}/osxpointer.cpp"
+	"${OSXGUEST_DIR}/osxboot.cpp"
+	"${OSXGUEST_DIR}/osxmain.cpp"
+	"${OSXGUEST_DIR}/osxglbridge.cpp"
+	"${OSXGUEST_DIR}/osxkext.cpp"
+	"${OSXGUEST_DIR}/osxnet.cpp"
+	"${OSXGUEST_DIR}/osxaudio.cpp"
+	"${OSXGUEST_DIR}/osxflash.cpp"
+)

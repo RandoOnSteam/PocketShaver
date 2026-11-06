@@ -88,8 +88,18 @@ set(SFLINCLUDES
 add_library(SheepShaverSFL_sflcore OBJECT ${SFLCORE} ${SFLPLATFORM}
 	"${CMAKE_CURRENT_SOURCE_DIR}/sflmem.cpp"
 	"${CMAKE_CURRENT_SOURCE_DIR}/video_sfl.cpp"
-	"${SSSRC}/MacOSX/Carbon/osxguest_carbon.cpp"
 	"${SSSRC}/dummy/prefs_dummy.cpp")
+if(CMAKE_SYSTEM_NAME MATCHES RetroCarbon)
+	target_sources(SheepShaverSFL_sflcore PRIVATE "${SSSRC}/MacOSX/Carbon/osxguest_carbon.cpp")
+else()
+	include("${SSSRC}/osxguest/osxguest.cmake")
+	target_sources(SheepShaverSFL_sflcore PRIVATE ${OSXGUEST_SOURCES}
+		"${CMAKE_CURRENT_SOURCE_DIR}/osxhost_sfl.cpp")
+	if(WIN32)
+		target_compile_definitions(SheepShaverSFL_sflcore PRIVATE WIN32_LEAN_AND_MEAN OSXGLBRIDGE=1)
+		target_sources(SheepShaverSFL_sflcore PRIVATE "${SSSRC}/gfxaccel/gl/glcontext.c")
+	endif()
+endif()
 if(NOT WIN32)
 	set_source_files_properties("${B2SRC}/extfs.cpp" PROPERTIES COMPILE_DEFINITIONS WIN32)
 endif()
@@ -100,3 +110,7 @@ target_include_directories(SheepShaverSFL_sflcore PRIVATE ${SFLINCLUDES})
 target_compile_definitions(SheepShaverSFL_sflcore PRIVATE SHEEPSHAVER=1)
 sfl_configure_core(SheepShaverSFL_sflcore)
 sfl_add_application(SheepShaverSFL SHEP)
+
+if(WIN32)
+	target_link_libraries(SheepShaverSFL PRIVATE opengl32 glu32)
+endif()
