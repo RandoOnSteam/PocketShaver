@@ -473,6 +473,8 @@ static void SflUiClipboardSync(SFLUIAPP *pThis)
 		WSClipboardGetText(&text, &length, &size);
 	copy = NULL;
 	if (text != NULL) {
+		if (length == WSMAXLENGTH)
+			length = strlen(text);
 		copy = WSALLOC(char, length + 1);
 		if (copy != NULL) {
 			WSMemoryCopy(copy, text, length);
