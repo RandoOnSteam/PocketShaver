@@ -128,7 +128,6 @@ static const uint8 bcd2bin[256] = {
 struct cdrom_drive_info {
 	cdrom_drive_info() : num(0), fh(NULL), start_byte(0), status(0), drop(false), init_null(false), driver_reference_number(0) {}
 	cdrom_drive_info(void *fh_) : num(0), fh(fh_), start_byte(0), status(0), drop(false), init_null(false), driver_reference_number(0) {}
-	
 	void close_fh(void) { SysAllowRemoval(fh); Sys_close(fh); }
 	
 	int num;			// Drive number
@@ -271,6 +270,21 @@ static void read_toc(cdrom_drive_info &info)
  *  Return: false = error
  */
 
+#if defined(USE_SFL)
+static bool block_is_audio(const cdrom_drive_info &info, uint32 block)
+{
+	uint32 frame = block + 150;
+	bool audio = false;
+	for (int i=4; i<804; i+=8) {
+		if (info.toc[i+2] == 0 || info.toc[i+2] == 0xaa)
+			break;
+		if (frame >= (uint32)(info.toc[i+5] * 4500 + info.toc[i+6] * 75 + info.toc[i+7]))
+			audio = (info.toc[i+1] & 4) == 0;
+	}
+	return audio;
+}
+
+#endif
 static bool position2msf(const cdrom_drive_info &info, uint16 postype, uint32 pos, bool stopping, uint8 &m, uint8 &s, uint8 &f)
 {
 	switch (postype) {
@@ -302,6 +316,21 @@ static bool position2msf(const cdrom_drive_info &info, uint16 postype, uint32 po
 			D(bug(" position2msf toc entry #%d, no such entry\n", pos));
 			return false;
 		}
+#if defined(USE_SFL)
+		case 3: {
+			if (pos >= 99)
+				return false;
+			int i = 4 + pos * 8;
+			if (stopping)
+				i += 8;
+			if (info.toc[i+2] == 0)
+				return false;
+			m = info.toc[i+5];
+			s = info.toc[i+6];
+			f = info.toc[i+7];
+			return true;
+		}
+#endif
 		default:
 			D(bug(" position2msf postype %d pos %d -> %d m %d s %d f\n", postype, pos, m, s, f));
 			return false;
@@ -940,10 +969,32 @@ int16 CDROMControl(uint32 pb, uint32 dce)
 			}
 		}
 			
+#if defined(USE_SFL)
+		case 102: {		// ReadHeader
+			if (ReadMacInt8(info->status + dsDiskInPlace) == 0)
+				return offLinErr;
+			uint32 block = ReadMacInt32(pb + csParam);
+			if (block_is_audio(*info, block))
+				return paramErr;
+			uint8 raw[2352];
+			if (SysCDReadSector(info->fh, raw, block, 0, 0x20) < 4) {
+				uint32 frame = block + 150;
+				raw[0] = bin2bcd[frame / 4500];
+				raw[1] = bin2bcd[(frame / 75) % 60];
+				raw[2] = bin2bcd[frame % 75];
+				raw[3] = 1;
+			}
+			Mac_memset(pb + csParam, 0, 4);
+			for (int index = 0; index < 4; index++)
+				WriteMacInt8(pb + csParam + index, raw[index]);
+			return noErr;
+		}
+#else
 		case 102:		// ReadHeader
 			printf("FATAL: .AppleCD/Control(102): unimplemented call\n");
 			return controlErr;
-			
+#endif
+
 		case 103: {		// AudioTrackSearch
 			D(bug(" AudioTrackSearch postype %d, pos %08x, hold %d\n", ReadMacInt16(pb + csParam), ReadMacInt32(pb + csParam + 2), ReadMacInt16(pb + csParam + 6)));
 			if (ReadMacInt8(info->status + dsDiskInPlace) == 0)
@@ -999,7 +1050,7 @@ int16 CDROMControl(uint32 pb, uint32 dce)
 			return noErr;
 			
 		case 106:		// AudioStop
-			D(bug(" AudioStop postype %d, pos %08lx\n", ReadMacInt16(pb + csParam), ReadMacInt32(pb + csParam + 2)));
+D(bug(" AudioStop postype %d, pos %08lx\n", ReadMacInt16(pb + csParam), ReadMacInt32(pb + csParam + 2)));
 			if (ReadMacInt8(info->status + dsDiskInPlace) == 0)
 				return offLinErr;
 			
@@ -1072,14 +1123,40 @@ int16 CDROMControl(uint32 pb, uint32 dce)
 			SysCDSetVolume(info->fh, ReadMacInt8(pb + csParam), ReadMacInt8(pb + csParam + 1));
 			return noErr;
 			
+#if defined(USE_SFL)
+		case 110:		// ReadMCN
+		case 111: {		// ReadISRC
+			char code[16];
+			bool found;
+			int length;
+			memset(code, 0, sizeof(code));
+			if (ReadMacInt8(info->status + dsDiskInPlace) == 0)
+				return offLinErr;
+			if (ReadMacInt16(pb + csCode) == 110) {
+				found = SysCDReadMCN(info->fh, code);
+				length = 13;
+			} else {
+				found = SysCDReadISRC(info->fh, bcd2bin[ReadMacInt16(pb + csParam) & 0xff], code);
+				length = 12;
+			}
+			Mac_memset(pb + csParam, 0, 14);
+			if (found) {
+				WriteMacInt8(pb + csParam, length);
+				for (int index = 0; index < length; index++)
+					WriteMacInt8(pb + csParam + 1 + index, code[index]);
+			}
+			return noErr;
+		}
+#else
 		case 110:		// ReadMCN
 			printf("FATAL: .AppleCD/Control(110): unimplemented call\n");
 			return controlErr;
-			
+
 		case 111:		// ReadISRC
 			printf("FATAL: .AppleCD/Control(111): unimplemented call\n");
 			return controlErr;
-			
+#endif
+
 		case 112: {		// ReadAudioVolume
 			uint8 left = 0, right = 0;
 			SysCDGetVolume(info->fh, left, right);
@@ -1088,33 +1165,125 @@ int16 CDROMControl(uint32 pb, uint32 dce)
 			return noErr;
 		}
 			
-		case 113:		// GetSpindleSpeed
+		case 113: {		// GetSpindleSpeed
+#if defined(USE_SFL)
+			unsigned int kbps = 0;
+			if (SysCDGetSpeed(info->fh, &kbps) && kbps != 0 && kbps <= 176) {
+				WriteMacInt16(pb + csParam, 0);
+				return noErr;
+			}
+#endif
 			WriteMacInt16(pb + csParam, 0xff);
 			return noErr;
-			
+		}
+
 		case 114:		// SetSpindleSpeed
+#if defined(USE_SFL)
+			if (ReadMacInt16(pb + csParam) == 0)
+				SysCDSetSpeed(info->fh, 176);
+			else if (ReadMacInt16(pb + csParam) == 0xff)
+				SysCDSetSpeed(info->fh, 0);
+			else
+				return paramErr;
+#endif
 			return noErr;
-			
+
+#if defined(USE_SFL)
+		case 115: {		// ReadAudio
+			if (ReadMacInt8(info->status + dsDiskInPlace) == 0)
+				return offLinErr;
+			if (ReadMacInt16(pb + csParam) != 0)
+				return paramErr;
+			uint32 buffer = ReadMacInt32(pb + csParam + 2);
+			uint32 count = ReadMacInt16(pb + csParam + 12);
+			uint8 m, s, f;
+			if (!position2msf(*info, ReadMacInt16(pb + csParam + 6), ReadMacInt32(pb + csParam + 8), false, m, s, f))
+				return paramErr;
+			if (m * 4500 + s * 75 + f < 150)
+				return paramErr;
+			uint32 block = m * 4500 + s * 75 + f - 150;
+			uint8 raw[2352];
+			for (uint32 index = 0; index < count; index++) {
+				if (SysCDReadSector(info->fh, raw, block + index, 1, 0x10) != 2352)
+					return paramErr;
+				Host2Mac_memcpy(buffer + index * 2352, raw, 2352);
+			}
+			return noErr;
+		}
+
+		case 116: {		// ReadAllSubcodes
+			uint8 position[16];
+			if (ReadMacInt8(info->status + dsDiskInPlace) == 0)
+				return offLinErr;
+			if (!SysCDGetPosition(info->fh, position))
+				return paramErr;
+			uint32 frame = position[9] * 4500 + position[10] * 75 + position[11];
+			if (frame < 150)
+				return paramErr;
+			if (!SysCDReadSubcodes(info->fh, Mac2HostAddr(ReadMacInt32(pb + csParam)), frame - 150, ReadMacInt16(pb + csParam + 6)))
+				return controlErr;
+			return noErr;
+		}
+
+		case 122: {		// SetTrackList
+			uint16 count = ReadMacInt16(pb + csParam);
+			uint32 list = ReadMacInt32(pb + csParam + 2);
+			if (list == 0 || count > 99)
+				return paramErr;
+			for (int index = 0; index < count; index++) {
+				if (info->toc[4 + index * 8 + 2] != bcd2bin[ReadMacInt8(list + index)])
+					return paramErr;
+			}
+			return noErr;
+		}
+
+		case 123: {		// GetTrackList
+			uint32 list = ReadMacInt32(pb + csParam + 2);
+			if (list == 0)
+				return paramErr;
+			int count = 0;
+			for (int i=4; i<804 && info->toc[i+2] != 0 && info->toc[i+2] != 0xaa; i+=8) {
+				WriteMacInt8(list + count, bin2bcd[info->toc[i+2]]);
+				count++;
+			}
+			WriteMacInt16(pb + csParam, count);
+			return noErr;
+		}
+
+		case 124: {		// GetTrackIndex
+			uint8 position[16];
+			int found = -1;
+			if (SysCDGetPosition(info->fh, position) && (position[1] == 0x11 || position[1] == 0x12)) {
+				for (int i=4; i<804 && found < 0 && info->toc[i+2] != 0xaa; i+=8) {
+					if (info->toc[i+2] == position[6])
+						found = (i - 4) / 8;
+				}
+			}
+			WriteMacInt16(pb + csParam, found);
+			return noErr;
+		}
+#else
 		case 115:		// ReadAudio
 			printf("FATAL: .AppleCD/Control(115): unimplemented call\n");
 			return controlErr;
-			
+
 		case 116:		// ReadAllSubcodes
 			printf("FATAL: .AppleCD/Control(116): unimplemented call\n");
 			return controlErr;
-			
+
 		case 122:		// SetTrackList
 			printf("FATAL: .AppleCD/Control(122): unimplemented call\n");
 			return controlErr;
-			
+
 		case 123:		// GetTrackList
 			printf("FATAL: .AppleCD/Control(123): unimplemented call\n");
 			return controlErr;
-			
+
 		case 124:		// GetTrackIndex
 			printf("FATAL: .AppleCD/Control(124): unimplemented call\n");
 			return controlErr;
-			
+#endif
+
 		case 125:		// SetPlayMode
 			D(bug("  SetPlayMode\n"));
 			// repeat flag (0 is off, 1 is on)
@@ -1276,6 +1445,17 @@ int16 CDROMStatus(uint32 pb, uint32 dce)
 			return noErr;
 			
 		case 121:		// Get CD features
+#if defined(USE_SFL)
+		{
+			unsigned int maxkbps = 0;
+			unsigned int flags = 0;
+			if (SysCDGetFeatures(info->fh, &maxkbps, &flags) && maxkbps != 0) {
+				WriteMacInt16(pb + csParam, (maxkbps << 8) / 150);
+				WriteMacInt16(pb + csParam + 2, flags);
+				return noErr;
+			}
+		}
+#endif
 			WriteMacInt16(pb + csParam, 0x0200);	// 300 KB/s
 			WriteMacInt16(pb + csParam + 2, 0x0c00);	// SCSI-2, stereo
 			return noErr;

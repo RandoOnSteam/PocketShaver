@@ -88,13 +88,13 @@ static void *SflAudioCreate(int rate, int channels, int bits, int bufferbytes, i
 		return NULL;
 	}
 	WSSignal_Create(&pThis->exited);
+	WSAudio_Play(&pThis->audio);
 	if (!WSThread_Create(&pThis->thread, SflAudioPump, pThis)) {
 		WSSignal_Destroy(&pThis->exited);
 		WSAudio_Destroy(&pThis->audio);
 		WSFREE(pThis);
 		return NULL;
 	}
-	WSAudio_Play(&pThis->audio);
 	return pThis;
 }
 

@@ -697,7 +697,7 @@ static uint32 BuildToc(OsxAtaDrive *drive, uint8 *data, uint8 *packet)
 	return length;
 }
 
-static uint32 BuildModePages(uint8 *data, uint32 page)
+static uint32 BuildModePages(OsxAtaDrive *drive, uint8 *data, uint32 page)
 {
 	uint32 length;
 	length = 0;
@@ -717,6 +717,15 @@ static uint32 BuildModePages(uint8 *data, uint32 page)
 		data[length + 9] = 0xff;
 		data[length + 10] = 0x02;
 		data[length + 11] = 0xff;
+#if defined(USE_SFL)
+		if (drive->file) {
+			uint8 left = 0;
+			uint8 right = 0;
+			SysCDGetVolume(drive->file, left, right);
+			data[length + 9] = left;
+			data[length + 11] = right;
+		}
+#endif
 		length += 16;
 	}
 	if (page == 0x2a || page == 0x3f) {
@@ -735,6 +744,72 @@ static uint32 BuildModePages(uint8 *data, uint32 page)
 	}
 	return length;
 }
+
+#if defined(USE_SFL)
+static uint32 BuildSubChannel(OsxAtaDrive *drive, uint8 *data, const uint8 *packet)
+{
+	uint8 position[16];
+	char code[16];
+	uint32 frames;
+	memset(data, 0, 32);
+	data[1] = 0x15;
+	if (!(packet[2] & 0x40))
+		return 4;
+	switch (packet[3]) {
+	case 0x01:
+		if (!SysCDGetPosition(drive->file, position)) {
+			data[3] = 12;
+			data[4] = 1;
+			return 16;
+		}
+		memcpy(data, position, 16);
+		data[3] = 12;
+		data[4] = 1;
+		if (!(packet[1] & 2)) {
+			frames = ((uint32)position[9] * 60 + position[10]) * 75 + position[11] - 150;
+			PutBig32(data + 8, frames);
+			frames = ((uint32)position[13] * 60 + position[14]) * 75 + position[15];
+			PutBig32(data + 12, frames);
+		}
+		return 16;
+	case 0x02:
+		data[3] = 20;
+		data[4] = 2;
+		memset(code, 0, sizeof(code));
+		if (SysCDReadMCN(drive->file, code)) {
+			data[8] = 0x80;
+			memcpy(data + 9, code, 13);
+		}
+		return 24;
+	case 0x03:
+		data[3] = 20;
+		data[4] = 3;
+		data[6] = packet[6];
+		memset(code, 0, sizeof(code));
+		if (SysCDReadISRC(drive->file, packet[6], code)) {
+			data[8] = 0x80;
+			memcpy(data + 9, code, 12);
+		}
+		return 24;
+	}
+	return 4;
+}
+
+static void AtapiModeSelect(OsxAtaDrive *drive, const uint8 *packet, const uint8 *buffer)
+{
+	const uint8 *page;
+	if (!drive->file)
+		return;
+	if (packet[0] == 0x55)
+		page = buffer + 8 + (((uint32)buffer[6] << 8) | buffer[7]);
+	else if (packet[0] == 0x15)
+		page = buffer + 4 + buffer[3];
+	else
+		return;
+	if ((page[0] & 0x3f) == 0x0e)
+		SysCDSetVolume(drive->file, page[9], page[11]);
+}
+#endif
 
 static uint32 BuildConfiguration(OsxAtaDrive *drive, uint8 *data)
 {
@@ -808,6 +883,33 @@ static uint32 BuildDvdStructure(OsxAtaDrive *drive, uint8 *data, uint32 format)
 	return 0;
 }
 
+#if defined(USE_SFL)
+static void AtapiPlay(OsxMachine *machine, OsxAtaBus *bus, OsxAtaDrive *drive, const uint8 *packet)
+{
+	uint32 start;
+	uint32 count;
+	uint32 end;
+	int result;
+	if (packet[0] == 0x47)
+		result = SysCDPlay(drive->file, packet[3], packet[4], packet[5], packet[6], packet[7], packet[8]);
+	else {
+		start = ((uint32)packet[2] << 24) | ((uint32)packet[3] << 16) | ((uint32)packet[4] << 8) | packet[5];
+		if (packet[0] == 0x45)
+			count = ((uint32)packet[7] << 8) | packet[8];
+		else
+			count = ((uint32)packet[6] << 24) | ((uint32)packet[7] << 16) | ((uint32)packet[8] << 8) | packet[9];
+		start += 150;
+		end = start + count;
+		result = SysCDPlay(drive->file, (uint8)(start / 4500), (uint8)((start / 75) % 60), (uint8)(start % 75),
+			(uint8)(end / 4500), (uint8)((end / 75) % 60), (uint8)(end % 75));
+	}
+	if (result)
+		AtapiComplete(machine, bus, drive, 0);
+	else
+		AtapiFail(machine, bus, drive, SENSEILLEGALREQUEST, 0x64);
+}
+
+#endif
 static void AtapiExecute(OsxMachine *machine, OsxAtaBus *bus)
 {
 	OsxAtaDrive *drive;
@@ -842,10 +944,59 @@ static void AtapiExecute(OsxMachine *machine, OsxAtaBus *bus)
 	}
 	switch (packet[0]) {
 	case 0x1b:
-		if ((packet[4] & 3) == 2)
+		if ((packet[4] & 3) == 2) {
+#if defined(USE_SFL)
+			if (drive->file)
+				SysEject(drive->file);
+#endif
 			EjectMedia(machine, drive);
+		}
 		AtapiComplete(machine, bus, drive, 0);
 		return;
+#if defined(USE_SFL)
+	case 0x1e:
+		if (packet[4] & 1)
+			SysPreventRemoval(drive->file);
+		else
+			SysAllowRemoval(drive->file);
+		AtapiComplete(machine, bus, drive, 0);
+		return;
+	case 0xbb:
+		SysCDSetSpeed(drive->file, ((uint32)packet[2] << 8 | packet[3]) & 0xffff);
+		AtapiComplete(machine, bus, drive, 0);
+		return;
+	case 0x45:
+	case 0xa5:
+	case 0x47:
+		AtapiPlay(machine, bus, drive, packet);
+		return;
+	case 0x4b:
+		if (packet[8] & 1)
+			count = SysCDResume(drive->file);
+		else
+			count = SysCDPause(drive->file);
+		if (count)
+			AtapiComplete(machine, bus, drive, 0);
+		else
+			AtapiFail(machine, bus, drive, SENSEILLEGALREQUEST, 0x64);
+		return;
+	case 0x4e:
+		SysCDStop(drive->file, 0, 0, 0);
+		AtapiComplete(machine, bus, drive, 0);
+		return;
+	case 0xba:
+		lba = ((uint32)packet[2] << 24) | ((uint32)packet[3] << 16) | ((uint32)packet[4] << 8) | packet[5];
+		lba += 150;
+		if (SysCDScan(drive->file, (uint8)(lba / 4500), (uint8)((lba / 75) % 60), (uint8)(lba % 75), (packet[1] & 0x10) != 0))
+			AtapiComplete(machine, bus, drive, 0);
+		else
+			AtapiFail(machine, bus, drive, SENSEILLEGALREQUEST, 0x64);
+		return;
+	case 0x00:
+	case 0x2b:
+		AtapiComplete(machine, bus, drive, 0);
+		return;
+#else
 	case 0x00:
 	case 0x1e:
 	case 0x2b:
@@ -855,6 +1006,7 @@ static void AtapiExecute(OsxMachine *machine, OsxAtaBus *bus)
 	case 0x47:
 		AtapiComplete(machine, bus, drive, 0);
 		return;
+#endif
 	case 0x03:
 		memset(data, 0, 18);
 		data[0] = 0x70;
@@ -880,7 +1032,7 @@ static void AtapiExecute(OsxMachine *machine, OsxAtaBus *bus)
 		BeginBufferIn(machine, bus, Allocation(packet[4], 36), length, dma);
 		return;
 	case 0x1a:
-		pages = BuildModePages(data + 4, packet[2] & 0x3f);
+		pages = BuildModePages(drive, data + 4, packet[2] & 0x3f);
 		if (pages == 0) {
 			AtapiFail(machine, bus, drive, SENSEILLEGALREQUEST, 0x24);
 			return;
@@ -892,7 +1044,7 @@ static void AtapiExecute(OsxMachine *machine, OsxAtaBus *bus)
 		BeginBufferIn(machine, bus, Allocation(packet[4], pages + 4), length, dma);
 		return;
 	case 0x5a:
-		pages = BuildModePages(data + 8, packet[2] & 0x3f);
+		pages = BuildModePages(drive, data + 8, packet[2] & 0x3f);
 		if (pages == 0) {
 			AtapiFail(machine, bus, drive, SENSEILLEGALREQUEST, 0x24);
 			return;
@@ -917,6 +1069,16 @@ static void AtapiExecute(OsxMachine *machine, OsxAtaBus *bus)
 			count = ((uint32)packet[6] << 24) | ((uint32)packet[7] << 16) | ((uint32)packet[8] << 8) | packet[9];
 		else
 			count = ((uint32)packet[6] << 16) | ((uint32)packet[7] << 8) | packet[8];
+#if defined(USE_SFL)
+		if (packet[0] == 0xbe && packet[9] == 0 && packet[10] == 1) {
+			if (count > OSXATABUFFER / 96 || !SysCDReadSubcodes(drive->file, data, lba, count)) {
+				AtapiFail(machine, bus, drive, SENSEILLEGALREQUEST, 0x24);
+				return;
+			}
+			BeginBufferIn(machine, bus, count * 96, length, dma);
+			return;
+		}
+#endif
 		if (packet[0] == 0xbe && (((packet[1] >> 2) & 7) > 5 || (packet[9] & 7) || packet[10])) {
 			AtapiFail(machine, bus, drive, SENSEILLEGALREQUEST, 0x24);
 			return;
@@ -939,10 +1101,16 @@ static void AtapiExecute(OsxMachine *machine, OsxAtaBus *bus)
 		BeginBufferIn(machine, bus, Allocation(((uint32)packet[7] << 8) | packet[8], count), length, dma);
 		return;
 	case 0x42:
+#if defined(USE_SFL)
+		count = BuildSubChannel(drive, data, packet);
+		BeginBufferIn(machine, bus, Allocation(((uint32)packet[7] << 8) | packet[8], count), length, dma);
+		return;
+#else
 		memset(data, 0, 16);
 		data[1] = 0x15;
 		BeginBufferIn(machine, bus, Allocation(((uint32)packet[7] << 8) | packet[8], 4), length, dma);
 		return;
+#endif
 	case 0x46:
 		count = BuildConfiguration(drive, data);
 		BeginBufferIn(machine, bus, Allocation(((uint32)packet[7] << 8) | packet[8], count), length, dma);
@@ -1286,6 +1454,9 @@ static void WriteData(OsxMachine *machine, OsxAtaBus *bus, uint32 value)
 		return;
 	}
 	if (drive->atapi) {
+#if defined(USE_SFL)
+		AtapiModeSelect(drive, bus->packet, bus->buffer);
+#endif
 		AtapiComplete(machine, bus, drive, 0);
 		return;
 	}

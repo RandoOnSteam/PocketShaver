@@ -83,5 +83,13 @@ extern bool SysCDStop(void *fh, uint8 lead_out_m, uint8 lead_out_s, uint8 lead_o
 extern bool SysCDScan(void *fh, uint8 start_m, uint8 start_s, uint8 start_f, bool reverse);
 extern void SysCDSetVolume(void *fh, uint8 left, uint8 right);
 extern void SysCDGetVolume(void *fh, uint8 &left, uint8 &right);
+#if defined(USE_SFL)
+extern bool SysCDReadMCN(void *fh, char *mcn);
+extern bool SysCDReadSubcodes(void *fh, void *buffer, uint32 sector, uint32 count);
+extern bool SysCDReadISRC(void *fh, int track, char *isrc);
+extern bool SysCDGetSpeed(void *fh, unsigned int *kbps);
+extern bool SysCDSetSpeed(void *fh, uint32 kbps);
+extern bool SysCDGetFeatures(void *fh, unsigned int *maxkbps, unsigned int *flags);
+#endif
 
 #endif

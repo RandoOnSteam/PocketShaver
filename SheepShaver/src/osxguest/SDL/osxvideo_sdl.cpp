@@ -253,6 +253,20 @@ uint8 *OsxHostLock(OsxHostVideo *video, int *pitch, int *raw)
 	return (uint8 *)video->screen->pixels;
 }
 
+#if SDL_VERSION_ATLEAST(2, 0, 0)
+static void OsxSdlRestoreContext(void)
+{
+	SDL_GLContext context;
+	SDL_Window *window;
+	context = SDL_GL_GetCurrentContext();
+	window = SDL_GL_GetCurrentWindow();
+	if (context) {
+		SDL_GL_MakeCurrent(window, NULL);
+		SDL_GL_MakeCurrent(window, context);
+	}
+}
+#endif
+
 int OsxHostPresent(OsxHostVideo *video, const uint32 *runstart, const uint32 *runend, int runs)
 {
 	int index;
@@ -262,6 +276,9 @@ int OsxHostPresent(OsxHostVideo *video, const uint32 *runstart, const uint32 *ru
 	SDL_UnlockSurface(video->screen);
 	if (!runs)
 		return 0;
+#if SDL_VERSION_ATLEAST(2, 0, 0)
+	OsxSdlRestoreContext();
+#endif
 #if SDL_VERSION_ATLEAST(3, 0, 0)
 	if (video->window != video->screen)
 		return SDL_BlitSurfaceScaled(video->screen, NULL, video->window, NULL, SDL_SCALEMODE_LINEAR) &&

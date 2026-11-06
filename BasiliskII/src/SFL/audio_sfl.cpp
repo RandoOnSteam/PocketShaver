@@ -63,6 +63,10 @@ typedef struct SFLSOUND {
 	int sizeindex;
 	int channelindex;
 	int blockbytes;
+	uint8 *guestsource;
+	int guestbytes;
+	int guestoffset;
+	bool guestdoublemono;
 	int mainvolume;
 	int speakervolume;
 	bool mainmute;
@@ -118,37 +122,55 @@ static void SflSoundToHost(uint8 *buffer, int bytes, int bits)
 #endif
 }
 
-static void SflSoundGuest(uint8 *buffer, int bytes)
+static bool SflSoundRequestGuest(void)
 {
 	uint32 info;
-	uint8 *source;
-	int count;
-	int index;
-	bool doublemono;
 	if (AudioStatus.num_sources == 0 || wsatomicintload(&SflSound.closing))
-		return;
+		return false;
 	SetInterruptFlag(INTFLAG_AUDIO);
 	TriggerInterrupt();
 	if (!WSSignal_Wait(&SflSound.done, SFLSOUNDWAITMS) || wsatomicintload(&SflSound.closing))
-		return;
+		return false;
 	info = ReadMacInt32(audio_data + adatStreamInfo);
 	if (info == 0 || SflSound.mainmute || SflSound.speakermute)
-		return;
-	count = ReadMacInt32(info + scd_sampleCount) * (AudioStatus.sample_size >> 3) * AudioStatus.channels;
-	if (count > bytes)
-		count = bytes;
-	if (count <= 0)
-		return;
-	source = Mac2HostAddr(ReadMacInt32(info + scd_buffer));
-	doublemono = AudioStatus.channels == 2 && ReadMacInt16(info + scd_numChannels) == 1 && ReadMacInt16(info + scd_sampleSize) == 8;
-	if (doublemono) {
-		for (index = 0; index + 1 < count; index += 2) {
-			buffer[index] = source[index >> 1];
-			buffer[index + 1] = source[index >> 1];
+		return false;
+	SflSound.guestbytes = ReadMacInt32(info + scd_sampleCount) * (AudioStatus.sample_size >> 3) * AudioStatus.channels;
+	if (SflSound.guestbytes <= 0)
+		return false;
+	SflSound.guestoffset = 0;
+	SflSound.guestsource = Mac2HostAddr(ReadMacInt32(info + scd_buffer));
+	SflSound.guestdoublemono = AudioStatus.channels == 2 && ReadMacInt16(info + scd_numChannels) == 1 && ReadMacInt16(info + scd_sampleSize) == 8;
+	return true;
+}
+
+static void SflSoundGuest(uint8 *buffer, int bytes)
+{
+	int filled;
+	int chunk;
+	int index;
+	int position;
+	filled = 0;
+	while (filled < bytes) {
+		if (SflSound.guestbytes == 0 && !SflSoundRequestGuest()) {
+			SflSound.guestbytes = 0;
+			return;
 		}
-	} else
-		memcpy(buffer, source, count);
-	SflSoundScale(buffer, count, AudioStatus.sample_size);
+		chunk = bytes - filled;
+		if (chunk > SflSound.guestbytes)
+			chunk = SflSound.guestbytes;
+		if (SflSound.guestdoublemono) {
+			for (index = 0; index + 1 < chunk; index += 2) {
+				position = (SflSound.guestoffset + index) >> 1;
+				buffer[filled + index] = SflSound.guestsource[position];
+				buffer[filled + index + 1] = SflSound.guestsource[position];
+			}
+		} else
+			memcpy(buffer + filled, SflSound.guestsource + SflSound.guestoffset, chunk);
+		SflSoundScale(buffer + filled, chunk, AudioStatus.sample_size);
+		SflSound.guestoffset += chunk;
+		SflSound.guestbytes -= chunk;
+		filled += chunk;
+	}
 }
 
 static void SflSoundFill(void *context, unsigned char *buffer, int bytes)
@@ -187,6 +209,7 @@ static bool SflSoundOpen(void)
 	audio_frames_per_block = SFLSOUNDBLOCKFRAMES >> PrefsFindInt32("sound_buffer");
 	SflSound.blockbytes = audio_frames_per_block * (AudioStatus.sample_size >> 3) * AudioStatus.channels;
 	wsatomicintstore(&SflSound.closing, 0);
+	SflSound.guestbytes = 0;
 	SflSound.device = SflAudioOpen(AudioStatus.sample_rate >> 16, AudioStatus.channels, AudioStatus.sample_size,
 		SflSound.blockbytes, SflSoundFill, NULL);
 	if (SflSound.device == NULL) {
