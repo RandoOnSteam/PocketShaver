@@ -22,6 +22,7 @@
 #include "osxmachine.h"
 #include "sflui.h"
 #include "sflnet.h"
+#include "gui.h"
 #include "thread.h"
 
 struct OsxHostVideo {

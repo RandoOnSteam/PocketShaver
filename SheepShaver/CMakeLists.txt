@@ -670,7 +670,7 @@ function(sheepshaver_configure_target SHEEPSHAVER_EXECUTABLE)
 	if(WIN32)
 		target_sources(${SHEEPSHAVER_EXECUTABLE} PRIVATE "${SS_GFXACCEL_DIR}/gl/glcontext.c")
 		target_compile_definitions(${SHEEPSHAVER_EXECUTABLE} PRIVATE OSXGLBRIDGE=1)
-		target_link_libraries(${SHEEPSHAVER_EXECUTABLE} PRIVATE opengl32 glu32)
+		target_link_libraries(${SHEEPSHAVER_EXECUTABLE} PRIVATE opengl32)
 	endif()
 
 	if(SS_GFXACCEL_LIBS)

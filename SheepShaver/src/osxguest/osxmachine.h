@@ -182,6 +182,7 @@ typedef struct OsxAtaDrive {
 } OsxAtaDrive;
 
 #define OSXDISKPATCHES 2048
+#define OSXQUARTZSLOTS 760
 
 typedef struct OsxDiskPatch {
 	uint64 offset;
@@ -535,7 +536,10 @@ struct OsxMachine {
 	int bootpartition;
 	int flurry;
 	int quartz;
-	uint32 quartztails[760];
+	uint32 quartztails[OSXQUARTZSLOTS];
+	uint32 quartzbase;
+	uint32 quartzstrings;
+	int quartzextensions;
 	uint32 flurrystubs[86];
 	uint32 flurryinit;
 	uint32 kernelend;

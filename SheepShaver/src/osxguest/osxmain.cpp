@@ -683,7 +683,7 @@ static void PresentFrame(OsxSession *session)
 		glpixels = GlBridgeFrame(session->gl);
 	if (session->quartz) {
 		const uint8 *quartzpixels;
-		quartzpixels = QuartzBridgeFrame(session->quartz);
+		quartzpixels = QuartzBridgeFrame(session->quartz, machine->vram, rowbytes * machine->height);
 		if (quartzpixels)
 			glpixels = quartzpixels;
 	}
@@ -736,8 +736,6 @@ static void PresentFrame(OsxSession *session)
 			runend[runs - 1] = machine->height - 1;
 	}
 	presented = OsxHostPresent(session->video, runstart, runend, runs);
-	if (presented && runs && machine->log)
-		fprintf(machine->log, "saver frame %llu\n", (unsigned long long)OsxHostNanoseconds());
 #if OSXPROFILE
 	session->tmpframes += presented;
 #endif
@@ -814,7 +812,8 @@ static int SyscallObserver(OsxCpu *cpu, void *context, uint32 instruction)
 	if (session->machine->quartz && (cpu->msr & OSXMSRPR) &&
 		(instruction & 0xfffc00ffu) == OSXQUARTZTRAP) {
 		if (!session->quartz)
-			session->quartz = CreateQuartzBridge(session->machine->width, session->machine->height);
+			session->quartz = CreateQuartzBridge(session->machine->width, session->machine->height,
+				session->machine->quartzbase, session->machine->quartzstrings, session->machine->quartzextensions);
 		if (session->quartz && QuartzBridgeCall(session->quartz, cpu,
 			session->machine->quartztails, (instruction >> 8) & 1023, session->machine->log))
 			return 1;
@@ -1445,24 +1444,6 @@ static void RunMachine(OsxSession *session)
 	}
 }
 
-static uint8 *AllocateMemory(size_t size)
-{
-#ifdef _WIN32
-	return (uint8 *)VirtualAlloc(NULL, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
-#else
-	return (uint8 *)calloc(1, size);
-#endif
-}
-
-static void ReleaseMemory(uint8 *memory)
-{
-#ifdef _WIN32
-	VirtualFree(memory, 0, MEM_RELEASE);
-#else
-	free(memory);
-#endif
-}
-
 static void DestroySession(OsxSession *session)
 {
 	OsxMachine *machine;
@@ -1494,8 +1475,8 @@ static void DestroySession(OsxSession *session)
 		free(machine->ata[0].patches);
 		free(machine->kernelimage);
 		free(machine->mkext);
-		ReleaseMemory(machine->ram);
-		ReleaseMemory(machine->vram);
+		free(machine->ram);
+		free(machine->vram);
 		if (machine->log)
 			fclose(machine->log);
 		if (machine->console)
@@ -1559,11 +1540,11 @@ static int RunSession(OsxSession *session)
 		machine->ramsize = 0x80000000u;
 		machine->g5state.highsize = (uint32)(PrefsFindInt32("ramsize") - 2048) << 20;
 	}
-	machine->ram = AllocateMemory((size_t)machine->ramsize + machine->g5state.highsize);
+	machine->ram = (uint8 *)calloc(1, (size_t)machine->ramsize + machine->g5state.highsize);
 #else
-	machine->ram = AllocateMemory(machine->ramsize);
+	machine->ram = (uint8 *)calloc(1, machine->ramsize);
 #endif
-	machine->vram = AllocateMemory(OSXVRAMSIZE);
+	machine->vram = (uint8 *)calloc(1, OSXVRAMSIZE);
 	if (machine->ram == NULL || machine->vram == NULL) {
 		fprintf(stderr, "osx: cannot allocate guest memory\n");
 		return 1;
@@ -1611,8 +1592,10 @@ static int RunSession(OsxSession *session)
 	AttachDisks(machine, &bootimage, &bootbus, &bootunit);
 	ParseDiskPatches(machine);
 #if OSXGLBRIDGE
+#if OSXGLBRIDGE
 	machine->flurry = PrefsFindBool("osxflurry");
 	machine->quartz = PrefsFindBool("osxquartz");
+#endif
 #endif
 	if (bootimage == NULL) {
 		fprintf(stderr, "osx: no cdrom or disk image configured\n");

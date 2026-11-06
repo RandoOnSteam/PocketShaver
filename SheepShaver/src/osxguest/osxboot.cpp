@@ -852,24 +852,6 @@ static int AddGuestFileBytes(OsxHfsVolume *volume, const OsxHfsFork *fork, OsxAt
 	return 1;
 }
 
-static int PatchGuestFileBytes(OsxHfsVolume *volume, OsxAtaBus *bus, const OsxAtaDrive *drive,
-	const char *path, uint32 offset, const uint8 *bytes, uint32 length)
-{
-	uint8 record[248];
-	OsxHfsFork *fork;
-	int result;
-	if (!LookupPath(volume, path, record) || Big16(record) != HFSFILERECORD)
-		return 0;
-	fork = (OsxHfsFork *)malloc(sizeof(OsxHfsFork));
-	if (!fork)
-		return 0;
-	ParseFork(record + 88, Big32(record + 8), 0, fork);
-	CompleteFork(volume, fork);
-	result = AddGuestFileBytes(volume, fork, bus, drive, offset, bytes, length);
-	free(fork);
-	return result;
-}
-
 static int PatchSaverFile(OsxHfsVolume *volume, OsxAtaBus *bus, const OsxAtaDrive *drive,
 	const char *path, uint32 expectedsize, uint64 expectedhash, const uint32 patches[][2], int count)
 {
@@ -906,144 +888,6 @@ static int PatchSaverFile(OsxHfsVolume *volume, OsxAtaBus *bus, const OsxAtaDriv
 		bus->patchcount = originalcount;
 	free(fork);
 	return index == count;
-}
-
-static uint64 GuestForkHash(OsxHfsVolume *volume, OsxHfsFork *fork, uint32 offset, uint32 length)
-{
-	uint8 bytes[512];
-	uint32 count;
-	uint32 index;
-	uint64 hash;
-	hash = 14695981039346656037ULL;
-	while (length) {
-		count = sizeof(bytes);
-		if (count > length)
-			count = length;
-		if (!ReadFork(volume, fork, offset, bytes, count))
-			return 0;
-		for (index = 0; index < count; index++)
-			hash = (hash ^ bytes[index]) * 1099511628211ULL;
-		offset += count;
-		length -= count;
-	}
-	return hash;
-}
-
-static void PatchQuartzCache(OsxHfsVolume *volume, OsxAtaBus *bus, const OsxAtaDrive *drive,
-	const uint32 patches[][2], uint32 count, const uint32 contextpatch[][2], uint32 contextcount,
-	const uint8 *bytes, uint32 offset, uint32 length)
-{
-	uint8 record[248];
-	uint8 replacement[4];
-	OsxHfsFork *fork;
-	uint32 index;
-	int originalcount;
-	if (!LookupPath(volume, "/private/var/db/dyld/dyld_shared_cache_ppc", record) ||
-		Big16(record) != HFSFILERECORD || Big32(record + 88) || Big32(record + 92) != 137904128)
-		return;
-	fork = (OsxHfsFork *)malloc(sizeof(*fork));
-	if (!fork)
-		return;
-	ParseFork(record + 88, Big32(record + 8), 0, fork);
-	CompleteFork(volume, fork);
-	if (GuestForkHash(volume, fork, 0x1769000, 0x25000) != 0x767b13011ccf4130ULL ||
-		GuestForkHash(volume, fork, 0x19d7000, 0xe000) != 0x4e9f689e66092e94ULL) {
-		free(fork);
-		return;
-	}
-	originalcount = bus->patchcount;
-	for (index = 0; index < count; index++) {
-		StoreBig32(replacement, patches[index][1]);
-		if (!AddGuestFilePatch(volume, fork, bus, drive, 0x1768000 + patches[index][0], replacement, 4))
-			break;
-	}
-	if (index == count) {
-		for (index = 0; index < contextcount; index++) {
-			StoreBig32(replacement, contextpatch[index][1]);
-			if (!AddGuestFilePatch(volume, fork, bus, drive, 0x19d6000 + contextpatch[index][0], replacement, 4))
-				break;
-		}
-		if (index != contextcount || !AddGuestFileBytes(volume, fork, bus, drive, 0x1768000 + offset, bytes, length))
-			bus->patchcount = originalcount;
-	} else
-		bus->patchcount = originalcount;
-	free(fork);
-}
-
-static int PrepareQuartz(OsxMachine *machine, OsxHfsVolume *volume, OsxAtaBus *bus, const OsxAtaDrive *drive)
-{
-	static const uint32 contextpatch[][2] = {
-		{0xa220, OSXQUARTZTRAP | (1023u << 8)},
-		{0x5b88, OSXQUARTZTRAP | (1021u << 8)},
-		{0x5c94, OSXQUARTZTRAP | (1022u << 8)},
-		{0x9870, OSXQUARTZTRAP | (1020u << 8)},
-		{0x8920, OSXQUARTZTRAP | (1019u << 8)}
-	};
-	static const uint32 rendererpatch[][2] = {
-		{0x13090, 0x38000f00},
-		{0x13094, 0x3840075d},
-		{0x130b0, 0x91230034},
-		{0x130c8, 0x91230030},
-		{0x12094, 0x3b8005d8},
-		{0x12564, 0x61290f00},
-		{0x12628, 0x614a0f00},
-		{0x126c4, 0x60000f00},
-		{0x13124, 0x38400f00}
-	};
-	static const uint32 enginepatch[][2] = {
-		{0x3200, 0x2f800f00},
-		{0x3324, 0x38600f00},
-		{0x332c, 0x3ba00f00}
-	};
-	static const uint32 patches[][2] = {
-#include "osxquartzpatches.h"
-	};
-	static const char extensions[] = OSXQUARTZEXTENSIONS;
-	uint8 strings[OSXQUARTZSTRINGEND - OSXQUARTZSTRINGS];
-	uint32 index;
-	uint32 slot;
-	int originalcount;
-	int renderercount;
-	memset(strings, 0, sizeof(strings));
-	memcpy(strings, extensions, sizeof(extensions));
-#if OSXGLBRIDGE
-	QuartzHostStrings((char *)strings + OSXQUARTZRENDERERSTRING - OSXQUARTZSTRINGS,
-		(char *)strings + OSXQUARTZVENDORSTRING - OSXQUARTZSTRINGS, OSXQUARTZVENDORSTRING - OSXQUARTZRENDERERSTRING);
-#endif
-	originalcount = bus->patchcount;
-	if (!PatchSaverFile(volume, bus, drive,
-		"/System/Library/Frameworks/OpenGL.framework/Versions/A/Libraries/libGL.dylib",
-		911568, 0xe2126cc30982d74eULL, patches, sizeof(patches) / sizeof(patches[0])) ||
-		!PatchGuestFileBytes(volume, bus, drive,
-		"/System/Library/Frameworks/OpenGL.framework/Versions/A/Libraries/libGL.dylib",
-		4096 + OSXQUARTZSTRINGS, strings, sizeof(strings))) {
-		bus->patchcount = originalcount;
-		return 0;
-	}
-	if (!PatchSaverFile(volume, bus, drive,
-		"/System/Library/Frameworks/OpenGL.framework/Versions/A/OpenGL",
-		352320, 0xf99dedef23643215ULL, contextpatch, sizeof(contextpatch) / sizeof(contextpatch[0]))) {
-		bus->patchcount = originalcount;
-		return 0;
-	}
-	for (index = 0; index < sizeof(patches) / sizeof(patches[0]); index++) {
-		slot = (patches[index][1] >> 8) & 1023;
-		machine->quartztails[slot] = patches[index][0] - 4096;
-	}
-	PatchQuartzCache(volume, bus, drive, patches, sizeof(patches) / sizeof(patches[0]),
-		contextpatch, sizeof(contextpatch) / sizeof(contextpatch[0]),
-		strings, 4096 + OSXQUARTZSTRINGS, sizeof(strings));
-	renderercount = bus->patchcount;
-	if (!PatchSaverFile(volume, bus, drive,
-		"/System/Library/Frameworks/OpenGL.framework/Versions/A/Resources/GLEngine.bundle/GLEngine",
-		7204432, 0xaedd8ac3552c17bbULL, enginepatch, sizeof(enginepatch) / sizeof(enginepatch[0])) ||
-		!PatchSaverFile(volume, bus, drive,
-		"/System/Library/Frameworks/OpenGL.framework/Versions/A/Resources/GLRendererFloat.bundle/GLRendererFloat",
-		573388, 0x295fd7ed200daf77ULL, rendererpatch, sizeof(rendererpatch) / sizeof(rendererpatch[0])))
-		bus->patchcount = renderercount;
-	if (machine->log)
-		fprintf(machine->log, "quartz prepared %d disk overlays\n", bus->patchcount - originalcount);
-	return 1;
 }
 
 static void PrepareSaverSoftware(OsxHfsVolume *volume, OsxAtaBus *bus, const OsxAtaDrive *drive)
@@ -1154,25 +998,34 @@ uint8 *OsxReadClassicRom(uint32 *size)
 	return rom;
 }
 
-static int ThinPowerPC(uint8 *data, uint32 *size)
+static int PowerPCSlice(const uint8 *data, uint32 size, uint32 *offset, uint32 *length)
 {
 	uint32 count;
 	uint32 index;
-	uint32 offset;
-	uint32 length;
-	if (data == NULL || *size < 8 || Big32(data) != 0xcafebabe)
+	*offset = 0;
+	*length = size;
+	if (data == NULL || size < 8 || Big32(data) != 0xcafebabe)
 		return 1;
 	count = Big32(data + 4);
-	for (index = 0; index < count && 8 + index * 20 + 20 <= *size; index++) {
-		offset = Big32(data + 8 + index * 20 + 8);
-		length = Big32(data + 8 + index * 20 + 12);
-		if (Big32(data + 8 + index * 20) == 18 && offset <= *size && length <= *size - offset) {
-			memmove(data, data + offset, length);
-			*size = length;
+	for (index = 0; index < count && 8 + index * 20 + 20 <= size; index++) {
+		*offset = Big32(data + 8 + index * 20 + 8);
+		*length = Big32(data + 8 + index * 20 + 12);
+		if (Big32(data + 8 + index * 20) == 18 && *offset <= size && *length <= size - *offset)
 			return 1;
-		}
 	}
 	return 0;
+}
+
+static int ThinPowerPC(uint8 *data, uint32 *size)
+{
+	uint32 offset;
+	uint32 length;
+	if (!PowerPCSlice(data, *size, &offset, &length))
+		return 0;
+	if (data && offset)
+		memmove(data, data + offset, length);
+	*size = length;
+	return 1;
 }
 
 static uint8 *ReadFileRange(OsxHfsVolume *volume, const char *path, uint32 offset, uint32 length)
@@ -1300,6 +1153,432 @@ static void FindSymbols(const uint8 *image, uint32 size, uint32 base, const char
 		}
 		position += Big32(image + position + 4);
 	}
+}
+
+#define QUARTZLIBRARY "/System/Library/Frameworks/OpenGL.framework/Versions/A/Libraries/libGL.dylib"
+#define QUARTZFRAMEWORK "/System/Library/Frameworks/OpenGL.framework/Versions/A/OpenGL"
+#define QUARTZMAXPATCHES 1024
+#define QUARTZMOVELINK 0x7c0802a6u
+#define QUARTZBRANCHLINK 0x4e800020u
+#define QUARTZBRANCHCOUNT 0x4e800420u
+#define QUARTZCALLCOUNT 0x4e800421u
+#define QUARTZCALLLINK 0x4e800021u
+
+typedef struct OsxQuartzImage {
+	uint8 *file;
+	uint8 *image;
+	uint32 size;
+	uint32 slice;
+	uint32 text;
+	uint32 address;
+	uint32 patchcount;
+	uint32 patches[QUARTZMAXPATCHES][2];
+} OsxQuartzImage;
+
+static int QuartzOpenImage(OsxHfsVolume *volume, const char *path, OsxQuartzImage *image)
+{
+	uint32 size;
+	image->file = ReadFile(volume, path, &size);
+	if (!image->file || !PowerPCSlice(image->file, size, &image->slice, &image->size) || image->size < 28)
+		return 0;
+	image->image = image->file + image->slice;
+	if (Big32(image->image) != 0xfeedface)
+		return 0;
+	image->text = TextCommand(image->image, image->size);
+	if (!image->text)
+		return 0;
+	image->address = Big32(image->image + image->text + 24);
+	return 1;
+}
+
+static int QuartzAddPatch(OsxQuartzImage *image, uint32 offset, uint32 value)
+{
+	if (image->patchcount >= QUARTZMAXPATCHES || offset + 4 > image->size)
+		return 0;
+	image->patches[image->patchcount][0] = offset;
+	image->patches[image->patchcount][1] = value;
+	image->patchcount++;
+	return 1;
+}
+
+static uint32 QuartzSymbolTable(const OsxQuartzImage *image, uint32 *count, uint32 *strings)
+{
+	uint32 position;
+	uint32 index;
+	position = 28;
+	for (index = 0; index < Big32(image->image + 16) && position + 24 <= image->size; index++) {
+		if (Big32(image->image + position) == 2) {
+			*count = Big32(image->image + position + 12);
+			*strings = Big32(image->image + position + 16);
+			return Big32(image->image + position + 8);
+		}
+		position += Big32(image->image + position + 4);
+	}
+	*count = 0;
+	*strings = 0;
+	return 0;
+}
+
+static uint32 QuartzSymbol(const OsxQuartzImage *image, const char *name)
+{
+	uint32 symbols;
+	uint32 count;
+	uint32 strings;
+	symbols = QuartzSymbolTable(image, &count, &strings);
+	for (; count > 0 && symbols + 12 <= image->size; count--, symbols += 12)
+		if ((image->image[symbols + 4] & 0x0e) == 0x0e && strings + Big32(image->image + symbols) < image->size &&
+			strcmp((const char *)image->image + strings + Big32(image->image + symbols), name) == 0)
+			return Big32(image->image + symbols + 8) - image->address;
+	return 0;
+}
+
+static uint32 QuartzLinkWord(const OsxQuartzImage *image, uint32 entry)
+{
+	uint32 position;
+	for (position = entry; entry && position < entry + 16 && position + 4 <= image->size; position += 4)
+		if (Big32(image->image + position) == QUARTZMOVELINK)
+			return position;
+	return 0;
+}
+
+static uint32 QuartzStubSlot(const OsxQuartzImage *image, uint32 start, uint32 *tail, int *called)
+{
+	uint32 position;
+	uint32 word;
+	uint32 target;
+	int link;
+	int found;
+	found = 0;
+	word = 0;
+	for (position = start; position + 4 <= image->size && position < start + 1024; position += 4) {
+		word = Big32(image->image + position);
+		if (word == QUARTZBRANCHLINK)
+			return 0;
+		if (word == QUARTZBRANCHCOUNT || word == QUARTZCALLCOUNT || word == QUARTZCALLLINK) {
+			found = 1;
+			break;
+		}
+	}
+	if (!found)
+		return 0;
+	*tail = position;
+	*called = word != QUARTZBRANCHCOUNT;
+	link = word == QUARTZCALLLINK;
+	target = 32;
+	while (position > start) {
+		position -= 4;
+		word = Big32(image->image + position);
+		if (target == 32) {
+			if ((link && (word & 0xfc1fffffu) == 0x7c0803a6u) || (!link && (word & 0xfc1fffffu) == 0x7c0903a6u))
+				target = (word >> 21) & 31;
+		} else if ((word >> 26) == 32 && ((word >> 21) & 31) == target && ((word >> 16) & 31) != 1 &&
+			!(word & 3) && (word & 0xffff) >= 4)
+			return (word & 0xffff) / 4;
+	}
+	return 0;
+}
+
+static uint32 QuartzHeaderEnd(const OsxQuartzImage *image)
+{
+	uint32 index;
+	uint32 first;
+	uint32 address;
+	first = Big32(image->image + image->text + 28);
+	for (index = 0; index < Big32(image->image + image->text + 48); index++) {
+		address = Big32(image->image + image->text + 56 + index * 68 + 32) - image->address;
+		if (address < first)
+			first = address;
+	}
+	return first;
+}
+
+static int QuartzLibraryPatches(OsxMachine *machine, OsxQuartzImage *image, uint32 stringsize)
+{
+	uint8 *wanted;
+	uint32 symbols;
+	uint32 count;
+	uint32 strings;
+	uint32 name;
+	uint32 slot;
+	uint32 tail;
+	uint32 highest;
+	uint32 pads;
+	uint32 cursor;
+	uint32 end;
+	uint32 position;
+	const char *symbol;
+	int called;
+	int result;
+	wanted = (uint8 *)calloc(OSXQUARTZSLOTS, 1);
+	if (!wanted)
+		return 0;
+	highest = 0;
+	symbols = QuartzSymbolTable(image, &count, &strings);
+	for (; count > 0 && symbols + 12 <= image->size; count--, symbols += 12) {
+		name = strings + Big32(image->image + symbols);
+		if ((image->image[symbols + 4] & 0x0e) != 0x0e || name + 4 >= image->size ||
+			Big32(image->image + symbols + 8) - image->address >= image->size)
+			continue;
+		symbol = (const char *)image->image + name;
+		if (symbol[0] != '_' || symbol[1] != 'g' || symbol[2] != 'l' || symbol[3] < 'A' || symbol[3] > 'Z')
+			continue;
+		slot = QuartzStubSlot(image, Big32(image->image + symbols + 8) - image->address, &tail, &called);
+		if (!slot || slot >= OSXQUARTZSLOTS)
+			continue;
+		if (slot > highest)
+			highest = slot;
+		if (called)
+			wanted[slot] = 1;
+		else if (!machine->quartztails[slot])
+			machine->quartztails[slot] = tail;
+	}
+	if (highest < 500) {
+		for (slot = 400; slot < OSXQUARTZSLOTS; slot++) {
+			wanted[slot] = 0;
+			machine->quartztails[slot] = 0;
+		}
+	}
+	pads = 0;
+	result = 1;
+	for (slot = 1; slot < OSXQUARTZSLOTS; slot++) {
+		if (machine->quartztails[slot])
+			result &= QuartzAddPatch(image, machine->quartztails[slot], OSXQUARTZTRAP | (slot << 8));
+		else if (wanted[slot])
+			pads++;
+	}
+	end = QuartzHeaderEnd(image);
+	cursor = 28 + Big32(image->image + 20);
+	for (position = cursor; position + 4 <= end; position += 4)
+		if (Big32(image->image + position))
+			result = 0;
+	cursor = (cursor + 15) & ~15u;
+	machine->quartzextensions = cursor + stringsize + pads * 4 <= end;
+	if (machine->quartzextensions) {
+		machine->quartzstrings = cursor;
+		cursor += stringsize;
+	} else if (cursor + stringsize - OSXQUARTZRENDERERSTRING + OSXQUARTZSTRINGS + pads * 4 <= end) {
+		machine->quartzstrings = cursor + OSXQUARTZSTRINGS - OSXQUARTZRENDERERSTRING;
+		cursor += stringsize - OSXQUARTZRENDERERSTRING + OSXQUARTZSTRINGS;
+	}
+	for (slot = 1; slot < OSXQUARTZSLOTS && cursor + 4 <= end; slot++) {
+		if (wanted[slot] && !machine->quartztails[slot]) {
+			machine->quartztails[slot] = cursor;
+			result &= QuartzAddPatch(image, cursor, OSXQUARTZTRAP | (slot << 8));
+			cursor += 4;
+		}
+	}
+	free(wanted);
+	machine->quartztails[0] = QuartzLinkWord(image, QuartzSymbol(image, "_CGLSetCurrentContext"));
+	if (!machine->quartztails[0])
+		return 0;
+	return result && QuartzAddPatch(image, machine->quartztails[0], OSXQUARTZTRAP);
+}
+
+static int QuartzFrameworkPatches(OsxQuartzImage *image)
+{
+	static const char *const hooks[5] = { "_CGLGetParameter", "_CGLSetPBuffer", "_CGLTexImagePBuffer", "_CGLFlushDrawable", "_CGLDescribeRenderer" };
+	static const uint32 calls[5] = { 1023, 1019, 1020, 1018, 1017 };
+	uint32 entry;
+	uint32 position;
+	uint32 word;
+	int stepped;
+	int index;
+	int result;
+	result = 1;
+	for (index = 0; index < 5; index++) {
+		entry = QuartzLinkWord(image, QuartzSymbol(image, hooks[index]));
+		if (entry)
+			result &= QuartzAddPatch(image, entry, OSXQUARTZTRAP | (calls[index] << 8));
+	}
+	entry = QuartzSymbol(image, "_cglAssignDispatch");
+	stepped = 0;
+	for (position = entry; entry && position < entry + 64 && position + 4 <= image->size; position += 4) {
+		word = Big32(image->image + position);
+		if (word == QUARTZMOVELINK)
+			break;
+		if (word == 0x38630004u)
+			stepped = 1;
+		if (word == QUARTZBRANCHLINK) {
+			if (stepped)
+				result &= QuartzAddPatch(image, position, OSXQUARTZTRAP | (1022u << 8));
+			break;
+		}
+	}
+	entry = QuartzSymbol(image, "_CGLSetPBufferVolatileState");
+	for (position = entry; entry && position < entry + 256 && position + 4 <= image->size; position += 4) {
+		if (Big32(image->image + position) == 0x39202721u) {
+			result &= QuartzAddPatch(image, position, 0x39200000u);
+			break;
+		}
+	}
+	return result;
+}
+
+static uint32 CacheFileOffset(OsxHfsVolume *volume, uint32 address)
+{
+	uint8 *header;
+	uint8 *mappings;
+	uint32 offset;
+	uint32 count;
+	uint32 index;
+	uint32 result;
+	result = 0;
+	header = ReadFileRange(volume, CLIPCACHE, 0, 32);
+	if (!header)
+		return 0;
+	offset = Big32(header + 16);
+	count = Big32(header + 20);
+	free(header);
+	if (count > 16)
+		return 0;
+	mappings = ReadFileRange(volume, CLIPCACHE, offset, count * 32);
+	for (index = 0; mappings && index < count; index++) {
+		offset = Big32(mappings + index * 32 + 4);
+		if (address >= offset && address - offset < Big32(mappings + index * 32 + 12))
+			result = Big32(mappings + index * 32 + 20) + address - offset;
+	}
+	free(mappings);
+	return result;
+}
+
+static int QuartzApplyImage(OsxHfsVolume *volume, OsxAtaBus *bus, const OsxAtaDrive *drive, const char *path,
+	const OsxQuartzImage *image, uint32 base, const uint8 *cached, const uint8 *bytes, uint32 bytesoffset, uint32 length)
+{
+	uint8 record[248];
+	uint8 replacement[4];
+	OsxHfsFork *fork;
+	uint32 index;
+	uint32 extent;
+	int result;
+	if (!LookupPath(volume, path, record) || Big16(record) != HFSFILERECORD)
+		return 0;
+	fork = (OsxHfsFork *)malloc(sizeof(OsxHfsFork));
+	if (!fork)
+		return 0;
+	ParseFork(record + 88, Big32(record + 8), 0, fork);
+	CompleteFork(volume, fork);
+	extent = Big32(image->image + image->text + 36);
+	result = 1;
+	for (index = 0; result && index < image->patchcount; index++) {
+		if (cached && (image->patches[index][0] + 4 > extent ||
+			Big32(cached + image->patches[index][0]) != Big32(image->image + image->patches[index][0])))
+			result = 0;
+		StoreBig32(replacement, image->patches[index][1]);
+		if (result)
+			result = AddGuestFilePatch(volume, fork, bus, drive, base + image->patches[index][0], replacement, 4);
+	}
+	if (result && bytes)
+		result = AddGuestFileBytes(volume, fork, bus, drive, base + bytesoffset, bytes, length);
+	free(fork);
+	return result;
+}
+
+static int QuartzApplyCache(OsxHfsVolume *volume, OsxAtaBus *bus, const OsxAtaDrive *drive,
+	const OsxQuartzImage *image, uint32 address, const uint8 *bytes, uint32 bytesoffset, uint32 length)
+{
+	uint8 *cached;
+	uint32 base;
+	int result;
+	base = CacheFileOffset(volume, address);
+	if (!base)
+		return 0;
+	cached = ReadFileRange(volume, CLIPCACHE, base, Big32(image->image + image->text + 36));
+	if (!cached)
+		return 0;
+	result = QuartzApplyImage(volume, bus, drive, CLIPCACHE, image, base, cached, bytes, bytesoffset, length);
+	free(cached);
+	return result;
+}
+
+static int PrepareQuartz(OsxMachine *machine, OsxHfsVolume *volume, OsxAtaBus *bus, const OsxAtaDrive *drive)
+{
+	static const uint32 rendererpatch[][2] = {
+		{0x13090, 0x38000f00},
+		{0x13094, 0x3840075d},
+		{0x130b0, 0x91230034},
+		{0x130c8, 0x91230030},
+		{0x12094, 0x3b8005d8},
+		{0x12564, 0x61290f00},
+		{0x12628, 0x614a0f00},
+		{0x126c4, 0x60000f00},
+		{0x13124, 0x38400f00}
+	};
+	static const uint32 enginepatch[][2] = {
+		{0x3200, 0x2f800f00},
+		{0x3324, 0x38600f00},
+		{0x332c, 0x3ba00f00}
+	};
+	static const char extensions[] = OSXQUARTZEXTENSIONS;
+	uint8 strings[OSXQUARTZSTRINGEND - OSXQUARTZSTRINGS];
+	OsxQuartzImage *library;
+	OsxQuartzImage *framework;
+	const uint8 *stringbytes;
+	uint32 stringoffset;
+	uint32 stringlength;
+	uint32 cachelibrary;
+	uint32 cacheframework;
+	int originalcount;
+	int renderercount;
+	int result;
+	memset(strings, 0, sizeof(strings));
+	memcpy(strings, extensions, sizeof(extensions));
+#if OSXGLBRIDGE
+	QuartzHostStrings((char *)strings + OSXQUARTZRENDERERSTRING - OSXQUARTZSTRINGS,
+		(char *)strings + OSXQUARTZVENDORSTRING - OSXQUARTZSTRINGS, OSXQUARTZVENDORSTRING - OSXQUARTZRENDERERSTRING);
+#endif
+	library = (OsxQuartzImage *)calloc(1, sizeof(OsxQuartzImage));
+	framework = (OsxQuartzImage *)calloc(1, sizeof(OsxQuartzImage));
+	originalcount = bus->patchcount;
+	memset(machine->quartztails, 0, sizeof(machine->quartztails));
+	machine->quartzstrings = 0;
+	result = library && framework && QuartzOpenImage(volume, QUARTZLIBRARY, library) &&
+		QuartzOpenImage(volume, QUARTZFRAMEWORK, framework) &&
+		QuartzLibraryPatches(machine, library, sizeof(strings)) && QuartzFrameworkPatches(framework);
+	if (result) {
+		stringbytes = NULL;
+		stringoffset = machine->quartzstrings;
+		stringlength = sizeof(strings);
+		if (machine->quartzstrings) {
+			stringbytes = strings;
+			if (!machine->quartzextensions) {
+				stringbytes = strings + OSXQUARTZRENDERERSTRING - OSXQUARTZSTRINGS;
+				stringoffset += OSXQUARTZRENDERERSTRING - OSXQUARTZSTRINGS;
+				stringlength -= OSXQUARTZRENDERERSTRING - OSXQUARTZSTRINGS;
+			}
+		}
+		machine->quartzbase = library->address;
+		cachelibrary = CacheBase(volume, QUARTZLIBRARY);
+		cacheframework = CacheBase(volume, QUARTZFRAMEWORK);
+		result = QuartzApplyImage(volume, bus, drive, QUARTZLIBRARY, library, library->slice, NULL, stringbytes,
+			stringoffset, stringlength) &&
+			QuartzApplyImage(volume, bus, drive, QUARTZFRAMEWORK, framework, framework->slice, NULL, NULL, 0, 0);
+		if (result && cachelibrary && cacheframework) {
+			machine->quartzbase = cachelibrary;
+			result = QuartzApplyCache(volume, bus, drive, library, cachelibrary, stringbytes, stringoffset, stringlength) &&
+				QuartzApplyCache(volume, bus, drive, framework, cacheframework, NULL, 0, 0);
+		}
+	}
+	if (library)
+		free(library->file);
+	if (framework)
+		free(framework->file);
+	free(library);
+	free(framework);
+	if (!result) {
+		bus->patchcount = originalcount;
+		return 0;
+	}
+	renderercount = bus->patchcount;
+	if (!PatchSaverFile(volume, bus, drive,
+		"/System/Library/Frameworks/OpenGL.framework/Versions/A/Resources/GLEngine.bundle/GLEngine",
+		7204432, 0xaedd8ac3552c17bbULL, enginepatch, sizeof(enginepatch) / sizeof(enginepatch[0])) ||
+		!PatchSaverFile(volume, bus, drive,
+		"/System/Library/Frameworks/OpenGL.framework/Versions/A/Resources/GLRendererFloat.bundle/GLRendererFloat",
+		573388, 0x295fd7ed200daf77ULL, rendererpatch, sizeof(rendererpatch) / sizeof(rendererpatch[0])))
+		bus->patchcount = renderercount;
+	if (machine->log)
+		fprintf(machine->log, "quartz prepared %d disk overlays base %08x strings %x\n", bus->patchcount - originalcount, machine->quartzbase, machine->quartzstrings);
+	return 1;
 }
 
 static void FindClipboardFunctions(OsxMachine *machine, OsxHfsVolume *volume)

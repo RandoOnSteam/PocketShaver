@@ -126,8 +126,8 @@ typedef struct OsxFaultRecord {
 	int instruction;
 } OsxFaultRecord;
 
-#define OSXPROFILE 1
-#define OSXPROFILEJIT 1
+#define OSXPROFILE 0
+#define OSXPROFILEJIT 0
 #define OSXMSGTRACE 0
 #define OSXNETTRACE 0
 #ifndef OSXG5

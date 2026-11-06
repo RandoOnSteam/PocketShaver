@@ -112,5 +112,5 @@ sfl_configure_core(SheepShaverSFL_sflcore)
 sfl_add_application(SheepShaverSFL SHEP)
 
 if(WIN32)
-	target_link_libraries(SheepShaverSFL PRIVATE opengl32 glu32)
+	target_link_libraries(SheepShaverSFL PRIVATE opengl32)
 endif()

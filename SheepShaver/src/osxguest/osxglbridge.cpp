@@ -19,6 +19,7 @@
  */
 #include "sysdeps.h"
 #include "osxcpu.h"
+#include "osxmachine.h"
 #include "osxglbridge.h"
 #if OSXGLBRIDGE
 #ifdef _WIN32
@@ -176,9 +177,9 @@ static OsxGlBridge *CreateGlBridgeShared(uint32 width, uint32 height, OsxGlBridg
 	GLPixelAttributes_EndList(&pixelattributes);
 	if (share)
 		bridge->contextready = GLContext_CreateCloneWithWindow(&bridge->context,
-			GLContext_GetHandle(&share->context), NULL, NULL, &pixelattributes);
+			GLContext_GetHandle(&share->context), 0, NULL, &pixelattributes);
 	else
-		bridge->contextready = GLContext_CreateWithWindow(&bridge->context, NULL, NULL, &pixelattributes);
+		bridge->contextready = GLContext_CreateWithWindow(&bridge->context, 0, NULL, &pixelattributes);
 	if (!bridge->contextready || !GLContext_SetCurrent(&bridge->context)) {
 		if (log)
 			fprintf(log, "quartz GL context creation failed ready %d\n", bridge->contextready);
@@ -547,12 +548,13 @@ typedef struct OsxQuartzPbuffer {
 typedef struct OsxQuartzContext {
 	struct OsxQuartzContext *next;
 	OsxGlBridge *gl;
-	uint32 library;
+	uint32 strings;
+	int extensions;
 	uint32 address;
 	uint32 engine;
 	uint32 segment;
 	OsxQuartzPbuffer *pbuffer;
-	uint32 original[760];
+	uint32 original[OSXQUARTZSLOTS];
 	uint8 calls[95];
 	uint32 viewport[4];
 } OsxQuartzContext;
@@ -563,6 +565,14 @@ struct OsxQuartzBridge {
 	uint32 width;
 	uint32 height;
 	OsxQuartzContext *present;
+	uint32 library;
+	uint32 strings;
+	uint32 processsegment;
+	int processsaver;
+	int extensions;
+	int drawableflush;
+	int held;
+	uint64 heldsum;
 	int fresh;
 };
 
@@ -649,7 +659,12 @@ static int GlPixelLayout(uint32 format, uint32 type, uint32 *components, uint32 
 	else if (type == 0x8035 || type == 0x8367 || type == 0x8036 || type == 0x8368) {
 		*element = 4;
 		*components = 1;
-	} else if (type != GL_UNSIGNED_BYTE && type != GL_BYTE)
+	} else if (type == 0x8033 || type == 0x8034 || (type >= 0x8363 && type <= 0x8366)) {
+		*element = 2;
+		*components = 1;
+	} else if (type == 0x8032 || type == 0x8362)
+		*components = 1;
+	else if (type != GL_UNSIGNED_BYTE && type != GL_BYTE)
 		return 0;
 	return 1;
 }
@@ -864,16 +879,15 @@ static int QuartzGlCall(OsxQuartzContext *context, OsxCpu *cpu, uint32 call)
 		glReadBuffer(arguments[0]);
 		break;
 	case 90: case 590: glFinish(); break;
-	case 589:
+	case 91: case 589:
 		glFlush();
 		break;
-	case 91: case 591:
-		glFlush();
-		bridge->lastframe = OsxHostNanoseconds();
-		bridge->frames++;
+	case 591:
 		break;
 	case 60: case 99:
 		count = arguments[0];
+		if (!count)
+			break;
 		if (count > 1048576 || !GlUpload(bridge, count * 4))
 			return 0;
 		if (call == 99) {
@@ -921,14 +935,20 @@ static int QuartzGlCall(OsxQuartzContext *context, OsxCpu *cpu, uint32 call)
 		GlGuestWrite(cpu, arguments[1], values, count * element, element);
 		break;
 	case 118:
+		if (!context->strings)
+			return 0;
+		if (arguments[0] == GL_EXTENSIONS || arguments[0] == 0x8874) {
+			if (!context->extensions)
+				return 0;
+		}
 		if (arguments[0] == GL_EXTENSIONS)
-			cpu->gpr[3] = context->library + OSXQUARTZSTRINGS;
+			cpu->gpr[3] = context->strings;
 		else if (arguments[0] == GL_RENDERER)
-			cpu->gpr[3] = context->library + OSXQUARTZRENDERERSTRING;
+			cpu->gpr[3] = context->strings + OSXQUARTZRENDERERSTRING - OSXQUARTZSTRINGS;
 		else if (arguments[0] == GL_VENDOR)
-			cpu->gpr[3] = context->library + OSXQUARTZVENDORSTRING;
+			cpu->gpr[3] = context->strings + OSXQUARTZVENDORSTRING - OSXQUARTZSTRINGS;
 		else if (arguments[0] == 0x8874)
-			cpu->gpr[3] = context->library + OSXQUARTZSTRINGS + sizeof(OSXQUARTZEXTENSIONS) - 1;
+			cpu->gpr[3] = context->strings + sizeof(OSXQUARTZEXTENSIONS) - 1;
 		else
 			return 0;
 		break;
@@ -1115,6 +1135,13 @@ static int QuartzGlCall(OsxQuartzContext *context, OsxCpu *cpu, uint32 call)
 		else
 			glTexParameteriv(arguments[0], arguments[1], (const GLint *)values);
 		break;
+	case 69:
+		if (!GlQuartzPixels(bridge, cpu, arguments[0], arguments[1], arguments[2], arguments[3], arguments[4]))
+			return 0;
+		glDrawPixels(arguments[0], arguments[1], arguments[2], arguments[3], bridge->upload);
+		break;
+	case 457:
+		break;
 	case 302:
 		if (!arguments[8])
 			glTexImage2D(arguments[0], arguments[1], arguments[2], arguments[3], arguments[4], arguments[5], arguments[6], arguments[7], NULL);
@@ -1163,13 +1190,16 @@ static int QuartzGlCall(OsxQuartzContext *context, OsxCpu *cpu, uint32 call)
 	return 1;
 }
 
-OsxQuartzBridge *CreateQuartzBridge(uint32 width, uint32 height)
+OsxQuartzBridge *CreateQuartzBridge(uint32 width, uint32 height, uint32 library, uint32 strings, int extensions)
 {
 	OsxQuartzBridge *bridge;
 	bridge = (OsxQuartzBridge *)calloc(1, sizeof(*bridge));
 	if (bridge) {
 		bridge->width = width;
 		bridge->height = height;
+		bridge->library = library;
+		bridge->strings = strings;
+		bridge->extensions = extensions;
 	}
 	return bridge;
 }
@@ -1192,27 +1222,45 @@ void DestroyQuartzBridge(OsxQuartzBridge *bridge)
 	free(bridge);
 }
 
-static uint32 QuartzLibrary(OsxCpu *cpu)
+static int QuartzSaverProcess(OsxQuartzBridge *bridge, OsxCpu *cpu)
 {
-	uint32 count;
-	uint32 entries;
-	uint32 index;
-	uint32 base;
-	uint32 path;
-	char name[100];
-	if (!OsxCpuReadVirtual(cpu, 0x8fe31280, &count) || count > 1024 ||
-		!OsxCpuReadVirtual(cpu, 0x8fe31284, &entries))
-		return 0;
-	for (index = 0; index < count; index++) {
-		if (!OsxCpuReadVirtual(cpu, entries + index * 12, &base) ||
-			!OsxCpuReadVirtual(cpu, entries + index * 12 + 4, &path) ||
-			!GlGuestCopy(cpu, (uint8 *)name, path, sizeof(name)))
+	static const char name[] = "ScreenSaverEngine";
+	uint32 address;
+	uint32 word;
+	uint32 matched;
+	uint32 position;
+	if (bridge->processsegment == cpu->sr[0])
+		return bridge->processsaver;
+	bridge->processsegment = cpu->sr[0];
+	bridge->processsaver = 0;
+	matched = 0;
+	for (address = 0xbfffe000u; address < 0xc0000000u; address += 4) {
+		if (!OsxCpuReadVirtual(cpu, address, &word))
 			continue;
-		name[sizeof(name) - 1] = 0;
-		if (!(base & 4095) && strcmp(name, "/System/Library/Frameworks/OpenGL.framework/Versions/A/Libraries/libGL.dylib") == 0)
-			return base;
+		for (position = 0; position < 4; position++) {
+			if (((word >> (24 - position * 8)) & 255) == (uint8)name[matched]) {
+				matched++;
+				if (matched == sizeof(name) - 1) {
+					bridge->processsaver = 1;
+					return 1;
+				}
+			} else
+				matched = 0;
+		}
 	}
 	return 0;
+}
+
+static void QuartzPresent(OsxQuartzBridge *bridge, OsxQuartzContext *context)
+{
+	if (context->pbuffer || context->viewport[2] != bridge->width || context->viewport[3] != bridge->height)
+		return;
+	glFlush();
+	context->gl->lastframe = OsxHostNanoseconds();
+	context->gl->frames++;
+	bridge->present = context;
+	bridge->fresh = 1;
+	GlBridgeCapture(context->gl);
 }
 
 static OsxQuartzPbuffer *QuartzFindPbuffer(OsxQuartzBridge *bridge, uint32 address, uint32 segment)
@@ -1337,6 +1385,36 @@ int QuartzBridgeCall(OsxQuartzBridge *bridge, OsxCpu *cpu, const uint32 *tails, 
 	int firstcall;
 	context = NULL;
 	share = NULL;
+	if (call == 1017) {
+		cpu->gpr[0] = cpu->lr;
+		value = 0;
+		if (cpu->gpr[5] == 73)
+			value = 1;
+		else if (cpu->gpr[5] == 120 || cpu->gpr[5] == 121)
+			value = 0x8000000;
+		if (value && QuartzSaverProcess(bridge, cpu) && OsxCpuWriteVirtual(cpu, cpu->gpr[6], value)) {
+			cpu->gpr[3] = 0;
+			cpu->nextpc = cpu->lr & ~3u;
+		}
+		return 1;
+	}
+	if (call == 1018) {
+		bridge->drawableflush = 1;
+		cpu->gpr[0] = cpu->lr;
+		if (!OsxCpuReadVirtual(cpu, cpu->gpr[3], &engine))
+			return 1;
+		for (candidate = bridge->contexts; candidate; candidate = candidate->next) {
+			if (candidate->segment == cpu->sr[0] && candidate->engine == engine) {
+				if (!GLContext_IsCurrent(&candidate->gl->context))
+					GLContext_SetCurrent(&candidate->gl->context);
+				QuartzPresent(bridge, candidate);
+				cpu->gpr[3] = 0;
+				cpu->nextpc = cpu->lr & ~3u;
+				break;
+			}
+		}
+		return 1;
+	}
 	if (call == 1019) {
 		QuartzBridgeCall(bridge, cpu, tails, 1023, log);
 		for (candidate = bridge->contexts; candidate; candidate = candidate->next) {
@@ -1359,15 +1437,6 @@ int QuartzBridgeCall(OsxQuartzBridge *bridge, OsxCpu *cpu, const uint32 *tails, 
 			cpu->gpr[0] = cpu->lr;
 		return 1;
 	}
-	if (call == 1021) {
-		value = cpu->gpr[0];
-		engine = cpu->gpr[3];
-		cpu->gpr[3] = cpu->gpr[24];
-		QuartzBridgeCall(bridge, cpu, tails, 1023, log);
-		cpu->gpr[0] = value;
-		cpu->gpr[3] = engine;
-		return 1;
-	}
 	if (call == 1022) {
 		value = cpu->gpr[0];
 		engine = cpu->gpr[3];
@@ -1381,10 +1450,11 @@ int QuartzBridgeCall(OsxQuartzBridge *bridge, OsxCpu *cpu, const uint32 *tails, 
 	if (!call || call == 1023) {
 		cpu->gpr[0] = cpu->lr;
 		address = cpu->gpr[3];
-		base = cpu->pc - tails[0];
-		if (call == 1023)
-			base = QuartzLibrary(cpu);
-		if (!address || !base || (base & 4095) || !OsxCpuReadVirtual(cpu, address, &engine))
+		base = bridge->library;
+		if (!call)
+			base = cpu->pc - tails[0];
+		if (!address || !QuartzSaverProcess(bridge, cpu) || !OsxCpuReadVirtual(cpu, address, &engine) || !engine ||
+			!OsxCpuReadVirtual(cpu, base + tails[0], &value) || value != OSXQUARTZTRAP)
 			return 1;
 		for (candidate = bridge->contexts; candidate; candidate = candidate->next) {
 			if (candidate->segment != cpu->sr[0])
@@ -1405,7 +1475,9 @@ int QuartzBridgeCall(OsxQuartzBridge *bridge, OsxCpu *cpu, const uint32 *tails, 
 			glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
 			context->address = address;
 			context->engine = engine;
-			context->library = base;
+			if (bridge->strings)
+				context->strings = base + bridge->strings;
+			context->extensions = bridge->extensions;
 			context->segment = cpu->sr[0];
 			context->next = bridge->contexts;
 			bridge->contexts = context;
@@ -1415,7 +1487,7 @@ int QuartzBridgeCall(OsxQuartzBridge *bridge, OsxCpu *cpu, const uint32 *tails, 
 		if (!context)
 			return 1;
 		context->address = address;
-		for (slot = 1; slot < 760; slot++) {
+		for (slot = 1; slot < OSXQUARTZSLOTS; slot++) {
 			if (!tails[slot] || !OsxCpuReadVirtual(cpu, address + slot * 4, &value) || !value)
 				continue;
 			if (value != base + tails[slot]) {
@@ -1425,7 +1497,7 @@ int QuartzBridgeCall(OsxQuartzBridge *bridge, OsxCpu *cpu, const uint32 *tails, 
 		}
 		return 1;
 	}
-	if (call >= 760 || !tails[call])
+	if (call >= OSXQUARTZSLOTS || !tails[call])
 		return 0;
 	for (candidate = bridge->contexts; candidate; candidate = candidate->next) {
 		if (candidate->segment == cpu->sr[0] && candidate->engine == cpu->gpr[3]) {
@@ -1433,8 +1505,12 @@ int QuartzBridgeCall(OsxQuartzBridge *bridge, OsxCpu *cpu, const uint32 *tails, 
 			break;
 		}
 	}
-	if (!context)
-		return 0;
+	if (!context) {
+		if ((cpu->ctr & ~3u) == cpu->pc)
+			return 0;
+		cpu->nextpc = cpu->ctr & ~3u;
+		return 1;
+	}
 	firstcall = !(context->calls[call / 8] & (1u << (call % 8)));
 	context->calls[call / 8] |= 1u << (call % 8);
 	if (firstcall && log)
@@ -1450,15 +1526,15 @@ int QuartzBridgeCall(OsxQuartzBridge *bridge, OsxCpu *cpu, const uint32 *tails, 
 		return 1;
 	if (result) {
 		cpu->nextpc = cpu->lr & ~3u;
-		if ((call == 91 || call == 591) && !context->pbuffer && context->viewport[2] == bridge->width && context->viewport[3] == bridge->height) {
-			bridge->present = context;
-			bridge->fresh = 1;
-			GlBridgeCapture(context->gl);
-		}
+		if (call == 591 || (call == 91 && !bridge->drawableflush))
+			QuartzPresent(bridge, context);
 	} else {
 		if (log && firstcall)
 			fprintf(log, "quartz native slot %u ctx %08x target %08x\n", call, context->engine, context->original[call]);
-		cpu->nextpc = context->original[call];
+		if (context->original[call])
+			cpu->nextpc = context->original[call];
+		else
+			cpu->nextpc = cpu->ctr & ~3u;
 	}
 	return 1;
 }
@@ -1488,11 +1564,32 @@ int QuartzBridgeFresh(OsxQuartzBridge *bridge)
 	return fresh;
 }
 
-const uint8 *QuartzBridgeFrame(OsxQuartzBridge *bridge)
+const uint8 *QuartzBridgeFrame(OsxQuartzBridge *bridge, const uint8 *vram, uint32 size)
 {
-	if (bridge->present)
-		return GlBridgeFrame(bridge->present->gl);
-	return NULL;
+	OsxGlBridge *gl;
+	uint64 sum;
+	uint32 index;
+	if (!bridge->present)
+		return NULL;
+	gl = bridge->present->gl;
+	if (OsxHostNanoseconds() - gl->lastframe < 500000000) {
+		bridge->held = 0;
+		return GlBridgeFrame(gl);
+	}
+	sum = 0;
+	for (index = 0; index + 8 <= size; index += 8)
+		sum = (sum ^ *(const uint64 *)(vram + index)) * 1099511628211ULL;
+	if (!bridge->held) {
+		bridge->held = 1;
+		bridge->heldsum = sum;
+		if (!GLContext_IsCurrent(&gl->context))
+			GLContext_SetCurrent(&gl->context);
+		GlBridgeCapture(gl);
+	} else if (bridge->heldsum != sum) {
+		bridge->present = NULL;
+		return NULL;
+	}
+	return gl->pixels;
 }
 
 #endif

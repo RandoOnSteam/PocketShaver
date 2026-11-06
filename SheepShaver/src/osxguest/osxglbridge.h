@@ -45,10 +45,10 @@
 
 typedef struct OsxGlBridge OsxGlBridge;
 typedef struct OsxQuartzBridge OsxQuartzBridge;
-OsxQuartzBridge *CreateQuartzBridge(uint32 width, uint32 height);
+OsxQuartzBridge *CreateQuartzBridge(uint32 width, uint32 height, uint32 library, uint32 strings, int extensions);
 void DestroyQuartzBridge(OsxQuartzBridge *bridge);
 int QuartzBridgeCall(OsxQuartzBridge *bridge, OsxCpu *cpu, const uint32 *tails, uint32 call, FILE *log);
-const uint8 *QuartzBridgeFrame(OsxQuartzBridge *bridge);
+const uint8 *QuartzBridgeFrame(OsxQuartzBridge *bridge, const uint8 *vram, uint32 size);
 int QuartzHostStrings(char *renderer, char *vendor, uint32 size);
 int QuartzBridgeFresh(OsxQuartzBridge *bridge);
 OsxGlBridge *CreateGlBridge(uint32 width, uint32 height);
