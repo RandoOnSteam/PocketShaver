@@ -79,9 +79,6 @@ set(B2_UAE
 
 add_library(BasiliskIISFL_sflcore OBJECT ${B2_CORE} ${B2_UAE} ${SFLPLATFORM}
 	"${SFLDIR}/video_sfl.cpp")
-if(NOT WIN32)
-	set_source_files_properties("${B2SRC}/extfs.cpp" PROPERTIES COMPILE_DEFINITIONS WIN32)
-endif()
 add_dependencies(BasiliskIISFL_sflcore sfl_uae_tables)
 target_include_directories(BasiliskIISFL_sflcore PRIVATE "${SFLDIR}" "${B2SRC}/include"
 	"${UAE_DIR}" "${B2_GEN}" "${SFLLIBS}")

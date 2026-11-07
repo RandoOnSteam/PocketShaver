@@ -80,6 +80,12 @@ int main(int argc, char **argv)
     }
 #else
     tablef = stdin;
+    if (argc > 1)
+	tablef = fopen(argv[1], "r");
+    if (tablef == NULL) {
+	fprintf(stderr, "%s not found\n", argv[1]);
+	exit(1);
+    }
 #endif
     getnextch();
     while (nextch != EOF) {
