@@ -1092,22 +1092,6 @@ void CheckLoad(uint32 type, int16 id, uint16 *p, uint32 size)
 			D(bug(" patch1 applied\n"));
 		}
 
-	} else if (type == FOURCC('C','O','D','E') && id == 5) {
-		// HACK: This is a hack for Populous 1. It writes to the old 
-		// Mac sound buffer at SoundBase, which SheepShaver doesn't
-		// currently support. Sound still doesn't work but it will
-		// run fine and not crash with this hack.
-		static const uint8 openhardsoundpattern[] = {
-			0x1e, 0x00, 0x67, 0x36, 0x4a, 0x93, 0x66, 0x50,
-			0x70, 0x01, 0x2f, 0x00, 0x2f, 0x3c, 0x00, 0x00, 0xa8, 0x07
-		};
-		static const uint8 openhardsoundname[] = "\215openhardsound";
-		if (size > 100 + sizeof(openhardsoundname)) {
-			base = find_rsrc_data((uint8 *)p, size - 100 - sizeof(openhardsoundname) + sizeof(openhardsoundpattern), openhardsoundpattern, sizeof(openhardsoundpattern));
-			if (base && (base & 1) == 0 && memcmp((uint8 *)p + base + 100, openhardsoundname, sizeof(openhardsoundname)) == 0)
-				p[base >> 1] = htons(0x7e01);
-		}
-
 	} else if (type == FOURCC('i','n','f','n') && (id == 129 || id == 200)) {
 		D(bug("infn %d found\n", id));
 		size >>= 1;

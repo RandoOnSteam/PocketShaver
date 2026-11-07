@@ -395,6 +395,7 @@ static bool ClassicMemoryInit(void)
 		ErrorAlert(str);
 		return false;
 	}
+	vm_acquire_fixed(Mac2HostAddr(MACIO_VIA_BASE), MACIO_VIA_SIZE);
 #ifdef ENABLE_USB
 	MacIOESCCInstall();
 	USBHIDInstall();

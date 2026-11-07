@@ -154,8 +154,10 @@ static void stop_threads() {
 	startup_thread = NULL;
 	//
 	interrupt_thread_quit = true;
+	SDL_SignalSemaphore(audio_irq_done_sem);
 	if (interrupt_thread != NULL)
 		SDL_WaitThread(interrupt_thread, NULL);
+	SDL_TryWaitSemaphore(audio_irq_done_sem);
 	interrupt_thread = NULL;
 	SDL_DestroyAudioStream(interrupt_stream);
 }
@@ -295,6 +297,8 @@ static int interrupt_thread_func(void *data)
 			TriggerInterrupt();
 			D(bug("stream: waiting for ack\n"));
 			SDL_WaitSemaphore(audio_irq_done_sem);
+			if (interrupt_thread_quit)
+				break;
 			D(bug("stream: ack received\n"));
 
 			// Get size of audio data
@@ -414,6 +418,10 @@ static void SDLCALL stream_func(void *, SDL_AudioStream *stream, int stream_len,
 #if defined(BINCUE)
 	MixAudio_bincue(dst, stream_len);
 #endif
+	int soundvolume = 0;
+	if (!main_mute && !speaker_mute)
+		soundvolume = (int)(get_audio_volume() * AUDIO_SOUNDBASE_UNITY);
+	AudioSoundBaseMix(dst, stream_len, SDL_AUDIO_BITSIZE(audio_spec.format), audio_spec.channels, audio_spec.freq, soundvolume);
 	SDL_PutAudioStreamData(stream, dst, stream_len);
 	delete[] src;
 	delete[] dst;

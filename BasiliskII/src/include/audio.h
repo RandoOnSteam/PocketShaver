@@ -22,6 +22,7 @@
 #define AUDIO_H
 
 #include <vector>
+#include "atomic.h"
 
 #ifndef NO_STD_NAMESPACE
 using std::vector;
@@ -43,6 +44,8 @@ extern void AudioExit(void);
 extern void AudioReset(void);
 
 extern void AudioInterrupt(void);
+extern void AudioSoundBaseTick(void);
+extern void AudioSoundBaseMix(uint8 *stream, int bytes, int samplesize, int channels, int frequency, int volume);
 
 extern void audio_enter_stream(void);
 extern void audio_exit_stream(void);
@@ -65,6 +68,13 @@ extern uint32 AudioCaptureRead(void *capture, uint8 *buffer, uint32 bytes);
 extern void AudioCaptureClear(void *capture);
 extern void AudioCaptureClose(void *capture);
 
+#define AUDIO_SOUNDBASE_SAMPLES 370
+#define AUDIO_SOUNDBASE_BYTES (AUDIO_SOUNDBASE_SAMPLES * 2)
+#define AUDIO_SOUNDBASE_RATE 22254545
+#define AUDIO_SOUNDBASE_PHASE 44
+#define AUDIO_SOUNDBASE_RING 16
+#define AUDIO_SOUNDBASE_UNITY 256
+
 // Current audio status
 struct audio_status {
 	uint32 sample_rate;		// 16.16 fixed point
@@ -73,6 +83,12 @@ struct audio_status {
 	uint32 mixer;			// Mac address of Apple Mixer
 	int num_sources;		// Number of active sources
 	void *soundinput;
+	uint32 soundbuffer;
+	uint8 soundring[AUDIO_SOUNDBASE_RING * AUDIO_SOUNDBASE_SAMPLES];
+	atomic_uint32 soundframes;
+	atomic_uint32 soundread;
+	uint32 soundposition;
+	int soundplaying;
 };
 extern struct audio_status AudioStatus;
 

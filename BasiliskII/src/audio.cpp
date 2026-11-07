@@ -68,6 +68,127 @@ void AudioReset(void)
 
 
 /*
+ *  Classic SoundBase buffer
+ */
+
+void AudioSoundBaseTick(void)
+{
+	const uint8 *source;
+	uint8 *frame;
+	uint32 base;
+	uint32 frames;
+	uint32 sample;
+	uint32 audible;
+	base = ReadMacInt32(0x266);
+	source = Mac2HostAddr(base);
+	if (base != AudioStatus.soundbuffer && (source < RAMBaseHost || source + AUDIO_SOUNDBASE_BYTES > RAMBaseHost + RAMSize)) {
+		if (AudioStatus.soundbuffer == 0)
+			return;
+		WriteMacInt32(0x266, AudioStatus.soundbuffer);
+		source = Mac2HostAddr(AudioStatus.soundbuffer);
+	}
+	frames = atomic_load32_explicit(&AudioStatus.soundframes, memory_order_relaxed);
+	if (frames - atomic_load32_explicit(&AudioStatus.soundread, memory_order_acquire) > AUDIO_SOUNDBASE_RING - 2)
+		return;
+	frame = AudioStatus.soundring + (frames & (AUDIO_SOUNDBASE_RING - 1)) * AUDIO_SOUNDBASE_SAMPLES;
+	audible = 0;
+	for (sample = AUDIO_SOUNDBASE_PHASE; sample < AUDIO_SOUNDBASE_SAMPLES; sample++) {
+		frame[sample - AUDIO_SOUNDBASE_PHASE] = source[sample * 2];
+		audible |= source[sample * 2] ^ source[0];
+	}
+	for (sample = 0; sample < AUDIO_SOUNDBASE_PHASE; sample++) {
+		frame[AUDIO_SOUNDBASE_SAMPLES - AUDIO_SOUNDBASE_PHASE + sample] = source[sample * 2];
+		audible |= source[sample * 2] ^ source[0];
+	}
+	if (audible)
+		atomic_store32_explicit(&AudioStatus.soundframes, frames + 1, memory_order_release);
+}
+
+void AudioSoundBaseMix(uint8 *stream, int bytes, int samplesize, int channels, int frequency, int volume)
+{
+	const uint8 *ring;
+	const uint8 *current;
+	uint32 frames;
+	uint32 read;
+	uint32 position;
+	uint32 step;
+	uint32 index;
+	uint32 fraction;
+	int backlog;
+	int target;
+	int count;
+	int channel;
+	int sample;
+	int next;
+	int mixed;
+	frames = atomic_load32_explicit(&AudioStatus.soundframes, memory_order_acquire);
+	read = atomic_load32_explicit(&AudioStatus.soundread, memory_order_relaxed);
+	if (frames == read) {
+		AudioStatus.soundplaying = 0;
+		return;
+	}
+	count = bytes / (channels * (samplesize >> 3));
+	step = (uint32)(((uint64)AUDIO_SOUNDBASE_RATE << 16) / ((uint64)frequency * 1000));
+	position = AudioStatus.soundposition;
+	backlog = (int)((frames - read) * AUDIO_SOUNDBASE_SAMPLES - (position >> 16));
+	target = (int)(((uint64)count * step) >> 16) + AUDIO_SOUNDBASE_SAMPLES * 2;
+	if (!AudioStatus.soundplaying) {
+		if (backlog < target)
+			return;
+		AudioStatus.soundplaying = 1;
+	}
+	backlog -= target;
+	if (backlog > AUDIO_SOUNDBASE_SAMPLES)
+		backlog = AUDIO_SOUNDBASE_SAMPLES;
+	else if (backlog < -AUDIO_SOUNDBASE_SAMPLES)
+		backlog = -AUDIO_SOUNDBASE_SAMPLES;
+	step = (uint32)((int64)step + (int64)step * backlog / 65536);
+	ring = AudioStatus.soundring;
+	while (count-- && read != frames) {
+		current = ring + (read & (AUDIO_SOUNDBASE_RING - 1)) * AUDIO_SOUNDBASE_SAMPLES;
+		index = position >> 16;
+		fraction = position & 0xffff;
+		next = current[index];
+		if (index + 1 < AUDIO_SOUNDBASE_SAMPLES)
+			next = current[index + 1];
+		else if (read + 1 != frames)
+			next = ring[((read + 1) & (AUDIO_SOUNDBASE_RING - 1)) * AUDIO_SOUNDBASE_SAMPLES];
+		sample = ((int)current[index] * (int)(65536 - fraction) + next * (int)fraction) >> 16;
+		sample = (sample - 128) * volume;
+		position += step;
+		if (position >= ((uint32)AUDIO_SOUNDBASE_SAMPLES << 16)) {
+			position -= (uint32)AUDIO_SOUNDBASE_SAMPLES << 16;
+			read++;
+		}
+		for (channel = 0; channel < channels; channel++) {
+			if (samplesize == 16) {
+				mixed = (int16)((stream[0] << 8) | stream[1]) + sample;
+				if (mixed > 32767)
+					mixed = 32767;
+				else if (mixed < -32768)
+					mixed = -32768;
+				stream[0] = (uint8)(mixed >> 8);
+				stream[1] = (uint8)mixed;
+				stream += 2;
+			} else {
+				mixed = stream[0] + (sample >> 8);
+				if (mixed > 255)
+					mixed = 255;
+				else if (mixed < 0)
+					mixed = 0;
+				stream[0] = (uint8)mixed;
+				stream++;
+			}
+		}
+	}
+	if (read == frames)
+		AudioStatus.soundplaying = 0;
+	AudioStatus.soundposition = position;
+	atomic_store32_explicit(&AudioStatus.soundread, read, memory_order_release);
+}
+
+
+/*
  *  Get audio info
  */
 

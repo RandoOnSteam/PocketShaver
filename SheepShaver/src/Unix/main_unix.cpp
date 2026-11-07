@@ -1219,6 +1219,7 @@ int main(int argc, char *argv[])
 		ErrorAlert(str);
 		goto quit;
 	}
+	vm_acquire_fixed(Mac2HostAddr(MACIO_VIA_BASE), MACIO_VIA_SIZE);
 #ifdef ENABLE_USB
 	MacIOESCCInstall();
 	USBHIDInstall();
