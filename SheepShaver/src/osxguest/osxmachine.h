@@ -610,9 +610,7 @@ uint32 OsxAudioRead(OsxMachine *machine, uint32 offset);
 void OsxAudioWrite(OsxMachine *machine, uint32 offset, uint32 value);
 void OsxAudioPoll(OsxMachine *machine, uint64 now);
 void OsxAudioExit(OsxMachine *machine);
-#if defined(USE_SFL)
 void OsxAudioOpenForCdrom(OsxMachine *machine);
-#endif
 
 
 

@@ -116,8 +116,60 @@ static int bincue_core_audio_callback(void);
 #define AUDIO	   0
 #define FOURTRACK  0x8
 
-// Audio status -- These are standard for scsi cd players
+// HACK (TODO put somewhere else): Mac on Mac funcs
+#if defined(macintosh)
+#include <Files.h>
+static int BincueMacOpen(const char *path)
+{
+	Str255 pascalpath;
+	FSSpec spec;
+	short reference;
+	size_t length;
+	length = strlen(path);
+	if (length > 255)
+		return -1;
+	pascalpath[0] = (unsigned char)length;
+	memcpy(pascalpath + 1, path, length);
+	if (FSMakeFSSpec(0, 0, pascalpath, &spec) != noErr
+			|| FSpOpenDF(&spec, fsRdPerm, &reference) != noErr)
+		return -1;
+	return reference;
+}
+static long BincueMacRead(int file, void *buffer, size_t length)
+{
+	long count;
+	OSErr error;
+	count = (long)length;
+	error = FSRead((short)file, &count, buffer);
+	if (error != noErr && error != eofErr)
+		return -1;
+	return count;
+}
+static long BincueMacSeek(int file, long offset, int origin)
+{
+	short mode;
+	long position;
+	mode = fsFromStart;
+	if (origin == SEEK_CUR)
+		mode = fsFromMark;
+	else if (origin == SEEK_END)
+		mode = fsFromLEOF;
+	if (SetFPos((short)file, mode, offset) != noErr
+			|| GetFPos((short)file, &position) != noErr)
+		return -1;
+	return position;
+}
+#undef open
+#undef read
+#undef lseek
+#undef close
+#define open(path, flags) BincueMacOpen(path)
+#define read BincueMacRead
+#define lseek BincueMacSeek
+#define close(file) FSClose((short)(file))
+#endif
 
+// Audio status -- These are standard for scsi cd players
 #define CDROM_AUDIO_INVALID    0x00
 #define CDROM_AUDIO_PLAY       0x11
 #define CDROM_AUDIO_PAUSED     0x12
@@ -742,6 +794,68 @@ void *OpenCDImage(const char *path)
 		return NULL;
 	}
 	return AttachPlayer(cs);
+}
+
+static uint32 ReadBigEndian32(const uint8 *bytes)
+{
+	return ((uint32)bytes[0] << 24) | ((uint32)bytes[1] << 16) | ((uint32)bytes[2] << 8) | bytes[3];
+}
+
+void *OpenCDTrackFile(const char *path, int number, unsigned int startframe, unsigned int lengthframes)
+{
+	uint8 header[4096];
+	CueSheet *cs;
+	Track *track;
+	int imagefh;
+	int headerbytes;
+	int position;
+	uint32 chunksize;
+#ifdef WIN32
+	imagefh = open(path, O_RDONLY | O_BINARY);
+#else
+	imagefh = open(path, O_RDONLY);
+#endif
+	if (imagefh < 0)
+		return NULL;
+	headerbytes = (int)read(imagefh, header, sizeof(header));
+	if (headerbytes < 12 || memcmp(header, "FORM", 4) != 0) {
+		close(imagefh);
+		return NULL;
+	}
+	cs = (CueSheet *)malloc(sizeof(CueSheet));
+	if (!cs) {
+		close(imagefh);
+		return NULL;
+	}
+	memset(cs, 0, sizeof(CueSheet));
+	cs->binfile = strdup(path);
+	cs->binfh = imagefh;
+	cs->tcnt = 1;
+	cs->length = lengthframes;
+	cs->raw_sector_size = 2352;
+	cs->cooked_sector_size = 2352;
+	cs->big_endian_audio = true;
+	track = &cs->tracks[0];
+	track->number = number;
+	track->start = startframe;
+	track->length = lengthframes;
+	track->tcf = AUDIO;
+	position = 12;
+	while (position + 8 <= headerbytes) {
+		chunksize = ReadBigEndian32(header + position + 4);
+		if (memcmp(header + position, "COMM", 4) == 0 && position + 30 <= headerbytes
+				&& memcmp(header + position + 26, "sowt", 4) == 0)
+			cs->big_endian_audio = false;
+		if (memcmp(header + position, "SSND", 4) == 0) {
+			track->fileoffset = position + 16 + ReadBigEndian32(header + position + 8);
+			return AttachPlayer(cs);
+		}
+		position += 8 + (int)((chunksize + 1) & ~(uint32)1);
+	}
+	close(imagefh);
+	free(cs->binfile);
+	free(cs);
+	return NULL;
 }
 
 void close_bincue(void *fh)

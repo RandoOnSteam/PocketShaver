@@ -37,6 +37,7 @@ extern bool GetPosition_bincue(void *, uint8 *);
 extern bool CDPlay_bincue(void *, uint8, uint8,
 						  uint8, uint8, uint8, uint8);
 extern bool CDPause_bincue(void *);
+extern void *OpenCDTrackFile(const char *, int, unsigned int, unsigned int);
 extern bool CDResume_bincue(void *);
 extern bool CDStop_bincue(void *);
 extern bool CDScan_bincue(void *, uint8, uint8, uint8, bool);

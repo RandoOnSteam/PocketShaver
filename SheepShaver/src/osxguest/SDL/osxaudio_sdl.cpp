@@ -21,9 +21,12 @@
 #include "my_sdl.h"
 #include "osxmachine.h"
 #include "osxhost.h"
+#include "bincue.h"
 
 #define AUDIOFRAMEBYTES 4
 #define AUDIOMARGINDIVISOR 200
+#define AUDIOCDVOLUME 128
+#define AUDIOCDBLOCK 8192
 
 #if SDL_VERSION_ATLEAST(3, 0, 0)
 static void SDLCALL AudioCallback(void *context, SDL_AudioStream *stream, int length, int total)
@@ -36,6 +39,27 @@ static void SDLCALL AudioCallback(void *context, SDL_AudioStream *stream, int le
 	if (length <= 0)
 		return;
 	count = audio->head - audio->tail;
+	if (HaveAudioToMix_bincue()) {
+		unsigned char mixed[AUDIOCDBLOCK];
+		int total;
+		total = length;
+		if (total > (int)sizeof(mixed))
+			total = (int)sizeof(mixed);
+		total &= ~3;
+		if (count > (uint32)total)
+			count = (uint32)total;
+		offset = audio->tail & (OSXAUDIORING - 1);
+		first = OSXAUDIORING - offset;
+		if (first > count)
+			first = count;
+		memcpy(mixed, audio->ring + offset, first);
+		memcpy(mixed + first, audio->ring, count - first);
+		memset(mixed + count, 0, total - count);
+		audio->tail += count;
+		MixAudio_bincue(mixed, total);
+		SDL_PutAudioStreamData(stream, mixed, total);
+		return;
+	}
 	if (count > (uint32)length + audio->rate / AUDIOMARGINDIVISOR * AUDIOFRAMEBYTES)
 		count = (uint32)length + audio->rate / AUDIOMARGINDIVISOR * AUDIOFRAMEBYTES;
 	offset = audio->tail & (OSXAUDIORING - 1);
@@ -60,8 +84,10 @@ void OsxAudioUnlockHost(OsxAudio *audio)
 
 void OsxAudioCloseHost(OsxAudio *audio)
 {
-	if (audio->stream)
+	if (audio->stream) {
 		SDL_DestroyAudioStream((SDL_AudioStream *)audio->stream);
+		CloseAudio_bincue();
+	}
 	audio->stream = NULL;
 }
 
@@ -74,6 +100,7 @@ void *OsxAudioStartHost(OsxAudio *audio)
 	spec.freq = (int)audio->rate;
 	spec.format = SDL_AUDIO_S16BE;
 	spec.channels = 2;
+	OpenAudio_bincue(spec.freq, spec.format, spec.channels, 0, AUDIOCDVOLUME);
 	stream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, AudioCallback, audio);
 	if (stream)
 		SDL_ResumeAudioStreamDevice(stream);
@@ -95,6 +122,7 @@ static void AudioCallback(void *context, Uint8 *stream, int length)
 		stream[index] = audio->ring[(audio->tail + index) & (OSXAUDIORING - 1)];
 	audio->tail += count;
 	memset(stream + count, 0, (uint32)length - count);
+	MixAudio_bincue(stream, length);
 }
 
 void OsxAudioLockHost(OsxAudio *audio)
@@ -109,8 +137,10 @@ void OsxAudioUnlockHost(OsxAudio *audio)
 
 void OsxAudioCloseHost(OsxAudio *audio)
 {
-	if (audio->stream)
+	if (audio->stream) {
 		SDL_CloseAudio();
+		CloseAudio_bincue();
+	}
 	audio->stream = NULL;
 }
 
@@ -125,6 +155,7 @@ void *OsxAudioStartHost(OsxAudio *audio)
 	spec.samples = 1024;
 	spec.callback = AudioCallback;
 	spec.userdata = audio;
+	OpenAudio_bincue(spec.freq, spec.format, spec.channels, 0, AUDIOCDVOLUME);
 	if (SDL_OpenAudio(&spec, NULL) < 0)
 		return NULL;
 	SDL_PauseAudio(0);
