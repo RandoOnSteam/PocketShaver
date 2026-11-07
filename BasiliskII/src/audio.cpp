@@ -63,11 +63,14 @@ int SoundInGain = 65536; // FIXED 4-byte from 0.5 to 1.5; this is middle value (
 
 void AudioReset(void)
 {
+#ifdef MACEMU_USEVIASOUNDBASE
 	AudioStatus.soundbuffer = 0;
+#endif
 	audio_data = 0;
 }
 
 
+#ifdef MACEMU_USEVIASOUNDBASE
 /*
  *  Classic SoundBase buffer
  */
@@ -197,6 +200,7 @@ void AudioSoundBaseMix(uint8 *stream, int bytes, int samplesize, int channels, i
 	AudioStatus.soundposition = position;
 	atomic_store32_explicit(&AudioStatus.soundread, read, memory_order_release);
 }
+#endif
 
 
 /*

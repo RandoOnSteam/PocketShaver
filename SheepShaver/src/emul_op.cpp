@@ -316,7 +316,9 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 		case OP_INSTALL_DRIVERS: {	// Patch to install our own drivers during startup
 			// Install drivers
 			InstallDrivers();
+#ifdef MACEMU_USEVIASOUNDBASE
 			AudioSoundBaseInstall();
+#endif
 
 			// Patch MakeExecutable()
 			MakeExecutableTvec = FindLibSymbol("\023PrivateInterfaceLib", "\016MakeExecutable");
@@ -397,7 +399,9 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 				}
 				if (InterruptFlags & INTFLAG_VIA) {
 					ClearInterruptFlag(INTFLAG_VIA);
+#ifdef MACEMU_USEVIASOUNDBASE
 					AudioSoundBaseTick();
+#endif
 					via_service_count++;
 #if !PRECISE_TIMING
 					TimerInterrupt();

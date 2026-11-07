@@ -418,10 +418,12 @@ static void SDLCALL stream_func(void *, SDL_AudioStream *stream, int stream_len,
 #if defined(BINCUE)
 	MixAudio_bincue(dst, stream_len);
 #endif
+#ifdef MACEMU_USEVIASOUNDBASE
 	int soundvolume = 0;
 	if (!main_mute && !speaker_mute)
 		soundvolume = (int)(get_audio_volume() * AUDIO_SOUNDBASE_UNITY);
 	AudioSoundBaseMix(dst, stream_len, SDL_AUDIO_BITSIZE(audio_spec.format), audio_spec.channels, audio_spec.freq, soundvolume);
+#endif
 	SDL_PutAudioStreamData(stream, dst, stream_len);
 	delete[] src;
 	delete[] dst;

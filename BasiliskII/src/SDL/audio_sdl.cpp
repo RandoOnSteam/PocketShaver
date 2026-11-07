@@ -533,10 +533,12 @@ static void stream_func(void *arg, uint8 *stream, int stream_len)
 #endif
 
 #endif
+#ifdef MACEMU_USEVIASOUNDBASE
 	int soundvolume = 0;
 	if (!main_mute && !speaker_mute)
 		soundvolume = get_audio_volume() * AUDIO_SOUNDBASE_UNITY / SDL_MIX_MAXVOLUME;
 	AudioSoundBaseMix(stream, stream_len, AudioStatus.sample_size, AudioStatus.channels, AudioStatus.sample_rate >> 16, soundvolume);
+#endif
 }
 
 

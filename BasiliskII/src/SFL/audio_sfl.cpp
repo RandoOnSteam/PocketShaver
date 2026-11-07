@@ -175,17 +175,21 @@ static void SflSoundGuest(uint8 *buffer, int bytes)
 
 static void SflSoundFill(void *context, unsigned char *buffer, int bytes)
 {
+#ifdef MACEMU_USEVIASOUNDBASE
 	int volume;
+#endif
 	if (AudioStatus.sample_size == 8)
 		memset(buffer, 0x80, bytes);
 	else
 		memset(buffer, 0, bytes);
 	SflSoundGuest(buffer, bytes);
 	MixAudio_bincue(buffer, bytes);
+#ifdef MACEMU_USEVIASOUNDBASE
 	volume = 0;
 	if (!SflSound.mainmute && !SflSound.speakermute)
 		volume = SflSound.mainvolume * SflSound.speakervolume * AUDIO_SOUNDBASE_UNITY / (SFLSOUNDMAXVOLUME * SFLSOUNDMAXVOLUME);
 	AudioSoundBaseMix(buffer, bytes, AudioStatus.sample_size, AudioStatus.channels, AudioStatus.sample_rate >> 16, volume);
+#endif
 	SflSoundToHost(buffer, bytes, AudioStatus.sample_size);
 }
 

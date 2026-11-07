@@ -244,7 +244,9 @@ void EmulOp(uint16 opcode, M68kRegisters *r)
 			// Install drivers
 			D(bug("InstallDrivers\n"));
 			InstallDrivers(r->a[0]);
+#ifdef MACEMU_USEVIASOUNDBASE
 			AudioSoundBaseInstall();
+#endif
 
 			// Install PutScrap() patch
 			M68kRegisters r;
@@ -465,7 +467,9 @@ void EmulOp(uint16 opcode, M68kRegisters *r)
 				if (HasMacStarted()) {
 
 					// Mac has started, execute all 60Hz interrupt functions
+#ifdef MACEMU_USEVIASOUNDBASE
 					AudioSoundBaseTick();
+#endif
 #if !PRECISE_TIMING
 					TimerInterrupt();
 #endif

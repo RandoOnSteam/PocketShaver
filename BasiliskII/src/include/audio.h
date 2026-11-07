@@ -22,7 +22,12 @@
 #define AUDIO_H
 
 #include <vector>
+
+#define MACEMU_USEVIASOUNDBASE
+
+#ifdef MACEMU_USEVIASOUNDBASE
 #include "atomic.h"
+#endif
 
 #ifndef NO_STD_NAMESPACE
 using std::vector;
@@ -44,9 +49,11 @@ extern void AudioExit(void);
 extern void AudioReset(void);
 
 extern void AudioInterrupt(void);
+#ifdef MACEMU_USEVIASOUNDBASE
 extern void AudioSoundBaseInstall(void);
 extern void AudioSoundBaseTick(void);
 extern void AudioSoundBaseMix(uint8 *stream, int bytes, int samplesize, int channels, int frequency, int volume);
+#endif
 
 extern void audio_enter_stream(void);
 extern void audio_exit_stream(void);
@@ -69,12 +76,16 @@ extern uint32 AudioCaptureRead(void *capture, uint8 *buffer, uint32 bytes);
 extern void AudioCaptureClear(void *capture);
 extern void AudioCaptureClose(void *capture);
 
+#ifdef MACEMU_USEVIASOUNDBASE
+#define MACIO_VIA_BASE 0xf3010000
+#define MACIO_VIA_SIZE 0x10000
 #define AUDIO_SOUNDBASE_SAMPLES 370
 #define AUDIO_SOUNDBASE_BYTES (AUDIO_SOUNDBASE_SAMPLES * 2)
 #define AUDIO_SOUNDBASE_RATE 22254545
 #define AUDIO_SOUNDBASE_PHASE 44
 #define AUDIO_SOUNDBASE_RING 16
 #define AUDIO_SOUNDBASE_UNITY 256
+#endif
 
 // Current audio status
 struct audio_status {
@@ -84,12 +95,14 @@ struct audio_status {
 	uint32 mixer;			// Mac address of Apple Mixer
 	int num_sources;		// Number of active sources
 	void *soundinput;
+#ifdef MACEMU_USEVIASOUNDBASE
 	uint32 soundbuffer;
 	uint8 soundring[AUDIO_SOUNDBASE_RING * AUDIO_SOUNDBASE_SAMPLES];
 	atomic_uint32 soundframes;
 	atomic_uint32 soundread;
 	uint32 soundposition;
 	int soundplaying;
+#endif
 };
 extern struct audio_status AudioStatus;
 

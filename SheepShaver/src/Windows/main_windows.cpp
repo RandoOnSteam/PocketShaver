@@ -37,6 +37,7 @@
 #include "timer.h"
 #include "adb.h"
 #include "video.h"
+#include "audio.h"
 #include "sys.h"
 #include "macos_util.h"
 #include "rom_patches.h"
@@ -395,7 +396,9 @@ static bool ClassicMemoryInit(void)
 		ErrorAlert(str);
 		return false;
 	}
+#ifdef MACEMU_USEVIASOUNDBASE
 	vm_acquire_fixed(Mac2HostAddr(MACIO_VIA_BASE), MACIO_VIA_SIZE);
+#endif
 #ifdef ENABLE_USB
 	MacIOESCCInstall();
 	USBHIDInstall();

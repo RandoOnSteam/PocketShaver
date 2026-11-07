@@ -32,6 +32,7 @@
 #include "timer.h"
 #include "adb.h"
 #include "video.h"
+#include "audio.h"
 #include "sys.h"
 #include "macos_util.h"
 #include "rom_patches.h"
@@ -222,7 +223,9 @@ bool SflMainMapMemory(void)
 		ErrorAlert(GetString(STR_SHEEP_MEM_MMAP_ERR));
 		return false;
 	}
+#ifdef MACEMU_USEVIASOUNDBASE
 	SflMemMap(MACIO_VIA_BASE, MACIO_VIA_SIZE); /* VIA sound chip; old games */
+#endif
 	return true;
 }
 
