@@ -94,7 +94,9 @@ static uint64 HostTicks(void)
 #if defined(_WIN32)
 	/* QueryPerformanceCounter() takes up around 20%
 	of process time! Use rdtsc directly if possible. */
-#if defined(_MSC_VER)
+#if defined(_MSC_VER) && OSXHOSTARM64
+	return (uint64)_ReadStatusReg(ARM64_CNTVCT);
+#elif defined(_MSC_VER)
 	return __rdtsc();
 #else
 	LARGE_INTEGER counter;
@@ -176,7 +178,9 @@ int OsxHostFeature(int feature)
 {
 #if defined(_WIN32)
 	return IsProcessorFeaturePresent(feature) != 0;
-#elif OSXHOSTX64
+#elif OSXHOSTX64 || OSXHOSTX86
+	if (feature == OSXFEATURESSE2)
+		return __builtin_cpu_supports("sse2") != 0;
 	if (feature == OSXFEATURESSSE3)
 		return __builtin_cpu_supports("ssse3") != 0;
 	if (feature == OSXFEATURESSE41)
@@ -206,6 +210,15 @@ void OsxJitRelease(uint8 *memory, uint32 size)
 	VirtualFree(memory, 0, MEM_RELEASE);
 #else
 	munmap(memory, size);
+#endif
+}
+
+void OsxJitFlush(uint8 *memory, uint32 size)
+{
+#if defined(_WIN32)
+	FlushInstructionCache(GetCurrentProcess(), memory, size);
+#elif defined(__GNUC__)
+	__builtin___clear_cache((char *)memory, (char *)memory + size);
 #endif
 }
 

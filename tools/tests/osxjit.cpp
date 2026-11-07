@@ -832,6 +832,39 @@ static void Invalidation(OsxJitTest *test)
 	}
 }
 
+static void ReplaceCode(void *context, uint32 address, int size, uint32 value)
+{
+	OsxCpu *cpu;
+	cpu = (OsxCpu *)context;
+	Put(cpu, TESTENTRY + 8, value);
+	OsxJitInvalidate(cpu, TESTENTRY + 8, 4);
+}
+
+static void InlineInvalidation(OsxJitTest *test)
+{
+	OsxCpu *cpu;
+	int index;
+	Reset(test);
+	for (index = 0; index < 2; index++) {
+		if (index == 0)
+			cpu = test->reference;
+		else
+			cpu = test->native;
+		cpu->buswrite = ReplaceCode;
+		cpu->gpr[3] = 0x38a00007;
+		cpu->gpr[4] = 0xf0000000;
+		Put(cpu, TESTENTRY, 0x90640000);
+		Put(cpu, TESTENTRY + 4, 0x38c60001);
+		Put(cpu, TESTENTRY + 8, 0x38a00003);
+		Put(cpu, TESTENTRY + 12, 0x48000000);
+	}
+	OsxJitInvalidate(test->native, TESTENTRY, 4096);
+	OsxCpuRun(test->reference, 3);
+	OsxJitRun(test->native, 3);
+	Compare(test, "inline DMA code replacement", 0x90640000);
+	Check(test, test->native->gpr[5] == 7, "replacement instruction executed", 0);
+}
+
 static void Contexts(OsxJitTest *test)
 {
 	OsxCpu *cpu;
@@ -1071,6 +1104,42 @@ static void VectorSequences(OsxJitTest *test)
 		OsxJitRun(test->native, 32);
 		Compare(test, "vector sequences and enable changes", 0);
 	}
+}
+
+static void JitSlices(OsxJitTest *test)
+{
+	OsxCpu *cpu;
+	int scenario;
+	int count;
+	int index;
+	int step;
+	for (scenario = 0; scenario < 3; scenario++) {
+		for (count = 1; count <= 160; count++) {
+			Reset(test);
+			test->native->jithot = 1;
+			if (scenario == 2)
+				test->native->jithot = 3;
+			for (index = 0; index < 2; index++) {
+				if (index == 0)
+					cpu = test->reference;
+				else
+					cpu = test->native;
+				cpu->instructions = 0xfffffff0ULL;
+				cpu->deterministic = 3;
+				if (scenario == 1)
+					cpu->msr |= OSXMSRSE;
+				for (step = 0; step < 31; step++)
+					Put(cpu, TESTENTRY + (uint32)step * 4, 0x38630001);
+				Put(cpu, TESTENTRY + 124, (31u << 26) | (4u << 21) | (12u << 16) | (8u << 11) | (371u << 1));
+				Put(cpu, TESTENTRY + 128, 0x4bffff80);
+			}
+			OsxJitInvalidate(test->native, TESTENTRY, 4096);
+			OsxCpuRun(test->reference, count);
+			OsxJitRun(test->native, count);
+			Compare(test, "slice limits, counter carry and tracing", 0);
+		}
+	}
+	test->native->jithot = 1;
 }
 
 static void Benchmark(OsxJitTest *test)
@@ -1601,9 +1670,11 @@ int main(void)
 	Sequences(&test);
 	Mmu(&test);
 	Invalidation(&test);
+	InlineInvalidation(&test);
 	Contexts(&test);
 	Floating(&test);
 	VectorSequences(&test);
+	JitSlices(&test);
 	Benchmark(&test);
 #if OSXG5
 	Test970(&test);

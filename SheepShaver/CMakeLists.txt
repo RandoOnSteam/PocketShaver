@@ -180,6 +180,7 @@ set(SS_CPU
 	"${SS_KPX}/src/cpu/ppc/ppc-nativejit.cpp"
 	"${SS_KPX}/src/cpu/jit/x86/nativejitx86_64.cpp"
 	"${SS_KPX}/src/cpu/jit/x86/nativejitx86_32.cpp"
+	"${SS_KPX}/src/cpu/jit/arm64/nativejitarm64.cpp"
 	"${SS_KPX}/src/utils/utils-cpuinfo.cpp"
 	"${SS_KPX}/sheepshaver_glue.cpp"
 	"${SS_KPX}/ppc-dis.c"
@@ -543,7 +544,7 @@ endif()
 # Executable
 # ---------------------------------------------------------------------------
 # ppc-execute-impl.cpp is #included by ppc-execute.cpp (not a separate TU)
-if(CMAKE_SIZEOF_VOID_P EQUAL 8 AND ENABLE_OSX_GUEST_TESTS AND (WIN32 OR CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64"))
+if(ENABLE_OSX_GUEST_TESTS AND ((WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 8) OR CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|i[3-6]86|x86"))
 	add_executable(OsxJitTest
 		"${SS_SRC}/../../tools/tests/osxjit.cpp"
 		"${SS_SRC}/osxguest/osxcpu.cpp"
@@ -664,6 +665,12 @@ function(sheepshaver_configure_target SHEEPSHAVER_EXECUTABLE)
 	endif()
 
 	macemu_apply_common(${SHEEPSHAVER_EXECUTABLE})
+	if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SIZEOF_VOID_P EQUAL 4)
+		find_library(SS_ATOMIC_LIBRARY NAMES atomic libatomic.so.1)
+		if(SS_ATOMIC_LIBRARY)
+			target_link_libraries(${SHEEPSHAVER_EXECUTABLE} PRIVATE ${SS_ATOMIC_LIBRARY})
+		endif()
+	endif()
 
 	if(WIN32)
 		target_sources(${SHEEPSHAVER_EXECUTABLE} PRIVATE "${SS_GFXACCEL_DIR}/gl/glcontext.c")

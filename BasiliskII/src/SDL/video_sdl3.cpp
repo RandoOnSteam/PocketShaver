@@ -860,7 +860,13 @@ static SDL_Surface *init_sdl_video(int width, int height, int depth, Uint32 flag
 			old_window_height != m * window_height ||
 			(old_window_flags & window_flags_to_monitor) != (window_flags & window_flags_to_monitor))
 		{
-			delete_sdl_video_window();
+#if !TARGET_OS_IPHONE
+			if ((old_window_flags & window_flags_to_monitor) != (window_flags & window_flags_to_monitor))
+				SDL_SetWindowFullscreen(sdl_window, (window_flags & SDL_WINDOW_FULLSCREEN) != 0);
+			if (!(window_flags & SDL_WINDOW_FULLSCREEN))
+				SDL_SetWindowSize(sdl_window, (int)(m * window_width), (int)(m * window_height));
+			SDL_SyncWindow(sdl_window);
+#endif
 		}
 	}
 
@@ -1506,9 +1512,8 @@ driver_base::~driver_base()
 	ungrab_mouse();
 	restore_mouse_accel();
 
-	delete_sdl_video_surfaces();	// This deletes instances of SDL_Surface and SDL_Texture
-	shutdown_sdl_video();			// This deletes SDL_Window, SDL_Renderer, in addition to
-									// instances of SDL_Surface and SDL_Texture.
+	delete_sdl_video_surfaces(); // This deletes instances of SDL_Surface and SDL_Texture
+	// We don't call shutdown_sdl_video() here anymore, instead we call it on VideoExit()
 
 	// the_buffer shall always be mapped through vm_acquire_framebuffer()
 	if (the_buffer != VM_MAP_FAILED) {
@@ -2055,7 +2060,8 @@ void VideoExit(void)
 	vector<monitor_desc *>::iterator i, end = VideoMonitors.end();
 	for (i = VideoMonitors.begin(); i != end; ++i)
 		dynamic_cast<SDL_monitor_desc *>(*i)->video_close();
-	delete_sdl_video_window();
+	shutdown_sdl_video(); // This deletes SDL_Window, SDL_Renderer, in addition to
+						  // instances of SDL_Surface and SDL_Texture.
 
 	// Destroy locks
 	if (frame_buffer_lock)

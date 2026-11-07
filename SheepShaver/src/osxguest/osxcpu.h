@@ -25,6 +25,25 @@
 #else
 #define OSXHOSTX64 0
 #endif
+#if defined(_M_IX86) || defined(__i386__)
+#define OSXHOSTX86 1
+#else
+#define OSXHOSTX86 0
+#endif
+#if defined(_M_ARM64) || defined(__aarch64__)
+#define OSXHOSTARM64 1
+#else
+#define OSXHOSTARM64 0
+#endif
+#if OSXHOSTX64
+#define OSXHOSTNAME "x64"
+#elif OSXHOSTX86
+#define OSXHOSTNAME "x86"
+#elif OSXHOSTARM64
+#define OSXHOSTNAME "arm64"
+#else
+#define OSXHOSTNAME "none"
+#endif
 #if OSXHOSTX64 && !defined(_WIN32)
 #define OSXJITABI __attribute__((ms_abi))
 #else
@@ -33,6 +52,7 @@
 #define OSXFEATURESSSE3 36
 #define OSXFEATUREAVX2 40
 #define OSXFEATURESSE41 37
+#define OSXFEATURESSE2 10
 
 #define OSXTLBBITS 10
 #define OSXTLBSIZE (1 << OSXTLBBITS)
@@ -280,6 +300,7 @@ OSXJITABI int OsxCpuExecuteInline(OsxCpu *cpu, uint32 instruction);
 int OsxHostFeature(int feature);
 uint8 *OsxJitAllocate(uint32 size);
 void OsxJitRelease(uint8 *memory, uint32 size);
+void OsxJitFlush(uint8 *memory, uint32 size);
 int OsxJitCreate(OsxCpu *cpu);
 void OsxJitDestroy(OsxCpu *cpu);
 void OsxJitRun(OsxCpu *cpu, int32 count);

@@ -24,9 +24,11 @@
 #define NATIVEJIT_HOST_X86_64 1
 #elif defined(_M_IX86) || defined(__i386__) || defined(__i386)
 #define NATIVEJIT_HOST_X86_32 1
+#elif (defined(_M_ARM64) || defined(__aarch64__)) && !defined(__APPLE__)
+#define NATIVEJIT_HOST_ARM64 1
 #endif
 
-#if defined(NATIVEJIT_HOST_X86_64) || defined(NATIVEJIT_HOST_X86_32)
+#if defined(NATIVEJIT_HOST_X86_64) || defined(NATIVEJIT_HOST_X86_32) || defined(NATIVEJIT_HOST_ARM64)
 #define NATIVEJIT_AVAILABLE 1
 #else
 #define NATIVEJIT_AVAILABLE 0

@@ -1684,7 +1684,7 @@ static int RunSession(OsxSession *session)
 	if (PrefsFindBool("osxjit")) {
 #endif
 		if (OsxJitCreate(cpu))
-			fprintf(machine->log, "cpu native x64 soft TLB\n");
+			fprintf(machine->log, "cpu native %s soft TLB\n", OSXHOSTNAME);
 		else
 			fprintf(machine->log, "cpu interpreter\n");
 	}
