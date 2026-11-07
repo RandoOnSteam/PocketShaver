@@ -37,6 +37,8 @@ const uint32  DR_CACHE_SIZE = 0x80000;			// Size of DR Cache
 const uintptr KERNEL_DATA_BASE = 0x68ffe000;	// Address of Kernel Data
 const uintptr KERNEL_DATA2_BASE = 0x5fffe000;	// Alternate address of Kernel Data
 const uint32  KERNEL_AREA_SIZE = 0x2000;		// Size of Kernel Data area
+const uintptr MACIO_VIA_BASE = 0xf3010000;
+const uint32  MACIO_VIA_SIZE = 0x10000;
 
 // MacOS 68k Emulator Data
 struct EmulatorData {

@@ -464,6 +464,7 @@ void EmulOp(uint16 opcode, M68kRegisters *r)
 				if (HasMacStarted()) {
 
 					// Mac has started, execute all 60Hz interrupt functions
+					AudioSoundBaseTick();
 #if !PRECISE_TIMING
 					TimerInterrupt();
 #endif

@@ -2818,6 +2818,23 @@ enum {
 // This function is called by SDL, whenever it generates an SDL_Event.  It has
 // the ability to process events, and optionally, to prevent them from being
 // added to SDL's event queue (and retrieve-able via SDL_PeepEvents(), etc.)
+#if defined(ENABLE_GFXACCEL) && defined(SHEEPSHAVER) && !defined(GFXACCEL_USE_SDLGPU)
+static void VideoWindowToGuest(float *x, float *y)
+{
+	int left;
+	int top;
+	int width;
+	int height;
+	const VIDEO_MODE &mode = drv->mode;
+	MetalCompositorRefreshPresentRect();
+	MetalCompositorGetPresentRect(&left, &top, &width, &height);
+	if (width <= 0 || height <= 0)
+		return;
+	*x = (*x - left) * VIDEO_MODE_X / width;
+	*y = (*y - top) * VIDEO_MODE_Y / height;
+}
+#endif
+
 static bool SDLCALL on_sdl_event_generated(void *userdata, SDL_Event *event)
 {
 	switch (event->type) {
@@ -2930,6 +2947,9 @@ static void handle_events(void)
 					drv->mouse_moved(event.motion.x, event.motion.y);
 #else
 					SDL_ConvertEventToRenderCoordinates(sdl_renderer, &event);
+#if defined(ENABLE_GFXACCEL) && defined(SHEEPSHAVER) && !defined(GFXACCEL_USE_SDLGPU)
+					VideoWindowToGuest(&event.motion.x, &event.motion.y);
+#endif
 #ifdef VIDEO_CHROMAKEY
 					if (display_type == DISPLAY_CHROMAKEY) {
 						int xl, yl;

@@ -396,6 +396,7 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 				}
 				if (InterruptFlags & INTFLAG_VIA) {
 					ClearInterruptFlag(INTFLAG_VIA);
+					AudioSoundBaseTick();
 					via_service_count++;
 #if !PRECISE_TIMING
 					TimerInterrupt();
