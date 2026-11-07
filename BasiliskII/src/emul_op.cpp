@@ -244,6 +244,7 @@ void EmulOp(uint16 opcode, M68kRegisters *r)
 			// Install drivers
 			D(bug("InstallDrivers\n"));
 			InstallDrivers(r->a[0]);
+			AudioSoundBaseInstall();
 
 			// Install PutScrap() patch
 			M68kRegisters r;

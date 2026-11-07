@@ -222,7 +222,7 @@ bool SflMainMapMemory(void)
 		ErrorAlert(GetString(STR_SHEEP_MEM_MMAP_ERR));
 		return false;
 	}
-	SflMemMap(MACIO_VIA_BASE, MACIO_VIA_SIZE);
+	SflMemMap(MACIO_VIA_BASE, MACIO_VIA_SIZE); /* VIA sound chip; old games */
 	return true;
 }
 

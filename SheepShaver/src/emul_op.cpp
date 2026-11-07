@@ -316,6 +316,7 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 		case OP_INSTALL_DRIVERS: {	// Patch to install our own drivers during startup
 			// Install drivers
 			InstallDrivers();
+			AudioSoundBaseInstall();
 
 			// Patch MakeExecutable()
 			MakeExecutableTvec = FindLibSymbol("\023PrivateInterfaceLib", "\016MakeExecutable");

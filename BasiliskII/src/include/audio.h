@@ -44,6 +44,7 @@ extern void AudioExit(void);
 extern void AudioReset(void);
 
 extern void AudioInterrupt(void);
+extern void AudioSoundBaseInstall(void);
 extern void AudioSoundBaseTick(void);
 extern void AudioSoundBaseMix(uint8 *stream, int bytes, int samplesize, int channels, int frequency, int volume);
 

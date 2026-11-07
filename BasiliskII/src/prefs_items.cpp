@@ -106,7 +106,7 @@ void AddPrefsDefaults(void)
 	PrefsAddInt32("bootdriver", 0);
 	PrefsAddInt32("bootdrive", 0);
 	PrefsAddInt32("ramsize", 8 * 1024 * 1024);
-	PrefsAddInt32("frameskip", 6);
+	PrefsAddInt32("frameskip", 1);
 	PrefsAddInt32("modelid", 5);	// Mac IIci
 	PrefsAddInt32("cpu", 3);		// 68030
 	PrefsAddInt32("displaycolordepth", 0);

@@ -63,6 +63,7 @@ int SoundInGain = 65536; // FIXED 4-byte from 0.5 to 1.5; this is middle value (
 
 void AudioReset(void)
 {
+	AudioStatus.soundbuffer = 0;
 	audio_data = 0;
 }
 
@@ -70,6 +71,16 @@ void AudioReset(void)
 /*
  *  Classic SoundBase buffer
  */
+
+void AudioSoundBaseInstall(void)
+{
+	M68kRegisters r;
+	r.d[0] = AUDIO_SOUNDBASE_BYTES;
+	Execute68kTrap(0xa71e, &r);
+	AudioStatus.soundbuffer = r.a[0];
+	if (r.a[0])
+		WriteMacInt32(0x266, r.a[0]);
+}
 
 void AudioSoundBaseTick(void)
 {
@@ -81,7 +92,7 @@ void AudioSoundBaseTick(void)
 	uint32 audible;
 	base = ReadMacInt32(0x266);
 	source = Mac2HostAddr(base);
-	if (base != AudioStatus.soundbuffer && (source < RAMBaseHost || source + AUDIO_SOUNDBASE_BYTES > RAMBaseHost + RAMSize)) {
+	if (source < RAMBaseHost || source + AUDIO_SOUNDBASE_BYTES > RAMBaseHost + RAMSize) {
 		if (AudioStatus.soundbuffer == 0)
 			return;
 		WriteMacInt32(0x266, AudioStatus.soundbuffer);

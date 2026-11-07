@@ -152,7 +152,6 @@ bool InitAll(const char *vmdir)
 
 	// Initialize Kernel Data
 	Mac_memset(KERNEL_DATA_BASE, 0, sizeof(KernelData));
-	AudioStatus.soundbuffer = SheepMem::Reserve(AUDIO_SOUNDBASE_BYTES);
 	if (ROMType == ROMTYPE_NEWWORLD) {
 		uint32 of_dev_tree = SheepMem::Reserve(4 * sizeof(uint32));
 		Mac_memset(of_dev_tree, 0, 4 * sizeof(uint32));
