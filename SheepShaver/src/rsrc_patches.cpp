@@ -571,7 +571,23 @@ void CheckLoad(uint32 type, int16 id, uint16 *p, uint32 size)
 	// Don't modify resources in ROM
 	if ((uintptr)p >= (uintptr)ROMBaseHost && (uintptr)p <= (uintptr)(ROMBaseHost + ROM_SIZE))
 		return;
-
+#if !defined(MACEMU_USEVIASOUNDBASE)
+	if (type == FOURCC('C','O','D','E')) {
+		// Populous (1) hack - it writes to the Via chip and
+		// SoundBase directly. VIA (0x1D4)for sound enable and SoundBase
+		// for the actual buffer write. This redirects to nothingness
+		// to prevent a crash.
+		static const uint8 soundname[] = "\215openhardsound";
+		static const uint8 soundpattern[] = {
+		0x1e, 0x00, 0x67, 0x36, 0x4a, 0x93, 0x66, 0x50,
+		0x70, 0x01, 0x2f, 0x00, 0x2f, 0x3c, 0x00, 0x00, 0xa8, 0x07
+		};
+		base = find_rsrc_data((uint8 *)p, size, soundpattern, sizeof(soundpattern));
+		if (base && size - base >= 100 + sizeof(soundname) &&
+		memcmp((uint8 *)p + base + 100, soundname, sizeof(soundname)) == 0)
+		p[base >> 1] = htons(0x7e01);
+	}
+#endif /* !MACEMU_USEVIASOUNDBASE */
 	if (type == FOURCC('b','o','o','t') && id == 3) {
 		D(bug("boot 3 found\n"));
 		if (HasNanoKernel2() && ReadMacInt16(ROMBase + 0x310004) >= 0x0210) {

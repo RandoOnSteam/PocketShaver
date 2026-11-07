@@ -23,7 +23,7 @@
 
 #include <vector>
 
-#define MACEMU_USEVIASOUNDBASE
+//#define MACEMU_USEVIASOUNDBASE
 
 #ifdef MACEMU_USEVIASOUNDBASE
 #include "atomic.h"
