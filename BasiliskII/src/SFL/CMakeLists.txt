@@ -19,16 +19,42 @@ endif()
 set(B2_UAE_GEN_SRCS
 	"${B2_GEN}/cpuemu.cpp" "${B2_GEN}/cpustbl.cpp" "${B2_GEN}/cputbl.h"
 	"${B2_GEN}/cpuemu_nf.cpp" "${B2_GEN}/cpustbl_nf.cpp")
-include(ExternalProject)
-ExternalProject_Add(sfl_uae_tables
-	SOURCE_DIR "${SFLDIR}/HostTools"
-	BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}/host-tools"
-	CMAKE_ARGS "-DB2_GEN=${B2_GEN}" "-DCMAKE_BUILD_TYPE=Release"
-		"-DCMAKE_MAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
-	BUILD_COMMAND "${CMAKE_COMMAND}" --build <BINARY_DIR> --config Release --target sfl_uae_tables
-	BUILD_ALWAYS TRUE
-	BUILD_BYPRODUCTS "${B2_GEN}/cpudefs.cpp" ${B2_UAE_GEN_SRCS}
-	INSTALL_COMMAND "")
+set(B2_HOST_TOOLS "" CACHE PATH "Directory holding a native SFL host-tools build, for cross builds")
+if(NOT B2_HOST_TOOLS AND MSVC AND CMAKE_C_COMPILER_ARCHITECTURE_ID STREQUAL "ARM64"
+		AND NOT CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "ARM64")
+	message(FATAL_ERROR "Cross compiling for ARM64: set B2_HOST_TOOLS to a native SFL build's host-tools directory")
+endif()
+if(B2_HOST_TOOLS)
+	add_custom_command(
+		OUTPUT "${B2_GEN}/cpudefs.cpp"
+		COMMAND ${CMAKE_COMMAND}
+		-DMACEMU_REDIRECT_TOOL=${B2_HOST_TOOLS}/sfl_build68k${CMAKE_HOST_EXECUTABLE_SUFFIX}
+		"-DMACEMU_REDIRECT_ARGS=\"${UAE_DIR}/table68k\""
+		-DMACEMU_REDIRECT_OUTPUT=${B2_GEN}/cpudefs.cpp
+		-P "${B2SRC}/../../cmake/run_redirect.cmake"
+		DEPENDS "${UAE_DIR}/table68k"
+		COMMENT "Generating cpudefs.cpp"
+		VERBATIM)
+	add_custom_command(
+		OUTPUT ${B2_UAE_GEN_SRCS}
+		COMMAND ${B2_HOST_TOOLS}/sfl_gencpu${CMAKE_HOST_EXECUTABLE_SUFFIX}
+		DEPENDS "${B2_GEN}/cpudefs.cpp"
+		WORKING_DIRECTORY "${B2_GEN}"
+		COMMENT "Running gencpu"
+		VERBATIM)
+	add_custom_target(sfl_uae_tables DEPENDS ${B2_UAE_GEN_SRCS})
+else()
+	include(ExternalProject)
+	ExternalProject_Add(sfl_uae_tables
+		SOURCE_DIR "${SFLDIR}/HostTools"
+		BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}/host-tools"
+		CMAKE_ARGS "-DB2_GEN=${B2_GEN}" "-DCMAKE_BUILD_TYPE=Release"
+			"-DCMAKE_MAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
+		BUILD_COMMAND "${CMAKE_COMMAND}" --build <BINARY_DIR> --config Release --target sfl_uae_tables
+		BUILD_ALWAYS TRUE
+		BUILD_BYPRODUCTS "${B2_GEN}/cpudefs.cpp" ${B2_UAE_GEN_SRCS}
+		INSTALL_COMMAND "")
+endif()
 set_source_files_properties("${B2_GEN}/cpudefs.cpp" ${B2_UAE_GEN_SRCS} PROPERTIES GENERATED TRUE)
 
 set(B2_CORE

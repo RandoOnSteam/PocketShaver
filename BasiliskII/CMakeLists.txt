@@ -47,6 +47,15 @@ macemu_write_config(
 # ---------------------------------------------------------------------------
 # UAE codegen host tools
 # ---------------------------------------------------------------------------
+	set(B2_HOST_TOOLS "" CACHE PATH "Directory holding host-built build68k and gencpu, for cross builds")
+	if(NOT B2_HOST_TOOLS AND MSVC AND CMAKE_C_COMPILER_ARCHITECTURE_ID STREQUAL "ARM64"
+			AND NOT CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "ARM64")
+		message(FATAL_ERROR "Cross compiling for ARM64: set B2_HOST_TOOLS to a native build's BasiliskII directory")
+	endif()
+	if(B2_HOST_TOOLS)
+		set(B2_BUILD68K "${B2_HOST_TOOLS}/build68k${CMAKE_HOST_EXECUTABLE_SUFFIX}")
+		set(B2_GENCPU "${B2_HOST_TOOLS}/gencpu${CMAKE_HOST_EXECUTABLE_SUFFIX}")
+	else()
 	add_executable(build68k "${UAE_DIR}/build68k.c")
 	target_include_directories(build68k PRIVATE
 		"${CMAKE_CURRENT_BINARY_DIR}" "${B2_SYSDEPS}" "${B2_SRC}/include" "${UAE_DIR}")
@@ -54,15 +63,18 @@ macemu_write_config(
 	if(MSVC)
 		target_compile_definitions(build68k PRIVATE _CRT_SECURE_NO_WARNINGS)
 	endif()
+		set(B2_BUILD68K build68k)
+		set(B2_GENCPU gencpu)
+	endif()
 
 	add_custom_command(
 		OUTPUT "${B2_GEN}/cpudefs.cpp"
 		COMMAND ${CMAKE_COMMAND}
-		-DMACEMU_REDIRECT_TOOL=$<TARGET_FILE:build68k>
+		-DMACEMU_REDIRECT_TOOL=${B2_BUILD68K}
 		-DMACEMU_REDIRECT_ARGS=${UAE_DIR}/table68k
 		-DMACEMU_REDIRECT_OUTPUT=${B2_GEN}/cpudefs.cpp
 		-P ${MACEMU_CMAKE_DIR}/run_redirect.cmake
-		DEPENDS build68k "${UAE_DIR}/table68k"
+		DEPENDS ${B2_BUILD68K} "${UAE_DIR}/table68k"
 		COMMENT "Generating cpudefs.cpp"
 		VERBATIM
 	)
@@ -75,11 +87,13 @@ macemu_write_config(
 		target_compile_definitions(uae_readcpu PRIVATE _CRT_SECURE_NO_WARNINGS)
 	endif()
 
+	if(NOT B2_HOST_TOOLS)
 	add_executable(gencpu "${UAE_DIR}/gencpu.c")
 	target_link_libraries(gencpu PRIVATE uae_readcpu)
 	target_compile_definitions(gencpu PRIVATE HAVE_CONFIG_H)
 	if(MSVC)
 		target_compile_definitions(gencpu PRIVATE _CRT_SECURE_NO_WARNINGS)
+	endif()
 	endif()
 
 	set(B2_UAE_GEN_SRCS
@@ -87,8 +101,8 @@ macemu_write_config(
 		"${B2_GEN}/cpuemu_nf.cpp" "${B2_GEN}/cpustbl_nf.cpp")
 	add_custom_command(
 		OUTPUT ${B2_UAE_GEN_SRCS}
-		COMMAND gencpu
-		DEPENDS gencpu "${B2_GEN}/cpudefs.cpp"
+		COMMAND ${B2_GENCPU}
+		DEPENDS ${B2_GENCPU} "${B2_GEN}/cpudefs.cpp"
 		WORKING_DIRECTORY "${B2_GEN}"
 		COMMENT "Running gencpu"
 		VERBATIM
