@@ -755,6 +755,123 @@ static void FloatSingleMultiplyAdd(OsxNativeEmitter *emitter, int extended, int 
 	FloatClass(emitter, target, count, 1);
 }
 
+static void FloatDoubleOperand(OsxNativeEmitter *emitter, int reg, int count)
+{
+	Byte(emitter, 0x8b); Byte(emitter, 0x93);
+	Word(emitter, OSXJITFPR(reg) + 4);
+	Byte(emitter, 0xc1); Byte(emitter, 0xea); Byte(emitter, 20);
+	Byte(emitter, 0x81); Byte(emitter, 0xe2); Word(emitter, 0x7ff);
+	Byte(emitter, 0x81); Byte(emitter, 0xea); Word(emitter, 565);
+	Byte(emitter, 0x81); Byte(emitter, 0xfa); Word(emitter, 917);
+	Miss(emitter, 3, count);
+}
+
+static void FloatOddSum(OsxNativeEmitter *emitter)
+{
+	uint8 *exact;
+	uint8 *odd;
+	uint8 *differ;
+	uint8 *done;
+	Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x28); Byte(emitter, 0xd0);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x58); Byte(emitter, 0xd5);
+	Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x28); Byte(emitter, 0xda);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x5c); Byte(emitter, 0xd8);
+	Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x28); Byte(emitter, 0xe2);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x5c); Byte(emitter, 0xe3);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x5c); Byte(emitter, 0xc4);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x5c); Byte(emitter, 0xeb);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x58); Byte(emitter, 0xc5);
+	Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x57); Byte(emitter, 0xdb);
+	Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x2e); Byte(emitter, 0xc3);
+	exact = Jump(emitter, 4);
+	Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x7e); Byte(emitter, 0xd0);
+	Byte(emitter, 0xa8); Byte(emitter, 1);
+	odd = Jump(emitter, 5);
+	Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x28); Byte(emitter, 0xe2);
+	Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x57); Byte(emitter, 0xe0);
+	Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x50); Byte(emitter, 0xc4);
+	Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x76); Byte(emitter, 0xed);
+	Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x73); Byte(emitter, 0xd5); Byte(emitter, 63);
+	Byte(emitter, 0xa8); Byte(emitter, 1);
+	differ = Jump(emitter, 5);
+	Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0xd4); Byte(emitter, 0xd5);
+	Byte(emitter, 0xe9);
+	done = emitter->cursor;
+	Word(emitter, 0);
+	Patch(differ, emitter->cursor);
+	Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0xfb); Byte(emitter, 0xd5);
+	Patch(done, emitter->cursor);
+	Patch(exact, emitter->cursor);
+	Patch(odd, emitter->cursor);
+}
+
+static void FloatDoubleMultiplyAdd(OsxNativeEmitter *emitter, int extended, int target, int left, int multiplier, int right, int count)
+{
+	FloatDoubleOperand(emitter, left, count);
+	FloatDoubleOperand(emitter, multiplier, count);
+	Byte(emitter, 0x8b); Byte(emitter, 0x93);
+	Word(emitter, OSXJITFPR(right) + 4);
+	Byte(emitter, 0xc1); Byte(emitter, 0xea); Byte(emitter, 20);
+	Byte(emitter, 0x81); Byte(emitter, 0xe2); Word(emitter, 0x7ff);
+	Byte(emitter, 0x81); Byte(emitter, 0xfa); Word(emitter, 0x7ff);
+	Miss(emitter, 4, count);
+	Byte(emitter, 0xb8); Word(emitter, 0x02000000);
+	Byte(emitter, 0xba); Word(emitter, 0x41a00000);
+	Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x6e); Byte(emitter, 0xe8);
+	Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x6e); Byte(emitter, 0xe2);
+	Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x62); Byte(emitter, 0xec);
+	FloatLoad(emitter, 0, left);
+	Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x28); Byte(emitter, 0xcd);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x59); Byte(emitter, 0xc8);
+	Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x28); Byte(emitter, 0xd1);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x5c); Byte(emitter, 0xd0);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x5c); Byte(emitter, 0xca);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x5c); Byte(emitter, 0xc1);
+	FloatLoad(emitter, 2, multiplier);
+	Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x28); Byte(emitter, 0xdd);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x59); Byte(emitter, 0xda);
+	Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x28); Byte(emitter, 0xe3);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x5c); Byte(emitter, 0xe2);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x5c); Byte(emitter, 0xdc);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x5c); Byte(emitter, 0xd3);
+	FloatLoad(emitter, 4, left);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x59); Byte(emitter, 0xa3);
+	Word(emitter, OSXJITFPR(multiplier));
+	Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x28); Byte(emitter, 0xe9);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x59); Byte(emitter, 0xeb);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x5c); Byte(emitter, 0xec);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x59); Byte(emitter, 0xca);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x58); Byte(emitter, 0xe9);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x59); Byte(emitter, 0xd8);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x58); Byte(emitter, 0xeb);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x59); Byte(emitter, 0xc2);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x58); Byte(emitter, 0xe8);
+	FloatLoad(emitter, 0, right);
+	if (extended == 28 || extended == 30) {
+		Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x76); Byte(emitter, 0xc9);
+		Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x73); Byte(emitter, 0xf1); Byte(emitter, 63);
+		Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x57); Byte(emitter, 0xc1);
+	}
+	Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x28); Byte(emitter, 0xc8);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x58); Byte(emitter, 0xcc);
+	Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x28); Byte(emitter, 0xd1);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x5c); Byte(emitter, 0xd0);
+	Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x28); Byte(emitter, 0xd9);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x5c); Byte(emitter, 0xda);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x5c); Byte(emitter, 0xc3);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x5c); Byte(emitter, 0xe2);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x58); Byte(emitter, 0xc4);
+	FloatOddSum(emitter);
+	Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x28); Byte(emitter, 0xc1);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x58); Byte(emitter, 0xc2);
+	if (extended >= 30) {
+		Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x76); Byte(emitter, 0xc9);
+		Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x73); Byte(emitter, 0xf1); Byte(emitter, 63);
+		Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x57); Byte(emitter, 0xc1);
+	}
+	FloatClass(emitter, target, count, 0);
+}
+
 static int Float(OsxNativeEmitter *emitter, uint32 instruction, int count)
 {
 	uint32 extended;
@@ -818,8 +935,13 @@ static int Float(OsxNativeEmitter *emitter, uint32 instruction, int count)
 			RecordFloat(emitter, instruction);
 			return 1;
 		}
-		if (!emitter->fused)
-			return 0;
+		if (!emitter->fused) {
+			RequireFloat(emitter, count);
+			FloatRounding(emitter, count);
+			FloatDoubleMultiplyAdd(emitter, extended, target, left, multiplier, right, count);
+			RecordFloat(emitter, instruction);
+			return 1;
+		}
 		RequireFloat(emitter, count);
 		FloatRounding(emitter, count);
 		CpuMemory(emitter, 0x8b, 0, OSXJITFPR(left), 1);
@@ -3894,6 +4016,123 @@ static void FloatSingleMultiplyAdd(OsxNativeEmitter *emitter, int extended, int 
 	FloatClass(emitter, target, count, 1);
 }
 
+static void FloatDoubleOperand(OsxNativeEmitter *emitter, int reg, int count)
+{
+	Byte(emitter, 0x8b); Byte(emitter, 0x93);
+	Word(emitter, OSXJITFPR(reg) + 4);
+	Byte(emitter, 0xc1); Byte(emitter, 0xea); Byte(emitter, 20);
+	Byte(emitter, 0x81); Byte(emitter, 0xe2); Word(emitter, 0x7ff);
+	Byte(emitter, 0x81); Byte(emitter, 0xea); Word(emitter, 565);
+	Byte(emitter, 0x81); Byte(emitter, 0xfa); Word(emitter, 917);
+	Miss(emitter, 3, count);
+}
+
+static void FloatOddSum(OsxNativeEmitter *emitter)
+{
+	uint8 *exact;
+	uint8 *odd;
+	uint8 *differ;
+	uint8 *done;
+	Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x28); Byte(emitter, 0xd0);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x58); Byte(emitter, 0xd5);
+	Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x28); Byte(emitter, 0xda);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x5c); Byte(emitter, 0xd8);
+	Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x28); Byte(emitter, 0xe2);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x5c); Byte(emitter, 0xe3);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x5c); Byte(emitter, 0xc4);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x5c); Byte(emitter, 0xeb);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x58); Byte(emitter, 0xc5);
+	Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x57); Byte(emitter, 0xdb);
+	Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x2e); Byte(emitter, 0xc3);
+	exact = Jump(emitter, 4);
+	Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x7e); Byte(emitter, 0xd0);
+	Byte(emitter, 0xa8); Byte(emitter, 1);
+	odd = Jump(emitter, 5);
+	Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x28); Byte(emitter, 0xe2);
+	Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x57); Byte(emitter, 0xe0);
+	Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x50); Byte(emitter, 0xc4);
+	Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x76); Byte(emitter, 0xed);
+	Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x73); Byte(emitter, 0xd5); Byte(emitter, 63);
+	Byte(emitter, 0xa8); Byte(emitter, 1);
+	differ = Jump(emitter, 5);
+	Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0xd4); Byte(emitter, 0xd5);
+	Byte(emitter, 0xe9);
+	done = emitter->cursor;
+	Word(emitter, 0);
+	Patch(differ, emitter->cursor);
+	Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0xfb); Byte(emitter, 0xd5);
+	Patch(done, emitter->cursor);
+	Patch(exact, emitter->cursor);
+	Patch(odd, emitter->cursor);
+}
+
+static void FloatDoubleMultiplyAdd(OsxNativeEmitter *emitter, int extended, int target, int left, int multiplier, int right, int count)
+{
+	FloatDoubleOperand(emitter, left, count);
+	FloatDoubleOperand(emitter, multiplier, count);
+	Byte(emitter, 0x8b); Byte(emitter, 0x93);
+	Word(emitter, OSXJITFPR(right) + 4);
+	Byte(emitter, 0xc1); Byte(emitter, 0xea); Byte(emitter, 20);
+	Byte(emitter, 0x81); Byte(emitter, 0xe2); Word(emitter, 0x7ff);
+	Byte(emitter, 0x81); Byte(emitter, 0xfa); Word(emitter, 0x7ff);
+	Miss(emitter, 4, count);
+	Byte(emitter, 0xb8); Word(emitter, 0x02000000);
+	Byte(emitter, 0xba); Word(emitter, 0x41a00000);
+	Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x6e); Byte(emitter, 0xe8);
+	Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x6e); Byte(emitter, 0xe2);
+	Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x62); Byte(emitter, 0xec);
+	FloatLoad(emitter, 0, left);
+	Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x28); Byte(emitter, 0xcd);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x59); Byte(emitter, 0xc8);
+	Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x28); Byte(emitter, 0xd1);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x5c); Byte(emitter, 0xd0);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x5c); Byte(emitter, 0xca);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x5c); Byte(emitter, 0xc1);
+	FloatLoad(emitter, 2, multiplier);
+	Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x28); Byte(emitter, 0xdd);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x59); Byte(emitter, 0xda);
+	Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x28); Byte(emitter, 0xe3);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x5c); Byte(emitter, 0xe2);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x5c); Byte(emitter, 0xdc);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x5c); Byte(emitter, 0xd3);
+	FloatLoad(emitter, 4, left);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x59); Byte(emitter, 0xa3);
+	Word(emitter, OSXJITFPR(multiplier));
+	Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x28); Byte(emitter, 0xe9);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x59); Byte(emitter, 0xeb);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x5c); Byte(emitter, 0xec);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x59); Byte(emitter, 0xca);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x58); Byte(emitter, 0xe9);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x59); Byte(emitter, 0xd8);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x58); Byte(emitter, 0xeb);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x59); Byte(emitter, 0xc2);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x58); Byte(emitter, 0xe8);
+	FloatLoad(emitter, 0, right);
+	if (extended == 28 || extended == 30) {
+		Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x76); Byte(emitter, 0xc9);
+		Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x73); Byte(emitter, 0xf1); Byte(emitter, 63);
+		Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x57); Byte(emitter, 0xc1);
+	}
+	Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x28); Byte(emitter, 0xc8);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x58); Byte(emitter, 0xcc);
+	Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x28); Byte(emitter, 0xd1);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x5c); Byte(emitter, 0xd0);
+	Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x28); Byte(emitter, 0xd9);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x5c); Byte(emitter, 0xda);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x5c); Byte(emitter, 0xc3);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x5c); Byte(emitter, 0xe2);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x58); Byte(emitter, 0xc4);
+	FloatOddSum(emitter);
+	Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x28); Byte(emitter, 0xc1);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x58); Byte(emitter, 0xc2);
+	if (extended >= 30) {
+		Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x76); Byte(emitter, 0xc9);
+		Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x73); Byte(emitter, 0xf1); Byte(emitter, 63);
+		Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x57); Byte(emitter, 0xc1);
+	}
+	FloatClass(emitter, target, count, 0);
+}
+
 static int Float(OsxNativeEmitter *emitter, uint32 instruction, int count)
 {
 	uint32 extended;
@@ -3958,8 +4197,13 @@ static int Float(OsxNativeEmitter *emitter, uint32 instruction, int count)
 			RecordFloat(emitter, instruction);
 			return 1;
 		}
-		if (!emitter->state->fused)
-			return 0;
+		if (!emitter->state->fused) {
+			RequireFloat(emitter, count);
+			FloatRounding(emitter, count);
+			FloatDoubleMultiplyAdd(emitter, extended, target, left, multiplier, right, count);
+			RecordFloat(emitter, instruction);
+			return 1;
+		}
 		RequireFloat(emitter, count);
 		FloatRounding(emitter, count);
 		FloatExponent(emitter, left, count, 0);

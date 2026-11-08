@@ -433,6 +433,95 @@ static void SingleMultiplyAdd(OsxJitTest *test)
 	}
 }
 
+static uint64 DoubleMultiplicand(OsxJitTest *test)
+{
+	static const uint64 specials[] = {
+		0, 0x8000000000000000ULL, 1, 0x000fffffffffffffULL, 0x7ff0000000000000ULL,
+		0x7ff8000000000000ULL, 0x3ff0000000000000ULL, 0x7fefffffffffffffULL
+	};
+	uint64 bits;
+	uint32 draw0;
+	uint32 draw1;
+	if ((Random(test) & 15) == 0)
+		return specials[Random(test) % (sizeof(specials) / sizeof(specials[0]))];
+	draw0 = Random(test);
+	draw1 = Random(test);
+	bits = (((uint64)draw0 << 32) | draw1) & 0x800fffffffffffffULL;
+	return bits | ((uint64)(1023 - 520 + Random(test) % 1041) << 52);
+}
+
+static uint64 DoubleAddend(OsxJitTest *test, uint64 left, uint64 multiplier)
+{
+	double product;
+	double factor;
+	uint64 bits;
+	uint64 exponent;
+	uint32 draw0;
+	uint32 draw1;
+	uint32 kind;
+	memcpy(&product, &left, 8);
+	memcpy(&factor, &multiplier, 8);
+	product = product * factor;
+	memcpy(&bits, &product, 8);
+	draw0 = Random(test);
+	draw1 = Random(test);
+	kind = Random(test) % 7;
+	exponent = (bits >> 52) & 0x7ff;
+	if (kind == 0)
+		return (((uint64)draw0 << 32) | draw1) & 0xbfffffffffffffffULL;
+	if (kind == 1)
+		return bits ^ 0x8000000000000000ULL;
+	if (kind == 2)
+		return (bits ^ 0x8000000000000000ULL) ^ (draw1 & 0xfff);
+	if (kind == 3 && exponent > 64 && exponent < 0x7ff - 64)
+		return ((((uint64)draw0 << 32) | draw1) & 0x800fffffffffffffULL) | ((exponent - 32 + (Random(test) & 63)) << 52);
+	if (kind == 4 && exponent > 60 && exponent < 0x7ff)
+		return (((uint64)(draw0 & 0x80000000u)) << 32) | ((exponent - 53) << 52) | (draw1 & 3);
+	if (kind == 5 && exponent > 60 && exponent < 0x7ff)
+		return (((uint64)(draw0 & 0x80000000u)) << 32) | ((exponent - 54 + (draw1 & 3)) << 52);
+	if (kind == 6 && (draw0 & 1))
+		return 0x0000000000000003ULL;
+	if (kind == 6)
+		return 0x8000000000000000ULL;
+	return bits;
+}
+
+static void DoubleMultiplyAdd(OsxJitTest *test)
+{
+	OsxCpu *cpu;
+	uint32 instruction;
+	uint32 fpscr;
+	uint64 left;
+	uint64 multiplier;
+	uint64 right;
+	int iteration;
+	int index;
+	for (iteration = 0; iteration < 1000000; iteration++) {
+		Reset(test);
+		instruction = (63u << 26) | ((Random(test) & 31) << 21) | (1u << 16) | (2u << 11) | (3u << 6);
+		instruction |= (28u + (Random(test) & 3)) << 1;
+		instruction |= Random(test) & 1;
+		fpscr = Random(test) & 0xfff7f0f8u;
+		if ((Random(test) & 15) == 0)
+			fpscr |= Random(test) & 3;
+		left = DoubleMultiplicand(test);
+		multiplier = DoubleMultiplicand(test);
+		right = DoubleAddend(test, left, multiplier);
+		for (index = 0; index < 2; index++) {
+			if (index == 0)
+				cpu = test->reference;
+			else
+				cpu = test->native;
+			cpu->fpr[1].bits = left;
+			cpu->fpr[2].bits = right;
+			cpu->fpr[3].bits = multiplier;
+			cpu->fpscr = fpscr;
+			OsxCpuUpdateModes(cpu);
+		}
+		Run(test, instruction, 1, "double multiply add");
+	}
+}
+
 static void VectorInstructions(OsxJitTest *test)
 {
 	uint32 draw0;
@@ -1250,7 +1339,7 @@ static void FloatBenchmarkForm(OsxJitTest *test, uint32 form)
 		cpu->fpr[3].value = 0.25;
 		cpu->fpr[4].value = 1.0;
 		for (step = 0; step < 31; step++)
-			Put(cpu, TESTENTRY + (uint32)step * 4, (59u << 26) | ((uint32)(5 + step % 3) << 21) | (2u << 16) | (4u << 11) | form);
+			Put(cpu, TESTENTRY + (uint32)step * 4, (59u << 26) | ((form >> 31) << 28) | ((uint32)(5 + step % 3) << 21) | (2u << 16) | (4u << 11) | (form & 0xffff));
 		Put(cpu, TESTENTRY + 124, 0x4bffff84);
 		OsxJitInvalidate(cpu, TESTENTRY, 4096);
 		start = OsxHostNanoseconds();
@@ -1271,6 +1360,7 @@ static void FloatBenchmark(OsxJitTest *test)
 	FloatBenchmarkForm(test, 21u << 1);
 	FloatBenchmarkForm(test, (3u << 6) | (25u << 1));
 	FloatBenchmarkForm(test, (3u << 6) | (29u << 1));
+	FloatBenchmarkForm(test, (1u << 31) | (3u << 6) | (29u << 1));
 }
 
 #if OSXG5
@@ -1762,6 +1852,7 @@ int main(void)
 	FloatVectorMemory(&test);
 	FloatArithmetic(&test);
 	SingleMultiplyAdd(&test);
+	DoubleMultiplyAdd(&test);
 	VectorInstructions(&test);
 	VectorFloatCases(&test);
 	ExtendedMemory(&test);
