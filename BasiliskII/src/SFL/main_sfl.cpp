@@ -100,6 +100,7 @@ typedef struct SFLMAIN
 	int nvramticks;
 	bool emulatorrunning;
 	bool initialized;
+	bool settingsrequested;
 #ifdef SHEEPSHAVER
 	bool nativeboot;
 #endif
@@ -148,6 +149,11 @@ bool tick_inhibit;
 #if defined(__cplusplus)
 extern "C" {
 #endif
+int SflEmulatorSettingsRequested(void)
+{
+	return SflMain.settingsrequested;
+}
+
 const char *SflMainPrefsPath(void)
 {
 	return SflMain.prefspath;
@@ -181,8 +187,15 @@ void SflMainParseArguments(int argc, char **argv)
 {
 	int index;
 	SflMain.prefspath = NULL;
+	SflMain.settingsrequested = false;
+	for (index = 1; index < argc; index++) {
+		if (argv[index] != NULL && strcmp(argv[index], "--settings") == 0) {
+			SflMain.settingsrequested = true;
+			argv[index] = NULL;
+		}
+	}
 	for (index = 1; index + 1 < argc; index++) {
-		if (strcmp(argv[index], "--config") == 0) {
+		if (argv[index] != NULL && strcmp(argv[index], "--config") == 0) {
 			SflMain.prefspath = argv[index + 1];
 			argv[index] = NULL;
 			argv[index + 1] = NULL;

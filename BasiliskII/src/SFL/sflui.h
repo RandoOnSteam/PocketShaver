@@ -67,6 +67,7 @@ void SflAudioCaptureClose(void *capture);
 
 void SflEmulatorLoadPrefs(int argc, char **argv);
 int SflEmulatorRomValid(const char *path);
+int SflEmulatorSettingsRequested(void);
 int SflEmulatorSetup(int argc, char **argv);
 void SflEmulatorStart(void);
 void SflEmulatorStop(void);

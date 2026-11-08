@@ -38,6 +38,7 @@
 #define SFLVIDEODEFAULTHEIGHT 480
 #define SFLVIDEOMINWIDTH 512
 #define SFLVIDEOMINHEIGHT 384
+#define SFLVIDEOMAXRESOLUTIONS 10
 
 typedef struct SFLVIDEOSIZE {
 	int width;
@@ -76,20 +77,22 @@ static int SflVideoBits(uint32 mode)
 	return 32;
 }
 
-static int SflVideoAppleId(int width, int height)
+static int SflVideoAppleId(int width, int height, int *custom)
 {
 	int index;
 	for (index = 0; index < SFLVIDEOSIZES; index++) {
 		if (SflVideoSizes[index].width == width && SflVideoSizes[index].height == height)
 			return SflVideoSizes[index].id;
 	}
-	return APPLE_CUSTOM;
+	return APPLE_CUSTOM + (*custom)++;
 }
 
-static void SflVideoAddModes(VideoInfo **cursor, int width, int height)
+static void SflVideoAddModes(VideoInfo **cursor, int width, int height, int *custom)
 {
 	VideoInfo *mode;
 	uint32 depth;
+	int appleid;
+	appleid = SflVideoAppleId(width, height, custom);
 	for (depth = APPLE_1_BIT; depth <= APPLE_32_BIT; depth++) {
 		mode = *cursor;
 		mode->viType = DIS_WINDOW;
@@ -97,7 +100,7 @@ static void SflVideoAddModes(VideoInfo **cursor, int width, int height)
 		mode->viXsize = width;
 		mode->viYsize = height;
 		mode->viAppleMode = depth;
-		mode->viAppleID = SflVideoAppleId(width, height);
+		mode->viAppleID = appleid;
 		(*cursor)++;
 	}
 }
@@ -133,6 +136,11 @@ static void SflVideoOpenMode(int index)
 bool VideoInit(void)
 {
 	VideoInfo *cursor;
+	const char *entry;
+	int custom;
+	int count;
+	int listwidth;
+	int listheight;
 	const char *mode;
 	int width;
 	int height;
@@ -156,10 +164,23 @@ bool VideoInit(void)
 		height = SFLVIDEODEFAULTHEIGHT;
 	}
 	cursor = VModes;
-	SflVideoAddModes(&cursor, width, height);
-	for (index = 0; index < SFLVIDEOSIZES; index++) {
-		if (SflVideoSizes[index].width < width && SflVideoSizes[index].height < height)
-			SflVideoAddModes(&cursor, SflVideoSizes[index].width, SflVideoSizes[index].height);
+	custom = 0;
+	SflVideoAddModes(&cursor, width, height, &custom);
+	if (PrefsFindString("resolution") != NULL) {
+		count = 1;
+		for (index = 0; count < SFLVIDEOMAXRESOLUTIONS && (entry = PrefsFindString("resolution", index)) != NULL; index++) {
+			if (sscanf(entry, "%dx%d", &listwidth, &listheight) != 2)
+				continue;
+			if (listwidth < SFLVIDEOMINWIDTH || listheight < SFLVIDEOMINHEIGHT || (listwidth == width && listheight == height))
+				continue;
+			SflVideoAddModes(&cursor, listwidth, listheight, &custom);
+			count++;
+		}
+	} else {
+		for (index = 0; index < SFLVIDEOSIZES; index++) {
+			if (SflVideoSizes[index].width < width && SflVideoSizes[index].height < height)
+				SflVideoAddModes(&cursor, SflVideoSizes[index].width, SflVideoSizes[index].height, &custom);
+		}
 	}
 	cursor->viType = DIS_INVALID;
 	cursor->viRowBytes = 0;

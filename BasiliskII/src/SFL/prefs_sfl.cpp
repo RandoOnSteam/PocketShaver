@@ -44,11 +44,16 @@ prefs_desc platform_prefs_items[] = {
 	{"tcp_port", TYPE_STRING, false, "kept for other builds sharing this file"},
 	{"portfile0", TYPE_STRING, false, "kept for other builds sharing this file"},
 	{"portfile1", TYPE_STRING, false, "kept for other builds sharing this file"},
+	{"clipsharing", TYPE_BOOLEAN, false, "share the clipboard with the guest"},
+	{"setupdismissed", TYPE_BOOLEAN, false, "setup instructions banner dismissed"},
+	{"diskunmounted", TYPE_STRING, true, "disk files known but not mounted"},
+	{"relmouse", TYPE_STRING, false, "relative mouse mode"},
+	{"skiposxstartup", TYPE_BOOLEAN, false, "skip the settings window at startup"},
 #ifdef SHEEPSHAVER
+	{"resolution", TYPE_STRING, true, "monitor resolutions offered to Mac OS"},
 	{"mousewheelmode", TYPE_INT32, false, "kept for other builds sharing this file"},
 	{"mousewheellines", TYPE_INT32, false, "kept for other builds sharing this file"},
 	{"altivec", TYPE_BOOLEAN, false, "enable AltiVec"},
-	{"relmouse", TYPE_STRING, false, "relative mouse mode"},
 #endif
 #ifndef SHEEPSHAVER
 	{"nonet", TYPE_BOOLEAN, false, "disable networking"},
@@ -109,8 +114,11 @@ void AddPlatformPrefsDefaults(void)
 	PrefsAddBool("notifyclip", false);
 #ifdef SHEEPSHAVER
 	PrefsAddBool("altivec", true);
-	PrefsAddString("relmouse", "manual");
 #endif
+	PrefsAddBool("skiposxstartup", false);
+	PrefsAddString("relmouse", "manual");
+	PrefsAddBool("clipsharing", true);
+	PrefsAddBool("setupdismissed", false);
 	PrefsAddBool("idlewait", true);
 	PrefsReplaceBool("enableextfs", false);
 	PrefsReplaceString("extfs", "");

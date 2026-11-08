@@ -107,6 +107,8 @@ void PutScrap(uint32 type, void *scrap, int32 length)
 {
 	char *text;
 	size_t textlength;
+	if (!PrefsFindBool("clipsharing"))
+		return;
 	if (SflClip.weputthis) {
 		SflClip.weputthis = false;
 		return;
@@ -151,6 +153,8 @@ void GetScrap(void **handle, uint32 type, int32 offset)
 	size_t converted;
 	uint32 scrap;
 	M68kRegisters r;
+	if (!PrefsFindBool("clipsharing"))
+		return;
 	if (type != SFLCLIPTEXT)
 		return;
 	if (!SflUiClipboardGet(&text, &length))

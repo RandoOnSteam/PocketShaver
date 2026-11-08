@@ -563,7 +563,7 @@ WSKEYEVENT_CALLBACK(SflUiOnKeyDown)
 {
 	WSKEYEVENT ev;
 	WSKeyEvent_Construct(&ev);
-	if (WSKeyEvent_GetKey(&ev) == WSKEY_F8 && !SflUiApp->input) {
+	if (WSKeyEvent_GetKey(&ev) == WSKEY_F5 && SflUiApp->keys[SFLUIADBCONTROL] && !SflUiApp->input) {
 		SflEmulatorRelativeMouse(SFLRELATIVETOGGLE);
 		return WSKEYEVENT_HANDLED;
 	}
@@ -577,6 +577,18 @@ WSKEYEVENT_CALLBACK(SflUiOnKeyUp)
 	WSKeyEvent_Construct(&ev);
 	SflUiKey(SflUiApp, WSKeyEvent_GetKey(&ev), 0);
 	return WSKEYEVENT_HANDLED;
+}
+
+WSFOCUSEVENT_CALLBACK(SflUiOnKillFocus)
+{
+	int adb;
+	for (adb = 0; adb < SFLUIADBCOUNT; ++adb) {
+		if (SflUiApp->keys[adb]) {
+			SflUiApp->keys[adb] = 0;
+			SflEmulatorKey(adb, 0);
+		}
+	}
+	return WSFOCUSEVENT_UNHANDLED;
 }
 
 static void SflUiUpdateClientSize(SFLUIAPP *pThis)
@@ -792,6 +804,7 @@ BEGIN_WINDOW_MESSAGES(SflUiWindowMessages)
 	IMPLEMENT_PAINT_MESSAGE(SflUiOnPaint)
 	IMPLEMENT_KEYDOWN_MESSAGE(SflUiOnKeyDown)
 	IMPLEMENT_KEYUP_MESSAGE(SflUiOnKeyUp)
+	IMPLEMENT_KILLFOCUS_MESSAGE(SflUiOnKillFocus)
 	IMPLEMENT_MOUSEMOVE_MESSAGE(SflUiOnMouseMove)
 	IMPLEMENT_MOUSEDOWN_MESSAGE(SflUiOnMouseDown)
 	IMPLEMENT_MOUSEUP_MESSAGE(SflUiOnMouseUp)
@@ -1216,6 +1229,8 @@ static int SflUiRunBootGui(SFLUIAPP *pThis)
 {
 	SflEmulatorLoadPrefs(pThis->super.mArgc, pThis->super.mArgv);
 	if (SflEmulatorPrefBool("nogui"))
+		return 1;
+	if (SflEmulatorPrefBool("skiposxstartup") && !SflEmulatorSettingsRequested())
 		return 1;
 	return SflBootGuiRun(&pThis->super);
 }

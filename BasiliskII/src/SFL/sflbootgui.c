@@ -1,8 +1,29 @@
+/*
+ *  sflbootgui.c - Original boot configuration window
+ *
+ *	(C) 2026 RandoOnSteam (battlemageloveryt@gmail.com)
+ *
+ *  This program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation; either version 2 of the License, or
+ *  (at your option) any later version.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program; if not, write to the Free Software
+ *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "gui.h"
 #include "guictl.h"
+#include "file.h"
 #include "thread.h"
 #include "sflui.h"
 #include "sflbootgui.h"
@@ -21,7 +42,10 @@
 #define SFLBOOTMAXBUTTONS 4
 #define SFLBOOTMAXRADIOS 16
 #define SFLBOOTVALUESIZE 64
-#define SFLBOOTPATHSIZE 512
+#define SFLBOOTPATHSIZE 1024
+#define SFLBOOTMAXDISKS 128
+#define SFLBOOTMAXRESOLUTIONS 10
+#define SFLBOOTMAXDISKSIZEMB 2047
 
 #define SFLBOOTHEADING 1
 #define SFLBOOTHELP 2
@@ -48,7 +72,7 @@
 #define SFLBOOTROWGAP 4
 #define SFLBOOTHEADINGHEIGHT 26
 #define SFLBOOTHEADINGGAP 10
-#define SFLBOOTTEXTLINE 18
+#define SFLBOOTTEXTLINE 19
 #define SFLBOOTCHARWIDTH 7
 #define SFLBOOTLABELWIDTH 200
 #define SFLBOOTFIELDWIDTH 120
@@ -58,13 +82,24 @@
 #define SFLBOOTCLOSEWIDTH 26
 #define SFLBOOTLISTHEIGHT 130
 #define SFLBOOTLISTCOLUMN 620
+#define SFLBOOTDISKNAMECOLUMN 450
+#define SFLBOOTDISKFLAGCOLUMN 80
+#define SFLBOOTTEXTPAD 2
+#define SFLBOOTLABELOFFSET 4
+#define SFLBOOTBANNERGAP 8
+#define SFLBOOTSHEETWIDTH 620
+#define SFLBOOTSHEETHEIGHT 600
+#define SFLBOOTSHEETINSET 16
+#define SFLBOOTFORMWIDTH 540
+#define SFLBOOTFORMHEIGHT 230
 #define SFLBOOTHELPGREY 96
 #define SFLBOOTMINROMTEXT 8
+#define SFLBOOTMINWIDTH 512
+#define SFLBOOTMINHEIGHT 384
+#define SFLBOOTMAXWIDTH 4096
+#define SFLBOOTMAXHEIGHT 4096
 #define SFLBOOTMEGABYTE 1048576L
 #define SFLBOOTIDLEMS 10
-#define SFLBOOTDISKSIZES 6
-#define SFLBOOTDISKBASEMB 32
-#define SFLBOOTDISKDEFAULT 3
 
 #if defined(WSWINGUI)
 #define SFLBOOTCOMBOHEIGHT 220
@@ -78,7 +113,6 @@
 #define SFLBOOTIDRADIOBASE 300
 #define SFLBOOTIDCONTROLBASE 500
 #define SFLBOOTIDROM (SFLBOOTIDBUTTONBASE + 0)
-#define SFLBOOTIDCD (SFLBOOTIDBUTTONBASE + 1)
 #define SFLBOOTIDFOLDER (SFLBOOTIDBUTTONBASE + 2)
 #define SFLBOOTIDDISKADD (SFLBOOTIDBUTTONBASE + 3)
 #define SFLBOOTIDDISKCREATE (SFLBOOTIDBUTTONBASE + 4)
@@ -90,6 +124,22 @@
 #define SFLBOOTIDSETUPCLOSE (SFLBOOTIDBUTTONBASE + 10)
 #define SFLBOOTIDNETWORKCLOSE (SFLBOOTIDBUTTONBASE + 11)
 #define SFLBOOTIDSHEETREAD (SFLBOOTIDBUTTONBASE + 12)
+#define SFLBOOTIDDISKMOUNT (SFLBOOTIDBUTTONBASE + 13)
+#define SFLBOOTIDDISKTYPE (SFLBOOTIDBUTTONBASE + 14)
+#define SFLBOOTIDDISKRELOAD (SFLBOOTIDBUTTONBASE + 15)
+#define SFLBOOTIDDISKOPEN (SFLBOOTIDBUTTONBASE + 16)
+#define SFLBOOTIDRESADD (SFLBOOTIDBUTTONBASE + 17)
+#define SFLBOOTIDRESEDIT (SFLBOOTIDBUTTONBASE + 18)
+#define SFLBOOTIDRESREMOVE (SFLBOOTIDBUTTONBASE + 19)
+#define SFLBOOTIDBOOTSTRAP (SFLBOOTIDBUTTONBASE + 20)
+#define SFLBOOTIDBOOTSTRAPDONE (SFLBOOTIDBUTTONBASE + 21)
+#define SFLBOOTIDCOMPATIBILITY (SFLBOOTIDBUTTONBASE + 22)
+#define SFLBOOTIDCOMPATIBILITY2 (SFLBOOTIDBUTTONBASE + 23)
+#define SFLBOOTIDRELATIVE (SFLBOOTIDBUTTONBASE + 24)
+#define SFLBOOTIDRELATIVE2 (SFLBOOTIDBUTTONBASE + 25)
+#define SFLBOOTIDSETUPGUIDE (SFLBOOTIDBUTTONBASE + 26)
+#define SFLBOOTIDBOOTSTRAP2 (SFLBOOTIDBUTTONBASE + 27)
+#define SFLBOOTIDCLIPBOARD (SFLBOOTIDBUTTONBASE + 28)
 #define SFLBOOTIDDONE 1
 #define SFLBOOTIDACCEPT 1
 #define SFLBOOTIDCANCEL 2
@@ -123,6 +173,12 @@ typedef struct SFLBOOTITEM {
 	WSCTLRADIOBUTTON radios[SFLBOOTMAXOPTIONS];
 } SFLBOOTITEM;
 
+typedef struct SFLBOOTDISK {
+	char *path;
+	int mounted;
+	int cd;
+} SFLBOOTDISK;
+
 typedef struct SFLBOOTGUI {
 	WSAPP *app;
 	WSWINDOW window;
@@ -134,10 +190,18 @@ typedef struct SFLBOOTGUI {
 	WSFONT headingfont;
 	WSFONT bodyfont;
 	SFLBOOTITEM items[SFLBOOTITEMS];
+	SFLBOOTDISK disks[SFLBOOTMAXDISKS];
 	SFLBOOTITEM *radioitems[SFLBOOTMAXRADIOS];
 	int radiooptions[SFLBOOTMAXRADIOS];
 	int count;
 	int radiocount;
+	int diskcount;
+	int dpi;
+	int basedpi;
+	int setupread;
+	int resolutionsedited;
+	int networkchanged;
+	int bootstrapcompleted;
 	int page;
 	int controlid;
 	int finished;
@@ -161,18 +225,28 @@ typedef struct SFLBOOTSHEET {
 
 typedef struct SFLBOOTFORM {
 	WSWINDOW window;
-	WSCTLLABEL label;
+	WSCTLSTYLEDLABEL label;
 	WSCTLLINE line;
-	WSCTLCOMBOBOX sizes;
+	WSCTLSTYLEDLABEL secondlabel;
+	WSCTLLINE secondline;
 	WSCTLBUTTON accept;
 	WSCTLBUTTON cancel;
 	char *value;
-	int selection;
+	char *secondvalue;
+	int hassecond;
 	int accepted;
 	int closed;
 } SFLBOOTFORM;
 
 static void SflBootLayout(SFLBOOTGUI *pThis);
+static void SflBootRefreshDynamic(SFLBOOTGUI *pThis);
+
+static int SflBootPx(SFLBOOTGUI *pThis, int value)
+{
+	return value * pThis->dpi / pThis->basedpi;
+}
+
+#define SFLBOOTPX(value) SflBootPx(pThis, (value))
 
 static SFLBOOTITEM *SflBootFind(SFLBOOTGUI *pThis, const char *name)
 {
@@ -277,7 +351,7 @@ static SFLBOOTITEM *SflBootAddItem(SFLBOOTGUI *pThis, int page, int type, const 
 	return item;
 }
 
-static void SflBootAddHeading(SFLBOOTGUI *pThis, int page, const char *text)
+static SFLBOOTITEM *SflBootAddHeading(SFLBOOTGUI *pThis, int page, const char *text)
 {
 	SFLBOOTITEM *item;
 	item = SflBootAddItem(pThis, page, SFLBOOTHEADING, NULL, text);
@@ -287,6 +361,7 @@ static void SflBootAddHeading(SFLBOOTGUI *pThis, int page, const char *text)
 		if (pThis->fontscreated)
 			WSCtlStyledLabel_SetFont(&item->label, &pThis->headingfont);
 	}
+	return item;
 }
 
 static SFLBOOTITEM *SflBootAddHelp(SFLBOOTGUI *pThis, int page, const char *pref, const char *text)
@@ -322,7 +397,7 @@ static void SflBootAddButton(SFLBOOTGUI *pThis, SFLBOOTITEM *item, const char *t
 	WSCtlScrollPanel_Add(&pThis->panels[item->page], WSCtl_GetHandle((WSCTL *)button));
 }
 
-static void SflBootAddCheck(SFLBOOTGUI *pThis, int page, const char *pref, const char *caption, int invert)
+static void SflBootAddCheckHandler(SFLBOOTGUI *pThis, int page, const char *pref, const char *caption, int invert, WSEVENTCHECKBUTTON_CALLBACK((*callback)), size_t id)
 {
 	SFLBOOTITEM *item;
 	WSRECT bounds;
@@ -330,13 +405,18 @@ static void SflBootAddCheck(SFLBOOTGUI *pThis, int page, const char *pref, const
 	item->kind = SFLBOOTKINDBOOL;
 	item->invert = invert;
 	WSRect_Construct(&bounds, 0, 0, 100, SFLBOOTROWHEIGHT);
-	if (!WSCtlCheckBox_Create(&item->check, &pThis->window, &bounds, caption, NULL, (size_t)pThis->controlid++)) {
+	if (!WSCtlCheckBox_Create(&item->check, &pThis->window, &bounds, caption, callback, id)) {
 		pThis->failed = 1;
 		return;
 	}
 	item->hascontrol = 1;
 	WSCtlCheckBox_SetChecked(&item->check, (SflEmulatorPrefBool(pref) != 0) != invert);
 	WSCtlScrollPanel_Add(&pThis->panels[page], WSCtl_GetHandle((WSCTL *)&item->check));
+}
+
+static void SflBootAddCheck(SFLBOOTGUI *pThis, int page, const char *pref, const char *caption, int invert)
+{
+	SflBootAddCheckHandler(pThis, page, pref, caption, invert, NULL, (size_t)pThis->controlid++);
 }
 
 static void SflBootAddLineControl(SFLBOOTGUI *pThis, SFLBOOTITEM *item, const char *value)
@@ -549,8 +629,11 @@ static void SflBootRadioClicked(SFLBOOTGUI *pThis, int number)
 	}
 	item->selected = pThis->radiooptions[number];
 	SflBootSyncRadios(pThis);
-	if (strcmp(item->pref, "network") == 0)
+	if (strcmp(item->pref, "network") == 0) {
+		pThis->networkchanged = 1;
 		SflBootUpdatePortField(pThis);
+	}
+	SflBootRefreshDynamic(pThis);
 }
 
 static void SflBootAppendList(SFLBOOTITEM *item, const char *text)
@@ -574,24 +657,195 @@ static char *SflBootListText(SFLBOOTITEM *item, int index)
 	return text;
 }
 
-static void SflBootAddList(SFLBOOTGUI *pThis, int page, const char *pref, const char *caption)
+static SFLBOOTITEM *SflBootAddListControl(SFLBOOTGUI *pThis, int page, const char *pref, const char *caption, int width)
 {
 	SFLBOOTITEM *item;
 	WSRECT bounds;
-	const char *value;
-	int index;
 	item = SflBootAddItem(pThis, page, SFLBOOTLIST, pref, caption);
 	WSRect_Construct(&bounds, 0, 0, 100, SFLBOOTLISTHEIGHT);
 	if (!WSCtlList_Create(&item->list, &pThis->window, &bounds, NULL, NULL, (size_t)pThis->controlid++, WSCTLLIST_STYLE_REPORT | WSCTLLIST_STYLE_FULLROWSELECT)) {
 		pThis->failed = 1;
-		return;
+		return item;
 	}
 	item->hascontrol = 1;
-	WSCtlList_InsertColumn(&item->list, 0, caption, WSCTLLIST_ALIGN_LEFT, SFLBOOTLISTCOLUMN);
+	WSCtlList_InsertColumn(&item->list, 0, caption, WSCTLLIST_ALIGN_LEFT, SFLBOOTPX(width));
+	WSCtlScrollPanel_AddList(&pThis->panels[page], &item->list);
+	return item;
+}
+
+static void SflBootAddList(SFLBOOTGUI *pThis, int page, const char *pref, const char *caption)
+{
+	SFLBOOTITEM *item;
+	const char *value;
+	int index;
+	item = SflBootAddListControl(pThis, page, pref, caption, SFLBOOTLISTCOLUMN);
+	if (!item->hascontrol)
+		return;
 	index = 0;
 	while ((value = SflEmulatorPrefString(pref, index++)) != NULL)
 		SflBootAppendList(item, value);
-	WSCtlScrollPanel_AddList(&pThis->panels[page], &item->list);
+}
+
+static const char *SflBootBaseName(const char *path)
+{
+	const char *slash;
+	const char *back;
+	slash = strrchr(path, '/');
+	back = strrchr(path, '\\');
+	if (back != NULL && (slash == NULL || back > slash))
+		slash = back;
+	if (slash != NULL)
+		return slash + 1;
+	return path;
+}
+
+static int SflBootExtensionIn(const char *path, const char *extensions)
+{
+	const char *dot;
+	char lowered[SFLBOOTVALUESIZE];
+	char wanted[SFLBOOTVALUESIZE];
+	size_t index;
+	dot = strrchr(path, '.');
+	if (dot == NULL || strlen(dot + 1) + 2 >= sizeof(lowered))
+		return 0;
+	for (index = 0; dot[index + 1] != 0; ++index) {
+		lowered[index] = dot[index + 1];
+		if (lowered[index] >= 'A' && lowered[index] <= 'Z')
+			lowered[index] = (char)(lowered[index] - 'A' + 'a');
+	}
+	lowered[index] = 0;
+	sprintf(wanted, "|%s|", lowered);
+	return strstr(extensions, wanted) != NULL;
+}
+
+static void SflBootDiskAppend(SFLBOOTGUI *pThis, const char *path, int mounted, int cd)
+{
+	SFLBOOTDISK *disk;
+	int index;
+	if (pThis->diskcount >= SFLBOOTMAXDISKS)
+		return;
+	for (index = 0; index < pThis->diskcount; ++index)
+		if (strcmp(SflBootBaseName(pThis->disks[index].path), SflBootBaseName(path)) == 0)
+			return;
+	disk = &pThis->disks[pThis->diskcount];
+	disk->path = WSALLOC(char, strlen(path) + 1);
+	if (disk->path == NULL)
+		return;
+	strcpy(disk->path, path);
+	disk->mounted = mounted;
+	disk->cd = cd;
+	pThis->diskcount++;
+}
+
+static void SflBootDiskRemoveAt(SFLBOOTGUI *pThis, int position)
+{
+	int index;
+	WSFREE(pThis->disks[position].path);
+	for (index = position; index + 1 < pThis->diskcount; ++index)
+		pThis->disks[index] = pThis->disks[index + 1];
+	pThis->diskcount--;
+}
+
+static void SflBootDiskSort(SFLBOOTGUI *pThis)
+{
+	SFLBOOTDISK moved;
+	int index;
+	int previous;
+	for (index = 1; index < pThis->diskcount; ++index) {
+		moved = pThis->disks[index];
+		previous = index;
+		while (previous > 0 && moved.mounted && !pThis->disks[previous - 1].mounted) {
+			pThis->disks[previous] = pThis->disks[previous - 1];
+			previous--;
+		}
+		pThis->disks[previous] = moved;
+	}
+}
+
+static void SflBootDiskRender(SFLBOOTGUI *pThis)
+{
+	SFLBOOTITEM *item;
+	const char *mounted;
+	const char *type;
+	int index;
+	item = SflBootFind(pThis, "disk");
+	SflBootDiskSort(pThis);
+	WSCtlList_DeleteAll(&item->list);
+	for (index = 0; index < pThis->diskcount; ++index) {
+		SflBootAppendList(item, pThis->disks[index].path);
+		mounted = "No";
+		if (pThis->disks[index].mounted)
+			mounted = "Yes";
+		type = "Hard disk";
+		if (pThis->disks[index].cd)
+			type = "CD-ROM";
+		WSCtlList_SetItemText(&item->list, index, 1, mounted);
+		WSCtlList_SetItemText(&item->list, index, 2, type);
+	}
+	SflBootFind(pThis, "diskempty")->hidden = pThis->diskcount != 0;
+}
+
+static void SflBootDiskLoad(SFLBOOTGUI *pThis)
+{
+	const char *value;
+	int index;
+	int cd;
+	index = 0;
+	while ((value = SflEmulatorPrefString("disk", index++)) != NULL)
+		SflBootDiskAppend(pThis, value, 1, 0);
+	index = 0;
+	while ((value = SflEmulatorPrefString("cdrom", index++)) != NULL)
+		SflBootDiskAppend(pThis, value, 1, 1);
+	index = 0;
+	while ((value = SflEmulatorPrefString("diskunmounted", index++)) != NULL) {
+		cd = strncmp(value, "cd:", 3) == 0;
+		SflBootDiskAppend(pThis, value + 3, 0, cd);
+	}
+}
+
+static void SflBootDiskApply(SFLBOOTGUI *pThis)
+{
+	SFLBOOTDISK *disk;
+	char *encoded;
+	int disks;
+	int cds;
+	int unmounted;
+	int index;
+	SflBootRemove("disk");
+	SflBootRemove("cdrom");
+	SflBootRemove("diskunmounted");
+	disks = 0;
+	cds = 0;
+	unmounted = 0;
+	for (index = 0; index < pThis->diskcount; ++index) {
+		disk = &pThis->disks[index];
+		if (disk->mounted && disk->cd) {
+			SflBootSetString("cdrom", disk->path, cds++);
+		} else if (disk->mounted) {
+			SflBootSetString("disk", disk->path, disks++);
+		} else {
+			encoded = WSALLOC(char, strlen(disk->path) + 4);
+			if (encoded == NULL)
+				continue;
+			if (disk->cd)
+				sprintf(encoded, "cd:%s", disk->path);
+			else
+				sprintf(encoded, "hd:%s", disk->path);
+			SflBootSetString("diskunmounted", encoded, unmounted++);
+			WSFREE(encoded);
+		}
+	}
+}
+
+static void SflBootAddDiskList(SFLBOOTGUI *pThis, int page)
+{
+	SFLBOOTITEM *item;
+	item = SflBootAddListControl(pThis, page, "disk", "Disk image", SFLBOOTDISKNAMECOLUMN);
+	if (!item->hascontrol)
+		return;
+	WSCtlList_InsertColumn(&item->list, 1, "Mounted", WSCTLLIST_ALIGN_LEFT, SFLBOOTPX(SFLBOOTDISKFLAGCOLUMN));
+	WSCtlList_InsertColumn(&item->list, 2, "Type", WSCTLLIST_ALIGN_LEFT, SFLBOOTPX(SFLBOOTDISKFLAGCOLUMN));
+	SflBootDiskLoad(pThis);
 }
 
 static void SflBootShowLabel(SFLBOOTITEM *item, int visible)
@@ -628,7 +882,7 @@ static void SflBootPlaceLine(SFLBOOTGUI *pThis, SFLBOOTITEM *item, int x, int y,
 {
 	WSRECT bounds;
 	int visible;
-	WSRect_Construct(&bounds, x, y, width, SFLBOOTROWHEIGHT);
+	WSRect_Construct(&bounds, x, y, width, SFLBOOTPX(SFLBOOTROWHEIGHT));
 	visible = SflBootMapRect(pThis, item, &bounds);
 	WSCtlLine_Move(&item->line, &bounds);
 	if (visible)
@@ -641,7 +895,7 @@ static void SflBootPlaceButton(SFLBOOTGUI *pThis, SFLBOOTITEM *item, int index, 
 {
 	WSRECT bounds;
 	int visible;
-	WSRect_Construct(&bounds, x, y, width, SFLBOOTROWHEIGHT);
+	WSRect_Construct(&bounds, x, y, width, SFLBOOTPX(SFLBOOTROWHEIGHT));
 	visible = SflBootMapRect(pThis, item, &bounds);
 	WSCtlButton_Move(&item->buttons[index], &bounds);
 	if (visible)
@@ -654,7 +908,7 @@ static void SflBootPlaceCheck(SFLBOOTGUI *pThis, SFLBOOTITEM *item, int x, int y
 {
 	WSRECT bounds;
 	int visible;
-	WSRect_Construct(&bounds, x, y, width, SFLBOOTROWHEIGHT);
+	WSRect_Construct(&bounds, x, y, width, SFLBOOTPX(SFLBOOTROWHEIGHT));
 	visible = SflBootMapRect(pThis, item, &bounds);
 	WSCtlCheckBox_Move(&item->check, &bounds);
 	if (visible)
@@ -667,7 +921,7 @@ static void SflBootPlaceCombo(SFLBOOTGUI *pThis, SFLBOOTITEM *item, int x, int y
 {
 	WSRECT bounds;
 	int visible;
-	WSRect_Construct(&bounds, x, y, SFLBOOTCOMBOWIDTH, SFLBOOTCOMBOHEIGHT);
+	WSRect_Construct(&bounds, x, y, SFLBOOTPX(SFLBOOTCOMBOWIDTH), SFLBOOTPX(SFLBOOTCOMBOHEIGHT));
 	visible = SflBootMapRect(pThis, item, &bounds);
 	WSCtlComboBox_Move(&item->combo, &bounds);
 	if (visible)
@@ -680,7 +934,7 @@ static void SflBootPlaceRadio(SFLBOOTGUI *pThis, SFLBOOTITEM *item, int index, i
 {
 	WSRECT bounds;
 	int visible;
-	WSRect_Construct(&bounds, x, y, width, SFLBOOTROWHEIGHT);
+	WSRect_Construct(&bounds, x, y, width, SFLBOOTPX(SFLBOOTROWHEIGHT));
 	visible = SflBootMapRect(pThis, item, &bounds);
 	WSCtlRadioButton_Move(&item->radios[index], &bounds);
 	if (visible)
@@ -693,7 +947,7 @@ static void SflBootPlaceList(SFLBOOTGUI *pThis, SFLBOOTITEM *item, int x, int y,
 {
 	WSRECT bounds;
 	int visible;
-	WSRect_Construct(&bounds, x, y, width, SFLBOOTLISTHEIGHT);
+	WSRect_Construct(&bounds, x, y, width, SFLBOOTPX(SFLBOOTLISTHEIGHT));
 	visible = SflBootMapRect(pThis, item, &bounds);
 	WSCtlList_Move(&item->list, &bounds);
 	if (visible)
@@ -749,84 +1003,90 @@ static int SflBootPlaceRadios(SFLBOOTGUI *pThis, SFLBOOTITEM *item, int y, int w
 	int index;
 	int cellwidth;
 	if (item->haslabel) {
-		SflBootPlaceLabel(pThis, item, SFLBOOTMARGIN, y, width, SFLBOOTTEXTLINE + 2);
-		y += SFLBOOTTEXTLINE + SFLBOOTROWGAP;
+		SflBootPlaceLabel(pThis, item, SFLBOOTPX(SFLBOOTMARGIN), y, width, SFLBOOTPX(SFLBOOTTEXTLINE) + SFLBOOTPX(SFLBOOTTEXTPAD));
+		y += SFLBOOTPX(SFLBOOTTEXTLINE) + SFLBOOTPX(SFLBOOTROWGAP);
 	}
 	cellwidth = width / item->optioncount;
 	for (index = 0; index < item->optioncount; ++index)
-		SflBootPlaceRadio(pThis, item, index, SFLBOOTMARGIN + index * cellwidth, y, cellwidth);
-	return y + SFLBOOTROWHEIGHT + SFLBOOTROWGAP;
+		SflBootPlaceRadio(pThis, item, index, SFLBOOTPX(SFLBOOTMARGIN) + index * cellwidth, y, cellwidth);
+	return y + SFLBOOTPX(SFLBOOTROWHEIGHT) + SFLBOOTPX(SFLBOOTROWGAP);
 }
 
-static int SflBootPlaceItem(SFLBOOTGUI *pThis, SFLBOOTITEM *item, int y, int width)
+static int SflBootPlaceItemAt(SFLBOOTGUI *pThis, SFLBOOTITEM *item, int y, int width)
 {
 	int lines;
 	int index;
 	int x;
-	if (item->hidden) {
-		SflBootPlaceLabel(pThis, item, 0, 0, 1, 1);
-		if (item->type == SFLBOOTBUTTONS || item->type == SFLBOOTBANNER)
-			for (index = 0; index < item->buttoncount; ++index)
-				SflBootPlaceButton(pThis, item, index, 0, 0, 1);
-		return y;
-	}
 	item->documenty = y;
 	switch (item->type) {
 	case SFLBOOTHEADING:
-		y += SFLBOOTHEADINGGAP;
-		SflBootPlaceLabel(pThis, item, SFLBOOTMARGIN, y, width, SFLBOOTHEADINGHEIGHT);
-		return y + SFLBOOTHEADINGHEIGHT;
+		y += SFLBOOTPX(SFLBOOTHEADINGGAP);
+		SflBootPlaceLabel(pThis, item, SFLBOOTPX(SFLBOOTMARGIN), y, width, SFLBOOTPX(SFLBOOTHEADINGHEIGHT));
+		return y + SFLBOOTPX(SFLBOOTHEADINGHEIGHT);
 	case SFLBOOTHELP:
-		lines = SflBootWrapText(item, width / SFLBOOTCHARWIDTH);
-		SflBootPlaceLabel(pThis, item, SFLBOOTMARGIN, y, width, lines * SFLBOOTTEXTLINE + 2);
-		return y + lines * SFLBOOTTEXTLINE + SFLBOOTROWGAP + 2;
+		lines = SflBootWrapText(item, width / SFLBOOTPX(SFLBOOTCHARWIDTH));
+		SflBootPlaceLabel(pThis, item, SFLBOOTPX(SFLBOOTMARGIN), y, width, lines * SFLBOOTPX(SFLBOOTTEXTLINE) + SFLBOOTPX(SFLBOOTTEXTPAD));
+		return y + lines * SFLBOOTPX(SFLBOOTTEXTLINE) + SFLBOOTPX(SFLBOOTROWGAP) + SFLBOOTPX(SFLBOOTTEXTPAD);
 	case SFLBOOTBANNER:
-		lines = SflBootWrapText(item, (width - SFLBOOTCLOSEWIDTH) / SFLBOOTCHARWIDTH);
-		SflBootPlaceLabel(pThis, item, SFLBOOTMARGIN, y, width - SFLBOOTCLOSEWIDTH - SFLBOOTROWGAP, lines * SFLBOOTTEXTLINE + 2);
-		SflBootPlaceButton(pThis, item, 0, SFLBOOTMARGIN + width - SFLBOOTCLOSEWIDTH, y, SFLBOOTCLOSEWIDTH);
-		return y + lines * SFLBOOTTEXTLINE + SFLBOOTROWGAP + 8;
+		lines = SflBootWrapText(item, (width - SFLBOOTPX(SFLBOOTCLOSEWIDTH)) / SFLBOOTPX(SFLBOOTCHARWIDTH));
+		SflBootPlaceLabel(pThis, item, SFLBOOTPX(SFLBOOTMARGIN), y, width - SFLBOOTPX(SFLBOOTCLOSEWIDTH) - SFLBOOTPX(SFLBOOTROWGAP), lines * SFLBOOTPX(SFLBOOTTEXTLINE) + SFLBOOTPX(SFLBOOTTEXTPAD));
+		SflBootPlaceButton(pThis, item, 0, SFLBOOTPX(SFLBOOTMARGIN) + width - SFLBOOTPX(SFLBOOTCLOSEWIDTH), y, SFLBOOTPX(SFLBOOTCLOSEWIDTH));
+		return y + lines * SFLBOOTPX(SFLBOOTTEXTLINE) + SFLBOOTPX(SFLBOOTROWGAP) + SFLBOOTPX(SFLBOOTBANNERGAP);
 	case SFLBOOTCHECK:
-		SflBootPlaceCheck(pThis, item, SFLBOOTMARGIN, y, width);
-		return y + SFLBOOTROWHEIGHT + SFLBOOTROWGAP;
+		SflBootPlaceCheck(pThis, item, SFLBOOTPX(SFLBOOTMARGIN), y, width);
+		return y + SFLBOOTPX(SFLBOOTROWHEIGHT) + SFLBOOTPX(SFLBOOTROWGAP);
 	case SFLBOOTPATH:
-		SflBootPlaceLabel(pThis, item, SFLBOOTMARGIN, y, width, SFLBOOTTEXTLINE + 2);
-		y += SFLBOOTTEXTLINE + SFLBOOTROWGAP;
-		SflBootPlaceLine(pThis, item, SFLBOOTMARGIN, y, width - SFLBOOTBROWSEWIDTH - SFLBOOTROWGAP);
-		SflBootPlaceButton(pThis, item, 0, SFLBOOTMARGIN + width - SFLBOOTBROWSEWIDTH, y, SFLBOOTBROWSEWIDTH);
-		return y + SFLBOOTROWHEIGHT + SFLBOOTROWGAP;
+		SflBootPlaceLabel(pThis, item, SFLBOOTPX(SFLBOOTMARGIN), y, width, SFLBOOTPX(SFLBOOTTEXTLINE) + SFLBOOTPX(SFLBOOTTEXTPAD));
+		y += SFLBOOTPX(SFLBOOTTEXTLINE) + SFLBOOTPX(SFLBOOTROWGAP);
+		SflBootPlaceLine(pThis, item, SFLBOOTPX(SFLBOOTMARGIN), y, width - SFLBOOTPX(SFLBOOTBROWSEWIDTH) - SFLBOOTPX(SFLBOOTROWGAP));
+		SflBootPlaceButton(pThis, item, 0, SFLBOOTPX(SFLBOOTMARGIN) + width - SFLBOOTPX(SFLBOOTBROWSEWIDTH), y, SFLBOOTPX(SFLBOOTBROWSEWIDTH));
+		return y + SFLBOOTPX(SFLBOOTROWHEIGHT) + SFLBOOTPX(SFLBOOTROWGAP);
 	case SFLBOOTFIELD:
-		SflBootPlaceLabel(pThis, item, SFLBOOTMARGIN, y + 4, SFLBOOTLABELWIDTH, SFLBOOTTEXTLINE + 2);
-		SflBootPlaceLine(pThis, item, SFLBOOTMARGIN + SFLBOOTLABELWIDTH, y, SFLBOOTFIELDWIDTH);
-		return y + SFLBOOTROWHEIGHT + SFLBOOTROWGAP;
+		SflBootPlaceLabel(pThis, item, SFLBOOTPX(SFLBOOTMARGIN), y + SFLBOOTPX(SFLBOOTLABELOFFSET), SFLBOOTPX(SFLBOOTLABELWIDTH), SFLBOOTPX(SFLBOOTTEXTLINE) + SFLBOOTPX(SFLBOOTTEXTPAD));
+		SflBootPlaceLine(pThis, item, SFLBOOTPX(SFLBOOTMARGIN) + SFLBOOTPX(SFLBOOTLABELWIDTH), y, SFLBOOTPX(SFLBOOTFIELDWIDTH));
+		return y + SFLBOOTPX(SFLBOOTROWHEIGHT) + SFLBOOTPX(SFLBOOTROWGAP);
 	case SFLBOOTCOMBO:
-		SflBootPlaceLabel(pThis, item, SFLBOOTMARGIN, y + 4, SFLBOOTLABELWIDTH, SFLBOOTTEXTLINE + 2);
-		SflBootPlaceCombo(pThis, item, SFLBOOTMARGIN + SFLBOOTLABELWIDTH, y);
-		return y + SFLBOOTROWHEIGHT + SFLBOOTROWGAP;
+		SflBootPlaceLabel(pThis, item, SFLBOOTPX(SFLBOOTMARGIN), y + SFLBOOTPX(SFLBOOTLABELOFFSET), SFLBOOTPX(SFLBOOTLABELWIDTH), SFLBOOTPX(SFLBOOTTEXTLINE) + SFLBOOTPX(SFLBOOTTEXTPAD));
+		SflBootPlaceCombo(pThis, item, SFLBOOTPX(SFLBOOTMARGIN) + SFLBOOTPX(SFLBOOTLABELWIDTH), y);
+		return y + SFLBOOTPX(SFLBOOTROWHEIGHT) + SFLBOOTPX(SFLBOOTROWGAP);
 	case SFLBOOTRADIO:
 		return SflBootPlaceRadios(pThis, item, y, width);
 	case SFLBOOTLIST:
-		SflBootPlaceList(pThis, item, SFLBOOTMARGIN, y, width);
-		return y + SFLBOOTLISTHEIGHT + SFLBOOTROWGAP;
+		SflBootPlaceList(pThis, item, SFLBOOTPX(SFLBOOTMARGIN), y, width);
+		return y + SFLBOOTPX(SFLBOOTLISTHEIGHT) + SFLBOOTPX(SFLBOOTROWGAP);
 	case SFLBOOTBUTTONS:
-		x = SFLBOOTMARGIN;
+		x = SFLBOOTPX(SFLBOOTMARGIN);
 		for (index = 0; index < item->buttoncount; ++index) {
-			SflBootPlaceButton(pThis, item, index, x, y, SFLBOOTBUTTONWIDTH);
-			x += SFLBOOTBUTTONWIDTH + SFLBOOTROWGAP;
+			SflBootPlaceButton(pThis, item, index, x, y, SFLBOOTPX(SFLBOOTBUTTONWIDTH));
+			x += SFLBOOTPX(SFLBOOTBUTTONWIDTH) + SFLBOOTPX(SFLBOOTROWGAP);
 		}
-		return y + SFLBOOTROWHEIGHT + SFLBOOTROWGAP;
+		return y + SFLBOOTPX(SFLBOOTROWHEIGHT) + SFLBOOTPX(SFLBOOTROWGAP);
 	default:
 		return y;
 	}
+}
+
+static int SflBootPlaceItem(SFLBOOTGUI *pThis, SFLBOOTITEM *item, int y, int width)
+{
+	int next;
+	next = SflBootPlaceItemAt(pThis, item, y, width);
+	if (item->hidden)
+		return y;
+	return next;
 }
 
 static void SflBootLayout(SFLBOOTGUI *pThis)
 {
 	WSRECT client;
 	WSRECT bounds;
+#if defined(WSWINGUI)
+	WSRECT tabpage;
+#endif
 	int positions[SFLBOOTPAGES];
 	int contentwidth[SFLBOOTPAGES];
 	int width;
 	int height;
+	int tabheight;
 	int index;
 	SFLBOOTITEM *item;
 	if (!pThis->ready)
@@ -834,22 +1094,29 @@ static void SflBootLayout(SFLBOOTGUI *pThis)
 	WSWindow_GetClientRect(&pThis->window, &client);
 	width = WSRect_GetWidth(&client);
 	height = WSRect_GetHeight(&client);
-	WSRect_Construct(&bounds, SFLBOOTMARGIN, SFLBOOTMARGIN, width - 2 * SFLBOOTMARGIN, SFLBOOTTABHEIGHT);
+	tabheight = SFLBOOTPX(SFLBOOTTABHEIGHT);
+	WSRect_Construct(&bounds, SFLBOOTPX(SFLBOOTMARGIN), SFLBOOTPX(SFLBOOTMARGIN), width - 2 * SFLBOOTPX(SFLBOOTMARGIN), tabheight);
 	WSCtlTab_Move(&pThis->tabs, &bounds);
-	WSRect_Construct(&bounds, SFLBOOTMARGIN, height - SFLBOOTBOOTHEIGHT - SFLBOOTMARGIN, width - 2 * SFLBOOTMARGIN, SFLBOOTBOOTHEIGHT);
+#if defined(WSWINGUI)
+	WSCtlTab_GetClientRect(&pThis->tabs, &tabpage);
+	tabheight = tabpage.top;
+	WSRect_Construct(&bounds, SFLBOOTPX(SFLBOOTMARGIN), SFLBOOTPX(SFLBOOTMARGIN), width - 2 * SFLBOOTPX(SFLBOOTMARGIN), tabheight);
+	WSCtlTab_Move(&pThis->tabs, &bounds);
+#endif
+	WSRect_Construct(&bounds, SFLBOOTPX(SFLBOOTMARGIN), height - SFLBOOTPX(SFLBOOTBOOTHEIGHT) - SFLBOOTPX(SFLBOOTMARGIN), width - 2 * SFLBOOTPX(SFLBOOTMARGIN), SFLBOOTPX(SFLBOOTBOOTHEIGHT));
 	WSCtlButton_Move(&pThis->boot, &bounds);
-	WSRect_Construct(&bounds, SFLBOOTMARGIN, 2 * SFLBOOTMARGIN + SFLBOOTTABHEIGHT, width - 2 * SFLBOOTMARGIN, height - 4 * SFLBOOTMARGIN - SFLBOOTTABHEIGHT - SFLBOOTBOOTHEIGHT);
+	WSRect_Construct(&bounds, SFLBOOTPX(SFLBOOTMARGIN), SFLBOOTPX(SFLBOOTMARGIN) + tabheight, width - 2 * SFLBOOTPX(SFLBOOTMARGIN), height - 3 * SFLBOOTPX(SFLBOOTMARGIN) - tabheight - SFLBOOTPX(SFLBOOTBOOTHEIGHT));
 	for (index = 0; index < SFLBOOTPAGES; ++index) {
 		WSCtlScrollPanel_Move(&pThis->panels[index], &bounds);
-		contentwidth[index] = WSCtlScrollPanel_GetContentWidth(&pThis->panels[index]) - 2 * SFLBOOTMARGIN;
-		positions[index] = SFLBOOTMARGIN;
+		contentwidth[index] = WSCtlScrollPanel_GetContentWidth(&pThis->panels[index]) - 2 * SFLBOOTPX(SFLBOOTMARGIN);
+		positions[index] = SFLBOOTPX(SFLBOOTMARGIN);
 	}
 	for (index = 0; index < pThis->count; ++index) {
 		item = &pThis->items[index];
 		positions[item->page] = SflBootPlaceItem(pThis, item, positions[item->page], contentwidth[item->page]);
 	}
 	for (index = 0; index < SFLBOOTPAGES; ++index) {
-		WSCtlScrollPanel_SetContentHeight(&pThis->panels[index], positions[index] + SFLBOOTMARGIN);
+		WSCtlScrollPanel_SetContentHeight(&pThis->panels[index], positions[index] + SFLBOOTPX(SFLBOOTMARGIN));
 		if (index == pThis->page)
 			WSCtlScrollPanel_Show(&pThis->panels[index]);
 		else
@@ -889,7 +1156,7 @@ static void SflBootApplyList(SFLBOOTITEM *item)
 	}
 }
 
-static void SflBootApplyItem(SFLBOOTITEM *item)
+static void SflBootApplyItem(SFLBOOTITEM *item, int resolutionsedited)
 {
 	char *text;
 	char value[SFLBOOTVALUESIZE];
@@ -921,42 +1188,95 @@ static void SflBootApplyItem(SFLBOOTITEM *item)
 		SflBootStoreValue(item, value);
 		break;
 	case SFLBOOTLIST:
-		SflBootApplyList(item);
+		if (strcmp(item->pref, "disk") != 0 && (strcmp(item->pref, "resolution") != 0 || resolutionsedited))
+			SflBootApplyList(item);
 		break;
 	default:
 		break;
 	}
 }
 
+static int SflBootRomIsValid(SFLBOOTGUI *pThis)
+{
+	char *path;
+	int valid;
+	path = NULL;
+	WSCtlLine_AllocText(&SflBootFind(pThis, "rom")->line, &path);
+	valid = SflEmulatorRomValid(path);
+	WSFREE(path);
+	return valid;
+}
+
 static void SflBootUpdateRomStatus(SFLBOOTGUI *pThis)
 {
-	SFLBOOTITEM *rom;
 	SFLBOOTITEM *status;
-	char *path;
-	rom = SflBootFind(pThis, "rom");
+	SFLBOOTITEM *welcome;
+	int valid;
+	int shown;
+	valid = SflBootRomIsValid(pThis);
 	status = SflBootFind(pThis, "romstatus");
-	path = NULL;
-	WSCtlLine_AllocText(&rom->line, &path);
-	if (SflEmulatorRomValid(path))
+	if (valid)
 		SflBootRefreshHelp(status, "A valid ROM was found.");
 	else
 		SflBootRefreshHelp(status, "No valid ROM. Select a Macintosh ROM file.");
-	WSFREE(path);
+	shown = 0;
+	if (SflBootIsSheepShaver()) {
+		shown = !valid || pThis->bootstrapcompleted;
+		SflBootFind(pThis, "bootstraptext")->hidden = !shown;
+		SflBootFind(pThis, "bootstrapbuttons")->hidden = !shown || pThis->bootstrapcompleted;
+		SflBootFind(pThis, "bootstrapdone")->hidden = !pThis->bootstrapcompleted;
+		SflBootFind(pThis, "advbootstrapheading")->hidden = !valid;
+		SflBootFind(pThis, "advbootstraptext")->hidden = !valid;
+		SflBootFind(pThis, "advbootstrapbuttons")->hidden = !valid;
+		if (valid)
+			SflBootFind(pThis, "bootstraperror")->hidden = 1;
+	}
+	welcome = SflBootFind(pThis, "welcomeheading");
+	welcome->hidden = shown;
+	SflBootFind(pThis, "welcometext")->hidden = shown;
+}
+
+static void SflBootRefreshDynamic(SFLBOOTGUI *pThis)
+{
+	SFLBOOTITEM *relative;
+	char value[SFLBOOTVALUESIZE];
+	if (WSCtlCheckBox_IsChecked(&SflBootFind(pThis, "clipsharing")->check))
+		SflBootRefreshHelp(SflBootFind(pThis, "clipinfo"), "Clipboard content is automatically copied between Classic Mac OS and the host after each copy action, in either OS.");
+	else
+		SflBootRefreshHelp(SflBootFind(pThis, "clipinfo"), "Clipboard content will not be shared.");
+	relative = SflBootFind(pThis, "relmouse");
+	SflBootSelectedValue(relative, value);
+	SflBootFind(pThis, "init_grab")->hidden = strcmp(value, "always") == 0;
+	if (strcmp(value, "always") == 0)
+		SflBootRefreshHelp(SflBootFind(pThis, "relinfo"), "Some games and apps require relative mouse mode to function.");
+	else
+		SflBootRefreshHelp(SflBootFind(pThis, "relinfo"), "Some games and apps require relative mouse mode to function. Relative mouse mode can be toggled on and off during emulation by pressing control + F5.");
+	SflBootFind(pThis, "networkwarning")->hidden = !pThis->networkchanged;
+	SflBootLayout(pThis);
 }
 
 static void SflBootBoot(SFLBOOTGUI *pThis)
 {
 	int index;
 	for (index = 0; index < pThis->count; ++index)
-		SflBootApplyItem(&pThis->items[index]);
+		SflBootApplyItem(&pThis->items[index], pThis->resolutionsedited);
+	SflBootDiskApply(pThis);
 	SflBootUpdateRomStatus(pThis);
 	if (!SflBootIsNativeBoot() && !SflEmulatorRomValid(SflEmulatorPrefString("rom", 0))) {
-		SflBootLayout(pThis);
-		SflBootError(pThis, SflBootFind(pThis, "rom"), "Select a valid Macintosh ROM file before booting.");
+		if (SflBootIsSheepShaver()) {
+			SflBootFind(pThis, "bootstraperror")->hidden = 0;
+			SflBootLayout(pThis);
+			SflBootError(pThis, SflBootFind(pThis, "bootstraptext"), "You need to bootstrap the emulator or select a valid Macintosh ROM file before booting.");
+		} else {
+			SflBootLayout(pThis);
+			SflBootError(pThis, SflBootFind(pThis, "rom"), "Select a valid Macintosh ROM file before booting.");
+		}
 		return;
 	}
 	if (SflEmulatorPrefString("disk", 0) == NULL && SflEmulatorPrefString("cdrom", 0) == NULL) {
-		SflBootError(pThis, SflBootFind(pThis, "disk"), "Add at least one disk before booting.");
+		SflBootFind(pThis, "diskerror")->hidden = 0;
+		SflBootLayout(pThis);
+		SflBootError(pThis, SflBootFind(pThis, "disk"), "Must select to mount at least one disk file.");
 		return;
 	}
 	if (!SflBootSave()) {
@@ -1006,18 +1326,24 @@ static void SflBootSheet(SFLBOOTGUI *pThis, const char *title, const char *text)
 	SFLBOOTSHEET sheet;
 	WSWNDCLASS windowclass;
 	WSRECT bounds;
+	int inset;
+	int width;
+	int buttonheight;
 	memset(&sheet, 0, sizeof(sheet));
 	if (!WSWndClass_Create(&windowclass, pThis->app, NULL, SflBootSheetMessages, "SflBootSheet"))
 		return;
-	WSRect_Construct(&bounds, WSDEFAULTPOSITION, WSDEFAULTPOSITION, 620, 600);
+	inset = SFLBOOTPX(SFLBOOTSHEETINSET);
+	width = SFLBOOTPX(SFLBOOTSHEETWIDTH);
+	buttonheight = SFLBOOTPX(SFLBOOTBOOTHEIGHT);
+	WSRect_Construct(&bounds, WSDEFAULTPOSITION, WSDEFAULTPOSITION, width, SFLBOOTPX(SFLBOOTSHEETHEIGHT));
 	if (WSWindow_Create(&sheet.window, pThis->app, &bounds, title, NULL, &windowclass)) {
 		WSWindow_SetCon(&sheet.window, &sheet);
-		WSWindow_SetSize(&sheet.window, 620, 600);
-		WSRect_Construct(&bounds, 16, 16, 570, 470);
+		WSWindow_SetSize(&sheet.window, width, SFLBOOTPX(SFLBOOTSHEETHEIGHT));
+		WSRect_Construct(&bounds, inset, inset, width - 3 * inset, SFLBOOTPX(SFLBOOTSHEETHEIGHT) - 2 * buttonheight - 4 * inset);
 		if (WSCtlText_CreateScrolled(&sheet.text, &sheet.scrolled, &sheet.window, &bounds, &windowclass)) {
 			WSCtlText_SetText(&sheet.text, text, strlen(text));
 			WSCtlText_SetEditable(&sheet.text, FALSE);
-			WSRect_Construct(&bounds, 16, 500, 570, 34);
+			WSRect_Construct(&bounds, inset, SFLBOOTPX(SFLBOOTSHEETHEIGHT) - 2 * buttonheight - 2 * inset, width - 3 * inset, buttonheight);
 			if (WSCtlButton_Create(&sheet.done, &sheet.window, &bounds, "Done", SflBootSheetDone, SFLBOOTIDDONE))
 				WSWindow_Modal(&sheet.window, &pThis->window, pThis->app);
 			else {
@@ -1035,15 +1361,19 @@ static void SflBootFormClose(SFLBOOTFORM *form, int accept)
 {
 	if (accept) {
 		WSCtlLine_AllocText(&form->line, &form->value);
-		form->selection = (int)WSCtlComboBox_GetCurrentIndex(&form->sizes);
+		if (form->hassecond)
+			WSCtlLine_AllocText(&form->secondline, &form->secondvalue);
 	}
 	form->accepted = accept;
 	form->closed = 1;
 	WSCtlButton_Destroy(&form->cancel);
 	WSCtlButton_Destroy(&form->accept);
-	WSCtlComboBox_Destroy(&form->sizes);
+	if (form->hassecond) {
+		WSCtlLine_Destroy(&form->secondline);
+		WSCtlStyledLabel_Destroy(&form->secondlabel);
+	}
 	WSCtlLine_Destroy(&form->line);
-	WSCtlLabel_Destroy(&form->label);
+	WSCtlStyledLabel_Destroy(&form->label);
 	WSWindow_Destroy(&form->window);
 }
 
@@ -1082,48 +1412,60 @@ BEGIN_WINDOW_MESSAGES(SflBootFormMessages)
 #endif /* SFL_USEDARKMODE */
 
 
-static int SflBootForm(SFLBOOTGUI *pThis, const char *title, const char *label, const char *initial, int disk, char **value, int *selection)
+static int SflBootForm(SFLBOOTGUI *pThis, const char *title, const char *label, const char *initial, const char *secondlabel, const char *secondinitial, char **value, char **secondvalue)
 {
 	SFLBOOTFORM form;
 	WSWNDCLASS windowclass;
 	WSRECT bounds;
-	int index;
-	int size;
-	char number[SFLBOOTVALUESIZE];
+	int inset;
+	int width;
+	int height;
+	int row;
+	int y;
 	memset(&form, 0, sizeof(form));
 	if (!WSWndClass_Create(&windowclass, pThis->app, NULL, SflBootFormMessages, "SflBootForm"))
 		return 0;
-	WSRect_Construct(&bounds, WSDEFAULTPOSITION, WSDEFAULTPOSITION, 540, 200);
+	inset = SFLBOOTPX(SFLBOOTSHEETINSET);
+	width = SFLBOOTPX(SFLBOOTFORMWIDTH);
+	height = SFLBOOTPX(SFLBOOTFORMHEIGHT);
+	row = SFLBOOTPX(SFLBOOTROWHEIGHT);
+	WSRect_Construct(&bounds, WSDEFAULTPOSITION, WSDEFAULTPOSITION, width, height);
 	if (!WSWindow_Create(&form.window, pThis->app, &bounds, title, NULL, &windowclass)) {
 		WSWndClass_Destroy(&windowclass, pThis->app);
 		return 0;
 	}
 	WSWindow_SetCon(&form.window, &form);
-	WSWindow_SetSize(&form.window, 540, 200);
-	WSRect_Construct(&bounds, 16, 16, 490, 22);
-	WSCtlLabel_Create(&form.label, &form.window, &bounds, label, 0, 3);
-	WSRect_Construct(&bounds, 16, 44, 490, 26);
+	WSWindow_SetSize(&form.window, width, height);
+	y = inset;
+	WSRect_Construct(&bounds, inset, y, width - 3 * inset, row);
+	WSCtlStyledLabel_Create(&form.label, &form.window, &bounds, label, 0, 3);
+	if (pThis->fontscreated)
+		WSCtlStyledLabel_SetFont(&form.label, &pThis->bodyfont);
+	y += row;
+	WSRect_Construct(&bounds, inset, y, width - 3 * inset, row);
 	WSCtlLine_Create(&form.line, &form.window, &bounds);
 	WSCtlLine_SetText(&form.line, initial, strlen(initial));
-	WSRect_Construct(&bounds, 16, 80, SFLBOOTCOMBOWIDTH, SFLBOOTCOMBOHEIGHT);
-	WSCtlComboBox_Create(&form.sizes, &form.window, &bounds, 4);
-	size = SFLBOOTDISKBASEMB;
-	for (index = 0; index < SFLBOOTDISKSIZES; ++index) {
-		sprintf(number, "%d MB", size);
-		WSCtlComboBox_AddString(&form.sizes, number);
-		size *= 2;
+	y += row;
+	if (secondlabel != NULL) {
+		form.hassecond = 1;
+		WSRect_Construct(&bounds, inset, y, width - 3 * inset, row);
+		WSCtlStyledLabel_Create(&form.secondlabel, &form.window, &bounds, secondlabel, 0, 4);
+		if (pThis->fontscreated)
+			WSCtlStyledLabel_SetFont(&form.secondlabel, &pThis->bodyfont);
+		y += row;
+		WSRect_Construct(&bounds, inset, y, width - 3 * inset, row);
+		WSCtlLine_Create(&form.secondline, &form.window, &bounds);
+		WSCtlLine_SetText(&form.secondline, secondinitial, strlen(secondinitial));
 	}
-	WSCtlComboBox_SetCurrentIndex(&form.sizes, SFLBOOTDISKDEFAULT);
-	if (!disk)
-		WSCtlComboBox_Hide(&form.sizes);
-	WSRect_Construct(&bounds, 296, 120, 100, 30);
+	WSRect_Construct(&bounds, width - 2 * SFLBOOTPX(SFLBOOTBROWSEWIDTH) - 3 * inset, height - SFLBOOTPX(70) - inset, SFLBOOTPX(SFLBOOTBROWSEWIDTH), SFLBOOTPX(SFLBOOTROWHEIGHT));
 	WSCtlButton_Create(&form.accept, &form.window, &bounds, "OK", SflBootFormAccept, SFLBOOTIDACCEPT);
-	WSRect_Construct(&bounds, 406, 120, 100, 30);
+	WSRect_Construct(&bounds, width - SFLBOOTPX(SFLBOOTBROWSEWIDTH) - 2 * inset, height - SFLBOOTPX(70) - inset, SFLBOOTPX(SFLBOOTBROWSEWIDTH), SFLBOOTPX(SFLBOOTROWHEIGHT));
 	WSCtlButton_Create(&form.cancel, &form.window, &bounds, "Cancel", SflBootFormCancel, SFLBOOTIDCANCEL);
 	WSWindow_Modal(&form.window, &pThis->window, pThis->app);
 	WSWndClass_Destroy(&windowclass, pThis->app);
 	*value = form.value;
-	*selection = form.selection;
+	if (secondvalue != NULL)
+		*secondvalue = form.secondvalue;
 	return form.accepted;
 }
 
@@ -1147,18 +1489,95 @@ static void SflBootBrowsePath(SFLBOOTGUI *pThis, const char *pref)
 
 static void SflBootAddDisks(SFLBOOTGUI *pThis)
 {
-	SFLBOOTITEM *disks;
 	WSCHOOSERFILEITERATOR iterator;
 	char *path;
-	disks = SflBootFind(pThis, "disk");
+	int rejected;
+	rejected = 0;
 	WSChooserFile(&iterator, &pThis->window);
 	while (!WSChooserFileIsEnd(&iterator)) {
 		WSChooserFileIterator_AllocValue(&iterator, &path);
-		SflBootAppendList(disks, path);
+		if (SflBootExtensionIn(path, SflBootDiskExtensions()))
+			SflBootDiskAppend(pThis, path, 1, SflBootExtensionIn(path, SflBootCdExtensions()));
+		else
+			rejected = 1;
 		WSFREE(path);
 		WSChooserFileIterator_Increment(&iterator);
 	}
 	WSChooserFileFinish(&iterator);
+	SflBootDiskRender(pThis);
+	SflBootLayout(pThis);
+	if (rejected)
+		WSMessageBox(&pThis->window, "Import disk file", "The file has an unsupported suffix. The supported suffixes are .dsk, .dmg, .cdr, .iso, .cue, .toast, .img, .chd, .qcow2.", WSMESSAGEBOX_OK);
+}
+
+static int SflBootSelectedDisk(SFLBOOTGUI *pThis)
+{
+	return WSCtlList_GetNextItem(&SflBootFind(pThis, "disk")->list, -1, WSCTLLIST_STATE_SELECTED, WSCTLLIST_GETNEXTITEM_ALL);
+}
+
+static void SflBootDiskRemove(SFLBOOTGUI *pThis)
+{
+	int selected;
+	selected = SflBootSelectedDisk(pThis);
+	if (selected < 0)
+		return;
+	SflBootDiskRemoveAt(pThis, selected);
+	SflBootDiskRender(pThis);
+	SflBootLayout(pThis);
+}
+
+static void SflBootDiskToggleMount(SFLBOOTGUI *pThis)
+{
+	int selected;
+	selected = SflBootSelectedDisk(pThis);
+	if (selected < 0)
+		return;
+	pThis->disks[selected].mounted = !pThis->disks[selected].mounted;
+	if (pThis->disks[selected].mounted)
+		SflBootFind(pThis, "diskerror")->hidden = 1;
+	SflBootDiskRender(pThis);
+	SflBootLayout(pThis);
+}
+
+static void SflBootDiskToggleType(SFLBOOTGUI *pThis)
+{
+	int selected;
+	selected = SflBootSelectedDisk(pThis);
+	if (selected < 0)
+		return;
+	pThis->disks[selected].cd = !pThis->disks[selected].cd;
+	SflBootDiskRender(pThis);
+}
+
+static void SflBootDiskReload(SFLBOOTGUI *pThis)
+{
+	WSFOLDER folder;
+	WSFOLDERFILEINFO info;
+	char directory[SFLBOOTPATHSIZE];
+	char joined[SFLBOOTPATHSIZE];
+	int index;
+	index = 0;
+	while (index < pThis->diskcount) {
+		if (WSFileExists(pThis->disks[index].path))
+			index++;
+		else
+			SflBootDiskRemoveAt(pThis, index);
+	}
+	SflBootShareFolder(directory, sizeof(directory));
+	WSFolder_Create(&folder, directory);
+	if (WSFolder_IsCreated(&folder)) {
+		while (WSFolder_Next(&folder, &info)) {
+			if (!SflBootExtensionIn(info.sName, SflBootDiskExtensions()))
+				continue;
+			if (strlen(directory) + strlen(info.sName) + 2 > sizeof(joined))
+				continue;
+			sprintf(joined, "%s%s%s", directory, WSPATHSEPARATOR, info.sName);
+			SflBootDiskAppend(pThis, joined, 0, SflBootExtensionIn(info.sName, SflBootCdExtensions()));
+		}
+		WSFolder_Destroy(&folder);
+	}
+	SflBootDiskRender(pThis);
+	SflBootLayout(pThis);
 }
 
 static void SflBootRemoveSelected(SFLBOOTGUI *pThis, const char *pref)
@@ -1169,44 +1588,164 @@ static void SflBootRemoveSelected(SFLBOOTGUI *pThis, const char *pref)
 	selected = WSCtlList_GetNextItem(&item->list, -1, WSCTLLIST_STATE_SELECTED, WSCTLLIST_GETNEXTITEM_ALL);
 	if (selected >= 0)
 		WSCtlList_DeleteItem(&item->list, selected);
+	if (strcmp(pref, "resolution") == 0)
+		pThis->resolutionsedited = 1;
+}
+
+static void SflBootEditResolution(SFLBOOTGUI *pThis, int edit)
+{
+	SFLBOOTITEM *item;
+	char *value;
+	char *current;
+	const char *initial;
+	char normalized[SFLBOOTVALUESIZE];
+	int selected;
+	int width;
+	int height;
+	item = SflBootFind(pThis, "resolution");
+	selected = -1;
+	current = NULL;
+	if (edit) {
+		selected = WSCtlList_GetNextItem(&item->list, -1, WSCTLLIST_STATE_SELECTED, WSCTLLIST_GETNEXTITEM_ALL);
+		if (selected < 0)
+			return;
+		current = SflBootListText(item, selected);
+	} else if (WSCtlList_GetItemCount(&item->list) >= SFLBOOTMAXRESOLUTIONS) {
+		WSMessageBox(&pThis->window, "Monitor resolutions", "Mac OS allows a maximum of 10 monitor resolutions to be available simultaneously.", WSMESSAGEBOX_OK);
+		return;
+	}
+	initial = "800x600";
+	if (current != NULL)
+		initial = current;
+	value = NULL;
+	if (SflBootForm(pThis, "Monitor resolution", "Width x height", initial, NULL, NULL, &value, NULL)) {
+		if (sscanf(value, "%dx%d", &width, &height) == 2 && width >= SFLBOOTMINWIDTH && height >= SFLBOOTMINHEIGHT && width <= SFLBOOTMAXWIDTH && height <= SFLBOOTMAXHEIGHT) {
+			sprintf(normalized, "%dx%d", width, height);
+			if (edit)
+				WSCtlList_SetItemText(&item->list, selected, 0, normalized);
+			else
+				SflBootAppendList(item, normalized);
+			pThis->resolutionsedited = 1;
+		} else {
+			WSMessageBox(&pThis->window, "Monitor resolution", "Enter a resolution such as 800x600, between 512x384 and 4096x4096.", WSMESSAGEBOX_OK);
+		}
+		WSFREE(value);
+	}
+	if (current != NULL)
+		WSFREE(current);
+}
+
+static void SflBootSelectInstallDisc(SFLBOOTGUI *pThis)
+{
+	WSCHOOSERFILEITERATOR iterator;
+	SFLBOOTITEM *rom;
+	char destination[SFLBOOTPATHSIZE];
+	char *path;
+	int extracted;
+	WSChooserFile(&iterator, &pThis->window);
+	if (WSChooserFileIsEnd(&iterator)) {
+		WSChooserFileFinish(&iterator);
+		return;
+	}
+	WSChooserFileIterator_AllocValue(&iterator, &path);
+	WSChooserFileFinish(&iterator);
+	extracted = SflBootExtractRom(path, destination, sizeof(destination));
+	WSFREE(path);
+	if (!extracted) {
+		WSMessageBox(&pThis->window, "Mac OS install disc image not compatible", "The provided file is not a compatible Mac OS install disc image for bootstrapping. Check 'Bootstrap compatibility list' for guidance.", WSMESSAGEBOX_OK);
+		return;
+	}
+	rom = SflBootFind(pThis, "rom");
+	WSCtlLine_SetText(&rom->line, destination, strlen(destination));
+	pThis->bootstrapcompleted = 1;
+	SflBootRefreshHelp(SflBootFind(pThis, "bootstraptext"), "Congratulations, the emulator is successfully bootstrapped!\n\nYou can now install and run Mac OS up to version 9.0.4. For network support, Mac OS 9.0 - 9.0.4 is required.");
+	SflBootFind(pThis, "bootstraperror")->hidden = 1;
+	SflBootUpdateRomStatus(pThis);
+	SflBootLayout(pThis);
+}
+
+static void SflBootBootstrapDone(SFLBOOTGUI *pThis)
+{
+	pThis->bootstrapcompleted = 0;
+	SflBootRefreshHelp(SflBootFind(pThis, "bootstraptext"), SflBootBootstrapText());
+	SflBootUpdateRomStatus(pThis);
+	SflBootLayout(pThis);
+}
+
+static void SflBootShowInstructions(SFLBOOTGUI *pThis)
+{
+	pThis->setupread = 1;
+	SflBootSheet(pThis, "Setup instructions", SflBootInstructionsText());
+}
+
+static void SflBootDismissSetup(SFLBOOTGUI *pThis)
+{
+	if (pThis->setupread) {
+		WSMessageBox(&pThis->window, "Information", "Setup instructions will still be accessible from the Resources section at the bottom of this tab.", WSMESSAGEBOX_OK);
+	} else if (WSMessageBox(&pThis->window, "Warning", "Steps 5 and 8 of the setup instructions are non-trivial and must be followed for successful setup.\nIf setup instructions are dismissed from here, they can still be accessed from the Resources section at the bottom of this tab.", WSMESSAGEBOX_OKCANCEL) != WSMESSAGEBOX_IDOK) {
+		return;
+	}
+	SflBootSetBool("setupdismissed", 1);
+	SflBootFind(pThis, "setupbanner")->hidden = 1;
+	SflBootFind(pThis, "setupread")->hidden = 1;
+	SflBootLayout(pThis);
 }
 
 static void SflBootCreateDisk(SFLBOOTGUI *pThis)
 {
 	FILE *file;
+	char directory[SFLBOOTPATHSIZE];
+	char joined[SFLBOOTPATHSIZE];
 	char *name;
-	long size;
-	int selection;
+	char *sizetext;
+	long megabytes;
 	int success;
-	if (!SflBootForm(pThis, "Create disk image", "Disk image path and size", "New Disk.img", 1, &name, &selection))
+	name = NULL;
+	sizetext = NULL;
+	if (!SflBootForm(pThis, "Create new disk", "Name", "DiskName.dsk", "Size in MB (recommended minimum is around 500)", "500", &name, &sizetext))
 		return;
-	file = fopen(name, "rb");
-	if (file != NULL) {
-		fclose(file);
-		WSMessageBox(&pThis->window, "Create disk image", "That file already exists. Choose another name.", WSMESSAGEBOX_OK);
+	SflBootShareFolder(directory, sizeof(directory));
+	megabytes = atol(sizetext);
+	WSFREE(sizetext);
+	if (megabytes <= 0 || megabytes > SFLBOOTMAXDISKSIZEMB) {
+		WSMessageBox(&pThis->window, "Create new disk", "An invalid file size was given.", WSMESSAGEBOX_OK);
 		WSFREE(name);
 		return;
 	}
-	size = ((long)SFLBOOTDISKBASEMB << selection) * SFLBOOTMEGABYTE;
+	if (name[0] == 0 || strlen(directory) + strlen(name) + 8 > sizeof(joined)) {
+		WSMessageBox(&pThis->window, "Create new disk", "Something went wrong when trying to create the file.", WSMESSAGEBOX_OK);
+		WSFREE(name);
+		return;
+	}
+	if (SflBootExtensionIn(name, "|dsk|"))
+		sprintf(joined, "%s%s%s", directory, WSPATHSEPARATOR, name);
+	else
+		sprintf(joined, "%s%s%s.dsk", directory, WSPATHSEPARATOR, name);
+	WSFREE(name);
+	if (WSFileExists(joined)) {
+		WSMessageBox(&pThis->window, "Create new disk", "A file with that name already exists.", WSMESSAGEBOX_OK);
+		return;
+	}
 	success = 0;
-	file = fopen(name, "wb");
+	file = fopen(joined, "wb");
 	if (file != NULL) {
-		success = fseek(file, size - 1, SEEK_SET) == 0 && fputc(0, file) != EOF;
+		success = fseek(file, megabytes * SFLBOOTMEGABYTE - 1, SEEK_SET) == 0 && fputc(0, file) != EOF;
 		if (fclose(file) != 0)
 			success = 0;
 	}
-	if (success)
-		SflBootAppendList(SflBootFind(pThis, "disk"), name);
-	else
-		WSMessageBox(&pThis->window, "Create disk image", "The disk image could not be created.", WSMESSAGEBOX_OK);
-	WSFREE(name);
+	if (!success) {
+		WSMessageBox(&pThis->window, "Create new disk", "Something went wrong when trying to create the file.", WSMESSAGEBOX_OK);
+		return;
+	}
+	SflBootDiskAppend(pThis, joined, 1, 0);
+	SflBootDiskRender(pThis);
+	SflBootLayout(pThis);
 }
 
 static void SflBootAddRedirect(SFLBOOTGUI *pThis)
 {
 	char *rule;
-	int selection;
-	if (!SflBootForm(pThis, "Port forwarding", "protocol:host-port:guest-address:guest-port", "tcp:8080:10.0.2.15:80", 0, &rule, &selection))
+	if (!SflBootForm(pThis, "Port forwarding", "protocol:host-port:guest-address:guest-port", "tcp:8080:10.0.2.15:80", NULL, NULL, &rule, NULL))
 		return;
 	if (SflBootValidateRedir(rule))
 		SflBootAppendList(SflBootFind(pThis, "redir"), rule);
@@ -1236,16 +1775,26 @@ static void SflBootDismiss(SFLBOOTGUI *pThis, const char *pref, const char *link
 
 SFLBOOTBUTTONHANDLER(SflBootOnBoot, SflBootBoot(pThis))
 SFLBOOTBUTTONHANDLER(SflBootOnBrowseRom, { SflBootBrowsePath(pThis, "rom"); SflBootUpdateRomStatus(pThis); SflBootLayout(pThis); })
-SFLBOOTBUTTONHANDLER(SflBootOnBrowseCd, SflBootBrowsePath(pThis, "cdrom"))
 SFLBOOTBUTTONHANDLER(SflBootOnBrowseFolder, SflBootBrowsePath(pThis, "extfs"))
 SFLBOOTBUTTONHANDLER(SflBootOnDiskAdd, SflBootAddDisks(pThis))
 SFLBOOTBUTTONHANDLER(SflBootOnDiskCreate, SflBootCreateDisk(pThis))
-SFLBOOTBUTTONHANDLER(SflBootOnDiskRemove, SflBootRemoveSelected(pThis, "disk"))
+SFLBOOTBUTTONHANDLER(SflBootOnDiskRemove, SflBootDiskRemove(pThis))
+SFLBOOTBUTTONHANDLER(SflBootOnDiskMount, SflBootDiskToggleMount(pThis))
+SFLBOOTBUTTONHANDLER(SflBootOnDiskType, SflBootDiskToggleType(pThis))
+SFLBOOTBUTTONHANDLER(SflBootOnDiskReload, SflBootDiskReload(pThis))
+SFLBOOTBUTTONHANDLER(SflBootOnDiskOpen, SflBootOpenShareFolder())
+SFLBOOTBUTTONHANDLER(SflBootOnResolutionAdd, SflBootEditResolution(pThis, 0))
+SFLBOOTBUTTONHANDLER(SflBootOnResolutionEdit, SflBootEditResolution(pThis, 1))
+SFLBOOTBUTTONHANDLER(SflBootOnResolutionRemove, SflBootRemoveSelected(pThis, "resolution"))
+SFLBOOTBUTTONHANDLER(SflBootOnBootstrap, SflBootSelectInstallDisc(pThis))
+SFLBOOTBUTTONHANDLER(SflBootOnBootstrapDone, SflBootBootstrapDone(pThis))
+SFLBOOTBUTTONHANDLER(SflBootOnCompatibility, SflBootSheet(pThis, "Bootstrap compatibility list", SflBootCompatibilityText()))
+SFLBOOTBUTTONHANDLER(SflBootOnRelative, SflBootSheet(pThis, "Relative mouse mode", SflBootRelativeMouseText()))
 SFLBOOTBUTTONHANDLER(SflBootOnRedirAdd, SflBootAddRedirect(pThis))
 SFLBOOTBUTTONHANDLER(SflBootOnRedirRemove, SflBootRemoveSelected(pThis, "redir"))
-SFLBOOTBUTTONHANDLER(SflBootOnInstructions, SflBootSheet(pThis, "Setup instructions", SflBootInstructionsText()))
+SFLBOOTBUTTONHANDLER(SflBootOnInstructions, SflBootShowInstructions(pThis))
 SFLBOOTBUTTONHANDLER(SflBootOnLicenses, SflBootSheet(pThis, "Licenses", SflBootLicenseText()))
-SFLBOOTBUTTONHANDLER(SflBootOnSetupClose, SflBootDismiss(pThis, "setupbanner", "setupread"))
+SFLBOOTBUTTONHANDLER(SflBootOnSetupClose, SflBootDismissSetup(pThis))
 SFLBOOTBUTTONHANDLER(SflBootOnNetworkClose, SflBootDismiss(pThis, "networkbanner", NULL))
 
 WSDND_DROP_CALLBACK(SflBootOnDrop)
@@ -1260,13 +1809,28 @@ WSDND_DROP_CALLBACK(SflBootOnDrop)
 	if (WSEventDnD_GetFileDrop(&event, &iterator)) {
 		while (!WSEventDnD_IsFileDropEnd(&event, &iterator)) {
 			WSDnDFileDropIterator_Value(&iterator, &path, &length);
-			SflBootAppendList(SflBootFind(pThis, "disk"), path);
+			if (SflBootExtensionIn(path, SflBootDiskExtensions()))
+				SflBootDiskAppend(pThis, path, 1, SflBootExtensionIn(path, SflBootCdExtensions()));
 			WSFREE(path);
 			WSDnDFileDropIterator_Increment(&iterator);
 		}
 		WSEventDnD_FinishFileDrop(&event, &iterator);
+		SflBootDiskRender(pThis);
+		SflBootLayout(pThis);
 	}
 	return WSEVENTDND_HANDLED;
+}
+
+WSEVENTCHECKBUTTON_CALLBACK(SflBootOnCheck)
+{
+	WSEVENTCHECKBUTTON event;
+	SFLBOOTGUI *pThis;
+	WSEventCheckButton_Construct(&event);
+	WSCtlCheckBoxHandleClicked(&event);
+	pThis = (SFLBOOTGUI *)WSEventCheckButton_GetWindowCon(&event);
+	if (pThis->ready)
+		SflBootRefreshDynamic(pThis);
+	return WSEVENTCHECKBUTTON_HANDLED;
 }
 
 WSCLOSEEVENT_CALLBACK(SflBootOnClose)
@@ -1420,7 +1984,6 @@ BEGIN_WINDOW_MESSAGES(SflBootMessages)
 	IMPLEMENT_CTLTAB_CHANGED_MESSAGE(SflBootOnTab, SFLBOOTIDTAB)
 	IMPLEMENT_CTLBUTTON_CLICKED_MESSAGE(SflBootOnBoot, SFLBOOTIDBOOT)
 	IMPLEMENT_CTLBUTTON_CLICKED_MESSAGE(SflBootOnBrowseRom, SFLBOOTIDROM)
-	IMPLEMENT_CTLBUTTON_CLICKED_MESSAGE(SflBootOnBrowseCd, SFLBOOTIDCD)
 	IMPLEMENT_CTLBUTTON_CLICKED_MESSAGE(SflBootOnBrowseFolder, SFLBOOTIDFOLDER)
 	IMPLEMENT_CTLBUTTON_CLICKED_MESSAGE(SflBootOnDiskAdd, SFLBOOTIDDISKADD)
 	IMPLEMENT_CTLBUTTON_CLICKED_MESSAGE(SflBootOnDiskCreate, SFLBOOTIDDISKCREATE)
@@ -1432,6 +1995,21 @@ BEGIN_WINDOW_MESSAGES(SflBootMessages)
 	IMPLEMENT_CTLBUTTON_CLICKED_MESSAGE(SflBootOnSetupClose, SFLBOOTIDSETUPCLOSE)
 	IMPLEMENT_CTLBUTTON_CLICKED_MESSAGE(SflBootOnNetworkClose, SFLBOOTIDNETWORKCLOSE)
 	IMPLEMENT_CTLBUTTON_CLICKED_MESSAGE(SflBootOnInstructions, SFLBOOTIDSHEETREAD)
+	IMPLEMENT_CTLBUTTON_CLICKED_MESSAGE(SflBootOnInstructions, SFLBOOTIDSETUPGUIDE)
+	IMPLEMENT_CTLBUTTON_CLICKED_MESSAGE(SflBootOnDiskMount, SFLBOOTIDDISKMOUNT)
+	IMPLEMENT_CTLBUTTON_CLICKED_MESSAGE(SflBootOnDiskType, SFLBOOTIDDISKTYPE)
+	IMPLEMENT_CTLBUTTON_CLICKED_MESSAGE(SflBootOnDiskReload, SFLBOOTIDDISKRELOAD)
+	IMPLEMENT_CTLBUTTON_CLICKED_MESSAGE(SflBootOnDiskOpen, SFLBOOTIDDISKOPEN)
+	IMPLEMENT_CTLBUTTON_CLICKED_MESSAGE(SflBootOnResolutionAdd, SFLBOOTIDRESADD)
+	IMPLEMENT_CTLBUTTON_CLICKED_MESSAGE(SflBootOnResolutionEdit, SFLBOOTIDRESEDIT)
+	IMPLEMENT_CTLBUTTON_CLICKED_MESSAGE(SflBootOnResolutionRemove, SFLBOOTIDRESREMOVE)
+	IMPLEMENT_CTLBUTTON_CLICKED_MESSAGE(SflBootOnBootstrap, SFLBOOTIDBOOTSTRAP)
+	IMPLEMENT_CTLBUTTON_CLICKED_MESSAGE(SflBootOnBootstrap, SFLBOOTIDBOOTSTRAP2)
+	IMPLEMENT_CTLBUTTON_CLICKED_MESSAGE(SflBootOnBootstrapDone, SFLBOOTIDBOOTSTRAPDONE)
+	IMPLEMENT_CTLBUTTON_CLICKED_MESSAGE(SflBootOnCompatibility, SFLBOOTIDCOMPATIBILITY)
+	IMPLEMENT_CTLBUTTON_CLICKED_MESSAGE(SflBootOnCompatibility, SFLBOOTIDCOMPATIBILITY2)
+	IMPLEMENT_CTLBUTTON_CLICKED_MESSAGE(SflBootOnRelative, SFLBOOTIDRELATIVE)
+	IMPLEMENT_CTLBUTTON_CLICKED_MESSAGE(SflBootOnRelative, SFLBOOTIDRELATIVE2)
 	IMPLEMENT_CTLRADIOBUTTON_TOGGLED_MESSAGE(SflBootRadio0, SFLBOOTIDRADIOBASE + 0)
 	IMPLEMENT_CTLRADIOBUTTON_TOGGLED_MESSAGE(SflBootRadio1, SFLBOOTIDRADIOBASE + 1)
 	IMPLEMENT_CTLRADIOBUTTON_TOGGLED_MESSAGE(SflBootRadio2, SFLBOOTIDRADIOBASE + 2)
@@ -1448,6 +2026,7 @@ BEGIN_WINDOW_MESSAGES(SflBootMessages)
 	IMPLEMENT_CTLRADIOBUTTON_TOGGLED_MESSAGE(SflBootRadio13, SFLBOOTIDRADIOBASE + 13)
 	IMPLEMENT_CTLRADIOBUTTON_TOGGLED_MESSAGE(SflBootRadio14, SFLBOOTIDRADIOBASE + 14)
 	IMPLEMENT_CTLRADIOBUTTON_TOGGLED_MESSAGE(SflBootRadio15, SFLBOOTIDRADIOBASE + 15)
+	IMPLEMENT_CTLCHECKBOX_CLICKED_MESSAGE(SflBootOnCheck, 0)
 #if defined(WSWINGUI)
 	IMPLEMENT_CTLLABEL_COLOR_MESSAGE(SflBootOnLabelColor)
 #endif
@@ -1462,74 +2041,131 @@ BEGIN_WINDOW_MESSAGES(SflBootMessages)
 	END_WINDOW_MESSAGES(SflBootMessages)
 #endif /* SFL_USEDARKMODE */
 
+static void SflBootLoadDefaultResolutions(SFLBOOTITEM *item)
+{
+	if (WSCtlList_GetItemCount(&item->list) != 0)
+		return;
+	SflBootAppendList(item, "640x480");
+	SflBootAppendList(item, "800x600");
+	SflBootAppendList(item, "1024x768");
+	SflBootAppendList(item, "1152x870");
+	SflBootAppendList(item, "1280x1024");
+	SflBootAppendList(item, "1600x1200");
+}
+
 static void SflBootBuildGeneral(SFLBOOTGUI *pThis)
 {
 	SFLBOOTITEM *item;
-	item = SflBootAddHelp(pThis, SFLBOOTPAGEGENERAL, "setupbanner", "Read the setup instructions if you want to install Classic Mac OS from scratch. They contain crucial tips on how to not get stuck during installation and how to get audio working.");
+	int dismissed;
+	dismissed = SflEmulatorPrefBool("setupdismissed");
+	item = SflBootAddHelp(pThis, SFLBOOTPAGEGENERAL, "setupbanner", "Read initial setup instructions if you want to install Classic Mac OS from scratch. Contains crucial tips on how to not get stuck in installation progress and get audio working, after installation.\n\nThe instructions can still be accessed from the Resources section at the bottom of this tab, after dismissal.");
 	item->type = SFLBOOTBANNER;
+	item->hidden = dismissed;
 	SflBootAddButton(pThis, item, "X", SflBootOnSetupClose, SFLBOOTIDSETUPCLOSE);
 	item = SflBootAddItem(pThis, SFLBOOTPAGEGENERAL, SFLBOOTBUTTONS, "setupread", NULL);
+	item->hidden = dismissed;
 	SflBootAddButton(pThis, item, "Read instructions", SflBootOnInstructions, SFLBOOTIDSHEETREAD);
+	if (SflBootIsSheepShaver()) {
+		SflBootAddHelp(pThis, SFLBOOTPAGEGENERAL, "bootstraptext", SflBootBootstrapText());
+		item = SflBootAddItem(pThis, SFLBOOTPAGEGENERAL, SFLBOOTBUTTONS, "bootstrapbuttons", NULL);
+		SflBootAddButton(pThis, item, "Select install disc", SflBootOnBootstrap, SFLBOOTIDBOOTSTRAP);
+		SflBootAddButton(pThis, item, "Compatibility list", SflBootOnCompatibility, SFLBOOTIDCOMPATIBILITY);
+		item = SflBootAddItem(pThis, SFLBOOTPAGEGENERAL, SFLBOOTBUTTONS, "bootstrapdone", NULL);
+		SflBootAddButton(pThis, item, "Done", SflBootOnBootstrapDone, SFLBOOTIDBOOTSTRAPDONE);
+		item = SflBootAddHelp(pThis, SFLBOOTPAGEGENERAL, "bootstraperror", "You need to bootstrap the emulator or select a valid ROM file");
+		item->hidden = 1;
+	}
+	item = SflBootAddHeading(pThis, SFLBOOTPAGEGENERAL, "Welcome!");
+	item->pref = "welcomeheading";
+	SflBootAddHelp(pThis, SFLBOOTPAGEGENERAL, "welcometext", "These settings appear each time the emulator starts. To go straight to Mac OS, turn on Skip startup screen in the Advanced tab.");
 	SflBootAddHeading(pThis, SFLBOOTPAGEGENERAL, "ROM");
 	SflBootAddPath(pThis, SFLBOOTPAGEGENERAL, "rom", "Macintosh ROM file", 0, SflBootOnBrowseRom, SFLBOOTIDROM);
 	SflBootAddHelp(pThis, SFLBOOTPAGEGENERAL, "romstatus", "");
 	SflBootAddHeading(pThis, SFLBOOTPAGEGENERAL, "Disks");
-	SflBootAddList(pThis, SFLBOOTPAGEGENERAL, "disk", "Mounted disk images");
 	item = SflBootAddItem(pThis, SFLBOOTPAGEGENERAL, SFLBOOTBUTTONS, NULL, NULL);
-	SflBootAddButton(pThis, item, "Add...", SflBootOnDiskAdd, SFLBOOTIDDISKADD);
+	SflBootAddButton(pThis, item, "Import...", SflBootOnDiskAdd, SFLBOOTIDDISKADD);
 	SflBootAddButton(pThis, item, "Create...", SflBootOnDiskCreate, SFLBOOTIDDISKCREATE);
+	SflBootAddButton(pThis, item, "Reload", SflBootOnDiskReload, SFLBOOTIDDISKRELOAD);
+	SflBootAddButton(pThis, item, "Open folder", SflBootOnDiskOpen, SFLBOOTIDDISKOPEN);
+	SflBootAddDiskList(pThis, SFLBOOTPAGEGENERAL);
+	item = SflBootAddItem(pThis, SFLBOOTPAGEGENERAL, SFLBOOTBUTTONS, NULL, NULL);
+	SflBootAddButton(pThis, item, "Mount / Unmount", SflBootOnDiskMount, SFLBOOTIDDISKMOUNT);
+	SflBootAddButton(pThis, item, "Hard disk / CD", SflBootOnDiskType, SFLBOOTIDDISKTYPE);
 	SflBootAddButton(pThis, item, "Remove", SflBootOnDiskRemove, SFLBOOTIDDISKREMOVE);
-	SflBootAddHeading(pThis, SFLBOOTPAGEGENERAL, "CD-ROM");
-	SflBootAddPath(pThis, SFLBOOTPAGEGENERAL, "cdrom", "CD-ROM image", 0, SflBootOnBrowseCd, SFLBOOTIDCD);
+	SflBootAddHelp(pThis, SFLBOOTPAGEGENERAL, "diskempty", "No disk files found.\nClick Create or Import to add a disk file. Alternatively, add a file manually to the share folder and click Reload. Click Open folder to open the share folder.");
+	item = SflBootAddHelp(pThis, SFLBOOTPAGEGENERAL, "diskerror", "Must select to mount at least one disk file");
+	item->hidden = 1;
 	SflBootAddHeading(pThis, SFLBOOTPAGEGENERAL, "Shared folder");
 	SflBootAddCheck(pThis, SFLBOOTPAGEGENERAL, "enableextfs", "Enable shared folder", 0);
 	SflBootAddPath(pThis, SFLBOOTPAGEGENERAL, "extfs", "Shared folder", 1, SflBootOnBrowseFolder, SFLBOOTIDFOLDER);
 	SflBootAddHeading(pThis, SFLBOOTPAGEGENERAL, "Right click");
-	SflBootAddRadio(pThis, SFLBOOTPAGEGENERAL, "rightclick", NULL, "Control + click=control|Command + click=command", SFLBOOTKINDSTRING);
+	SflBootAddRadio(pThis, SFLBOOTPAGEGENERAL, "rightclick", NULL, "control + click=control|command + click=command", SFLBOOTKINDSTRING);
 	SflBootAddHelp(pThis, SFLBOOTPAGEGENERAL, NULL, "Controls what a right mouse click does.");
 	SflBootAddHeading(pThis, SFLBOOTPAGEGENERAL, "Audio");
 	SflBootAddCheck(pThis, SFLBOOTPAGEGENERAL, "nosound", "Audio enabled", 1);
-	SflBootAddHelp(pThis, SFLBOOTPAGEGENERAL, NULL, "Audio output must be selected in the Sound control panel. See the setup instructions.");
+	SflBootAddHelp(pThis, SFLBOOTPAGEGENERAL, NULL, "Having trouble getting audio to work? Read the setup guide.");
+	item = SflBootAddItem(pThis, SFLBOOTPAGEGENERAL, SFLBOOTBUTTONS, NULL, NULL);
+	SflBootAddButton(pThis, item, "Setup guide", SflBootOnInstructions, SFLBOOTIDSETUPGUIDE);
 	if (SflBootIsSheepShaver()) {
 		SflBootAddHeading(pThis, SFLBOOTPAGEGENERAL, "Mac OS X");
 		SflBootAddCombo(pThis, SFLBOOTPAGEGENERAL, "osxboot", "Boot device", "Automatic=|Hard disk=disk|CD-ROM=cdrom", SFLBOOTKINDSTRING);
 	}
+	SflBootAddHeading(pThis, SFLBOOTPAGEGENERAL, "Resources");
+	item = SflBootAddItem(pThis, SFLBOOTPAGEGENERAL, SFLBOOTBUTTONS, NULL, NULL);
+	SflBootAddButton(pThis, item, "Setup instructions", SflBootOnInstructions, SFLBOOTIDINSTRUCTIONS);
+	if (SflBootIsSheepShaver())
+		SflBootAddButton(pThis, item, "Compatibility list", SflBootOnCompatibility, SFLBOOTIDCOMPATIBILITY2);
+	SflBootAddButton(pThis, item, "Relative mouse", SflBootOnRelative, SFLBOOTIDRELATIVE);
+	SflBootAddButton(pThis, item, "Licenses", SflBootOnLicenses, SFLBOOTIDLICENSES);
 }
 
 static void SflBootBuildGraphics(SFLBOOTGUI *pThis)
 {
+	SFLBOOTITEM *item;
 	SflBootAddHeading(pThis, SFLBOOTPAGEGRAPHICS, "Display");
 	SflBootAddRadio(pThis, SFLBOOTPAGEGRAPHICS, "screenmode", NULL, "Windowed=win|Full screen=dga", SFLBOOTKINDSPECIAL);
-	SflBootAddCombo(pThis, SFLBOOTPAGEGRAPHICS, "screensize", "Resolution", "Desktop=0/0|640 x 480=640/480|800 x 600=800/600|1024 x 768=1024/768|1280 x 720=1280/720|1920 x 1080=1920/1080", SFLBOOTKINDSPECIAL);
-	SflBootAddHelp(pThis, SFLBOOTPAGEGRAPHICS, NULL, "Resolution made available to Mac OS, along with the standard sizes below it. Desktop uses the size of the host display when full screen.");
+	SflBootAddHelp(pThis, SFLBOOTPAGEGRAPHICS, NULL, "Choose whether emulation runs in a window or full screen.");
+	SflBootAddCombo(pThis, SFLBOOTPAGEGRAPHICS, "screensize", "Startup resolution", "Desktop=0/0|640 x 480=640/480|800 x 600=800/600|1024 x 768=1024/768|1280 x 720=1280/720|1920 x 1080=1920/1080", SFLBOOTKINDSPECIAL);
 	if (SflBootIsSheepShaver()) {
+		SflBootAddHeading(pThis, SFLBOOTPAGEGRAPHICS, "Monitor resolutions");
+		SflBootAddList(pThis, SFLBOOTPAGEGRAPHICS, "resolution", "Width x height");
+		item = SflBootFind(pThis, "resolution");
+		if (item->hascontrol)
+			SflBootLoadDefaultResolutions(item);
+		item = SflBootAddItem(pThis, SFLBOOTPAGEGRAPHICS, SFLBOOTBUTTONS, NULL, NULL);
+		SflBootAddButton(pThis, item, "Add...", SflBootOnResolutionAdd, SFLBOOTIDRESADD);
+		SflBootAddButton(pThis, item, "Edit...", SflBootOnResolutionEdit, SFLBOOTIDRESEDIT);
+		SflBootAddButton(pThis, item, "Remove", SflBootOnResolutionRemove, SFLBOOTIDRESREMOVE);
+		SflBootAddHelp(pThis, SFLBOOTPAGEGRAPHICS, NULL, "Resolutions made available to Mac OS. Can be edited. Changing the active resolution is still done with the Monitors app, inside Mac OS. Mac OS allows a maximum of 10 monitor resolutions.");
 		SflBootAddHeading(pThis, SFLBOOTPAGEGRAPHICS, "Graphics acceleration (experimental)");
 		SflBootAddCheck(pThis, SFLBOOTPAGEGRAPHICS, "nqdaccel", "QuickDraw 2D", 0);
 		SflBootAddCheck(pThis, SFLBOOTPAGEGRAPHICS, "raveaccel", "QuickDraw 3D + RAVE", 0);
 		SflBootAddCheck(pThis, SFLBOOTPAGEGRAPHICS, "glaccel", "OpenGL", 0);
 		SflBootAddCheck(pThis, SFLBOOTPAGEGRAPHICS, "dspaccel", "DrawSprocket", 0);
-		SflBootAddHelp(pThis, SFLBOOTPAGEGRAPHICS, NULL, "Each accelerator is independent. Mix and match per application to find what runs best.");
+		SflBootAddHelp(pThis, SFLBOOTPAGEGRAPHICS, NULL, "Each accelerator is independent - mix and match per app to find what runs best.");
 	}
 	SflBootAddHeading(pThis, SFLBOOTPAGEGRAPHICS, "Rendering filter");
 	SflBootAddRadio(pThis, SFLBOOTPAGEGRAPHICS, "scale_nearest", NULL, "Bilinear=0|Nearest neighbor=1", SFLBOOTKINDBOOL);
-	SflBootAddHelp(pThis, SFLBOOTPAGEGRAPHICS, NULL, "Bilinear produces a smooth image through interpolation. Nearest neighbor gives a sharp, pixelated look.");
+	SflBootAddHelp(pThis, SFLBOOTPAGEGRAPHICS, NULL, "Bilinear produces a smooth image through interpolation. Nearest neighbor gives a sharp, \"retro\" pixelated look. Takes effect on next resolution change or restart.");
 	SflBootAddCheck(pThis, SFLBOOTPAGEGRAPHICS, "scale_integer", "Integer scaling", 0);
 	SflBootAddHeading(pThis, SFLBOOTPAGEGRAPHICS, "Gamma ramp");
 	SflBootAddRadio(pThis, SFLBOOTPAGEGRAPHICS, "gammaramp", NULL, "Linear=off|OS defined=on|Full screen only=fullscreen", SFLBOOTKINDSTRING);
-	SflBootAddHelp(pThis, SFLBOOTPAGEGRAPHICS, NULL, "A linear gamma ramp generally produces a less color distorted image.");
-	SflBootAddHeading(pThis, SFLBOOTPAGEGRAPHICS, "Frame rate");
+	SflBootAddHelp(pThis, SFLBOOTPAGEGRAPHICS, NULL, "Linear gamma ramp generally produces a less color distorted image. Higher screen brightness can compensate for a potentially dark picture and, in some instances, produce a higher color dynamic. Takes effect on next resolution change or restart.");
+	SflBootAddHeading(pThis, SFLBOOTPAGEGRAPHICS, "Frame rate setting");
 	SflBootAddCombo(pThis, SFLBOOTPAGEGRAPHICS, "frameskip", "Refresh", "Every frame=1|Every 2nd frame=2|Every 4th frame=4|Every 6th frame=6|Every 8th frame=8", SFLBOOTKINDINT);
 }
 
 static void SflBootBuildNetwork(SFLBOOTGUI *pThis)
 {
 	SFLBOOTITEM *item;
-	item = SflBootAddHelp(pThis, SFLBOOTPAGENETWORK, "networkbanner", "Network requires Mac OS 9.0 - 9.0.4.");
+	item = SflBootAddHelp(pThis, SFLBOOTPAGENETWORK, "networkbanner", "Network requires Mac OS 9.0 - 9.0.4");
 	item->type = SFLBOOTBANNER;
 	SflBootAddButton(pThis, item, "X", SflBootOnNetworkClose, SFLBOOTIDNETWORKCLOSE);
 	SflBootAddHeading(pThis, SFLBOOTPAGENETWORK, "Mode");
 	SflBootAddRadio(pThis, SFLBOOTPAGENETWORK, "network", NULL, "Off=off|Internet=slirp|UDP tunnel=udptunnel", SFLBOOTKINDSPECIAL);
-	SflBootAddHelp(pThis, SFLBOOTPAGENETWORK, NULL, "Internet gives access through SLiRP, without the ability to host. UDP tunnel connects to other emulators on the same network.");
+	SflBootAddHelp(pThis, SFLBOOTPAGENETWORK, NULL, "Internet gives access to the internet, using SLiRP, but without the ability to host. UDP tunnel connects to other emulators on the same network, but without access to the internet.");
+	item = SflBootAddHelp(pThis, SFLBOOTPAGENETWORK, "networkwarning", "It might take a while before Mac OS assigns the new IP address. You can force this by restarting or changing configuration inside the TCP/IP app.");
+	item->hidden = 1;
 	SflBootAddField(pThis, SFLBOOTPAGENETWORK, "udpport", "UDP tunnel port");
 	SflBootAddHeading(pThis, SFLBOOTPAGENETWORK, "Port forwarding");
 	SflBootAddList(pThis, SFLBOOTPAGENETWORK, "redir", "Rules");
@@ -1541,42 +2177,42 @@ static void SflBootBuildNetwork(SFLBOOTGUI *pThis)
 static void SflBootBuildAdvanced(SFLBOOTGUI *pThis)
 {
 	SFLBOOTITEM *item;
-	SflBootAddHeading(pThis, SFLBOOTPAGEADVANCED, "Memory");
-	SflBootAddCombo(pThis, SFLBOOTPAGEADVANCED, "ramsize", "RAM", "16 MB=16777216|32 MB=33554432|64 MB=67108864|128 MB=134217728|256 MB=268435456|512 MB=536870912|768 MB=805306368|1024 MB=1073741824", SFLBOOTKINDINT);
+	SflBootAddHeading(pThis, SFLBOOTPAGEADVANCED, "RAM setting");
+	SflBootAddCombo(pThis, SFLBOOTPAGEADVANCED, "ramsize", "RAM", "16 MB=16777216|32 MB=33554432|64 MB=67108864|128 MB=134217728|256 MB=268435456|512 MB=536870912|768 MB=805306368|1 GB=1073741824", SFLBOOTKINDINT);
 	SflBootAddHeading(pThis, SFLBOOTPAGEADVANCED, "Clipboard sharing");
-	SflBootAddCheck(pThis, SFLBOOTPAGEADVANCED, "noclipconversion", "Convert shared clipboard text", 1);
-	if (SflBootIsSheepShaver()) {
-		SflBootAddHeading(pThis, SFLBOOTPAGEADVANCED, "Relative mouse mode");
-		SflBootAddRadio(pThis, SFLBOOTPAGEADVANCED, "relmouse", NULL, "Manual=manual|Automatic=auto|Always on=always", SFLBOOTKINDSTRING);
-		SflBootAddHelp(pThis, SFLBOOTPAGEADVANCED, NULL, "Manual mode toggles with F8. Automatic follows the guest hiding its cursor.");
-	} else {
-		SflBootAddHeading(pThis, SFLBOOTPAGEADVANCED, "Relative mouse mode");
-	}
+	SflBootAddCheckHandler(pThis, SFLBOOTPAGEADVANCED, "clipsharing", "Enable clipboard sharing", 0, SflBootOnCheck, SFLBOOTIDCLIPBOARD);
+	SflBootAddHelp(pThis, SFLBOOTPAGEADVANCED, "clipinfo", "");
+	SflBootAddHeading(pThis, SFLBOOTPAGEADVANCED, "Relative mouse mode");
+	SflBootAddRadio(pThis, SFLBOOTPAGEADVANCED, "relmouse", NULL, "Manual=manual|Automatic=auto|Always on=always", SFLBOOTKINDSTRING);
+	SflBootAddHelp(pThis, SFLBOOTPAGEADVANCED, "relinfo", "");
+	item = SflBootAddItem(pThis, SFLBOOTPAGEADVANCED, SFLBOOTBUTTONS, NULL, NULL);
+	SflBootAddButton(pThis, item, "Read more", SflBootOnRelative, SFLBOOTIDRELATIVE2);
 	SflBootAddCheck(pThis, SFLBOOTPAGEADVANCED, "init_grab", "Boot with relative mouse mode on", 0);
 	SflBootAddHeading(pThis, SFLBOOTPAGEADVANCED, "Performance metrics");
 	SflBootAddCheck(pThis, SFLBOOTPAGEADVANCED, "showfps", "Show FPS counter", 0);
 	SflBootAddCheck(pThis, SFLBOOTPAGEADVANCED, "shownetrate", "Show network transfer rate", 0);
 	SflBootAddHeading(pThis, SFLBOOTPAGEADVANCED, "UI options");
+	SflBootAddCheck(pThis, SFLBOOTPAGEADVANCED, "skiposxstartup", "Skip startup screen", 0);
+	SflBootAddHelp(pThis, SFLBOOTPAGEADVANCED, NULL, "Start the emulator with --settings to show this window again.");
 	SflBootAddCheck(pThis, SFLBOOTPAGEADVANCED, "notifyip", "Report IP address assignment", 0);
 	SflBootAddCheck(pThis, SFLBOOTPAGEADVANCED, "notifyclip", "Notify of clipboard sharing events", 0);
 	SflBootAddHeading(pThis, SFLBOOTPAGEADVANCED, "CPU emulation");
 	if (SflBootIsSheepShaver()) {
 		SflBootAddCheck(pThis, SFLBOOTPAGEADVANCED, "ignoreillegal", "Ignore illegal CPU instructions", 0);
 		SflBootAddCheck(pThis, SFLBOOTPAGEADVANCED, "altivec", "AltiVec", 0);
-		SflBootAddHelp(pThis, SFLBOOTPAGEADVANCED, NULL, "Advertises a G4 processor so vector-aware software can use faster code paths.");
+		SflBootAddHelp(pThis, SFLBOOTPAGEADVANCED, NULL, "Experimental. Advertises a G4 processor with AltiVec so vector-aware software can use faster code paths. Toggle this off (reverting to a G3) if you run into conflicts with graphics acceleration.");
 	}
 	SflBootAddCheck(pThis, SFLBOOTPAGEADVANCED, "jit", "JIT compiler", 0);
-	SflBootAddHelp(pThis, SFLBOOTPAGEADVANCED, NULL, "Translates guest code into native code as it runs, for a large CPU speedup.");
+	SflBootAddHelp(pThis, SFLBOOTPAGEADVANCED, NULL, "Experimental. Translates guest code into native code as it runs, for a large CPU speedup. Takes effect after the app is fully restarted.");
 	if (SflBootIsSheepShaver()) {
 		SflBootAddCheck(pThis, SFLBOOTPAGEADVANCED, "jit68k", "68k JIT compiler", 0);
 		SflBootAddCheck(pThis, SFLBOOTPAGEADVANCED, "osxjit", "JIT compiler (Mac OS X)", 0);
-		SflBootAddHeading(pThis, SFLBOOTPAGEADVANCED, "Mac OS X");
-		SflBootAddCheck(pThis, SFLBOOTPAGEADVANCED, "skiposxstartup", "Skip startup screen", 0);
+		item = SflBootAddHeading(pThis, SFLBOOTPAGEADVANCED, "Bootstrap");
+		item->pref = "advbootstrapheading";
+		SflBootAddHelp(pThis, SFLBOOTPAGEADVANCED, "advbootstraptext", "Select a Mac OS install disc file if you want to redo bootstrapping with another install disc.");
+		item = SflBootAddItem(pThis, SFLBOOTPAGEADVANCED, SFLBOOTBUTTONS, "advbootstrapbuttons", NULL);
+		SflBootAddButton(pThis, item, "Select install disc", SflBootOnBootstrap, SFLBOOTIDBOOTSTRAP2);
 	}
-	SflBootAddHeading(pThis, SFLBOOTPAGEADVANCED, "Resources");
-	item = SflBootAddItem(pThis, SFLBOOTPAGEADVANCED, SFLBOOTBUTTONS, NULL, NULL);
-	SflBootAddButton(pThis, item, "Setup instructions", SflBootOnInstructions, SFLBOOTIDINSTRUCTIONS);
-	SflBootAddButton(pThis, item, "Licenses", SflBootOnLicenses, SFLBOOTIDLICENSES);
 }
 
 static int SflBootCreateWindow(SFLBOOTGUI *pThis)
@@ -1586,13 +2222,13 @@ static int SflBootCreateWindow(SFLBOOTGUI *pThis)
 	if (!WSWndClass_Create(&pThis->windowclass, pThis->app, NULL, SflBootMessages, "SflBootPreferences"))
 		return 0;
 
-	WSRect_Construct(&bounds, WSDEFAULTPOSITION, WSDEFAULTPOSITION, SFLBOOTWIDTH, SFLBOOTHEIGHT);
+	WSRect_Construct(&bounds, WSDEFAULTPOSITION, WSDEFAULTPOSITION, SFLBOOTPX(SFLBOOTWIDTH), SFLBOOTPX(SFLBOOTHEIGHT));
 	if (!WSWindow_Create(&pThis->window, pThis->app, &bounds, "PocketShaver", NULL, &pThis->windowclass)) {
 		WSWndClass_Destroy(&pThis->windowclass, pThis->app);
 		return 0;
 	}
 	WSWindow_SetCon(&pThis->window, pThis);
-	WSWindow_SetSize(&pThis->window, SFLBOOTWIDTH, SFLBOOTHEIGHT);
+	WSWindow_SetSize(&pThis->window, SFLBOOTPX(SFLBOOTWIDTH), SFLBOOTPX(SFLBOOTHEIGHT));
 	WSRect_Construct(&bounds, 0, 0, SFLBOOTWIDTH, SFLBOOTHEIGHT);
 	for (index = 0; index < SFLBOOTPAGES; ++index) {
 		if (!WSCtlScrollPanel_Create(&pThis->panels[index], &pThis->window, &bounds, (size_t)pThis->controlid++))
@@ -1648,6 +2284,21 @@ static void SflBootDestroyItem(SFLBOOTITEM *item)
 		WSFREE(item->wrapped);
 }
 
+static void SflBootInitScale(SFLBOOTGUI *pThis)
+{
+#if defined(WSWINGUI)
+	guipos_t x;
+	guipos_t y;
+	WSDisplayGetDPI(&x, &y);
+	pThis->dpi = (int)y;
+	WSDisplayGetBaseDPI(&x, &y);
+	pThis->basedpi = (int)y;
+#else
+	pThis->dpi = 1;
+	pThis->basedpi = 1;
+#endif
+}
+
 static void SflBootDestroyWindow(SFLBOOTGUI *pThis)
 {
 	int index;
@@ -1655,6 +2306,8 @@ static void SflBootDestroyWindow(SFLBOOTGUI *pThis)
 		WSDnD_Destroy(&pThis->drop);
 	for (index = pThis->count - 1; index >= 0; --index)
 		SflBootDestroyItem(&pThis->items[index]);
+	for (index = 0; index < pThis->diskcount; ++index)
+		WSFREE(pThis->disks[index].path);
 	WSCtlButton_Destroy(&pThis->boot);
 	WSCtlTab_Destroy(&pThis->tabs);
 	for (index = 0; index < SFLBOOTPAGES; ++index)
@@ -1678,24 +2331,26 @@ int SflBootGuiRun(WSAPP *app)
 	memset(pThis, 0, sizeof(*pThis));
 	pThis->app = app;
 	pThis->controlid = SFLBOOTIDCONTROLBASE;
+	SflBootInitScale(pThis);
 	loop = &app->mEventLoop;
 	accepted = 0;
 	#if defined(SFL_USEDARKMODE)
 		WSDarkMode_Create(&pThis->darkmode);
 	#endif /* SFL_USEDARKMODE */
 	if (SflBootCreateWindow(pThis)) {
-		pThis->fontscreated = SflBootCreateFonts(&pThis->headingfont, &pThis->bodyfont);
+		pThis->fontscreated = SflBootCreateFonts(&pThis->headingfont, &pThis->bodyfont, pThis->dpi, pThis->basedpi);
 		SflBootBuildGeneral(pThis);
 		SflBootBuildGraphics(pThis);
 		SflBootBuildNetwork(pThis);
 		SflBootBuildAdvanced(pThis);
 		if (!pThis->failed) {
 			pThis->dropcreated = WSDnD_Create(&pThis->drop, &pThis->window, SflBootOnDrop);
+			SflBootDiskRender(pThis);
 			SflBootUpdateRomStatus(pThis);
 			WSWindow_Show(&pThis->window);
 			pThis->ready = 1;
-			SflBootLayout(pThis);
 			SflBootUpdatePortField(pThis);
+			SflBootRefreshDynamic(pThis);
 			while (!pThis->finished) {
 				WSEventLoop_Process(loop);
 				WSThreadSleep(SFLBOOTIDLEMS);
