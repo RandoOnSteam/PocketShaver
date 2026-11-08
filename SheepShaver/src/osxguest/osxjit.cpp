@@ -21,6 +21,10 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "osxcpu.h"
+/* OSXJITNOFUSED forces off AVX2 ops for testing. Don't release with it on! */
+#if !defined(OSXJITNOFUSED)
+#define OSXJITNOFUSED 0
+#endif
 /*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 							x64 OSX JIT
@@ -707,6 +711,50 @@ static void FloatTruncate(OsxNativeEmitter *emitter, int target, int right, int 
 	Word(emitter, 0xfff80000u);
 }
 
+static void FloatSingleOperand(OsxNativeEmitter *emitter, int reg, int count)
+{
+	Byte(emitter, 0xf7); Byte(emitter, 0x83);
+	Word(emitter, OSXJITFPR(reg));
+	Word(emitter, 0x1fffffff);
+	Miss(emitter, 5, count);
+	Byte(emitter, 0x8b); Byte(emitter, 0x93);
+	Word(emitter, OSXJITFPR(reg) + 4);
+	Byte(emitter, 0xc1); Byte(emitter, 0xea); Byte(emitter, 20);
+	Byte(emitter, 0x81); Byte(emitter, 0xe2); Word(emitter, 0x7ff);
+	Byte(emitter, 0x81); Byte(emitter, 0xea); Word(emitter, 897);
+	Byte(emitter, 0x81); Byte(emitter, 0xfa); Word(emitter, 254);
+	Miss(emitter, 3, count);
+}
+
+static void FloatSingleMultiplyAdd(OsxNativeEmitter *emitter, int extended, int target, int left, int multiplier, int right, int count)
+{
+	FloatSingleOperand(emitter, left, count);
+	FloatSingleOperand(emitter, multiplier, count);
+	Byte(emitter, 0x8b); Byte(emitter, 0x93);
+	Word(emitter, OSXJITFPR(right) + 4);
+	Byte(emitter, 0xc1); Byte(emitter, 0xea); Byte(emitter, 20);
+	Byte(emitter, 0x81); Byte(emitter, 0xe2); Word(emitter, 0x7ff);
+	Byte(emitter, 0x81); Byte(emitter, 0xfa); Word(emitter, 0x7ff);
+	Miss(emitter, 4, count);
+	FloatLoad(emitter, 0, left);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x59); Byte(emitter, 0x83);
+	Word(emitter, OSXJITFPR(multiplier));
+	FloatLoad(emitter, 1, right);
+	if (extended == 28 || extended == 30) {
+		Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x76); Byte(emitter, 0xd2);
+		Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x73); Byte(emitter, 0xf2); Byte(emitter, 63);
+		Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x57); Byte(emitter, 0xca);
+	}
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x58); Byte(emitter, 0xc1);
+	if (extended >= 30) {
+		Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x76); Byte(emitter, 0xc9);
+		Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x73); Byte(emitter, 0xf1); Byte(emitter, 63);
+		Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x57); Byte(emitter, 0xc1);
+	}
+	FloatNarrow(emitter);
+	FloatClass(emitter, target, count, 1);
+}
+
 static int Float(OsxNativeEmitter *emitter, uint32 instruction, int count)
 {
 	uint32 extended;
@@ -762,9 +810,16 @@ static int Float(OsxNativeEmitter *emitter, uint32 instruction, int count)
 	}
 	extended &= 31;
 	if (extended >= 28) {
+		multiplier = (instruction >> 6) & 31;
+		if (!emitter->fused && single) {
+			RequireFloat(emitter, count);
+			FloatRounding(emitter, count);
+			FloatSingleMultiplyAdd(emitter, extended, target, left, multiplier, right, count);
+			RecordFloat(emitter, instruction);
+			return 1;
+		}
 		if (!emitter->fused)
 			return 0;
-		multiplier = (instruction >> 6) & 31;
 		RequireFloat(emitter, count);
 		FloatRounding(emitter, count);
 		CpuMemory(emitter, 0x8b, 0, OSXJITFPR(left), 1);
@@ -2696,7 +2751,7 @@ int OsxJitCreate(OsxCpu *cpu)
 		return 0;
 	state->pagecount = (cpu->ramsize + 4095) >> 12;
 	state->shuffle = OsxHostFeature(OSXFEATURESSSE3);
-	state->fused = OsxHostFeature(OSXFEATUREAVX2);
+	state->fused = !OSXJITNOFUSED && OsxHostFeature(OSXFEATUREAVX2);
 	state->rounding = OsxHostFeature(OSXFEATURESSE41);
 	for (index = 0; index < 4; index++) {
 		state->vectorconstants[0][index] = 0x00010203u + (uint32)index * 0x04040404u;
@@ -3795,6 +3850,50 @@ static void FloatTruncate(OsxNativeEmitter *emitter, int target, int right, int 
 	Word(emitter, 0xfff80000u);
 }
 
+static void FloatSingleOperand(OsxNativeEmitter *emitter, int reg, int count)
+{
+	Byte(emitter, 0xf7); Byte(emitter, 0x83);
+	Word(emitter, OSXJITFPR(reg));
+	Word(emitter, 0x1fffffff);
+	Miss(emitter, 5, count);
+	Byte(emitter, 0x8b); Byte(emitter, 0x93);
+	Word(emitter, OSXJITFPR(reg) + 4);
+	Byte(emitter, 0xc1); Byte(emitter, 0xea); Byte(emitter, 20);
+	Byte(emitter, 0x81); Byte(emitter, 0xe2); Word(emitter, 0x7ff);
+	Byte(emitter, 0x81); Byte(emitter, 0xea); Word(emitter, 897);
+	Byte(emitter, 0x81); Byte(emitter, 0xfa); Word(emitter, 254);
+	Miss(emitter, 3, count);
+}
+
+static void FloatSingleMultiplyAdd(OsxNativeEmitter *emitter, int extended, int target, int left, int multiplier, int right, int count)
+{
+	FloatSingleOperand(emitter, left, count);
+	FloatSingleOperand(emitter, multiplier, count);
+	Byte(emitter, 0x8b); Byte(emitter, 0x93);
+	Word(emitter, OSXJITFPR(right) + 4);
+	Byte(emitter, 0xc1); Byte(emitter, 0xea); Byte(emitter, 20);
+	Byte(emitter, 0x81); Byte(emitter, 0xe2); Word(emitter, 0x7ff);
+	Byte(emitter, 0x81); Byte(emitter, 0xfa); Word(emitter, 0x7ff);
+	Miss(emitter, 4, count);
+	FloatLoad(emitter, 0, left);
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x59); Byte(emitter, 0x83);
+	Word(emitter, OSXJITFPR(multiplier));
+	FloatLoad(emitter, 1, right);
+	if (extended == 28 || extended == 30) {
+		Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x76); Byte(emitter, 0xd2);
+		Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x73); Byte(emitter, 0xf2); Byte(emitter, 63);
+		Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x57); Byte(emitter, 0xca);
+	}
+	Byte(emitter, 0xf2); Byte(emitter, 0x0f); Byte(emitter, 0x58); Byte(emitter, 0xc1);
+	if (extended >= 30) {
+		Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x76); Byte(emitter, 0xc9);
+		Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x73); Byte(emitter, 0xf1); Byte(emitter, 63);
+		Byte(emitter, 0x66); Byte(emitter, 0x0f); Byte(emitter, 0x57); Byte(emitter, 0xc1);
+	}
+	FloatNarrow(emitter);
+	FloatClass(emitter, target, count, 1);
+}
+
 static int Float(OsxNativeEmitter *emitter, uint32 instruction, int count)
 {
 	uint32 extended;
@@ -3851,9 +3950,16 @@ static int Float(OsxNativeEmitter *emitter, uint32 instruction, int count)
 	}
 	extended &= 31;
 	if (extended >= 28) {
+		multiplier = (instruction >> 6) & 31;
+		if (!emitter->state->fused && single) {
+			RequireFloat(emitter, count);
+			FloatRounding(emitter, count);
+			FloatSingleMultiplyAdd(emitter, extended, target, left, multiplier, right, count);
+			RecordFloat(emitter, instruction);
+			return 1;
+		}
 		if (!emitter->state->fused)
 			return 0;
-		multiplier = (instruction >> 6) & 31;
 		RequireFloat(emitter, count);
 		FloatRounding(emitter, count);
 		FloatExponent(emitter, left, count, 0);
@@ -4956,7 +5062,7 @@ int OsxJitCreate(OsxCpu *cpu)
 	if (state == NULL)
 		return 0;
 	state->pagecount = (cpu->ramsize + 4095) >> 12;
-	state->fused = OsxHostFeature(OSXFEATUREAVX2);
+	state->fused = !OSXJITNOFUSED && OsxHostFeature(OSXFEATUREAVX2);
 	state->versions = (uint32 *)calloc(state->pagecount, sizeof(uint32));
 	state->compiledpages = (uint8 *)calloc(state->pagecount, 1);
 	state->records = (OsxNativeRecord *)malloc(OSXJITRECORDS * sizeof(OsxNativeRecord));

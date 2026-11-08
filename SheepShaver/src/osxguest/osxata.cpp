@@ -252,8 +252,25 @@ static int OpenMedia(OsxAtaDrive *drive, const char *path, int atapi)
 	if (atapi)
 		drive->imagepath = strdup(path);
 #endif
-	drive->mediapresent = 1;
+	drive->mediapresent = !atapi || (SysIsDiskInserted(drive->file) && drive->sectors > 0);
 	return 1;
+}
+
+static void PollMedia(OsxMachine *machine, OsxAtaDrive *drive)
+{ /* This prevents thrashing from
+		getting ASC 0x11 "unrecovered read error" 
+		instead of ASC 0x3A "not ready, medium not present" */
+	if (drive->mediapresent || drive->file == NULL || !SysIsDiskInserted(drive->file))
+		return;
+	drive->sectors = (uint64)SysGetFileSize(drive->file) / OSXATAPISECTOR;
+	if (drive->sectors == 0)
+		return;
+	drive->dvd = drive->sectors > OSXATAPICDSECTORS;
+	drive->mediapresent = 1;
+	drive->unitattention = 1;
+	drive->mediachanged = 1;
+	if (machine->log)
+		fprintf(machine->log, "cdrom media detected\n");
 }
 
 void OsxAtaCloseMedia(OsxAtaDrive *drive)
@@ -933,6 +950,7 @@ static void AtapiExecute(OsxMachine *machine, OsxAtaBus *bus)
 	length &= ~1u;
 	if (machine->log && packet[0] != 0x28 && packet[0] != 0x00 && packet[0] != 0x4a)
 		fprintf(machine->log, "atapi command %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n", packet[0], packet[1], packet[2], packet[3], packet[4], packet[5], packet[6], packet[7], packet[8], packet[9]);
+	PollMedia(machine, drive);
 	if (!drive->mediapresent && packet[0] != 0x12 && packet[0] != 0x03 && packet[0] != 0x4a && packet[0] != 0x46 && packet[0] != 0x1b && packet[0] != 0x1e && packet[0] != 0x5a && packet[0] != 0x1a && packet[0] != 0xbd) {
 		AtapiFail(machine, bus, drive, SENSENOTREADY, 0x3a);
 		return;

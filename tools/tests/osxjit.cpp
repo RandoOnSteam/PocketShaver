@@ -377,6 +377,62 @@ static void FloatArithmetic(OsxJitTest *test)
 	}
 }
 
+static uint64 SingleBits(OsxJitTest *test)
+{
+	static const uint32 specials[] = {
+		0, 0x80000000u, 0x00000001u, 0x007fffffu, 0x00800000u, 0x7f7fffffu, 0xff7fffffu,
+		0x7f800000u, 0xff800000u, 0x7fc00000u, 0x3f800000u, 0xbf800000u, 0x33800000u, 0x4b000000u
+	};
+	uint32 bits;
+	float narrow;
+	double wide;
+	uint64 result;
+	if ((Random(test) & 7) == 0)
+		bits = specials[Random(test) % (sizeof(specials) / sizeof(specials[0]))];
+	else
+		bits = (Random(test) & 0x8fffffffu) | ((Random(test) % 32 + 112) << 23);
+	memcpy(&narrow, &bits, 4);
+	wide = narrow;
+	memcpy(&result, &wide, 8);
+	return result;
+}
+
+static void SingleMultiplyAdd(OsxJitTest *test)
+{
+	OsxCpu *cpu;
+	uint32 instruction;
+	uint32 fpscr;
+	uint64 bits;
+	int iteration;
+	int index;
+	int reg;
+	for (iteration = 0; iteration < 400000; iteration++) {
+		Reset(test);
+		instruction = (59u << 26) | ((Random(test) & 31) << 21) | (1u << 16) | (2u << 11) | (3u << 6);
+		instruction |= (28u + (Random(test) & 3)) << 1;
+		instruction |= Random(test) & 1;
+		fpscr = Random(test) & 0xfff7f0f8u;
+		if ((Random(test) & 15) == 0)
+			fpscr |= Random(test) & 3;
+		for (reg = 0; reg < 32; reg++) {
+			bits = SingleBits(test);
+			if ((iteration & 63) == 0 && reg == 2)
+				bits ^= Random(test) & 0x1fffffffu;
+			test->reference->fpr[reg].bits = bits;
+			test->native->fpr[reg].bits = bits;
+		}
+		for (index = 0; index < 2; index++) {
+			if (index == 0)
+				cpu = test->reference;
+			else
+				cpu = test->native;
+			cpu->fpscr = fpscr;
+			OsxCpuUpdateModes(cpu);
+		}
+		Run(test, instruction, 1, "single multiply add");
+	}
+}
+
 static void VectorInstructions(OsxJitTest *test)
 {
 	uint32 draw0;
@@ -1173,6 +1229,50 @@ static void Benchmark(OsxJitTest *test)
 	Compare(test, "benchmark", 0);
 }
 
+static void FloatBenchmarkForm(OsxJitTest *test, uint32 form)
+{
+	OsxCpu *cpu;
+	uint64 start;
+	uint64 elapsed;
+	int mode;
+	int slice;
+	int step;
+	Reset(test);
+	for (mode = 0; mode < 2; mode++) {
+		if (mode == 0)
+			cpu = test->reference;
+		else
+			cpu = test->native;
+		cpu->fpscr = 0;
+		cpu->msr |= OSXMSRFP;
+		OsxCpuUpdateModes(cpu);
+		cpu->fpr[2].value = 0.5;
+		cpu->fpr[3].value = 0.25;
+		cpu->fpr[4].value = 1.0;
+		for (step = 0; step < 31; step++)
+			Put(cpu, TESTENTRY + (uint32)step * 4, (59u << 26) | ((uint32)(5 + step % 3) << 21) | (2u << 16) | (4u << 11) | form);
+		Put(cpu, TESTENTRY + 124, 0x4bffff84);
+		OsxJitInvalidate(cpu, TESTENTRY, 4096);
+		start = OsxHostNanoseconds();
+		for (slice = 0; slice < 2000; slice++) {
+			if (mode == 0)
+				OsxCpuRun(cpu, 20000);
+			else
+				OsxJitRun(cpu, 20000);
+		}
+		elapsed = OsxHostNanoseconds() - start;
+		printf("float benchmark form %03x mode %d instructions 40000000 ns %llu\n", form, mode, (unsigned long long)elapsed);
+	}
+	Compare(test, "float benchmark", 0);
+}
+
+static void FloatBenchmark(OsxJitTest *test)
+{
+	FloatBenchmarkForm(test, 21u << 1);
+	FloatBenchmarkForm(test, (3u << 6) | (25u << 1));
+	FloatBenchmarkForm(test, (3u << 6) | (29u << 1));
+}
+
 #if OSXG5
 static void Put970(Osx970 *core, uint64 address, int size, uint64 value)
 {
@@ -1661,6 +1761,7 @@ int main(void)
 	MemoryInstructions(&test);
 	FloatVectorMemory(&test);
 	FloatArithmetic(&test);
+	SingleMultiplyAdd(&test);
 	VectorInstructions(&test);
 	VectorFloatCases(&test);
 	ExtendedMemory(&test);
@@ -1676,6 +1777,7 @@ int main(void)
 	VectorSequences(&test);
 	JitSlices(&test);
 	Benchmark(&test);
+	FloatBenchmark(&test);
 #if OSXG5
 	Test970(&test);
 #endif
