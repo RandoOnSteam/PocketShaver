@@ -21,6 +21,7 @@
 #include "slirp.h"
 #include "libslirp.h"
 #include "sflslirp.h"
+#include "sflui.h"
 
 #define SFLSLIRPUSECPERMS 1000
 
@@ -34,9 +35,25 @@ static SFLSLIRP SflSlirp;
 
 int SflSlirpInit(SFLSLIRPOUTPUT output, void *context)
 {
+	const char *rule;
+	int index;
+	int hostport;
+	int guestport;
+	char protocol[4];
+	char address[32];
+	struct in_addr guest;
 	SflSlirp.output = output;
 	SflSlirp.context = context;
-	return slirp_init() >= 0;
+	if (slirp_init() < 0) return 0;
+	index = 0;
+	while ((rule = SflEmulatorPrefString("redir", index++)) != NULL) {
+		if (sscanf(rule, "%3[^:]:%d:%31[^:]:%d", protocol, &hostport, address, &guestport) == 4) {
+			guest.s_addr = inet_addr(address);
+			if (hostport > 0 && hostport <= 65535 && guestport > 0 && guestport <= 65535)
+				slirp_redir(!strcmp(protocol, "udp"), hostport, guest, guestport);
+		}
+	}
+	return 1;
 }
 
 void SflSlirpInput(const unsigned char *frame, int length)

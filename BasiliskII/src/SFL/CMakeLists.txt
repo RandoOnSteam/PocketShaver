@@ -106,7 +106,14 @@ set(B2_UAE
 add_library(BasiliskIISFL_sflcore OBJECT ${B2_CORE} ${B2_UAE} ${SFLPLATFORM}
 	"${SFLDIR}/video_sfl.cpp")
 add_dependencies(BasiliskIISFL_sflcore sfl_uae_tables)
+if(NOT CMAKE_SYSTEM_NAME MATCHES RetroCarbon)
+	target_sources(BasiliskIISFL_sflcore PRIVATE "${B2SRC}/CrossPlatform/sigsegv.cpp")
+	target_compile_definitions(BasiliskIISFL_sflcore PRIVATE SFLFAULTHANDLER=1)
+	if(WIN32)
+		set_source_files_properties("${B2SRC}/CrossPlatform/sigsegv.cpp" PROPERTIES COMPILE_DEFINITIONS HAVE_WIN32_VM=1)
+	endif()
+endif()
 target_include_directories(BasiliskIISFL_sflcore PRIVATE "${SFLDIR}" "${B2SRC}/include"
-	"${UAE_DIR}" "${B2_GEN}" "${SFLLIBS}")
+	"${B2SRC}/CrossPlatform" "${UAE_DIR}" "${B2_GEN}" "${SFLLIBS}")
 sfl_configure_core(BasiliskIISFL_sflcore)
 sfl_add_application(BasiliskIISFL B2EM)

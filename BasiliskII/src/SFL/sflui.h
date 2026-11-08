@@ -44,6 +44,12 @@ typedef void (*SFLUIINPUT)(void *context, int operation, int first, int second);
 void SflUiSetInput(SFLUIINPUT input, void *context);
 int SflUiQueueInput(int operation, int first, int second);
 int SflUiIsQuitting(void);
+void SflUiNetworkTransfer(const unsigned char *frame, int length, int incoming);
+void SflUiNotify(const char *text);
+#define SFLRELATIVEUPDATE 0
+#define SFLRELATIVETOGGLE 1
+#define SFLRELATIVESTART 2
+int SflEmulatorRelativeMouse(int operation);
 int SflUiPresent(int firstrow, int lastrow);
 int SflUiGetStatus(int *width, int *height, int *depth, int *hostwidth, int *hostheight);
 unsigned char *SflUiCopyFrame(int host, int *width, int *height);
@@ -59,6 +65,8 @@ int SflAudioCaptureRead(void *capture, unsigned char *buffer, int bytes);
 void SflAudioCaptureClear(void *capture);
 void SflAudioCaptureClose(void *capture);
 
+void SflEmulatorLoadPrefs(int argc, char **argv);
+int SflEmulatorRomValid(const char *path);
 int SflEmulatorSetup(int argc, char **argv);
 void SflEmulatorStart(void);
 void SflEmulatorStop(void);

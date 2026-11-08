@@ -94,7 +94,12 @@ if(CMAKE_SYSTEM_NAME MATCHES RetroCarbon)
 else()
 	include("${SSSRC}/osxguest/osxguest.cmake")
 	target_sources(SheepShaverSFL_sflcore PRIVATE ${OSXGUEST_SOURCES}
-		"${CMAKE_CURRENT_SOURCE_DIR}/osxhost_sfl.cpp")
+		"${CMAKE_CURRENT_SOURCE_DIR}/osxhost_sfl.cpp"
+		"${SSSRC}/CrossPlatform/sigsegv.cpp")
+	target_compile_definitions(SheepShaverSFL_sflcore PRIVATE SFLFAULTHANDLER=1)
+	if(WIN32)
+		set_source_files_properties("${SSSRC}/CrossPlatform/sigsegv.cpp" PROPERTIES COMPILE_DEFINITIONS HAVE_WIN32_VM=1)
+	endif()
 	if(WIN32)
 		target_compile_definitions(SheepShaverSFL_sflcore PRIVATE WIN32_LEAN_AND_MEAN OSXGLBRIDGE=1)
 		target_sources(SheepShaverSFL_sflcore PRIVATE "${SSSRC}/gfxaccel/gl/glcontext.c")

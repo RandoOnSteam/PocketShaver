@@ -35,6 +35,7 @@
 #include "video.h"
 #include "osxguest.h"
 #include "audio.h"
+#include "vm_alloc.h"
 #include "ether.h"
 #include "serial.h"
 #include "joymanager.h"
@@ -96,6 +97,26 @@ static void IdleWaitMeasured(void)
 /*
  *  Execute EMUL_OP opcode (called by 68k emulator)
  */
+
+#if defined(MACEMU_USEVIASOUNDBASE) && !defined(USE_SFL)
+#define LMGVIA1BASE 0x1d4
+#define LMGVIA2BASE 0xcec
+#define LMGNOVIA 0xffffffff
+
+static void InstallViaWindow(uint32 lowmem)
+{
+	uint32 base;
+	base = ReadMacInt32(lowmem);
+	if (base == LMGNOVIA)
+		return;
+	base &= ~(MACIO_VIA_SIZE - 1);
+	if (base == 0 || base == MACIO_VIA_BASE)
+		return;
+	if (base < RAMBase + RAMSize || base - ROMBase < ROM_AREA_SIZE)
+		return;
+	vm_acquire_fixed(Mac2HostAddr(base), MACIO_VIA_SIZE);
+}
+#endif
 
 void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 {
@@ -318,6 +339,10 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 			InstallDrivers();
 #ifdef MACEMU_USEVIASOUNDBASE
 			AudioSoundBaseInstall();
+#if !defined(USE_SFL)
+			InstallViaWindow(LMGVIA1BASE);
+			InstallViaWindow(LMGVIA2BASE);
+#endif
 #endif
 
 			// Patch MakeExecutable()

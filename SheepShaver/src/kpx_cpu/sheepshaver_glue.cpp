@@ -3318,7 +3318,7 @@ static void dump_crash_context(sheepshaver_cpu *cpu)
 	RsrcLocksDumpOnCrash();
 }
 
-#if !defined(USE_SFL)
+#if !defined(USE_SFL) || defined(SFLFAULTHANDLER)
 sigsegv_return_t sigsegv_handler(sigsegv_info_t *sip)
 {
 #if ENABLE_VOSF

@@ -21,7 +21,7 @@ set(SFLPLATFORM
 	"${SFLDIR}/ether_sfl.cpp"
 	"${B2SRC}/dummy/serial_dummy.cpp"
 	"${B2SRC}/dummy/scsi_dummy.cpp"
-	"${B2SRC}/dummy/prefs_editor_dummy.cpp"
+	"${SFLDIR}/sflbootprefs.cpp"
 )
 
 function(sfl_configure_core target)
@@ -37,6 +37,7 @@ function(sfl_add_application target creator)
 	set(SFLLIBSOURCES
 		"${SFLDIR}/sflimpl.c"
 		"${SFLDIR}/sflui.c"
+		"${SFLDIR}/sflbootgui.c"
 		"${SFLDIR}/sflaudio.c"
 		"${SFLDIR}/sflnet.c"
 		"${SFLDIR}/sflsocket.c"
@@ -116,5 +117,9 @@ function(sfl_add_application target creator)
 	endif()
 	if(APPLE)
 		target_link_libraries(${target} PRIVATE "-framework Cocoa" "-framework AudioToolbox" "-framework AudioUnit" "-framework CoreAudio" "-framework AVFoundation" "-framework IOKit" "-framework ForceFeedback")
+		find_library(SFLMEDIAPLAYER MediaPlayer)
+		if(SFLMEDIAPLAYER)
+			target_link_libraries(${target} PRIVATE "-weak_framework MediaPlayer")
+		endif()
 	endif()
 endfunction()

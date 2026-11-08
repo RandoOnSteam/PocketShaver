@@ -118,6 +118,7 @@ void PutScrap(uint32 type, void *scrap, int32 length)
 		return;
 	textlength = SflRomanToUtf8((const uint8 *)scrap, (size_t)length, text, (size_t)length * SFLCLIPUTF8PERBYTE + 1, true);
 	SflUiClipboardSet(text, textlength);
+	if (PrefsFindBool("notifyclip")) SflUiNotify("Clipboard copied from guest");
 	SflClipRemember(&SflClip.known, &SflClip.knownlength, text, textlength);
 	WSFREE(text);
 }
@@ -156,6 +157,7 @@ void GetScrap(void **handle, uint32 type, int32 offset)
 		return;
 	if (length != 0 && !SflClipMatches(SflClip.known, SflClip.knownlength, text, length)) {
 		SflClipRemember(&SflClip.known, &SflClip.knownlength, text, length);
+		if (PrefsFindBool("notifyclip")) SflUiNotify("Clipboard shared with guest");
 		r.d[0] = (uint32)length;
 		Execute68kTrap(0xa71e, &r);
 		scrap = r.a[0];

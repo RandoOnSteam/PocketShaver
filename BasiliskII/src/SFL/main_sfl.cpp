@@ -46,12 +46,30 @@
 #endif
 #include "sflmain.h"
 #include "sflui.h"
+#if defined(SFLFAULTHANDLER)
+#include "sigsegv.h"
+#if defined(SHEEPSHAVER)
+extern sigsegv_return_t sigsegv_handler(sigsegv_info_t *sip);
+#else
+static sigsegv_return_t sigsegv_handler(sigsegv_info_t *sip)
+{
+	const uintptr faultaddress = (uintptr)sigsegv_get_fault_address(sip);
+	if (faultaddress - (uintptr)ROMBaseHost < ROMSize)
+		return SIGSEGV_RETURN_SKIP_INSTRUCTION;
+	if (PrefsFindBool("ignoresegv"))
+		return SIGSEGV_RETURN_SKIP_INSTRUCTION;
+	return SIGSEGV_RETURN_FAILURE;
+}
+#endif
+#endif
 #include "gui.h"
 #include "file.h"
 #include "thread.h"
 
 #define SFLMAINROMFILENAME "ROM"
 #define SFLMAINROMFILENAME2 "Mac OS ROM"
+#define SFLMAINCHRPSIGNATURE 11
+#define SFLMAINFAULTHANDLERERROR "Unable to install the memory fault handler."
 #define SFLMAINROMBASE 0x40800000
 #define SFLMAINHIGHPAGE 0xffff0000
 #define SFLMAINKERNELPAGE 0x68ff0000
@@ -262,6 +280,30 @@ uint8 *SflMainReadRomFile(const char *path, uint32 *size)
 	return data;
 }
 
+int SflEmulatorRomValid(const char *path)
+{
+	uint8 *data;
+	uint32 size;
+	int valid;
+	data = NULL;
+	size = 0;
+	if (path != NULL && *path != 0)
+		data = SflMainReadRomFile(path, &size);
+	if (data == NULL)
+		data = SflMainReadRomFile(SFLMAINROMFILENAME, &size);
+	if (data == NULL)
+		data = SflMainReadRomFile(SFLMAINROMFILENAME2, &size);
+	if (data == NULL)
+		return 0;
+#ifdef SHEEPSHAVER
+	valid = size == ROM_SIZE || (size > SFLMAINCHRPSIGNATURE && strncmp((char *)data, "<CHRP-BOOT>", SFLMAINCHRPSIGNATURE) == 0);
+#else
+	valid = size == 64 * 1024 || size == 128 * 1024 || size == 256 * 1024 || size == 512 * 1024 || size == 1024 * 1024;
+#endif
+	free(data);
+	return valid;
+}
+
 bool SflMainLoadRom(void)
 {
 	const char *path;
@@ -337,6 +379,13 @@ WSTHREADENTRYCALLBACK(SflMainEmulatorThread)
 	return WSTHREADENTRYPROCRETCODE(0);
 }
 #endif /* #if !defined(SFLMAINRUNEMULATORONMAINTHREAD) */
+void SflEmulatorLoadPrefs(int argc, char **argv)
+{
+	SflMainParseArguments(argc, argv);
+	argc = SflMainCompactArguments(argc, argv);
+	PrefsInit(NULL, argc, argv);
+}
+
 int SflEmulatorSetup(int argc, char **argv)
 {
 	WSCriticalSection_Construct(&SflMain.intflags);
@@ -347,9 +396,6 @@ int SflEmulatorSetup(int argc, char **argv)
 	wsatomicintstore(&SflMain.pendingticks, 0);
 	SflMain.secondticks = 0;
 	SflMain.nvramticks = 0;
-	SflMainParseArguments(argc, argv);
-	argc = SflMainCompactArguments(argc, argv);
-	PrefsInit(NULL, argc, argv);
 #ifdef SHEEPSHAVER
 	SflMain.nativeboot = OsxGuestRequested() != 0;
 	if (SflMain.nativeboot) {
@@ -358,8 +404,16 @@ int SflEmulatorSetup(int argc, char **argv)
 		return SFLNATIVEBOOT;
 	}
 #endif
+#if defined(SFLFAULTHANDLER)
+	if (!sigsegv_install_handler(sigsegv_handler)) {
+		ErrorAlert(SFLMAINFAULTHANDLERERROR);
+		return 0;
+	}
+#endif
 #ifdef SHEEPSHAVER
 	PVR = 0x000c0000;
+	if (!PrefsFindBool("altivec"))
+		PVR = 0x00080000;
 	CPUClockSpeed = 100000000;
 	BusClockSpeed = 100000000;
 	TimebaseSpeed = 25000000;

@@ -18,8 +18,13 @@
  *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
+#if defined(_MSC_VER)
+#define IID_IAgileObject_DEFINED
+#endif
 #define GUI_IMPLEMENTATION
 #include "gui.h"
+#define GUICTL_IMPLEMENTATION
+#include "guictl.h"
 #define FILE_IMPLEMENTATION
 #include "file.h"
 #define THREAD_IMPLEMENTATION

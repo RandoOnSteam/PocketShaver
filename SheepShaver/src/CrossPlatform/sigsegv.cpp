@@ -627,6 +627,11 @@ static sigsegv_address_t get_fault_address(struct sigcontext *scp)
 #define SIGSEGV_REGISTER_FILE			((SIGSEGV_REGISTER_TYPE *)&SIGSEGV_CONTEXT_REGS->Rax)
 #define SIGSEGV_SKIP_INSTRUCTION		ix86_skip_instruction
 #endif
+#if defined(_M_ARM64)
+#define SIGSEGV_FAULT_INSTRUCTION		SIGSEGV_CONTEXT_REGS->Pc
+#define SIGSEGV_REGISTER_FILE			((unsigned long *)&SIGSEGV_CONTEXT_REGS->X0)
+#define SIGSEGV_SKIP_INSTRUCTION		aarch64_skip_instruction
+#endif
 #if defined(_M_IA64)
 #define SIGSEGV_FAULT_INSTRUCTION		SIGSEGV_CONTEXT_REGS->StIIP
 #endif
@@ -2620,7 +2625,7 @@ static bool aarch64_skip_instruction(unsigned long *regs) {
 	return true;
 }
 #endif
-#ifdef __linux__
+#if defined(__linux__) || defined(_M_ARM64)
 static bool aarch64_skip_instruction(unsigned long *regs) {
 	unsigned long long *r = (unsigned long long *)regs;
 	if (!r[32]) return false;

@@ -1,7 +1,10 @@
 #include "sysdeps.h"
 #include "adb.h"
 #include "prefs.h"
+#include "cpu_emulation.h"
 #include "sflui.h"
+
+#define SFLCURSORSTATEADDRESS 0x8d0
 
 void VideoPumpEvents(void)
 {
@@ -38,10 +41,38 @@ void SflEmulatorButton(int down)
 
 void SflEmulatorMouseButton(int button, int down)
 {
+	const char *modifier;
+	int key;
+	if (button == 1) {
+		modifier = PrefsFindString("rightclick");
+		key = 0x36;
+		if (modifier && !strcmp(modifier, "command")) key = 0x37;
+		if (down) SflEmulatorKey(key, 1);
+		SflEmulatorMouseButton(0, down);
+		if (!down) SflEmulatorKey(key, 0);
+		return;
+	}
 	if (SflUiQueueInput(SFLUIINPUTBUTTON, button, down))
 		return;
 	if (down)
 		ADBMouseDown(button);
 	else
 		ADBMouseUp(button);
+}
+
+int SflEmulatorRelativeMouse(int operation)
+{
+	const char *mode;
+	bool always;
+	bool automatic;
+	mode = PrefsFindString("relmouse");
+	always = mode != NULL && strcmp(mode, "always") == 0;
+	automatic = mode != NULL && strcmp(mode, "auto") == 0;
+	if (operation == SFLRELATIVESTART)
+		ADBSetRelMouseMode(always || PrefsFindBool("init_grab"));
+	else if (operation == SFLRELATIVETOGGLE && !always && !automatic)
+		ADBSetRelMouseMode(!ADBIsRelativeMouseMode());
+	else if (operation == SFLRELATIVEUPDATE && automatic)
+		ADBSetRelMouseMode((int16)ReadMacInt16(SFLCURSORSTATEADDRESS) < 0);
+	return ADBIsRelativeMouseMode();
 }

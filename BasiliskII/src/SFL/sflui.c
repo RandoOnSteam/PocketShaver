@@ -19,6 +19,8 @@
  */
 
 #include <stdlib.h>
+#include <stdio.h>
+#include <time.h>
 #include <string.h>
 #include "gui.h"
 #include "thread.h"
@@ -28,8 +30,11 @@
 #include "sflmonitor.h"
 #endif
 #include "sflmain.h"
+#include "sflbootgui.h"
 
 #define SFLUITICKMS 17 /* match Windows */
+#define SFLUINOTICESIZE 160
+#define SFLUINOTICESECONDS 5
 #define SFLUICLIPBOARDREPAINTS 15
 #define SFLUIADBCOUNT 128
 #define SFLUINOKEY -1
@@ -82,6 +87,7 @@ typedef struct SFLUIAPP
 	unsigned int inputread;
 	unsigned int inputwrite;
 	unsigned int paints;
+	struct SFLUISTATUS *status;
 	unsigned char keys[SFLUIADBCOUNT];
 	int buttondown;
 	guipos_t mousex;
@@ -115,6 +121,119 @@ typedef struct SFLUIAPP
 } SFLUIAPP;
 
 SFLUIAPP *SflUiApp;
+typedef struct SFLUISTATUS
+{
+	unsigned int previouspaints;
+	unsigned long receivedbytes;
+	unsigned long sentbytes;
+	time_t statstime;
+	time_t noticetime;
+	int showfps;
+	int shownetrate;
+	int notifyip;
+	char notice[SFLUINOTICESIZE];
+	char basetitle[SFLUINOTICESIZE];
+} SFLUISTATUS;
+
+static void SflUiStatusCreate(SFLUIAPP *pThis, const char *title)
+{
+	SFLUISTATUS *status;
+	int showfps;
+	int shownetrate;
+	int notifyip;
+	showfps = SflEmulatorPrefBool("showfps");
+	shownetrate = SflEmulatorPrefBool("shownetrate");
+	notifyip = SflEmulatorPrefBool("notifyip");
+	status = pThis->status;
+	if (status == NULL) {
+		if (!showfps && !shownetrate && !notifyip && !SflEmulatorPrefBool("notifyclip"))
+			return;
+		status = (SFLUISTATUS *)WSALLOC1(SFLUISTATUS);
+		if (status == NULL)
+			return;
+		memset(status, 0, sizeof(*status));
+		status->showfps = showfps;
+		status->shownetrate = shownetrate;
+		status->notifyip = notifyip;
+		pThis->status = status;
+	}
+	strncpy(status->basetitle, title, sizeof(status->basetitle) - 1);
+	status->statstime = time(NULL);
+}
+
+void SflUiNotify(const char *text)
+{
+	SFLUISTATUS *status;
+	status = SflUiApp->status;
+	if (status == NULL)
+		return;
+	WSCriticalSection_Lock(&SflUiApp->lock);
+	strncpy(status->notice, text, sizeof(status->notice) - 1);
+	status->noticetime = time(NULL);
+	WSCriticalSection_Unlock(&SflUiApp->lock);
+}
+
+void SflUiNetworkTransfer(const unsigned char *frame, int length, int incoming)
+{
+	SFLUISTATUS *status;
+	int header;
+	char notice[SFLUINOTICESIZE];
+	status = SflUiApp->status;
+	if (status == NULL)
+		return;
+	if (status->shownetrate) {
+		WSCriticalSection_Lock(&SflUiApp->lock);
+		if (incoming)
+			status->receivedbytes += length;
+		else
+			status->sentbytes += length;
+		WSCriticalSection_Unlock(&SflUiApp->lock);
+	}
+	if (!incoming || !status->notifyip || length < 62 || frame[12] != 8 || frame[13] != 0 || frame[23] != 17)
+		return;
+	header = 14 + (frame[14] & 15) * 4;
+	if (header >= 34 && length >= header + 28 && frame[header] == 0 && frame[header + 1] == 67 && frame[header + 2] == 0 && frame[header + 3] == 68 && frame[header + 8] == 2) {
+		sprintf(notice, "Guest IP: %u.%u.%u.%u", frame[header + 24], frame[header + 25], frame[header + 26], frame[header + 27]);
+		SflUiNotify(notice);
+	}
+}
+
+static void SflUiUpdateTitle(SFLUIAPP *pThis)
+{
+	SFLUISTATUS *status;
+	time_t now;
+	unsigned long elapsed;
+	char title[SFLUINOTICESIZE * 3];
+	char metric[SFLUINOTICESIZE];
+	status = pThis->status;
+	if (status == NULL)
+		return;
+	now = time(NULL);
+	if (now <= status->statstime)
+		return;
+	elapsed = (unsigned long)(now - status->statstime);
+	strcpy(title, status->basetitle);
+	if (status->showfps) {
+		sprintf(metric, " | %lu FPS", (unsigned long)(pThis->paints - status->previouspaints) / elapsed);
+		strcat(title, metric);
+	}
+	WSCriticalSection_Lock(&pThis->lock);
+	if (status->shownetrate) {
+		sprintf(metric, " | RX %lu B/s TX %lu B/s", status->receivedbytes / elapsed, status->sentbytes / elapsed);
+		strcat(title, metric);
+	}
+	if (now - status->noticetime < SFLUINOTICESECONDS && status->notice[0]) {
+		strcat(title, " | ");
+		strcat(title, status->notice);
+	}
+	status->receivedbytes = 0;
+	status->sentbytes = 0;
+	WSCriticalSection_Unlock(&pThis->lock);
+	status->previouspaints = pThis->paints;
+	status->statstime = now;
+	WSWindow_SetTitle(&pThis->window, title);
+}
+
 static void SflUiApplySize(SFLUIAPP *pThis);
 static void SflUiRefresh(SFLUIAPP *pThis);
 static void SflUiUpdateClientSize(SFLUIAPP *pThis);
@@ -393,6 +512,10 @@ static void SflUiMouseDeliver(SFLUIAPP *pThis, guipos_t x, guipos_t y)
 
 static void SflUiMouse(SFLUIAPP *pThis, guipos_t x, guipos_t y)
 {
+	guipos_t centerx;
+	guipos_t centery;
+	guipos_t screenx;
+	guipos_t screeny;
 #if defined(WSMACCLASSICORCARBON)
 	guipos_t originx = 0;
 	guipos_t originy = 0;
@@ -400,6 +523,18 @@ static void SflUiMouse(SFLUIAPP *pThis, guipos_t x, guipos_t y)
 	x -= originx;
 	y -= originy;
 #endif
+	if (!pThis->input && SflEmulatorRelativeMouse(SFLRELATIVEUPDATE)) {
+		centerx = pThis->clientwidth / 2;
+		centery = pThis->clientheight / 2;
+		if (x != centerx || y != centery) {
+			SflEmulatorMouse((int)(x - centerx), (int)(y - centery));
+			screenx = centerx;
+			screeny = centery;
+			WSWindow_ClientToScreen(&pThis->window, &screenx, &screeny);
+			WSCursorWarp(screenx, screeny);
+		}
+		return;
+	}
 	pThis->mousex = x;
 	pThis->mousey = y;
 	pThis->mousepending = TRUE;
@@ -428,6 +563,10 @@ WSKEYEVENT_CALLBACK(SflUiOnKeyDown)
 {
 	WSKEYEVENT ev;
 	WSKeyEvent_Construct(&ev);
+	if (WSKeyEvent_GetKey(&ev) == WSKEY_F8 && !SflUiApp->input) {
+		SflEmulatorRelativeMouse(SFLRELATIVETOGGLE);
+		return WSKEYEVENT_HANDLED;
+	}
 	SflUiKey(SflUiApp, WSKeyEvent_GetKey(&ev), 1);
 	return WSKEYEVENT_HANDLED;
 }
@@ -554,6 +693,7 @@ static void SflUiRefresh(SFLUIAPP *pThis)
 		return;
 	wsatomicintstore(&pThis->repaint, 0);
 	SflUiMouseFlush(pThis);
+	SflUiUpdateTitle(pThis);
 	pThis->frameticks++;
 	if (pThis->frameticks >= pThis->frameskip) {
 		pThis->frameticks = 0;
@@ -585,7 +725,8 @@ WSMOUSEEVENT_CALLBACK(SflUiOnMouseDown)
 	SflUiMouseFlush(SflUiApp);
 	if (!SflUiApp->buttondown) {
 		SflUiApp->buttondown = 1;
-		SflEmulatorButton(1);
+		if (WSMouseEvent_IsRButton(&ev)) SflUiApp->buttondown = 2;
+		SflEmulatorMouseButton(SflUiApp->buttondown - 1, 1);
 	}
 	return WSMOUSEEVENT_UNHANDLED;
 }
@@ -597,8 +738,8 @@ WSMOUSEEVENT_CALLBACK(SflUiOnMouseUp)
 	SflUiMouse(SflUiApp, WSMouseEvent_GetX(&ev), WSMouseEvent_GetY(&ev));
 	SflUiMouseFlush(SflUiApp);
 	if (SflUiApp->buttondown) {
+		SflEmulatorMouseButton(SflUiApp->buttondown - 1, 0);
 		SflUiApp->buttondown = 0;
-		SflEmulatorButton(0);
 	}
 	return WSMOUSEEVENT_UNHANDLED;
 }
@@ -735,6 +876,7 @@ int SflUiOpen(const char *title, int width, int height, int fullscreen, int fram
 		return 0;
 	WSWindow_SetCon(&pThis->window, pThis);
 	pThis->windowopen = TRUE;
+	SflUiStatusCreate(pThis, title);
 	pThis->framewidth = width;
 	pThis->frameheight = height;
 	pThis->fullscreen = FALSE;
@@ -978,6 +1120,7 @@ void SflUiRequestQuit(void)
 static wsbool SflUiOnInit(SFLUIAPP *pThis)
 {
 	SflUiApp = pThis;
+	pThis->status = NULL;
 	pThis->frame = NULL;
 	pThis->framewidth = 0;
 	pThis->frameheight = 0;
@@ -1024,6 +1167,10 @@ static wsbool SflUiOnInit(SFLUIAPP *pThis)
 	wsatomicintstore(&pThis->resize, 0);
 	wsatomicintstore(&pThis->repaint, 0);
 	WSCriticalSection_Construct(&pThis->lock);
+#if 0
+	WSDisplaySetDPIAware(); /* Win32 */
+	WSEnableVisualStyles(); /* Win32 */
+#endif
 	return WSApp_Create(&pThis->super);
 }
 
@@ -1058,14 +1205,26 @@ static int SflUiOnExit(SFLUIAPP *pThis)
 		WSFREE(pThis->clipset);
 	WSApp_Destroy(&pThis->super);
 	WSFREE(pThis->shadow);
+	if (pThis->status != NULL)
+		WSFREE(pThis->status);
 	WSCriticalSection_Destruct(&pThis->lock);
 	SflUiApp = NULL;
 	return 0;
 }
 
+static int SflUiRunBootGui(SFLUIAPP *pThis)
+{
+	SflEmulatorLoadPrefs(pThis->super.mArgc, pThis->super.mArgv);
+	if (SflEmulatorPrefBool("nogui"))
+		return 1;
+	return SflBootGuiRun(&pThis->super);
+}
+
 #if !defined(SFLMAINRUNEMULATORONMAINTHREAD)
 static wsbool SflUiOnLoopBegin(SFLUIAPP *pThis)
 {
+	if (!SflUiRunBootGui(pThis))
+		return FALSE;
 	if (!SflEmulatorSetup(pThis->super.mArgc, pThis->super.mArgv))
 		return FALSE;
 	if (!pThis->windowopen)
@@ -1112,6 +1271,10 @@ static void SflUiOnRun(SFLUIAPP *pThis)
 	int mode;
 	if (!WSEventLoop_Create(&pThis->super.mEventLoop))
 		return;
+	if (!SflUiRunBootGui(pThis)) {
+		WSEventLoop_Destroy(&pThis->super.mEventLoop);
+		return;
+	}
 	mode = SflEmulatorSetup(pThis->super.mArgc, pThis->super.mArgv);
 	if (!mode) {
 		WSEventLoop_Destroy(&pThis->super.mEventLoop);
@@ -1136,6 +1299,7 @@ static void SflUiOnRun(SFLUIAPP *pThis)
 			&pThis->window, SFLUITICKMS, SflUiOnTicker);
 
 		if (pThis->tickercreated) {
+			SflEmulatorRelativeMouse(SFLRELATIVESTART);
 			SflEmulatorStart();
 			WSTicker_Destroy(&pThis->ticker);
 			WSTimerEndPeriod(1);

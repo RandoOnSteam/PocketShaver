@@ -46,6 +46,16 @@
 #define HAVE_STRDUP 1
 #define HAVE_STRERROR 1
 #define HAVE_FENV_H 1
+#if defined(SFLFAULTHANDLER)
+#define HAVE_SIGSEGV_SKIP_INSTRUCTION 1
+#if defined(_WIN32)
+#define HAVE_WIN32_EXCEPTIONS 1
+#elif defined(__APPLE__)
+#define HAVE_MACH_EXCEPTIONS 1
+#else
+#define HAVE_SIGINFO_T 1
+#endif
+#endif
 
 #define USE_SFL 1
 #ifdef SHEEPSHAVER

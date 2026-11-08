@@ -29,6 +29,30 @@
 #endif
 
 prefs_desc platform_prefs_items[] = {
+	{"rightclick", TYPE_STRING, false, "right click modifier"},
+	{"showfps", TYPE_BOOLEAN, false, "show frame rate"},
+	{"shownetrate", TYPE_BOOLEAN, false, "show network transfer rate"},
+	{"notifyip", TYPE_BOOLEAN, false, "report assigned IP address"},
+	{"notifyclip", TYPE_BOOLEAN, false, "report clipboard transfers"},
+	{"debugextfs", TYPE_BOOLEAN, false, "kept for other builds sharing this file"},
+	{"extdrives", TYPE_STRING, false, "kept for other builds sharing this file"},
+	{"pollmedia", TYPE_BOOLEAN, false, "kept for other builds sharing this file"},
+	{"etherpermanentaddress", TYPE_BOOLEAN, false, "kept for other builds sharing this file"},
+	{"ethermulticastmode", TYPE_INT32, false, "kept for other builds sharing this file"},
+	{"routerenabled", TYPE_BOOLEAN, false, "kept for other builds sharing this file"},
+	{"ftp_port_list", TYPE_STRING, false, "kept for other builds sharing this file"},
+	{"tcp_port", TYPE_STRING, false, "kept for other builds sharing this file"},
+	{"portfile0", TYPE_STRING, false, "kept for other builds sharing this file"},
+	{"portfile1", TYPE_STRING, false, "kept for other builds sharing this file"},
+#ifdef SHEEPSHAVER
+	{"mousewheelmode", TYPE_INT32, false, "kept for other builds sharing this file"},
+	{"mousewheellines", TYPE_INT32, false, "kept for other builds sharing this file"},
+	{"altivec", TYPE_BOOLEAN, false, "enable AltiVec"},
+	{"relmouse", TYPE_STRING, false, "relative mouse mode"},
+#endif
+#ifndef SHEEPSHAVER
+	{"nonet", TYPE_BOOLEAN, false, "disable networking"},
+#endif
 	{"idlewait", TYPE_BOOLEAN, false, "sleep when idle"},
 	{"enableextfs", TYPE_BOOLEAN, false, "enable extfs system"},
 #ifdef SHEEPSHAVER
@@ -52,25 +76,41 @@ void LoadPrefs(const char *vmdir)
 	FILE *file;
 	file = fopen(SflPrefsPath(), "r");
 	if (file == NULL) {
-		SavePrefs();
 		return;
 	}
 	LoadPrefsFromStream(file);
 	fclose(file);
 }
 
-void SavePrefs(void)
+extern "C" int SflBootSave(void)
 {
 	FILE *file;
+	int success;
 	file = fopen(SflPrefsPath(), "w");
 	if (file == NULL)
-		return;
+		return 0;
 	SavePrefsToStream(file);
-	fclose(file);
+	success = ferror(file) == 0;
+	if (fclose(file) != 0) success = 0;
+	return success;
+}
+
+void SavePrefs(void)
+{
+	SflBootSave();
 }
 
 void AddPlatformPrefsDefaults(void)
 {
+	PrefsAddString("rightclick", "control");
+	PrefsAddBool("showfps", false);
+	PrefsAddBool("shownetrate", false);
+	PrefsAddBool("notifyip", true);
+	PrefsAddBool("notifyclip", false);
+#ifdef SHEEPSHAVER
+	PrefsAddBool("altivec", true);
+	PrefsAddString("relmouse", "manual");
+#endif
 	PrefsAddBool("idlewait", true);
 	PrefsReplaceBool("enableextfs", false);
 	PrefsReplaceString("extfs", "");

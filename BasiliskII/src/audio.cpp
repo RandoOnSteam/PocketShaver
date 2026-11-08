@@ -66,6 +66,8 @@ void AudioReset(void)
 #ifdef MACEMU_USEVIASOUNDBASE
 	AudioStatus.soundbuffer = 0;
 #endif
+	AudioStatus.mixer = 0;
+	AudioStatus.num_sources = 0;
 	audio_data = 0;
 }
 

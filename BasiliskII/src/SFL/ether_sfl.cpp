@@ -27,6 +27,7 @@
 #include "gui.h"
 #include "thread.h"
 #include "sflnet.h"
+#include "sflui.h"
 #ifndef SHEEPSHAVER
 #include <map>
 #include "macos_util.h"
@@ -61,6 +62,7 @@ static void SflEtherReceive(void *context, const unsigned char *frame, int lengt
 #endif
 	if (length < 14 || length > SFLNETFRAMESIZE)
 		return;
+	SflUiNetworkTransfer(frame, length, 1);
 	memcpy(SflEther.frame, frame, length);
 	SflEther.framelength = length;
 	SetInterruptFlag(INTFLAG_ETHER);
@@ -89,10 +91,8 @@ static bool SflEtherOpen(void)
 	int port;
 	SflEther.open = false;
 	SflEther.net = NULL;
-#ifdef SHEEPSHAVER
 	if (PrefsFindBool("nonet"))
 		return false;
-#endif
 	mode = PrefsFindString("ether");
 #ifndef SHEEPSHAVER
 	if (PrefsFindBool("udptunnel"))
@@ -162,6 +162,7 @@ void AO_transmit_packet(uint32 mp)
 	length = ether_msgb_to_buffer(mp, packet);
 	if (length > SFLNETFRAMESIZE)
 		return;
+	SflUiNetworkTransfer(packet, length, 0);
 	if (SflNetSend(SflEther.net, packet, length))
 		num_tx_packets++;
 	else
@@ -245,6 +246,7 @@ int16 ether_write(uint32 wds)
 	if (!SflEther.open || length < 14)
 		return excessCollsns;
 	memcpy(frame + 6, SflEther.address, SFLNETADDRESSSIZE);
+	SflUiNetworkTransfer(frame, length, 0);
 	if (!SflNetSend(SflEther.net, frame, length))
 		return excessCollsns;
 	return noErr;
