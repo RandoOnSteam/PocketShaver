@@ -376,7 +376,7 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 			int startupindex;
 			int startuppartition;
 			D(bug("*** RESET ***\n"));
-			if (VideoDriverInitialized() && OsxSelectBootImage(&startupindex, &startuppartition) == OSXBOOTNATIVE) {
+			if (VideoDriverInitialized() && OsxGuestSelectBootImage(&startupindex, &startuppartition) == OSXBOOTNATIVE) {
 				StopEmulation();
 				break;
 			}

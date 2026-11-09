@@ -41,7 +41,7 @@
 
 #define DBDMAMAXSTEPS 4096
 
-static uint32 SwapForSize(uint32 value, int size)
+static uint32 OsxGuestSwapForSize(uint32 value, int size)
 {
 	if (size == 4)
 		return bswap_32(value);
@@ -50,7 +50,7 @@ static uint32 SwapForSize(uint32 value, int size)
 	return value & 0xff;
 }
 
-static uint32 ReadLittleRegister(uint32 reg, uint32 offset, int size)
+static uint32 OsxGuestReadLittleRegister(uint32 reg, uint32 offset, int size)
 {
 	uint32 bytes;
 	uint32 result;
@@ -62,7 +62,7 @@ static uint32 ReadLittleRegister(uint32 reg, uint32 offset, int size)
 	return result;
 }
 
-static uint32 WriteLittleRegister(uint32 reg, uint32 offset, int size, uint32 value)
+static uint32 OsxGuestWriteLittleRegister(uint32 reg, uint32 offset, int size, uint32 value)
 {
 	int index;
 	uint32 shift;
@@ -73,12 +73,12 @@ static uint32 WriteLittleRegister(uint32 reg, uint32 offset, int size, uint32 va
 	return reg;
 }
 
-static inline uint32 ReadGuest32(OsxMachine *machine, uint32 address)
+static inline uint32 OsxGuestReadGuest32(OsxMachine *machine, uint32 address)
 {
 	uint8 *host;
 #if OSXG5
 	if (machine->g5) {
-		host = OsxG5DmaHost(machine, address, 4);
+		host = OsxGuestG5DmaHost(machine, address, 4);
 		if (host == NULL)
 			return 0;
 		return ((uint32)host[0] << 24) | ((uint32)host[1] << 16) | ((uint32)host[2] << 8) | host[3];
@@ -90,17 +90,17 @@ static inline uint32 ReadGuest32(OsxMachine *machine, uint32 address)
 	return ((uint32)host[0] << 24) | ((uint32)host[1] << 16) | ((uint32)host[2] << 8) | host[3];
 }
 
-static inline uint32 ReadGuestLittle32(OsxMachine *machine, uint32 address)
+static inline uint32 OsxGuestReadGuestLittle32(OsxMachine *machine, uint32 address)
 {
-	return bswap_32(ReadGuest32(machine, address));
+	return bswap_32(OsxGuestReadGuest32(machine, address));
 }
 
-static inline void WriteGuestLittle32(OsxMachine *machine, uint32 address, uint32 value)
+static inline void OsxGuestWriteGuestLittle32(OsxMachine *machine, uint32 address, uint32 value)
 {
 	uint8 *host;
 #if OSXG5
 	if (machine->g5) {
-		host = OsxG5DmaHost(machine, address, 4);
+		host = OsxGuestG5DmaHost(machine, address, 4);
 		if (host == NULL)
 			return;
 		host[0] = (uint8)value;
@@ -119,7 +119,7 @@ static inline void WriteGuestLittle32(OsxMachine *machine, uint32 address, uint3
 	host[3] = (uint8)(value >> 24);
 }
 
-void OsxPciReset(OsxMachine *machine)
+void OsxGuestPciReset(OsxMachine *machine)
 {
 	OsxPciFunction *function;
 	memset(machine->pci, 0, sizeof(machine->pci));
@@ -142,7 +142,7 @@ void OsxPciReset(OsxMachine *machine)
 	machine->configaddress = 0;
 }
 
-static OsxPciFunction *SelectedFunction(OsxMachine *machine, uint32 *reg)
+static OsxPciFunction *OsxGuestSelectedFunction(OsxMachine *machine, uint32 *reg)
 {
 	uint32 address;
 	uint32 device;
@@ -160,7 +160,7 @@ static OsxPciFunction *SelectedFunction(OsxMachine *machine, uint32 *reg)
 	return NULL;
 }
 
-static uint32 ConfigDword(OsxPciFunction *function, uint32 reg)
+static uint32 OsxGuestConfigDword(OsxPciFunction *function, uint32 reg)
 {
 	switch (reg) {
 	case 0x00: return function->vendordevice;
@@ -173,25 +173,25 @@ static uint32 ConfigDword(OsxPciFunction *function, uint32 reg)
 	return 0;
 }
 
-uint32 OsxPciConfigRead(OsxMachine *machine, uint32 offset, int size)
+uint32 OsxGuestPciConfigRead(OsxMachine *machine, uint32 offset, int size)
 {
 	OsxPciFunction *function;
 	uint32 reg;
-	function = SelectedFunction(machine, &reg);
+	function = OsxGuestSelectedFunction(machine, &reg);
 	if (function == NULL)
 		return 0xffffffffu >> ((4 - size) * 8);
-	return ReadLittleRegister(ConfigDword(function, reg), offset, size);
+	return OsxGuestReadLittleRegister(OsxGuestConfigDword(function, reg), offset, size);
 }
 
-void OsxPciConfigWrite(OsxMachine *machine, uint32 offset, int size, uint32 value)
+void OsxGuestPciConfigWrite(OsxMachine *machine, uint32 offset, int size, uint32 value)
 {
 	OsxPciFunction *function;
 	uint32 reg;
 	uint32 merged;
-	function = SelectedFunction(machine, &reg);
+	function = OsxGuestSelectedFunction(machine, &reg);
 	if (function == NULL)
 		return;
-	merged = WriteLittleRegister(ConfigDword(function, reg), offset, size, value);
+	merged = OsxGuestWriteLittleRegister(OsxGuestConfigDword(function, reg), offset, size, value);
 	switch (reg) {
 	case 0x04:
 		function->command = (function->command & 0xffff0000u) | (merged & 0xffff);
@@ -209,7 +209,7 @@ void OsxPciConfigWrite(OsxMachine *machine, uint32 offset, int size, uint32 valu
 	}
 }
 
-static void UpdateCpuInterrupt(OsxMachine *machine)
+static void OsxGuestUpdateCpuInterrupt(OsxMachine *machine)
 {
 	OsxPic *pic;
 	uint32 pending;
@@ -221,14 +221,14 @@ static void UpdateCpuInterrupt(OsxMachine *machine)
 		machine->cpu->halted = 0;
 }
 
-void OsxPicSetLine(OsxMachine *machine, int source, int level)
+void OsxGuestPicSetLine(OsxMachine *machine, int source, int level)
 {
 	OsxPic *pic;
 	int bank;
 	uint32 bit;
 #if OSXG5
 	if (machine->g5) {
-		OsxG5SetLine(machine, source, level);
+		OsxGuestG5SetLine(machine, source, level);
 		return;
 	}
 #endif
@@ -242,10 +242,10 @@ void OsxPicSetLine(OsxMachine *machine, int source, int level)
 	} else {
 		pic->levels[bank] &= ~bit;
 	}
-	UpdateCpuInterrupt(machine);
+	OsxGuestUpdateCpuInterrupt(machine);
 }
 
-static uint32 PicRead(OsxMachine *machine, uint32 offset)
+static uint32 OsxGuestPicRead(OsxMachine *machine, uint32 offset)
 {
 	int bank;
 	if (offset < 0x20)
@@ -260,7 +260,7 @@ static uint32 PicRead(OsxMachine *machine, uint32 offset)
 	return 0;
 }
 
-static void PicWrite(OsxMachine *machine, uint32 offset, uint32 value)
+static void OsxGuestPicWrite(OsxMachine *machine, uint32 offset, uint32 value)
 {
 	int bank;
 	if (offset < 0x20)
@@ -277,10 +277,10 @@ static void PicWrite(OsxMachine *machine, uint32 offset, uint32 value)
 		machine->pic.events[bank] &= ~value;
 		break;
 	}
-	UpdateCpuInterrupt(machine);
+	OsxGuestUpdateCpuInterrupt(machine);
 }
 
-static int DbdmaCondition(uint32 status, uint32 select, uint32 mode)
+static int OsxGuestDbdmaCondition(uint32 status, uint32 select, uint32 mode)
 {
 	int match;
 	if (mode == 0)
@@ -293,24 +293,24 @@ static int DbdmaCondition(uint32 status, uint32 select, uint32 mode)
 	return !match;
 }
 
-static void DbdmaStop(OsxMachine *machine, int channel)
+static void OsxGuestDbdmaStop(OsxMachine *machine, int channel)
 {
 	machine->dbdma[channel].status &= ~(DBDMAACTIVE | DBDMAFLUSH);
 }
 
-static void DbdmaComplete(OsxMachine *machine, OsxDbdma *dma, uint32 descriptor, uint32 word0, uint32 residual)
+static void OsxGuestDbdmaComplete(OsxMachine *machine, OsxDbdma *dma, uint32 descriptor, uint32 word0, uint32 residual)
 {
 	uint32 status;
 	uint32 command;
 	status = dma->status | DBDMAACTIVE | DBDMARUN;
-	WriteGuestLittle32(machine, descriptor + 12, (status << 16) | (residual & 0xffff));
+	OsxGuestWriteGuestLittle32(machine, descriptor + 12, (status << 16) | (residual & 0xffff));
 	command = (word0 >> 16) & 0xffff;
-	if (DbdmaCondition(dma->status, dma->interruptselect, (command >> 4) & 3) && dma->irq >= 0) {
-		OsxPicSetLine(machine, dma->irq, 1);
-		OsxPicSetLine(machine, dma->irq, 0);
+	if (OsxGuestDbdmaCondition(dma->status, dma->interruptselect, (command >> 4) & 3) && dma->irq >= 0) {
+		OsxGuestPicSetLine(machine, dma->irq, 1);
+		OsxGuestPicSetLine(machine, dma->irq, 0);
 	}
-	if (DbdmaCondition(dma->status, dma->branchselect, (command >> 2) & 3)) {
-		dma->commandpointer = ReadGuestLittle32(machine, descriptor + 8);
+	if (OsxGuestDbdmaCondition(dma->status, dma->branchselect, (command >> 2) & 3)) {
+		dma->commandpointer = OsxGuestReadGuestLittle32(machine, descriptor + 8);
 		dma->status |= DBDMABRANCH;
 	} else {
 		dma->commandpointer = descriptor + 16;
@@ -318,7 +318,7 @@ static void DbdmaComplete(OsxMachine *machine, OsxDbdma *dma, uint32 descriptor,
 	}
 }
 
-static void DbdmaRunControl(OsxMachine *machine, int channel)
+static void OsxGuestDbdmaRunControl(OsxMachine *machine, int channel)
 {
 	OsxDbdma *dma;
 	uint32 descriptor;
@@ -333,33 +333,33 @@ static void DbdmaRunControl(OsxMachine *machine, int channel)
 		if (!(dma->status & DBDMARUN) || !(dma->status & DBDMAACTIVE) || (dma->status & DBDMAPAUSE))
 			return;
 		descriptor = dma->commandpointer;
-		word0 = ReadGuestLittle32(machine, descriptor);
+		word0 = OsxGuestReadGuestLittle32(machine, descriptor);
 		command = word0 >> 28;
-		address = ReadGuestLittle32(machine, descriptor + 4);
+		address = OsxGuestReadGuestLittle32(machine, descriptor + 4);
 		if (command == DBDMASTOP) {
-			DbdmaStop(machine, channel);
+			OsxGuestDbdmaStop(machine, channel);
 			return;
 		}
 		if (command <= DBDMAINPUTLAST)
 			return;
 		if (command == DBDMASTOREQUAD) {
-			value = ReadGuestLittle32(machine, descriptor + 8);
-			WriteGuestLittle32(machine, address & ~3u, value);
+			value = OsxGuestReadGuestLittle32(machine, descriptor + 8);
+			OsxGuestWriteGuestLittle32(machine, address & ~3u, value);
 		} else if (command == DBDMALOADQUAD) {
 			size = 4;
 			if ((word0 & 7) == 2)
 				size = 2;
 			if (address < machine->ramsize)
-				value = ReadGuestLittle32(machine, address & ~3u);
+				value = OsxGuestReadGuestLittle32(machine, address & ~3u);
 			else
-				value = OsxBusRead(machine, address, size);
-			WriteGuestLittle32(machine, descriptor + 8, value);
+				value = OsxGuestBusRead(machine, address, size);
+			OsxGuestWriteGuestLittle32(machine, descriptor + 8, value);
 		}
-		DbdmaComplete(machine, dma, descriptor, word0, 0);
+		OsxGuestDbdmaComplete(machine, dma, descriptor, word0, 0);
 	}
 }
 
-int OsxDbdmaTransfer(OsxMachine *machine, int channel, uint8 *data, uint32 length, int towardmemory)
+int OsxGuestDbdmaTransfer(OsxMachine *machine, int channel, uint8 *data, uint32 length, int towardmemory)
 {
 	OsxDbdma *dma;
 	uint32 descriptor;
@@ -377,17 +377,17 @@ int OsxDbdmaTransfer(OsxMachine *machine, int channel, uint8 *data, uint32 lengt
 	for (steps = 0; steps < DBDMAMAXSTEPS && consumed < length; steps++) {
 		if (!(dma->status & DBDMARUN) || !(dma->status & DBDMAACTIVE))
 			break;
-		DbdmaRunControl(machine, channel);
+		OsxGuestDbdmaRunControl(machine, channel);
 		if (!(dma->status & DBDMAACTIVE))
 			break;
 		descriptor = dma->commandpointer;
-		word0 = ReadGuestLittle32(machine, descriptor);
+		word0 = OsxGuestReadGuestLittle32(machine, descriptor);
 		command = word0 >> 28;
 		if (command > DBDMAINPUTLAST)
 			break;
-		address = ReadGuestLittle32(machine, descriptor + 4);
+		address = OsxGuestReadGuestLittle32(machine, descriptor + 4);
 		request = word0 & 0xffff;
-		residual = ReadGuestLittle32(machine, descriptor + 12) & 0xffff;
+		residual = OsxGuestReadGuestLittle32(machine, descriptor + 12) & 0xffff;
 		if (residual == 0 || residual > request)
 			residual = request;
 		done = request - residual;
@@ -396,29 +396,29 @@ int OsxDbdmaTransfer(OsxMachine *machine, int channel, uint8 *data, uint32 lengt
 			chunk = length - consumed;
 #if OSXG5
 		if (machine->g5)
-			OsxG5DmaCopy(machine, address + done, data + consumed, chunk, towardmemory);
+			OsxGuestG5DmaCopy(machine, address + done, data + consumed, chunk, towardmemory);
 		else
 #endif
 		if (address + done + chunk <= machine->ramsize) {
 			if (towardmemory) {
 				memcpy(machine->ram + address + done, data + consumed, chunk);
-				OsxJitInvalidate(machine->cpu, address + done, chunk);
+				OsxGuestJitInvalidate(machine->cpu, address + done, chunk);
 			} else
 				memcpy(data + consumed, machine->ram + address + done, chunk);
 		}
 		consumed += chunk;
 		residual -= chunk;
 		if (residual != 0) {
-			WriteGuestLittle32(machine, descriptor + 12, ((dma->status | DBDMAACTIVE | DBDMARUN) << 16) | residual);
+			OsxGuestWriteGuestLittle32(machine, descriptor + 12, ((dma->status | DBDMAACTIVE | DBDMARUN) << 16) | residual);
 			break;
 		}
-		DbdmaComplete(machine, dma, descriptor, word0, 0);
+		OsxGuestDbdmaComplete(machine, dma, descriptor, word0, 0);
 	}
-	DbdmaRunControl(machine, channel);
+	OsxGuestDbdmaRunControl(machine, channel);
 	return (int)consumed;
 }
 
-int OsxDbdmaOutputFrame(OsxMachine *machine, int channel, uint8 *data, uint32 limit)
+int OsxGuestDbdmaOutputFrame(OsxMachine *machine, int channel, uint8 *data, uint32 limit)
 {
 	OsxDbdma *dma;
 	uint32 descriptor;
@@ -431,31 +431,31 @@ int OsxDbdmaOutputFrame(OsxMachine *machine, int channel, uint8 *data, uint32 li
 	dma = &machine->dbdma[channel];
 	consumed = 0;
 	for (steps = 0; steps < DBDMAMAXSTEPS; steps++) {
-		DbdmaRunControl(machine, channel);
+		OsxGuestDbdmaRunControl(machine, channel);
 		if (!(dma->status & DBDMARUN) || !(dma->status & DBDMAACTIVE))
 			return -1;
 		descriptor = dma->commandpointer;
-		word0 = ReadGuestLittle32(machine, descriptor);
+		word0 = OsxGuestReadGuestLittle32(machine, descriptor);
 		command = word0 >> 28;
 		if (command != DBDMAOUTPUTMORE && command != DBDMAOUTPUTLAST)
 			return -1;
-		address = ReadGuestLittle32(machine, descriptor + 4);
+		address = OsxGuestReadGuestLittle32(machine, descriptor + 4);
 		chunk = word0 & 0xffff;
 		if (chunk > limit - consumed)
 			chunk = limit - consumed;
 		if (address < machine->ramsize && chunk <= machine->ramsize - address)
 			memcpy(data + consumed, machine->ram + address, chunk);
 		consumed += chunk;
-		DbdmaComplete(machine, dma, descriptor, word0, 0);
+		OsxGuestDbdmaComplete(machine, dma, descriptor, word0, 0);
 		if (command == DBDMAOUTPUTLAST) {
-			DbdmaRunControl(machine, channel);
+			OsxGuestDbdmaRunControl(machine, channel);
 			return (int)consumed;
 		}
 	}
 	return -1;
 }
 
-int OsxDbdmaInputFrame(OsxMachine *machine, int channel, const uint8 *data, uint32 length)
+int OsxGuestDbdmaInputFrame(OsxMachine *machine, int channel, const uint8 *data, uint32 length)
 {
 	OsxDbdma *dma;
 	uint32 descriptor;
@@ -467,47 +467,47 @@ int OsxDbdmaInputFrame(OsxMachine *machine, int channel, const uint8 *data, uint
 	uint32 consumed;
 	int steps;
 	dma = &machine->dbdma[channel];
-	DbdmaRunControl(machine, channel);
+	OsxGuestDbdmaRunControl(machine, channel);
 	if (!(dma->status & DBDMARUN) || !(dma->status & DBDMAACTIVE))
 		return 0;
-	word0 = ReadGuestLittle32(machine, dma->commandpointer);
+	word0 = OsxGuestReadGuestLittle32(machine, dma->commandpointer);
 	command = word0 >> 28;
 	if (command != DBDMAINPUTMORE && command != DBDMAINPUTLAST)
 		return 0;
 	consumed = 0;
 	for (steps = 0; steps < DBDMAMAXSTEPS; steps++) {
 		descriptor = dma->commandpointer;
-		word0 = ReadGuestLittle32(machine, descriptor);
+		word0 = OsxGuestReadGuestLittle32(machine, descriptor);
 		command = word0 >> 28;
 		if (command != DBDMAINPUTMORE && command != DBDMAINPUTLAST)
 			return 1;
-		address = ReadGuestLittle32(machine, descriptor + 4);
+		address = OsxGuestReadGuestLittle32(machine, descriptor + 4);
 		request = word0 & 0xffff;
 		chunk = request;
 		if (chunk > length - consumed)
 			chunk = length - consumed;
 		if (address < machine->ramsize && chunk <= machine->ramsize - address) {
 			memcpy(machine->ram + address, data + consumed, chunk);
-			OsxJitInvalidate(machine->cpu, address, chunk);
+			OsxGuestJitInvalidate(machine->cpu, address, chunk);
 		}
 		consumed += chunk;
 		if (consumed == length || command == DBDMAINPUTLAST) {
 			if (command == DBDMAINPUTMORE)
 				dma->status |= DBDMAENDOFFRAME;
-			DbdmaComplete(machine, dma, descriptor, word0, request - chunk);
+			OsxGuestDbdmaComplete(machine, dma, descriptor, word0, request - chunk);
 			dma->status &= ~DBDMAENDOFFRAME;
-			DbdmaRunControl(machine, channel);
+			OsxGuestDbdmaRunControl(machine, channel);
 			return 1;
 		}
-		DbdmaComplete(machine, dma, descriptor, word0, 0);
-		DbdmaRunControl(machine, channel);
+		OsxGuestDbdmaComplete(machine, dma, descriptor, word0, 0);
+		OsxGuestDbdmaRunControl(machine, channel);
 		if (!(dma->status & DBDMAACTIVE))
 			return 1;
 	}
 	return 1;
 }
 
-void OsxDbdmaDump(OsxMachine *machine, int channel)
+void OsxGuestDbdmaDump(OsxMachine *machine, int channel)
 {
 	uint32 pointer;
 	int index;
@@ -515,28 +515,28 @@ void OsxDbdmaDump(OsxMachine *machine, int channel)
 	if (machine->log)
 		fprintf(machine->log, "  pic events %08x %08x mask %08x %08x levels %08x %08x external %d msr %08x\n", machine->pic.events[0], machine->pic.events[1], machine->pic.mask[0], machine->pic.mask[1], machine->pic.levels[0], machine->pic.levels[1], machine->cpu->externalline, machine->cpu->msr);
 	for (index = -4; index < 4 && machine->log; index++)
-		fprintf(machine->log, "  dbdma %08x: %08x %08x %08x %08x\n", pointer + index * 16, ReadGuestLittle32(machine, pointer + index * 16), ReadGuestLittle32(machine, pointer + index * 16 + 4), ReadGuestLittle32(machine, pointer + index * 16 + 8), ReadGuestLittle32(machine, pointer + index * 16 + 12));
+		fprintf(machine->log, "  dbdma %08x: %08x %08x %08x %08x\n", pointer + index * 16, OsxGuestReadGuestLittle32(machine, pointer + index * 16), OsxGuestReadGuestLittle32(machine, pointer + index * 16 + 4), OsxGuestReadGuestLittle32(machine, pointer + index * 16 + 8), OsxGuestReadGuestLittle32(machine, pointer + index * 16 + 12));
 }
 
-void OsxDbdmaFinish(OsxMachine *machine, int channel)
+void OsxGuestDbdmaFinish(OsxMachine *machine, int channel)
 {
-	DbdmaRunControl(machine, channel);
+	OsxGuestDbdmaRunControl(machine, channel);
 }
 
-void OsxDbdmaKick(OsxMachine *machine, int channel)
+void OsxGuestDbdmaKick(OsxMachine *machine, int channel)
 {
-	DbdmaRunControl(machine, channel);
+	OsxGuestDbdmaRunControl(machine, channel);
 	if (channel == OSXDBDMAIDE0)
-		OsxAtaDmaReady(machine, 0);
+		OsxGuestAtaDmaReady(machine, 0);
 	else if (channel == OSXDBDMAIDE1)
-		OsxAtaDmaReady(machine, 1);
+		OsxGuestAtaDmaReady(machine, 1);
 	else if (channel == OSXDBDMABMACTX)
-		OsxBmacTransmit(machine);
+		OsxGuestBmacTransmit(machine);
 	else if (channel == OSXDBDMABMACRX)
-		OsxBmacReceive(machine);
+		OsxGuestBmacReceive(machine);
 }
 
-static uint32 DbdmaRead(OsxMachine *machine, int channel, uint32 reg)
+static uint32 OsxGuestDbdmaRead(OsxMachine *machine, int channel, uint32 reg)
 {
 	OsxDbdma *dma;
 	dma = &machine->dbdma[channel];
@@ -552,7 +552,7 @@ static uint32 DbdmaRead(OsxMachine *machine, int channel, uint32 reg)
 	return 0;
 }
 
-static void DbdmaWrite(OsxMachine *machine, int channel, uint32 reg, uint32 value)
+static void OsxGuestDbdmaWrite(OsxMachine *machine, int channel, uint32 reg, uint32 value)
 {
 	OsxDbdma *dma;
 	uint32 mask;
@@ -574,7 +574,7 @@ static void DbdmaWrite(OsxMachine *machine, int channel, uint32 reg, uint32 valu
 		if ((dma->status & DBDMAWAKE) && (dma->status & DBDMARUN))
 			dma->status = (dma->status | DBDMAACTIVE) & ~DBDMAWAKE;
 		if (dma->status & DBDMAACTIVE)
-			OsxDbdmaKick(machine, channel);
+			OsxGuestDbdmaKick(machine, channel);
 		break;
 	case 0x0c:
 		if (!(dma->status & DBDMAACTIVE))
@@ -592,25 +592,25 @@ static void DbdmaWrite(OsxMachine *machine, int channel, uint32 reg, uint32 valu
 	}
 }
 
-uint32 OsxHeathrowRead(OsxMachine *machine, uint32 offset, int size)
+uint32 OsxGuestHeathrowRead(OsxMachine *machine, uint32 offset, int size)
 {
 	uint32 value;
 	if (offset >= 0x10 && offset < 0x30)
-		return SwapForSize(PicRead(machine, offset & ~3u), size);
+		return OsxGuestSwapForSize(OsxGuestPicRead(machine, offset & ~3u), size);
 	if (offset >= 0x34 && offset < 0x3c)
-		return SwapForSize(machine->heathrowfcr[(offset - 0x34) >> 2], size);
+		return OsxGuestSwapForSize(machine->heathrowfcr[(offset - 0x34) >> 2], size);
 	if (offset >= 0x8000 && offset < 0x9000) {
-		value = DbdmaRead(machine, (offset >> 8) & 15, offset & 0xfc);
-		return ReadLittleRegister(value, offset & 3, size);
+		value = OsxGuestDbdmaRead(machine, (offset >> 8) & 15, offset & 0xfc);
+		return OsxGuestReadLittleRegister(value, offset & 3, size);
 	}
 	if (offset >= 0x16000 && offset < 0x18000)
-		return OsxCudaRead(machine, (offset >> 9) & 15);
+		return OsxGuestCudaRead(machine, (offset >> 9) & 15);
 	if (offset - OSXBMACOFFSET < OSXBMACSIZE)
-		return SwapForSize(OsxBmacRead(machine, offset - OSXBMACOFFSET), size);
+		return OsxGuestSwapForSize(OsxGuestBmacRead(machine, offset - OSXBMACOFFSET), size);
 	if (offset - OSXAUDIOOFFSET < OSXAUDIOSIZE)
-		return SwapForSize(OsxAudioRead(machine, offset - OSXAUDIOOFFSET), size);
+		return OsxGuestSwapForSize(OsxGuestAudioRead(machine, offset - OSXAUDIOOFFSET), size);
 	if (offset >= 0x20000 && offset < 0x22000)
-		return OsxAtaRead(machine, (offset >> 12) & 1, offset & 0xfff, size);
+		return OsxGuestAtaRead(machine, (offset >> 12) & 1, offset & 0xfff, size);
 	if (offset >= 0x60000)
 		return machine->nvram[((offset - 0x60000) >> 4) & (OSXNVRAMSIZE - 1)];
 	if (offset >= 0x12000 && offset < 0x14000)
@@ -621,40 +621,40 @@ uint32 OsxHeathrowRead(OsxMachine *machine, uint32 offset, int size)
 	return 0;
 }
 
-void OsxHeathrowWrite(OsxMachine *machine, uint32 offset, int size, uint32 value)
+void OsxGuestHeathrowWrite(OsxMachine *machine, uint32 offset, int size, uint32 value)
 {
 	uint32 reg;
 	int channel;
 	if (offset >= 0x10 && offset < 0x30) {
-		PicWrite(machine, offset & ~3u, SwapForSize(value, size));
+		OsxGuestPicWrite(machine, offset & ~3u, OsxGuestSwapForSize(value, size));
 		return;
 	}
 	if (offset >= 0x34 && offset < 0x3c) {
-		machine->heathrowfcr[(offset - 0x34) >> 2] = SwapForSize(value, size);
+		machine->heathrowfcr[(offset - 0x34) >> 2] = OsxGuestSwapForSize(value, size);
 		return;
 	}
 	if (offset >= 0x8000 && offset < 0x9000) {
 		channel = (offset >> 8) & 15;
-		reg = WriteLittleRegister(DbdmaRead(machine, channel, offset & 0xfc), offset & 3, size, value);
+		reg = OsxGuestWriteLittleRegister(OsxGuestDbdmaRead(machine, channel, offset & 0xfc), offset & 3, size, value);
 		if ((offset & 0xfc) == 0)
-			reg = WriteLittleRegister(0, offset & 3, size, value);
-		DbdmaWrite(machine, channel, offset & 0xfc, reg);
+			reg = OsxGuestWriteLittleRegister(0, offset & 3, size, value);
+		OsxGuestDbdmaWrite(machine, channel, offset & 0xfc, reg);
 		return;
 	}
 	if (offset >= 0x16000 && offset < 0x18000) {
-		OsxCudaWrite(machine, (offset >> 9) & 15, value & 0xff);
+		OsxGuestCudaWrite(machine, (offset >> 9) & 15, value & 0xff);
 		return;
 	}
 	if (offset - OSXBMACOFFSET < OSXBMACSIZE) {
-		OsxBmacWrite(machine, offset - OSXBMACOFFSET, SwapForSize(value, size));
+		OsxGuestBmacWrite(machine, offset - OSXBMACOFFSET, OsxGuestSwapForSize(value, size));
 		return;
 	}
 	if (offset - OSXAUDIOOFFSET < OSXAUDIOSIZE) {
-		OsxAudioWrite(machine, offset - OSXAUDIOOFFSET, SwapForSize(value, size));
+		OsxGuestAudioWrite(machine, offset - OSXAUDIOOFFSET, OsxGuestSwapForSize(value, size));
 		return;
 	}
 	if (offset >= 0x20000 && offset < 0x22000) {
-		OsxAtaWrite(machine, (offset >> 12) & 1, offset & 0xfff, size, value);
+		OsxGuestAtaWrite(machine, (offset >> 12) & 1, offset & 0xfff, size, value);
 		return;
 	}
 	if (offset >= 0x60000) {
@@ -668,54 +668,54 @@ void OsxHeathrowWrite(OsxMachine *machine, uint32 offset, int size, uint32 value
 		fprintf(machine->log, "heathrow write %05x size %d value %08x\n", offset, size, value);
 }
 
-uint32 OsxBusRead(void *context, uint32 address, int size)
+uint32 OsxGuestBusRead(void *context, uint32 address, int size)
 {
 	OsxMachine *machine;
 	machine = (OsxMachine *)context;
 #if OSXG5
 	if (machine->g5)
-		return OsxG5BusRead(machine, address, size);
+		return OsxGuestG5BusRead(machine, address, size);
 #endif
 	if (address - OSXHEATHROWBASE < OSXHEATHROWSIZE)
-		return OsxHeathrowRead(machine, address - OSXHEATHROWBASE, size);
+		return OsxGuestHeathrowRead(machine, address - OSXHEATHROWBASE, size);
 	if (address >= OSXCONFIGDATABASE && address < OSXCONFIGDATABASE + 0x00100000)
-		return OsxPciConfigRead(machine, address & 3, size);
+		return OsxGuestPciConfigRead(machine, address & 3, size);
 	if (address >= OSXCONFIGADDRESSBASE && address < OSXCONFIGADDRESSBASE + 0x00200000)
-		return ReadLittleRegister(machine->configaddress, address & 3, size);
+		return OsxGuestReadLittleRegister(machine->configaddress, address & 3, size);
 	if (address == OSXMACHINEIDADDRESS)
 		return 0x00100000;
 	if (address - OSXFLASHBASE < OSXFLASHSIZE)
-		return OsxFlashRead(machine, address - OSXFLASHBASE, size);
+		return OsxGuestFlashRead(machine, address - OSXFLASHBASE, size);
 	machine->unknownreads++;
 	if (machine->log && machine->unknownreads < 200)
 		fprintf(machine->log, "bus read %08x size %d pc %08x\n", address, size, machine->cpu->pc);
 	return 0xffffffffu >> ((4 - size) * 8);
 }
 
-void OsxBusWrite(void *context, uint32 address, int size, uint32 value)
+void OsxGuestBusWrite(void *context, uint32 address, int size, uint32 value)
 {
 	OsxMachine *machine;
 	machine = (OsxMachine *)context;
 #if OSXG5
 	if (machine->g5) {
-		OsxG5BusWrite(machine, address, size, value);
+		OsxGuestG5BusWrite(machine, address, size, value);
 		return;
 	}
 #endif
 	if (address - OSXHEATHROWBASE < OSXHEATHROWSIZE) {
-		OsxHeathrowWrite(machine, address - OSXHEATHROWBASE, size, value);
+		OsxGuestHeathrowWrite(machine, address - OSXHEATHROWBASE, size, value);
 		return;
 	}
 	if (address >= OSXCONFIGDATABASE && address < OSXCONFIGDATABASE + 0x00100000) {
-		OsxPciConfigWrite(machine, address & 3, size, value);
+		OsxGuestPciConfigWrite(machine, address & 3, size, value);
 		return;
 	}
 	if (address >= OSXCONFIGADDRESSBASE && address < OSXCONFIGADDRESSBASE + 0x00200000) {
-		machine->configaddress = WriteLittleRegister(machine->configaddress, address & 3, size, value);
+		machine->configaddress = OsxGuestWriteLittleRegister(machine->configaddress, address & 3, size, value);
 		return;
 	}
 	if (address - OSXFLASHBASE < OSXFLASHSIZE) {
-		OsxFlashWrite(machine, address - OSXFLASHBASE, size, value);
+		OsxGuestFlashWrite(machine, address - OSXFLASHBASE, size, value);
 		return;
 	}
 	machine->unknownwrites++;

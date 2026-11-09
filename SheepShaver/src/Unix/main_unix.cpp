@@ -641,7 +641,7 @@ static bool load_mac_rom(void)
 	if (rom_fd < 0)
 		rom_fd = open(ROM_FILE_NAME2, O_RDONLY);
 	if (rom_fd < 0) {
-		rom_tmp = OsxReadClassicRom(&actual);
+		rom_tmp = OsxGuestReadClassicRom(&actual);
 		rom_size = actual;
 	} else {
 		printf("%s", GetString(STR_READING_ROM_FILE));

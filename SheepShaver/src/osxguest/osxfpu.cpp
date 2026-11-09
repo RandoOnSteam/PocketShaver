@@ -51,41 +51,41 @@
 #define FLOATSIGN 0x8000000000000000ULL
 #define FLOATDEFAULTNAN 0x7ff8000000000000ULL
 
-static inline int IsNan(uint64 bits)
+static inline int OsxGuestIsNan(uint64 bits)
 {
 	return (bits & FLOATEXPONENT) == FLOATEXPONENT && (bits & FLOATFRACTION) != 0;
 }
 
-static inline int IsSignalingNan(uint64 bits)
+static inline int OsxGuestIsSignalingNan(uint64 bits)
 {
-	return IsNan(bits) && !(bits & FLOATQUIET);
+	return OsxGuestIsNan(bits) && !(bits & FLOATQUIET);
 }
 
-static inline int IsInfinity(uint64 bits)
+static inline int OsxGuestIsInfinity(uint64 bits)
 {
 	return (bits & ~FLOATSIGN) == FLOATEXPONENT;
 }
 
-static inline int IsZero(uint64 bits)
+static inline int OsxGuestIsZero(uint64 bits)
 {
 	return (bits & ~FLOATSIGN) == 0;
 }
 
-static inline double BitsToDouble(uint64 bits)
+static inline double OsxGuestBitsToDouble(uint64 bits)
 {
 	OsxFloat value;
 	value.bits = bits;
 	return value.value;
 }
 
-static inline uint64 DoubleToBits(double number)
+static inline uint64 OsxGuestDoubleToBits(double number)
 {
 	OsxFloat value;
 	value.value = number;
 	return value.bits;
 }
 
-static uint32 ClassifyResult(uint64 bits, int single)
+static uint32 OsxGuestClassifyResult(uint64 bits, int single)
 {
 	uint32 exponent;
 	int negative;
@@ -118,7 +118,7 @@ static uint32 ClassifyResult(uint64 bits, int single)
 	return 0x04;
 }
 
-static void UpdateSummary(OsxCpu *cpu)
+static void OsxGuestUpdateSummary(OsxCpu *cpu)
 {
 	uint32 fpscr;
 	fpscr = cpu->fpscr;
@@ -133,72 +133,72 @@ static void UpdateSummary(OsxCpu *cpu)
 	cpu->fpscr = fpscr;
 }
 
-static void RaiseFloatFlags(OsxCpu *cpu, uint32 flags)
+static void OsxGuestRaiseFloatFlags(OsxCpu *cpu, uint32 flags)
 {
 	uint32 fresh;
 	fresh = flags & ~cpu->fpscr;
 	if (fresh)
 		cpu->fpscr |= flags | FPSCRFX;
-	UpdateSummary(cpu);
+	OsxGuestUpdateSummary(cpu);
 }
 
-static uint64 PropagateNan(OsxCpu *cpu, uint64 first, uint64 second, uint64 third, int count)
+static uint64 OsxGuestPropagateNan(OsxCpu *cpu, uint64 first, uint64 second, uint64 third, int count)
 {
 	uint32 flags;
 	flags = 0;
-	if (IsSignalingNan(first) || IsSignalingNan(second) || (count > 2 && IsSignalingNan(third)))
+	if (OsxGuestIsSignalingNan(first) || OsxGuestIsSignalingNan(second) || (count > 2 && OsxGuestIsSignalingNan(third)))
 		flags |= FPSCRVXSNAN;
 	if (flags)
-		RaiseFloatFlags(cpu, flags);
-	if (IsNan(first))
+		OsxGuestRaiseFloatFlags(cpu, flags);
+	if (OsxGuestIsNan(first))
 		return first | FLOATQUIET;
-	if (IsNan(second))
+	if (OsxGuestIsNan(second))
 		return second | FLOATQUIET;
 	return third | FLOATQUIET;
 }
 
-static uint64 InvalidResult(OsxCpu *cpu, uint32 reason)
+static uint64 OsxGuestInvalidResult(OsxCpu *cpu, uint32 reason)
 {
-	RaiseFloatFlags(cpu, reason);
+	OsxGuestRaiseFloatFlags(cpu, reason);
 	return FLOATDEFAULTNAN;
 }
 
-static uint64 RoundSingle(uint64 bits)
+static uint64 OsxGuestRoundSingle(uint64 bits)
 {
 	float narrow;
-	if (IsNan(bits))
+	if (OsxGuestIsNan(bits))
 		return bits & 0xffffffffe0000000ULL;
-	narrow = (float)BitsToDouble(bits);
-	return DoubleToBits((double)narrow);
+	narrow = (float)OsxGuestBitsToDouble(bits);
+	return OsxGuestDoubleToBits((double)narrow);
 }
 
-static void FinishResult(OsxCpu *cpu, int target, uint64 bits, int single, int inputsfinite)
+static void OsxGuestFinishResult(OsxCpu *cpu, int target, uint64 bits, int single, int inputsfinite)
 {
 	if (single)
-		bits = RoundSingle(bits);
-	if (inputsfinite && IsInfinity(bits))
-		RaiseFloatFlags(cpu, FPSCROX | FPSCRXX);
+		bits = OsxGuestRoundSingle(bits);
+	if (inputsfinite && OsxGuestIsInfinity(bits))
+		OsxGuestRaiseFloatFlags(cpu, FPSCROX | FPSCRXX);
 	cpu->fpr[target].bits = bits;
-	cpu->fpscr = (cpu->fpscr & ~FPSCRFPRF) | (ClassifyResult(bits, single) << 12);
+	cpu->fpscr = (cpu->fpscr & ~FPSCRFPRF) | (OsxGuestClassifyResult(bits, single) << 12);
 }
 
-void OsxCpuSetFloatCompare(OsxCpu *cpu, int field, double left, double right, int ordered)
+void OsxGuestCpuSetFloatCompare(OsxCpu *cpu, int field, double left, double right, int ordered)
 {
 	uint32 value;
 	uint64 leftbits;
 	uint64 rightbits;
 	int shift;
-	leftbits = DoubleToBits(left);
-	rightbits = DoubleToBits(right);
-	if (IsNan(leftbits) || IsNan(rightbits)) {
+	leftbits = OsxGuestDoubleToBits(left);
+	rightbits = OsxGuestDoubleToBits(right);
+	if (OsxGuestIsNan(leftbits) || OsxGuestIsNan(rightbits)) {
 		value = 1;
-		if (IsSignalingNan(leftbits) || IsSignalingNan(rightbits)) {
+		if (OsxGuestIsSignalingNan(leftbits) || OsxGuestIsSignalingNan(rightbits)) {
 			if (ordered)
-				RaiseFloatFlags(cpu, FPSCRVXSNAN | FPSCRVXVC);
+				OsxGuestRaiseFloatFlags(cpu, FPSCRVXSNAN | FPSCRVXVC);
 			else
-				RaiseFloatFlags(cpu, FPSCRVXSNAN);
+				OsxGuestRaiseFloatFlags(cpu, FPSCRVXSNAN);
 		} else if (ordered) {
-			RaiseFloatFlags(cpu, FPSCRVXVC);
+			OsxGuestRaiseFloatFlags(cpu, FPSCRVXVC);
 		}
 	} else if (left < right) {
 		value = 8;
@@ -212,20 +212,20 @@ void OsxCpuSetFloatCompare(OsxCpu *cpu, int field, double left, double right, in
 	cpu->cr = (cpu->cr & ~(0xfu << shift)) | (value << shift);
 }
 
-static uint64 ConvertToInteger(OsxCpu *cpu, uint64 bits, int truncate)
+static uint64 OsxGuestConvertToInteger(OsxCpu *cpu, uint64 bits, int truncate)
 {
 	double value;
 	double rounded;
 	uint32 mode;
 	int32 integer;
-	if (IsNan(bits)) {
-		if (IsSignalingNan(bits))
-			RaiseFloatFlags(cpu, FPSCRVXSNAN | FPSCRVXCVI);
+	if (OsxGuestIsNan(bits)) {
+		if (OsxGuestIsSignalingNan(bits))
+			OsxGuestRaiseFloatFlags(cpu, FPSCRVXSNAN | FPSCRVXCVI);
 		else
-			RaiseFloatFlags(cpu, FPSCRVXCVI);
+			OsxGuestRaiseFloatFlags(cpu, FPSCRVXCVI);
 		return 0xfff8000080000000ULL;
 	}
-	value = BitsToDouble(bits);
+	value = OsxGuestBitsToDouble(bits);
 	if (truncate)
 		mode = 1;
 	else
@@ -239,11 +239,11 @@ static uint64 ConvertToInteger(OsxCpu *cpu, uint64 bits, int truncate)
 	else
 		rounded = floor(value);
 	if (rounded > 2147483647.0) {
-		RaiseFloatFlags(cpu, FPSCRVXCVI);
+		OsxGuestRaiseFloatFlags(cpu, FPSCRVXCVI);
 		return 0xfff800007fffffffULL;
 	}
 	if (rounded < -2147483648.0) {
-		RaiseFloatFlags(cpu, FPSCRVXCVI);
+		OsxGuestRaiseFloatFlags(cpu, FPSCRVXCVI);
 		return 0xfff8000080000000ULL;
 	}
 	if (rounded != value)
@@ -252,7 +252,7 @@ static uint64 ConvertToInteger(OsxCpu *cpu, uint64 bits, int truncate)
 	return 0xfff8000000000000ULL | (uint32)integer;
 }
 
-static void MoveToFpscrField(OsxCpu *cpu, int field, uint32 value)
+static void OsxGuestMoveToFpscrField(OsxCpu *cpu, int field, uint32 value)
 {
 	int shift;
 	uint32 mask;
@@ -263,7 +263,7 @@ static void MoveToFpscrField(OsxCpu *cpu, int field, uint32 value)
 	cpu->fpscr = (cpu->fpscr & ~mask) | ((value << shift) & mask);
 }
 
-static void ExecuteArithmetic(OsxCpu *cpu, uint32 instruction, int single)
+static void OsxGuestExecuteArithmetic(OsxCpu *cpu, uint32 instruction, int single)
 {
 	uint32 extended;
 	int target;
@@ -280,54 +280,54 @@ static void ExecuteArithmetic(OsxCpu *cpu, uint32 instruction, int single)
 	b = cpu->fpr[(instruction >> 11) & 31].bits;
 	c = cpu->fpr[(instruction >> 6) & 31].bits;
 	extended = (instruction >> 1) & 31;
-	left = BitsToDouble(a);
-	right = BitsToDouble(b);
-	multiplier = BitsToDouble(c);
+	left = OsxGuestBitsToDouble(a);
+	right = OsxGuestBitsToDouble(b);
+	multiplier = OsxGuestBitsToDouble(c);
 	switch (extended) {
 	case 18:
-		finite = !IsInfinity(a) && !IsInfinity(b) && !IsZero(b);
-		if (IsNan(a) || IsNan(b))
-			result = PropagateNan(cpu, a, b, 0, 2);
-		else if (IsZero(a) && IsZero(b))
-			result = InvalidResult(cpu, FPSCRVXZDZ);
-		else if (IsInfinity(a) && IsInfinity(b))
-			result = InvalidResult(cpu, FPSCRVXIDI);
+		finite = !OsxGuestIsInfinity(a) && !OsxGuestIsInfinity(b) && !OsxGuestIsZero(b);
+		if (OsxGuestIsNan(a) || OsxGuestIsNan(b))
+			result = OsxGuestPropagateNan(cpu, a, b, 0, 2);
+		else if (OsxGuestIsZero(a) && OsxGuestIsZero(b))
+			result = OsxGuestInvalidResult(cpu, FPSCRVXZDZ);
+		else if (OsxGuestIsInfinity(a) && OsxGuestIsInfinity(b))
+			result = OsxGuestInvalidResult(cpu, FPSCRVXIDI);
 		else {
-			if (IsZero(b))
-				RaiseFloatFlags(cpu, FPSCRZX);
-			result = DoubleToBits(left / right);
+			if (OsxGuestIsZero(b))
+				OsxGuestRaiseFloatFlags(cpu, FPSCRZX);
+			result = OsxGuestDoubleToBits(left / right);
 		}
 		break;
 	case 20:
-		finite = !IsInfinity(a) && !IsInfinity(b);
-		if (IsNan(a) || IsNan(b))
-			result = PropagateNan(cpu, a, b, 0, 2);
-		else if (IsInfinity(a) && IsInfinity(b) && ((a ^ b) & FLOATSIGN) == 0)
-			result = InvalidResult(cpu, FPSCRVXISI);
+		finite = !OsxGuestIsInfinity(a) && !OsxGuestIsInfinity(b);
+		if (OsxGuestIsNan(a) || OsxGuestIsNan(b))
+			result = OsxGuestPropagateNan(cpu, a, b, 0, 2);
+		else if (OsxGuestIsInfinity(a) && OsxGuestIsInfinity(b) && ((a ^ b) & FLOATSIGN) == 0)
+			result = OsxGuestInvalidResult(cpu, FPSCRVXISI);
 		else
-			result = DoubleToBits(left - right);
+			result = OsxGuestDoubleToBits(left - right);
 		break;
 	case 21:
-		finite = !IsInfinity(a) && !IsInfinity(b);
-		if (IsNan(a) || IsNan(b))
-			result = PropagateNan(cpu, a, b, 0, 2);
-		else if (IsInfinity(a) && IsInfinity(b) && ((a ^ b) & FLOATSIGN) != 0)
-			result = InvalidResult(cpu, FPSCRVXISI);
+		finite = !OsxGuestIsInfinity(a) && !OsxGuestIsInfinity(b);
+		if (OsxGuestIsNan(a) || OsxGuestIsNan(b))
+			result = OsxGuestPropagateNan(cpu, a, b, 0, 2);
+		else if (OsxGuestIsInfinity(a) && OsxGuestIsInfinity(b) && ((a ^ b) & FLOATSIGN) != 0)
+			result = OsxGuestInvalidResult(cpu, FPSCRVXISI);
 		else
-			result = DoubleToBits(left + right);
+			result = OsxGuestDoubleToBits(left + right);
 		break;
 	case 22:
-		finite = !IsInfinity(b);
-		if (IsNan(b))
-			result = PropagateNan(cpu, b, 0, 0, 1);
-		else if ((b & FLOATSIGN) && !IsZero(b))
-			result = InvalidResult(cpu, FPSCRVXSQRT);
+		finite = !OsxGuestIsInfinity(b);
+		if (OsxGuestIsNan(b))
+			result = OsxGuestPropagateNan(cpu, b, 0, 0, 1);
+		else if ((b & FLOATSIGN) && !OsxGuestIsZero(b))
+			result = OsxGuestInvalidResult(cpu, FPSCRVXSQRT);
 		else
-			result = DoubleToBits(sqrt(right));
+			result = OsxGuestDoubleToBits(sqrt(right));
 		break;
 	case 23:
 		finite = 0;
-		if (!IsNan(a) && left >= 0.0)
+		if (!OsxGuestIsNan(a) && left >= 0.0)
 			result = c;
 		else
 			result = b;
@@ -337,65 +337,65 @@ static void ExecuteArithmetic(OsxCpu *cpu, uint32 instruction, int single)
 		return;
 	case 24:
 		finite = 0;
-		if (IsNan(b))
-			result = PropagateNan(cpu, b, 0, 0, 1);
+		if (OsxGuestIsNan(b))
+			result = OsxGuestPropagateNan(cpu, b, 0, 0, 1);
 		else {
-			if (IsZero(b))
-				RaiseFloatFlags(cpu, FPSCRZX);
-			result = DoubleToBits(1.0 / right);
+			if (OsxGuestIsZero(b))
+				OsxGuestRaiseFloatFlags(cpu, FPSCRZX);
+			result = OsxGuestDoubleToBits(1.0 / right);
 		}
 		single = 1;
 		break;
 	case 25:
-		finite = !IsInfinity(a) && !IsInfinity(c);
-		if (IsNan(a) || IsNan(c))
-			result = PropagateNan(cpu, a, c, 0, 2);
-		else if ((IsInfinity(a) && IsZero(c)) || (IsZero(a) && IsInfinity(c)))
-			result = InvalidResult(cpu, FPSCRVXIMZ);
+		finite = !OsxGuestIsInfinity(a) && !OsxGuestIsInfinity(c);
+		if (OsxGuestIsNan(a) || OsxGuestIsNan(c))
+			result = OsxGuestPropagateNan(cpu, a, c, 0, 2);
+		else if ((OsxGuestIsInfinity(a) && OsxGuestIsZero(c)) || (OsxGuestIsZero(a) && OsxGuestIsInfinity(c)))
+			result = OsxGuestInvalidResult(cpu, FPSCRVXIMZ);
 		else
-			result = DoubleToBits(left * multiplier);
+			result = OsxGuestDoubleToBits(left * multiplier);
 		break;
 	case 26:
 		finite = 0;
-		if (IsNan(b))
-			result = PropagateNan(cpu, b, 0, 0, 1);
-		else if ((b & FLOATSIGN) && !IsZero(b))
-			result = InvalidResult(cpu, FPSCRVXSQRT);
+		if (OsxGuestIsNan(b))
+			result = OsxGuestPropagateNan(cpu, b, 0, 0, 1);
+		else if ((b & FLOATSIGN) && !OsxGuestIsZero(b))
+			result = OsxGuestInvalidResult(cpu, FPSCRVXSQRT);
 		else {
-			if (IsZero(b))
-				RaiseFloatFlags(cpu, FPSCRZX);
-			result = DoubleToBits(1.0 / sqrt(right));
+			if (OsxGuestIsZero(b))
+				OsxGuestRaiseFloatFlags(cpu, FPSCRZX);
+			result = OsxGuestDoubleToBits(1.0 / sqrt(right));
 		}
 		break;
 	case 28:
 	case 29:
 	case 30:
 	case 31:
-		finite = !IsInfinity(a) && !IsInfinity(b) && !IsInfinity(c);
-		if (IsNan(a) || IsNan(b) || IsNan(c)) {
-			result = PropagateNan(cpu, a, b, c, 3);
-		} else if ((IsInfinity(a) && IsZero(c)) || (IsZero(a) && IsInfinity(c))) {
-			result = InvalidResult(cpu, FPSCRVXIMZ);
+		finite = !OsxGuestIsInfinity(a) && !OsxGuestIsInfinity(b) && !OsxGuestIsInfinity(c);
+		if (OsxGuestIsNan(a) || OsxGuestIsNan(b) || OsxGuestIsNan(c)) {
+			result = OsxGuestPropagateNan(cpu, a, b, c, 3);
+		} else if ((OsxGuestIsInfinity(a) && OsxGuestIsZero(c)) || (OsxGuestIsZero(a) && OsxGuestIsInfinity(c))) {
+			result = OsxGuestInvalidResult(cpu, FPSCRVXIMZ);
 		} else {
 			if (extended == 28 || extended == 30)
 				right = -right;
-			result = DoubleToBits(fma(left, multiplier, right));
-			if (IsNan(result))
-				result = InvalidResult(cpu, FPSCRVXISI);
+			result = OsxGuestDoubleToBits(fma(left, multiplier, right));
+			if (OsxGuestIsNan(result))
+				result = OsxGuestInvalidResult(cpu, FPSCRVXISI);
 			else if (extended >= 30)
 				result ^= FLOATSIGN;
 		}
 		break;
 	default:
-		OsxCpuRaiseException(cpu, OSXVECTORPROGRAM, OSXPROGRAMILLEGAL, cpu->pc);
+		OsxGuestCpuRaiseException(cpu, OSXVECTORPROGRAM, OSXPROGRAMILLEGAL, cpu->pc);
 		return;
 	}
-	FinishResult(cpu, target, result, single, finite);
+	OsxGuestFinishResult(cpu, target, result, single, finite);
 	if (instruction & 1)
 		cpu->cr = (cpu->cr & 0xf0ffffffu) | ((cpu->fpscr >> 4) & 0x0f000000u);
 }
 
-static void ExecuteControl(OsxCpu *cpu, uint32 instruction)
+static void OsxGuestExecuteControl(OsxCpu *cpu, uint32 instruction)
 {
 	uint32 extended;
 	int target;
@@ -410,19 +410,19 @@ static void ExecuteControl(OsxCpu *cpu, uint32 instruction)
 	b = cpu->fpr[(instruction >> 11) & 31].bits;
 	switch (extended) {
 	case 0:
-		OsxCpuSetFloatCompare(cpu, target >> 2, cpu->fpr[(instruction >> 16) & 31].value, BitsToDouble(b), 0);
+		OsxGuestCpuSetFloatCompare(cpu, target >> 2, cpu->fpr[(instruction >> 16) & 31].value, OsxGuestBitsToDouble(b), 0);
 		return;
 	case 32:
-		OsxCpuSetFloatCompare(cpu, target >> 2, cpu->fpr[(instruction >> 16) & 31].value, BitsToDouble(b), 1);
+		OsxGuestCpuSetFloatCompare(cpu, target >> 2, cpu->fpr[(instruction >> 16) & 31].value, OsxGuestBitsToDouble(b), 1);
 		return;
 	case 12:
-		FinishResult(cpu, target, b, 1, !IsInfinity(b));
+		OsxGuestFinishResult(cpu, target, b, 1, !OsxGuestIsInfinity(b));
 		break;
 	case 14:
-		cpu->fpr[target].bits = ConvertToInteger(cpu, b, 0);
+		cpu->fpr[target].bits = OsxGuestConvertToInteger(cpu, b, 0);
 		break;
 	case 15:
-		cpu->fpr[target].bits = ConvertToInteger(cpu, b, 1);
+		cpu->fpr[target].bits = OsxGuestConvertToInteger(cpu, b, 1);
 		break;
 	case 40:
 		cpu->fpr[target].bits = b ^ FLOATSIGN;
@@ -444,7 +444,7 @@ static void ExecuteControl(OsxCpu *cpu, uint32 instruction)
 		value = (cpu->fpscr >> ((7 - sourcefield) * 4)) & 0xf;
 		cpu->cr = (cpu->cr & ~(0xfu << ((7 - (target >> 2)) * 4))) | (value << ((7 - (target >> 2)) * 4));
 		cpu->fpscr &= ~((0xfu << ((7 - sourcefield) * 4)) & FPSCRSTICKY);
-		UpdateSummary(cpu);
+		OsxGuestUpdateSummary(cpu);
 		return;
 	case 38:
 	case 70:
@@ -455,11 +455,11 @@ static void ExecuteControl(OsxCpu *cpu, uint32 instruction)
 			else
 				cpu->fpscr &= ~bit;
 		}
-		UpdateSummary(cpu);
+		OsxGuestUpdateSummary(cpu);
 		break;
 	case 134:
-		MoveToFpscrField(cpu, target >> 2, (instruction >> 12) & 0xf);
-		UpdateSummary(cpu);
+		OsxGuestMoveToFpscrField(cpu, target >> 2, (instruction >> 12) & 0xf);
+		OsxGuestUpdateSummary(cpu);
 		break;
 	case 711:
 		mask = 0;
@@ -469,36 +469,36 @@ static void ExecuteControl(OsxCpu *cpu, uint32 instruction)
 				mask |= 0xf0000000u >> (field * 4);
 		mask &= ~(FPSCRFEX | FPSCRVX);
 		cpu->fpscr = (cpu->fpscr & ~mask) | ((uint32)b & mask);
-		UpdateSummary(cpu);
+		OsxGuestUpdateSummary(cpu);
 		break;
 	default:
-		OsxCpuRaiseException(cpu, OSXVECTORPROGRAM, OSXPROGRAMILLEGAL, cpu->pc);
+		OsxGuestCpuRaiseException(cpu, OSXVECTORPROGRAM, OSXPROGRAMILLEGAL, cpu->pc);
 		return;
 	}
 	if (instruction & 1)
 		cpu->cr = (cpu->cr & 0xf0ffffffu) | ((cpu->fpscr >> 4) & 0x0f000000u);
 }
 
-static void ExecuteFloat(OsxCpu *cpu, uint32 instruction)
+static void OsxGuestExecuteFloat(OsxCpu *cpu, uint32 instruction)
 {
 	if ((instruction >> 26) == 59) {
-		ExecuteArithmetic(cpu, instruction, 1);
+		OsxGuestExecuteArithmetic(cpu, instruction, 1);
 		return;
 	}
 	if (instruction & 0x20)
-		ExecuteArithmetic(cpu, instruction, 0);
+		OsxGuestExecuteArithmetic(cpu, instruction, 0);
 	else
-		ExecuteControl(cpu, instruction);
+		OsxGuestExecuteControl(cpu, instruction);
 }
 
-void OsxCpuExecuteFloat(OsxCpu *cpu, uint32 instruction)
+void OsxGuestCpuExecuteFloat(OsxCpu *cpu, uint32 instruction)
 {
 	static const int roundingmodes[4] = { FE_TONEAREST, FE_TOWARDZERO, FE_UPWARD, FE_DOWNWARD };
 	if (!(cpu->fpscr & 3)) {
-		ExecuteFloat(cpu, instruction);
+		OsxGuestExecuteFloat(cpu, instruction);
 		return;
 	}
 	fesetround(roundingmodes[cpu->fpscr & 3]);
-	ExecuteFloat(cpu, instruction);
+	OsxGuestExecuteFloat(cpu, instruction);
 	fesetround(FE_TONEAREST);
 }

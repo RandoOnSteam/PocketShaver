@@ -82,9 +82,9 @@
 #define ATAIRQDMA 0x80000000u
 #define ATAIRQDRIVE 0x40000000u
 
-static void GmacReset(OsxMachine *machine);
+static void OsxGuestGmacReset(OsxMachine *machine);
 
-static uint32 LoadLittle(const uint8 *bytes, int size)
+static uint32 OsxGuestLoadLittle(const uint8 *bytes, int size)
 {
 	uint32 value;
 	int index;
@@ -94,14 +94,14 @@ static uint32 LoadLittle(const uint8 *bytes, int size)
 	return value;
 }
 
-static void StoreLittle(uint8 *bytes, int size, uint32 value)
+static void OsxGuestStoreLittle(uint8 *bytes, int size, uint32 value)
 {
 	int index;
 	for (index = 0; index < size; index++)
 		bytes[index] = (uint8)(value >> (index * 8));
 }
 
-static uint32 BusFromBytes(const uint8 *bytes, int size)
+static uint32 OsxGuestBusFromBytes(const uint8 *bytes, int size)
 {
 	uint32 value;
 	int index;
@@ -111,31 +111,31 @@ static uint32 BusFromBytes(const uint8 *bytes, int size)
 	return value;
 }
 
-static void BytesFromBus(uint8 *bytes, int size, uint32 value)
+static void OsxGuestBytesFromBus(uint8 *bytes, int size, uint32 value)
 {
 	int index;
 	for (index = 0; index < size; index++)
 		bytes[index] = (uint8)(value >> ((size - 1 - index) * 8));
 }
 
-static uint32 AllOnes(int size)
+static uint32 OsxGuestAllOnes(int size)
 {
 	return 0xffffffffu >> ((4 - size) * 8);
 }
 
-static void SetFunction(OsxG5Function *function, uint32 device, uint32 vendordevice, uint32 classrevision, uint32 bar, uint32 barsize)
+static void OsxGuestSetFunction(OsxG5Function *function, uint32 device, uint32 vendordevice, uint32 classrevision, uint32 bar, uint32 barsize)
 {
 	memset(function, 0, sizeof(OsxG5Function));
 	function->device = device;
-	StoreLittle(function->config, 4, vendordevice);
-	StoreLittle(function->config + 4, 4, 0x02000006);
-	StoreLittle(function->config + 8, 4, classrevision);
-	StoreLittle(function->config + 0x10, 4, bar);
+	OsxGuestStoreLittle(function->config, 4, vendordevice);
+	OsxGuestStoreLittle(function->config + 4, 4, 0x02000006);
+	OsxGuestStoreLittle(function->config + 8, 4, classrevision);
+	OsxGuestStoreLittle(function->config + 0x10, 4, bar);
 	if (barsize)
 		function->barmask[0] = ~(barsize - 1);
 }
 
-static void MpicReset(OsxMpic *mpic)
+static void OsxGuestMpicReset(OsxMpic *mpic)
 {
 	int index;
 	for (index = 0; index < OSXG5MPICSOURCES; index++) {
@@ -152,7 +152,7 @@ static void MpicReset(OsxMpic *mpic)
 	memset(mpic->timers, 0, sizeof(mpic->timers));
 }
 
-void OsxG5Reset(OsxMachine *machine)
+void OsxGuestG5Reset(OsxMachine *machine)
 {
 	OsxG5 *g5;
 	uint32 highsize;
@@ -160,17 +160,17 @@ void OsxG5Reset(OsxMachine *machine)
 	highsize = g5->highsize;
 	memset(g5, 0, sizeof(OsxG5));
 	g5->highsize = highsize;
-	SetFunction(&g5->functions[0], OSXG5DEVICEHOST, 0x0057106b, 0x06000000, 0, 0);
-	SetFunction(&g5->functions[1], OSXG5DEVICEMACIO, 0x0041106b, 0xff000000, OSXG5MACIOBASE, OSXG5MACIOSIZE);
-	SetFunction(&g5->functions[2], OSXG5DEVICEATA0, 0x0043106b, 0x01018f00, OSXG5ATABASE, OSXG5ATASIZE);
-	SetFunction(&g5->functions[3], OSXG5DEVICEATA1, 0x0043106b, 0x01018f00, OSXG5ATABASE + OSXG5ATASIZE, OSXG5ATASIZE);
-	SetFunction(&g5->functions[4], OSXG5DEVICEDISPLAY, 0x11111234, 0x03000002, OSXVRAMBASE | 8, OSXVRAMSIZE);
-	SetFunction(&g5->functions[5], OSXG5DEVICEGMAC, 0x004c106b, 0x02000000, OSXG5GMACBASE, OSXG5GMACSIZE);
-	StoreLittle(g5->functions[5].config + 0x3c, 4, 0x0100 | OSXG5IRQGMAC);
-	StoreLittle(g5->functions[0].config + 0x80, 4, 0x01000000);
-	StoreLittle(g5->functions[2].config + 0x3c, 4, 0x0100 | OSXG5IRQATA0);
-	StoreLittle(g5->functions[3].config + 0x3c, 4, 0x0100 | OSXG5IRQATA1);
-	MpicReset(&g5->mpic);
+	OsxGuestSetFunction(&g5->functions[0], OSXG5DEVICEHOST, 0x0057106b, 0x06000000, 0, 0);
+	OsxGuestSetFunction(&g5->functions[1], OSXG5DEVICEMACIO, 0x0041106b, 0xff000000, OSXG5MACIOBASE, OSXG5MACIOSIZE);
+	OsxGuestSetFunction(&g5->functions[2], OSXG5DEVICEATA0, 0x0043106b, 0x01018f00, OSXG5ATABASE, OSXG5ATASIZE);
+	OsxGuestSetFunction(&g5->functions[3], OSXG5DEVICEATA1, 0x0043106b, 0x01018f00, OSXG5ATABASE + OSXG5ATASIZE, OSXG5ATASIZE);
+	OsxGuestSetFunction(&g5->functions[4], OSXG5DEVICEDISPLAY, 0x11111234, 0x03000002, OSXVRAMBASE | 8, OSXVRAMSIZE);
+	OsxGuestSetFunction(&g5->functions[5], OSXG5DEVICEGMAC, 0x004c106b, 0x02000000, OSXG5GMACBASE, OSXG5GMACSIZE);
+	OsxGuestStoreLittle(g5->functions[5].config + 0x3c, 4, 0x0100 | OSXG5IRQGMAC);
+	OsxGuestStoreLittle(g5->functions[0].config + 0x80, 4, 0x01000000);
+	OsxGuestStoreLittle(g5->functions[2].config + 0x3c, 4, 0x0100 | OSXG5IRQATA0);
+	OsxGuestStoreLittle(g5->functions[3].config + 0x3c, 4, 0x0100 | OSXG5IRQATA1);
+	OsxGuestMpicReset(&g5->mpic);
 	g5->i2c.device = I2CPULSAR;
 	g5->i2c.width = 1;
 	g5->k2i2c.device = I2CTAS3004;
@@ -183,22 +183,22 @@ void OsxG5Reset(OsxMachine *machine)
 	g5->gpio[GPIOPMU] = GPIOINDATA;
 	machine->dbdma[OSXDBDMAIDE0].irq = OSXIRQIDE0DMA;
 	machine->dbdma[OSXDBDMAIDE1].irq = OSXIRQIDE1DMA;
-	GmacReset(machine);
+	OsxGuestGmacReset(machine);
 }
 
-static int MpicPriority(uint32 ivpr)
+static int OsxGuestMpicPriority(uint32 ivpr)
 {
 	return (int)((ivpr >> 16) & 15);
 }
 
-static int MpicPending(OsxMpic *mpic, int source)
+static int OsxGuestMpicPending(OsxMpic *mpic, int source)
 {
 	if (source < MPICSOURCESK2 && (mpic->ivpr[source] & MPICSENSE))
 		return mpic->line[source];
 	return mpic->pending[source];
 }
 
-static int MpicBest(OsxMpic *mpic)
+static int OsxGuestMpicBest(OsxMpic *mpic)
 {
 	int floor;
 	int best;
@@ -206,15 +206,15 @@ static int MpicBest(OsxMpic *mpic)
 	int priority;
 	floor = (int)mpic->ctpr;
 	if (mpic->inservicecount > 0) {
-		priority = MpicPriority(mpic->ivpr[mpic->inservice[mpic->inservicecount - 1]]);
+		priority = OsxGuestMpicPriority(mpic->ivpr[mpic->inservice[mpic->inservicecount - 1]]);
 		if (priority > floor)
 			floor = priority;
 	}
 	best = -1;
 	for (index = 0; index < OSXG5MPICSOURCES; index++) {
-		if (!MpicPending(mpic, index) || (mpic->ivpr[index] & MPICMASK) || !(mpic->idr[index] & 1))
+		if (!OsxGuestMpicPending(mpic, index) || (mpic->ivpr[index] & MPICMASK) || !(mpic->idr[index] & 1))
 			continue;
-		priority = MpicPriority(mpic->ivpr[index]);
+		priority = OsxGuestMpicPriority(mpic->ivpr[index]);
 		if (priority > floor) {
 			floor = priority;
 			best = index;
@@ -223,51 +223,51 @@ static int MpicBest(OsxMpic *mpic)
 	return best;
 }
 
-static void MpicUpdate(OsxMachine *machine)
+static void OsxGuestMpicUpdate(OsxMachine *machine)
 {
 	int line;
-	line = MpicBest(&machine->g5state.mpic) >= 0;
+	line = OsxGuestMpicBest(&machine->g5state.mpic) >= 0;
 	machine->cpu->externalline = line;
 	if (line)
 		machine->cpu->halted = 0;
 }
 
-static void MpicSetSource(OsxMachine *machine, int source, int level)
+static void OsxGuestMpicSetSource(OsxMachine *machine, int source, int level)
 {
 	OsxMpic *mpic;
 	mpic = &machine->g5state.mpic;
 	if (level && !mpic->line[source])
 		mpic->pending[source] = 1;
 	mpic->line[source] = (uint8)(level != 0);
-	MpicUpdate(machine);
+	OsxGuestMpicUpdate(machine);
 }
 
-static uint32 MpicAcknowledge(OsxMachine *machine)
+static uint32 OsxGuestMpicAcknowledge(OsxMachine *machine)
 {
 	OsxMpic *mpic;
 	int source;
 	mpic = &machine->g5state.mpic;
-	source = MpicBest(mpic);
+	source = OsxGuestMpicBest(mpic);
 	if (source < 0)
 		return mpic->spvr & 0xff;
 	if (source >= MPICSOURCESK2 || !(mpic->ivpr[source] & MPICSENSE))
 		mpic->pending[source] = 0;
 	if (mpic->inservicecount < 16)
 		mpic->inservice[mpic->inservicecount++] = (uint8)source;
-	MpicUpdate(machine);
+	OsxGuestMpicUpdate(machine);
 	return mpic->ivpr[source] & 0xff;
 }
 
-static void MpicEndOfInterrupt(OsxMachine *machine)
+static void OsxGuestMpicEndOfInterrupt(OsxMachine *machine)
 {
 	OsxMpic *mpic;
 	mpic = &machine->g5state.mpic;
 	if (mpic->inservicecount > 0)
 		mpic->inservicecount--;
-	MpicUpdate(machine);
+	OsxGuestMpicUpdate(machine);
 }
 
-static int MpicInService(OsxMpic *mpic, int source)
+static int OsxGuestMpicInService(OsxMpic *mpic, int source)
 {
 	int index;
 	for (index = 0; index < mpic->inservicecount; index++)
@@ -276,61 +276,61 @@ static int MpicInService(OsxMpic *mpic, int source)
 	return 0;
 }
 
-static uint32 MpicSourceVector(OsxMpic *mpic, int source)
+static uint32 OsxGuestMpicSourceVector(OsxMpic *mpic, int source)
 {
 	uint32 value;
 	value = mpic->ivpr[source] & ~MPICACTIVITY;
-	if (MpicPending(mpic, source) || MpicInService(mpic, source))
+	if (OsxGuestMpicPending(mpic, source) || OsxGuestMpicInService(mpic, source))
 		value |= MPICACTIVITY;
 	return value;
 }
 
-static uint32 MpicCpuRead(OsxMachine *machine, uint32 reg)
+static uint32 OsxGuestMpicCpuRead(OsxMachine *machine, uint32 reg)
 {
 	switch (reg) {
 	case 0x80: return machine->g5state.mpic.ctpr;
 	case 0x90: return 0;
-	case 0xa0: return MpicAcknowledge(machine);
+	case 0xa0: return OsxGuestMpicAcknowledge(machine);
 	}
 	return 0;
 }
 
-static void MpicCpuWrite(OsxMachine *machine, uint32 reg, uint32 value)
+static void OsxGuestMpicCpuWrite(OsxMachine *machine, uint32 reg, uint32 value)
 {
 	OsxMpic *mpic;
 	mpic = &machine->g5state.mpic;
 	if (reg >= 0x40 && reg < 0x80) {
 		if (value & 1)
 			mpic->pending[OSXG5MPICIPI + ((reg - 0x40) >> 4)] = 1;
-		MpicUpdate(machine);
+		OsxGuestMpicUpdate(machine);
 		return;
 	}
 	if (reg == 0x80) {
 		mpic->ctpr = value & 15;
-		MpicUpdate(machine);
+		OsxGuestMpicUpdate(machine);
 		return;
 	}
 	if (reg == 0xb0)
-		MpicEndOfInterrupt(machine);
+		OsxGuestMpicEndOfInterrupt(machine);
 }
 
-static uint32 MpicRead(OsxMachine *machine, uint32 offset)
+static uint32 OsxGuestMpicRead(OsxMachine *machine, uint32 offset)
 {
 	OsxMpic *mpic;
 	int source;
 	mpic = &machine->g5state.mpic;
 	if (offset < 0x1000)
-		return MpicCpuRead(machine, offset & 0xff0);
+		return OsxGuestMpicCpuRead(machine, offset & 0xff0);
 	if (offset >= 0x20000 && offset < 0x21000)
-		return MpicCpuRead(machine, offset & 0xff0);
+		return OsxGuestMpicCpuRead(machine, offset & 0xff0);
 	if (offset >= 0x10000 && offset < 0x10000 + MPICSOURCESK2 * 0x20) {
 		source = (int)((offset - 0x10000) >> 5);
 		if (offset & 0x10)
 			return mpic->idr[source];
-		return MpicSourceVector(mpic, source);
+		return OsxGuestMpicSourceVector(mpic, source);
 	}
 	if (offset >= 0x10a0 && offset < 0x10e0)
-		return MpicSourceVector(mpic, OSXG5MPICIPI + (int)((offset - 0x10a0) >> 4));
+		return OsxGuestMpicSourceVector(mpic, OSXG5MPICIPI + (int)((offset - 0x10a0) >> 4));
 	if (offset >= 0x1100 && offset < 0x1200)
 		return mpic->timers[(offset - 0x1100) >> 4];
 	switch (offset) {
@@ -343,13 +343,13 @@ static uint32 MpicRead(OsxMachine *machine, uint32 offset)
 	return 0;
 }
 
-static void MpicWrite(OsxMachine *machine, uint32 offset, uint32 value)
+static void OsxGuestMpicWrite(OsxMachine *machine, uint32 offset, uint32 value)
 {
 	OsxMpic *mpic;
 	int source;
 	mpic = &machine->g5state.mpic;
 	if (offset < 0x1000 || (offset >= 0x20000 && offset < 0x21000)) {
-		MpicCpuWrite(machine, offset & 0xff0, value);
+		OsxGuestMpicCpuWrite(machine, offset & 0xff0, value);
 		return;
 	}
 	if (offset >= 0x10000 && offset < 0x10000 + MPICSOURCESK2 * 0x20) {
@@ -358,13 +358,13 @@ static void MpicWrite(OsxMachine *machine, uint32 offset, uint32 value)
 			mpic->idr[source] = value;
 		else
 			mpic->ivpr[source] = value & ~MPICACTIVITY;
-		MpicUpdate(machine);
+		OsxGuestMpicUpdate(machine);
 		return;
 	}
 	if (offset >= 0x10a0 && offset < 0x10e0) {
 		mpic->ivpr[OSXG5MPICIPI + ((offset - 0x10a0) >> 4)] = value & ~MPICACTIVITY;
 		mpic->idr[OSXG5MPICIPI + ((offset - 0x10a0) >> 4)] = 1;
-		MpicUpdate(machine);
+		OsxGuestMpicUpdate(machine);
 		return;
 	}
 	if (offset >= 0x1100 && offset < 0x1200) {
@@ -374,9 +374,9 @@ static void MpicWrite(OsxMachine *machine, uint32 offset, uint32 value)
 	switch (offset) {
 	case 0x1020:
 		if (value & MPICRESET)
-			MpicReset(mpic);
+			OsxGuestMpicReset(mpic);
 		mpic->gcr = value & ~MPICRESET;
-		MpicUpdate(machine);
+		OsxGuestMpicUpdate(machine);
 		break;
 	case 0x1080:
 		mpic->vid = value;
@@ -390,40 +390,40 @@ static void MpicWrite(OsxMachine *machine, uint32 offset, uint32 value)
 	}
 }
 
-void OsxG5SetLine(OsxMachine *machine, int source, int level)
+void OsxGuestG5SetLine(OsxMachine *machine, int source, int level)
 {
 	OsxG5 *g5;
 	g5 = &machine->g5state;
 	switch (source) {
 	case OSXIRQIDE0:
 		machine->dbdma[OSXDBDMAIDE0].status = (machine->dbdma[OSXDBDMAIDE0].status & ~0x80u) | (level ? 0x80u : 0);
-		MpicSetSource(machine, OSXG5IRQATA0, level);
+		OsxGuestMpicSetSource(machine, OSXG5IRQATA0, level);
 		break;
 	case OSXIRQIDE1:
 		machine->dbdma[OSXDBDMAIDE1].status = (machine->dbdma[OSXDBDMAIDE1].status & ~0x80u) | (level ? 0x80u : 0);
-		MpicSetSource(machine, OSXG5IRQATA1, level);
+		OsxGuestMpicSetSource(machine, OSXG5IRQATA1, level);
 		break;
 	case OSXIRQIDE0DMA:
 		if (level)
 			g5->atairq[0] |= ATAIRQDMA;
-		MpicSetSource(machine, OSXG5IRQATA0DMA, level);
+		OsxGuestMpicSetSource(machine, OSXG5IRQATA0DMA, level);
 		break;
 	case OSXIRQIDE1DMA:
 		if (level)
 			g5->atairq[1] |= ATAIRQDMA;
-		MpicSetSource(machine, OSXG5IRQATA1DMA, level);
+		OsxGuestMpicSetSource(machine, OSXG5IRQATA1DMA, level);
 		break;
 	case OSXIRQCUDA:
-		MpicSetSource(machine, OSXG5IRQPMU, level);
+		OsxGuestMpicSetSource(machine, OSXG5IRQPMU, level);
 		break;
 	default:
 		if (source & OSXG5IRQDIRECT)
-			MpicSetSource(machine, source & (OSXG5IRQDIRECT - 1), level);
+			OsxGuestMpicSetSource(machine, source & (OSXG5IRQDIRECT - 1), level);
 		break;
 	}
 }
 
-void OsxG5SetPmuRequest(OsxMachine *machine, int level)
+void OsxGuestG5SetPmuRequest(OsxMachine *machine, int level)
 {
 	OsxG5 *g5;
 	g5 = &machine->g5state;
@@ -431,10 +431,10 @@ void OsxG5SetPmuRequest(OsxMachine *machine, int level)
 		g5->gpio[GPIOPMU] &= ~GPIOINDATA;
 	else
 		g5->gpio[GPIOPMU] |= GPIOINDATA;
-	MpicSetSource(machine, OSXG5IRQPMUGPIO, level);
+	OsxGuestMpicSetSource(machine, OSXG5IRQPMUGPIO, level);
 }
 
-static OsxG5Function *FindFunction(OsxMachine *machine, uint32 offset, uint32 *reg)
+static OsxG5Function *OsxGuestFindFunction(OsxMachine *machine, uint32 offset, uint32 *reg)
 {
 	OsxG5 *g5;
 	uint32 devfn;
@@ -452,17 +452,17 @@ static OsxG5Function *FindFunction(OsxMachine *machine, uint32 offset, uint32 *r
 	return NULL;
 }
 
-static uint32 ConfigRead(OsxMachine *machine, uint32 offset, int size)
+static uint32 OsxGuestConfigRead(OsxMachine *machine, uint32 offset, int size)
 {
 	OsxG5Function *function;
 	uint32 reg;
-	function = FindFunction(machine, offset, &reg);
+	function = OsxGuestFindFunction(machine, offset, &reg);
 	if (function == NULL || reg + size > 256)
-		return AllOnes(size);
-	return BusFromBytes(function->config + reg, size);
+		return OsxGuestAllOnes(size);
+	return OsxGuestBusFromBytes(function->config + reg, size);
 }
 
-static void ConfigWrite(OsxMachine *machine, uint32 offset, int size, uint32 value)
+static void OsxGuestConfigWrite(OsxMachine *machine, uint32 offset, int size, uint32 value)
 {
 	OsxG5Function *function;
 	uint8 updated[256];
@@ -470,11 +470,11 @@ static void ConfigWrite(OsxMachine *machine, uint32 offset, int size, uint32 val
 	uint32 dword;
 	uint32 bar;
 	int index;
-	function = FindFunction(machine, offset, &reg);
+	function = OsxGuestFindFunction(machine, offset, &reg);
 	if (function == NULL || reg + size > 256)
 		return;
 	memcpy(updated, function->config, 256);
-	BytesFromBus(updated + reg, size, value);
+	OsxGuestBytesFromBus(updated + reg, size, value);
 	memcpy(function->config + 4, updated + 4, 2);
 	memcpy(function->config + 0x0c, updated + 0x0c, 2);
 	function->config[0x3c] = updated[0x3c];
@@ -482,29 +482,29 @@ static void ConfigWrite(OsxMachine *machine, uint32 offset, int size, uint32 val
 		bar = 0x10 + index * 4;
 		if (reg + size <= bar || reg >= bar + 4)
 			continue;
-		dword = LoadLittle(updated + bar, 4);
-		dword = (dword & function->barmask[index]) | (LoadLittle(function->config + bar, 4) & 0xf);
-		StoreLittle(function->config + bar, 4, dword);
+		dword = OsxGuestLoadLittle(updated + bar, 4);
+		dword = (dword & function->barmask[index]) | (OsxGuestLoadLittle(function->config + bar, 4) & 0xf);
+		OsxGuestStoreLittle(function->config + bar, 4, dword);
 	}
 }
 
-static uint32 HtSelfRead(OsxMachine *machine, uint32 offset, int size)
+static uint32 OsxGuestHtSelfRead(OsxMachine *machine, uint32 offset, int size)
 {
 	uint32 reg;
 	reg = offset >> 2;
 	if (reg + size > 256)
 		return 0;
-	return BusFromBytes(machine->g5state.functions[0].config + reg, size);
+	return OsxGuestBusFromBytes(machine->g5state.functions[0].config + reg, size);
 }
 
-static void I2cStop(OsxKeyWest *i2c)
+static void OsxGuestI2cStop(OsxKeyWest *i2c)
 {
 	i2c->active = 0;
 	i2c->status &= ~I2CSTATUSBUSY;
 	i2c->control = 0;
 }
 
-static int I2cStart(OsxKeyWest *i2c)
+static int OsxGuestI2cStart(OsxKeyWest *i2c)
 {
 	int mode;
 	mode = i2c->mode & I2CMODEMASK;
@@ -528,7 +528,7 @@ static int I2cStart(OsxKeyWest *i2c)
 	return 1;
 }
 
-static uint8 I2cFetch(OsxKeyWest *i2c)
+static uint8 OsxGuestI2cFetch(OsxKeyWest *i2c)
 {
 	uint8 value;
 	if (i2c->selected) {
@@ -546,7 +546,7 @@ static uint8 I2cFetch(OsxKeyWest *i2c)
 	return value;
 }
 
-static void I2cStore(OsxKeyWest *i2c, uint8 value)
+static void OsxGuestI2cStore(OsxKeyWest *i2c, uint8 value)
 {
 	if (i2c->selected) {
 		if ((i2c->map & CS8420VERSION) != CS8420VERSION)
@@ -566,15 +566,15 @@ static void I2cStore(OsxKeyWest *i2c, uint8 value)
 	i2c->position++;
 }
 
-static void I2cReadByte(OsxKeyWest *i2c)
+static void OsxGuestI2cReadByte(OsxKeyWest *i2c)
 {
-	i2c->data = I2cFetch(i2c);
+	i2c->data = OsxGuestI2cFetch(i2c);
 	i2c->status |= I2CSTATUSLASTAAK;
 	i2c->lastnak = !(i2c->control & I2CCONTROLAAK);
 	i2c->isr |= I2CIRQDATA;
 }
 
-static uint32 I2cRead(OsxKeyWest *i2c, uint32 reg)
+static uint32 OsxGuestI2cRead(OsxKeyWest *i2c, uint32 reg)
 {
 	switch (reg) {
 	case I2CMODE: return i2c->mode;
@@ -589,14 +589,14 @@ static uint32 I2cRead(OsxKeyWest *i2c, uint32 reg)
 	return 0;
 }
 
-static void I2cControl(OsxKeyWest *i2c, uint8 value)
+static void OsxGuestI2cControl(OsxKeyWest *i2c, uint8 value)
 {
 	uint8 rising;
 	int ack;
 	rising = value & ~i2c->control;
 	i2c->control = value;
 	if (rising & I2CCONTROLXADDR) {
-		ack = I2cStart(i2c);
+		ack = OsxGuestI2cStart(i2c);
 		if (ack)
 			i2c->status |= I2CSTATUSLASTAAK;
 		else
@@ -608,17 +608,17 @@ static void I2cControl(OsxKeyWest *i2c, uint8 value)
 		i2c->readpending = ack && (i2c->addr & 1);
 		i2c->isr |= I2CIRQADDR;
 		if (!ack) {
-			I2cStop(i2c);
+			OsxGuestI2cStop(i2c);
 			i2c->isr |= I2CIRQSTOP;
 		}
 	}
 	if (rising & I2CCONTROLSTOP) {
-		I2cStop(i2c);
+		OsxGuestI2cStop(i2c);
 		i2c->isr |= I2CIRQSTOP;
 	}
 }
 
-static void I2cAcknowledge(OsxKeyWest *i2c, uint8 value)
+static void OsxGuestI2cAcknowledge(OsxKeyWest *i2c, uint8 value)
 {
 	uint8 previous;
 	int mode;
@@ -626,7 +626,7 @@ static void I2cAcknowledge(OsxKeyWest *i2c, uint8 value)
 	i2c->isr &= ~(value & 0x0f);
 	if ((value & I2CIRQADDR) && i2c->active && i2c->readpending) {
 		i2c->readpending = 0;
-		I2cReadByte(i2c);
+		OsxGuestI2cReadByte(i2c);
 	}
 	mode = i2c->mode & I2CMODEMASK;
 	if (!(value & I2CIRQDATA) || !i2c->active)
@@ -635,26 +635,26 @@ static void I2cAcknowledge(OsxKeyWest *i2c, uint8 value)
 		if (!(previous & I2CIRQDATA))
 			return;
 		if (i2c->lastnak) {
-			I2cStop(i2c);
+			OsxGuestI2cStop(i2c);
 			i2c->isr |= I2CIRQSTOP;
 		} else {
-			I2cReadByte(i2c);
+			OsxGuestI2cReadByte(i2c);
 		}
 		return;
 	}
 	if (i2c->addr & 1) {
-		I2cReadByte(i2c);
+		OsxGuestI2cReadByte(i2c);
 		return;
 	}
 	i2c->isr |= I2CIRQDATA;
 }
 
-static void I2cData(OsxKeyWest *i2c, uint8 value)
+static void OsxGuestI2cData(OsxKeyWest *i2c, uint8 value)
 {
 	i2c->data = value;
 	if (i2c->active && !(i2c->addr & 1)) {
 		if (i2c->pointerset) {
-			I2cStore(i2c, value);
+			OsxGuestI2cStore(i2c, value);
 		} else {
 			i2c->pointer = value;
 			i2c->map = value;
@@ -666,25 +666,25 @@ static void I2cData(OsxKeyWest *i2c, uint8 value)
 		return;
 	}
 	i2c->status &= ~I2CSTATUSLASTAAK;
-	I2cStop(i2c);
+	OsxGuestI2cStop(i2c);
 	i2c->isr |= I2CIRQDATA | I2CIRQSTOP;
 }
 
-static void I2cWrite(OsxKeyWest *i2c, uint32 reg, uint8 value)
+static void OsxGuestI2cWrite(OsxKeyWest *i2c, uint32 reg, uint8 value)
 {
 	switch (reg) {
 	case I2CMODE: i2c->mode = value; break;
-	case I2CCONTROL: I2cControl(i2c, value); break;
+	case I2CCONTROL: OsxGuestI2cControl(i2c, value); break;
 	case I2CSTATUS: i2c->status = value; break;
-	case I2CISR: I2cAcknowledge(i2c, value); break;
+	case I2CISR: OsxGuestI2cAcknowledge(i2c, value); break;
 	case I2CIER: i2c->ier = value; break;
 	case I2CADDR: i2c->addr = value; break;
 	case I2CSUBADDR: i2c->subaddr = value; break;
-	case I2CDATA: I2cData(i2c, value); break;
+	case I2CDATA: OsxGuestI2cData(i2c, value); break;
 	}
 }
 
-static uint8 *PhysicalHost(OsxMachine *machine, uint64 physical, uint32 length)
+static uint8 *OsxGuestPhysicalHost(OsxMachine *machine, uint64 physical, uint32 length)
 {
 	uint64 high;
 	if (physical < machine->ramsize && length <= machine->ramsize - physical)
@@ -695,7 +695,7 @@ static uint8 *PhysicalHost(OsxMachine *machine, uint64 physical, uint32 length)
 	return NULL;
 }
 
-uint8 *OsxG5DmaHost(OsxMachine *machine, uint32 bus, uint32 length)
+uint8 *OsxGuestG5DmaHost(OsxMachine *machine, uint32 bus, uint32 length)
 {
 	OsxG5 *g5;
 	uint8 *table;
@@ -703,7 +703,7 @@ uint8 *OsxG5DmaHost(OsxMachine *machine, uint32 bus, uint32 length)
 	uint32 entry;
 	g5 = &machine->g5state;
 	if (!(g5->dartcontrol & DARTENABLE))
-		return PhysicalHost(machine, bus, length);
+		return OsxGuestPhysicalHost(machine, bus, length);
 	if ((bus & 0xfff) + length > 0x1000)
 		return NULL;
 	pages = g5->dartcontrol & 0x1ff;
@@ -711,18 +711,18 @@ uint8 *OsxG5DmaHost(OsxMachine *machine, uint32 bus, uint32 length)
 		pages = 512;
 	if ((bus >> 12) >= pages * 1024)
 		return NULL;
-	table = PhysicalHost(machine, ((uint64)((g5->dartcontrol >> 12) & 0xfffff) << 12) + (bus >> 12) * 4, 4);
+	table = OsxGuestPhysicalHost(machine, ((uint64)((g5->dartcontrol >> 12) & 0xfffff) << 12) + (bus >> 12) * 4, 4);
 	if (table == NULL)
 		return NULL;
-	entry = BusFromBytes(table, 4);
+	entry = OsxGuestBusFromBytes(table, 4);
 	if (!(entry & DARTVALID)) {
 		g5->dartexception = bus >> 12;
 		return NULL;
 	}
-	return PhysicalHost(machine, ((uint64)(entry & 0x00ffffff) << 12) | (bus & 0xfff), length);
+	return OsxGuestPhysicalHost(machine, ((uint64)(entry & 0x00ffffff) << 12) | (bus & 0xfff), length);
 }
 
-int OsxG5DmaCopy(OsxMachine *machine, uint32 bus, uint8 *data, uint32 length, int towardmemory)
+int OsxGuestG5DmaCopy(OsxMachine *machine, uint32 bus, uint8 *data, uint32 length, int towardmemory)
 {
 	uint8 *host;
 	uint32 chunk;
@@ -732,12 +732,12 @@ int OsxG5DmaCopy(OsxMachine *machine, uint32 bus, uint8 *data, uint32 length, in
 		chunk = 0x1000 - ((bus + done) & 0xfff);
 		if (chunk > length - done)
 			chunk = length - done;
-		host = OsxG5DmaHost(machine, bus + done, chunk);
+		host = OsxGuestG5DmaHost(machine, bus + done, chunk);
 		if (host == NULL)
 			return 0;
 		if (towardmemory) {
 			memcpy(host, data + done, chunk);
-			OsxJitInvalidate(machine->cpu, (uint32)(host - machine->ram), chunk);
+			OsxGuestJitInvalidate(machine->cpu, (uint32)(host - machine->ram), chunk);
 		} else {
 			memcpy(data + done, host, chunk);
 		}
@@ -746,14 +746,14 @@ int OsxG5DmaCopy(OsxMachine *machine, uint32 bus, uint8 *data, uint32 length, in
 	return 1;
 }
 
-static uint64 K2Counter(OsxMachine *machine)
+static uint64 OsxGuestK2Counter(OsxMachine *machine)
 {
 	uint64 timebase;
-	timebase = OsxCpuTimebase(machine->cpu);
+	timebase = OsxGuestCpuTimebase(machine->cpu);
 	return (timebase / OSXTIMEBASEFREQUENCY) * K2COUNTERFREQUENCY + (timebase % OSXTIMEBASEFREQUENCY) * K2COUNTERFREQUENCY / OSXTIMEBASEFREQUENCY;
 }
 
-static void TasUpdateGain(OsxMachine *machine)
+static void OsxGuestTasUpdateGain(OsxMachine *machine)
 {
 	OsxKeyWest *tas;
 	const uint8 *volume;
@@ -768,7 +768,7 @@ static void TasUpdateGain(OsxMachine *machine)
 	}
 }
 
-static int I2sDivider(uint32 field, int sclk)
+static int OsxGuestI2sDivider(uint32 field, int sclk)
 {
 	if (sclk) {
 		if (field == 8)
@@ -786,7 +786,7 @@ static int I2sDivider(uint32 field, int sclk)
 	return (int)(field + 1) * 2;
 }
 
-static void I2sUpdateRate(OsxMachine *machine)
+static void OsxGuestI2sUpdateRate(OsxMachine *machine)
 {
 	static const uint32 clocks[4] = { 18432000, 45158400, 49152000, 0 };
 	uint32 format;
@@ -796,12 +796,12 @@ static void I2sUpdateRate(OsxMachine *machine)
 	source = clocks[(format >> 30) & 3];
 	rate = 44100;
 	if (source)
-		rate = source / (uint32)(I2sDivider((format >> 24) & 0x1f, 0) * I2sDivider((format >> 20) & 0x0f, 1) * 64);
+		rate = source / (uint32)(OsxGuestI2sDivider((format >> 24) & 0x1f, 0) * OsxGuestI2sDivider((format >> 20) & 0x0f, 1) * 64);
 	if (rate >= 8000 && rate <= 96000)
 		machine->audio.rate = rate;
 }
 
-static void I2sUpdateClocks(OsxMachine *machine)
+static void OsxGuestI2sUpdateClocks(OsxMachine *machine)
 {
 	uint32 fcr1;
 	fcr1 = bswap_32(machine->g5state.fcr[K2FCR1 >> 2]);
@@ -809,7 +809,7 @@ static void I2sUpdateClocks(OsxMachine *machine)
 		machine->g5state.i2sinterrupt |= I2SCLOCKSSTOPPED;
 }
 
-static uint32 I2sRead(OsxMachine *machine, uint32 reg)
+static uint32 OsxGuestI2sRead(OsxMachine *machine, uint32 reg)
 {
 	OsxG5 *g5;
 	g5 = &machine->g5state;
@@ -822,7 +822,7 @@ static uint32 I2sRead(OsxMachine *machine, uint32 reg)
 	return 0;
 }
 
-static void I2sWrite(OsxMachine *machine, uint32 reg, uint32 value)
+static void OsxGuestI2sWrite(OsxMachine *machine, uint32 reg, uint32 value)
 {
 	OsxG5 *g5;
 	g5 = &machine->g5state;
@@ -832,7 +832,7 @@ static void I2sWrite(OsxMachine *machine, uint32 reg, uint32 value)
 		break;
 	case I2SFORMAT:
 		g5->i2sformat = value;
-		I2sUpdateRate(machine);
+		OsxGuestI2sUpdateRate(machine);
 		break;
 	case I2SWORDSIZES:
 		g5->i2swordsizes = value;
@@ -843,70 +843,70 @@ static void I2sWrite(OsxMachine *machine, uint32 reg, uint32 value)
 	}
 }
 
-static uint32 MacIoRead(OsxMachine *machine, uint32 offset, int size)
+static uint32 OsxGuestMacIoRead(OsxMachine *machine, uint32 offset, int size)
 {
 	OsxG5 *g5;
 	g5 = &machine->g5state;
 	if (offset >= 0x10000 && offset < 0x10100)
-		return bswap_32(I2sRead(machine, offset & 0xf0)) >> ((4 - size) * 8);
+		return bswap_32(OsxGuestI2sRead(machine, offset & 0xf0)) >> ((4 - size) * 8);
 	if (offset >= 0x18000 && offset < 0x19000)
-		return I2cRead(&g5->k2i2c, offset & 0xf0) << ((size - 1) * 8);
+		return OsxGuestI2cRead(&g5->k2i2c, offset & 0xf0) << ((size - 1) * 8);
 	if (offset >= 0x8000 && offset < 0x9000)
-		return OsxHeathrowRead(machine, offset, size);
+		return OsxGuestHeathrowRead(machine, offset, size);
 	if (offset == K2COUNTER && size == 4)
-		return bswap_32((uint32)K2Counter(machine));
+		return bswap_32((uint32)OsxGuestK2Counter(machine));
 	if (offset == K2COUNTER + 4 && size == 4)
-		return bswap_32((uint32)(K2Counter(machine) >> 32));
+		return bswap_32((uint32)(OsxGuestK2Counter(machine) >> 32));
 	if (offset >= OSXG5MPICOFFSET)
-		return bswap_32(MpicRead(machine, (offset - OSXG5MPICOFFSET) & ~3u)) >> ((4 - size) * 8);
+		return bswap_32(OsxGuestMpicRead(machine, (offset - OSXG5MPICOFFSET) & ~3u)) >> ((4 - size) * 8);
 	if (offset >= 0x16000 && offset < 0x18000)
-		return OsxCudaRead(machine, (offset >> 9) & 15);
+		return OsxGuestCudaRead(machine, (offset >> 9) & 15);
 	if (offset < OSXG5GPIOBASE)
 		return g5->fcr[offset >> 2] >> ((4 - size) * 8);
 	if (offset - OSXG5GPIOBASE + size <= OSXG5GPIOSIZE)
-		return BusFromBytes(g5->gpio + offset - OSXG5GPIOBASE, size);
+		return OsxGuestBusFromBytes(g5->gpio + offset - OSXG5GPIOBASE, size);
 	machine->unknownreads++;
 	if (machine->log && machine->unknownreads < 200)
 		fprintf(machine->log, "k2 read %05x size %d\n", offset, size);
 	return 0;
 }
 
-static void MacIoWrite(OsxMachine *machine, uint32 offset, int size, uint32 value)
+static void OsxGuestMacIoWrite(OsxMachine *machine, uint32 offset, int size, uint32 value)
 {
 	OsxG5 *g5;
 	g5 = &machine->g5state;
 	if (offset >= 0x8000 && offset < 0x9000) {
-		OsxHeathrowWrite(machine, offset, size, value);
+		OsxGuestHeathrowWrite(machine, offset, size, value);
 		return;
 	}
 	if (offset >= OSXG5MPICOFFSET) {
 		if (size == 4)
-			MpicWrite(machine, (offset - OSXG5MPICOFFSET) & ~3u, bswap_32(value));
+			OsxGuestMpicWrite(machine, (offset - OSXG5MPICOFFSET) & ~3u, bswap_32(value));
 		return;
 	}
 	if (offset >= 0x16000 && offset < 0x18000) {
-		OsxCudaWrite(machine, (offset >> 9) & 15, value & 0xff);
+		OsxGuestCudaWrite(machine, (offset >> 9) & 15, value & 0xff);
 		return;
 	}
 	if (offset >= 0x10000 && offset < 0x10100) {
 		if (size == 4)
-			I2sWrite(machine, offset & 0xf0, bswap_32(value));
+			OsxGuestI2sWrite(machine, offset & 0xf0, bswap_32(value));
 		return;
 	}
 	if (offset >= 0x18000 && offset < 0x19000) {
-		I2cWrite(&g5->k2i2c, offset & 0xf0, (uint8)(value >> ((size - 1) * 8)));
-		MpicSetSource(machine, OSXG5IRQK2I2C, (g5->k2i2c.isr & g5->k2i2c.ier) != 0);
-		TasUpdateGain(machine);
+		OsxGuestI2cWrite(&g5->k2i2c, offset & 0xf0, (uint8)(value >> ((size - 1) * 8)));
+		OsxGuestMpicSetSource(machine, OSXG5IRQK2I2C, (g5->k2i2c.isr & g5->k2i2c.ier) != 0);
+		OsxGuestTasUpdateGain(machine);
 		return;
 	}
 	if (offset < OSXG5GPIOBASE) {
 		if (size == 4)
 			g5->fcr[offset >> 2] = value;
-		I2sUpdateClocks(machine);
+		OsxGuestI2sUpdateClocks(machine);
 		return;
 	}
 	if (offset - OSXG5GPIOBASE + size <= OSXG5GPIOSIZE) {
-		BytesFromBus(g5->gpio + offset - OSXG5GPIOBASE, size, value);
+		OsxGuestBytesFromBus(g5->gpio + offset - OSXG5GPIOBASE, size, value);
 		return;
 	}
 	machine->unknownwrites++;
@@ -914,7 +914,7 @@ static void MacIoWrite(OsxMachine *machine, uint32 offset, int size, uint32 valu
 		fprintf(machine->log, "k2 write %05x size %d value %08x\n", offset, size, value);
 }
 
-static uint32 AtaRead(OsxMachine *machine, uint32 offset, int size)
+static uint32 OsxGuestG5AtaRead(OsxMachine *machine, uint32 offset, int size)
 {
 	OsxG5 *g5;
 	int bus;
@@ -926,17 +926,17 @@ static uint32 AtaRead(OsxMachine *machine, uint32 offset, int size)
 	if (reg < 0x1000)
 		return bswap_32(g5->atafcr[bus]) >> ((4 - size) * 8);
 	if (reg < 0x2000)
-		return OsxHeathrowRead(machine, 0x8000 + (OSXDBDMAIDE0 + bus) * 0x100 + (reg & 0xff), size);
+		return OsxGuestHeathrowRead(machine, 0x8000 + (OSXDBDMAIDE0 + bus) * 0x100 + (reg & 0xff), size);
 	if ((reg & 0xfff) == 0x300) {
 		value = g5->atairq[bus] & ATAIRQDMA;
 		if (machine->ata[bus].irqline)
 			value |= ATAIRQDRIVE;
 		return bswap_32(value) >> ((4 - size) * 8);
 	}
-	return OsxHeathrowRead(machine, 0x20000 + bus * 0x1000 + (reg & 0xfff), size);
+	return OsxGuestHeathrowRead(machine, 0x20000 + bus * 0x1000 + (reg & 0xfff), size);
 }
 
-static void AtaWrite(OsxMachine *machine, uint32 offset, int size, uint32 value)
+static void OsxGuestG5AtaWrite(OsxMachine *machine, uint32 offset, int size, uint32 value)
 {
 	OsxG5 *g5;
 	int bus;
@@ -950,7 +950,7 @@ static void AtaWrite(OsxMachine *machine, uint32 offset, int size, uint32 value)
 		return;
 	}
 	if (reg < 0x2000) {
-		OsxHeathrowWrite(machine, 0x8000 + (OSXDBDMAIDE0 + bus) * 0x100 + (reg & 0xff), size, value);
+		OsxGuestHeathrowWrite(machine, 0x8000 + (OSXDBDMAIDE0 + bus) * 0x100 + (reg & 0xff), size, value);
 		return;
 	}
 	if ((reg & 0xfff) == 0x300) {
@@ -958,15 +958,15 @@ static void AtaWrite(OsxMachine *machine, uint32 offset, int size, uint32 value)
 			g5->atairq[bus] &= ~ATAIRQDMA;
 		return;
 	}
-	OsxHeathrowWrite(machine, 0x20000 + bus * 0x1000 + (reg & 0xfff), size, value);
+	OsxGuestHeathrowWrite(machine, 0x20000 + bus * 0x1000 + (reg & 0xfff), size, value);
 }
 
-static uint32 U3Read(OsxMachine *machine, uint32 offset, int size)
+static uint32 OsxGuestU3Read(OsxMachine *machine, uint32 offset, int size)
 {
 	if (offset - (OSXG5U3I2C - OSXG5U3BASE) < 0x1000)
-		return I2cRead(&machine->g5state.i2c, (offset - (OSXG5U3I2C - OSXG5U3BASE)) & 0xf0) << ((size - 1) * 8);
+		return OsxGuestI2cRead(&machine->g5state.i2c, (offset - (OSXG5U3I2C - OSXG5U3BASE)) & 0xf0) << ((size - 1) * 8);
 	if (offset - (OSXG5HTSELF - OSXG5U3BASE) < 0x1000)
-		return HtSelfRead(machine, offset - (OSXG5HTSELF - OSXG5U3BASE), size);
+		return OsxGuestHtSelfRead(machine, offset - (OSXG5HTSELF - OSXG5U3BASE), size);
 	if (offset == OSXG5DART - OSXG5U3BASE && size == 4)
 		return machine->g5state.dartcontrol;
 	if (offset == OSXG5DART - OSXG5U3BASE + 0x10 && size == 4)
@@ -976,20 +976,20 @@ static uint32 U3Read(OsxMachine *machine, uint32 offset, int size)
 	return 0;
 }
 
-static void U3Write(OsxMachine *machine, uint32 offset, int size, uint32 value)
+static void OsxGuestU3Write(OsxMachine *machine, uint32 offset, int size, uint32 value)
 {
 	if (offset - (OSXG5U3I2C - OSXG5U3BASE) < 0x1000) {
-		I2cWrite(&machine->g5state.i2c, (offset - (OSXG5U3I2C - OSXG5U3BASE)) & 0xf0, (uint8)(value >> ((size - 1) * 8)));
-		MpicSetSource(machine, OSXG5IRQU3I2C, (machine->g5state.i2c.isr & machine->g5state.i2c.ier) != 0);
+		OsxGuestI2cWrite(&machine->g5state.i2c, (offset - (OSXG5U3I2C - OSXG5U3BASE)) & 0xf0, (uint8)(value >> ((size - 1) * 8)));
+		OsxGuestMpicSetSource(machine, OSXG5IRQU3I2C, (machine->g5state.i2c.isr & machine->g5state.i2c.ier) != 0);
 	} else if (offset - (OSXG5HTSELF - OSXG5U3BASE) < 0x400)
-		ConfigWrite(machine, (offset - (OSXG5HTSELF - OSXG5U3BASE)) >> 2, size, value);
+		OsxGuestConfigWrite(machine, (offset - (OSXG5HTSELF - OSXG5U3BASE)) >> 2, size, value);
 	else if (offset == OSXG5DART - OSXG5U3BASE && size == 4)
 		machine->g5state.dartcontrol = value & ~DARTFLUSH;
 	else if (offset == OSXG5DART - OSXG5U3BASE + 0x10 && size == 4)
 		machine->g5state.dartexception = 0;
 }
 
-static uint8 ChrpChecksum(const uint8 *header)
+static uint8 OsxGuestChrpChecksum(const uint8 *header)
 {
 	uint32 sum;
 	int index;
@@ -1002,30 +1002,30 @@ static uint8 ChrpChecksum(const uint8 *header)
 	return (uint8)sum;
 }
 
-static int FlashBankValid(const uint8 *bank)
+static int OsxGuestFlashBankValid(const uint8 *bank)
 {
-	return bank[0] == 0x5a && bank[1] == ChrpChecksum(bank) && BusFromBytes(bank + 16, 4) == OsxAdler32(bank + 20, OSXFLASHBANK - 20);
+	return bank[0] == 0x5a && bank[1] == OsxGuestChrpChecksum(bank) && OsxGuestBusFromBytes(bank + 16, 4) == OsxGuestAdler32(bank + 20, OSXFLASHBANK - 20);
 }
 
-void OsxG5PrepareNvram(OsxMachine *machine)
+void OsxGuestG5PrepareNvram(OsxMachine *machine)
 {
 	uint8 *bank;
 	bank = machine->flash;
-	if (FlashBankValid(bank) || FlashBankValid(bank + OSXFLASHBANK))
+	if (OsxGuestFlashBankValid(bank) || OsxGuestFlashBankValid(bank + OSXFLASHBANK))
 		return;
 	memcpy(bank, machine->nvram, OSXFLASHBANK);
 	memset(bank, 0, 0x30);
 	bank[0] = 0x5a;
 	bank[3] = 2;
 	memcpy(bank + 4, "nvram", 5);
-	BytesFromBus(bank + 20, 4, 1);
-	bank[1] = ChrpChecksum(bank);
+	OsxGuestBytesFromBus(bank + 20, 4, 1);
+	bank[1] = OsxGuestChrpChecksum(bank);
 	bank[0x20] = 0x7f;
 	bank[0x22] = (uint8)(((OSXPRAMOFFSET - 0x30) / 16) >> 8);
 	bank[0x23] = (uint8)((OSXPRAMOFFSET - 0x30) / 16);
 	memcpy(bank + 0x24, "wwwwwwwwwwww", 12);
-	bank[0x21] = ChrpChecksum(bank + 0x20);
-	BytesFromBus(bank + 16, 4, OsxAdler32(bank + 20, OSXFLASHBANK - 20));
+	bank[0x21] = OsxGuestChrpChecksum(bank + 0x20);
+	OsxGuestBytesFromBus(bank + 16, 4, OsxGuestAdler32(bank + 20, OSXFLASHBANK - 20));
 	memset(bank + OSXFLASHBANK, 0xff, OSXFLASHBANK);
 	machine->flashdirty = 1;
 }
@@ -1064,12 +1064,12 @@ void OsxG5PrepareNvram(OsxMachine *machine)
 #define GMACTXINTME 1
 #define GMACPHY 1
 
-static uint32 GmacRingMask(uint32 config)
+static uint32 OsxGuestGmacRingMask(uint32 config)
 {
 	return (1u << (((config & 0x1e) >> 1) + 5)) - 1;
 }
 
-static uint16 GmacChecksum(const uint8 *data, uint32 length)
+static uint16 OsxGuestGmacChecksum(const uint8 *data, uint32 length)
 {
 	uint32 sum;
 	uint32 index;
@@ -1083,21 +1083,21 @@ static uint16 GmacChecksum(const uint8 *data, uint32 length)
 	return (uint16)~sum;
 }
 
-static void GmacUpdate(OsxMachine *machine)
+static void OsxGuestGmacUpdate(OsxMachine *machine)
 {
 	OsxGmac *gmac;
 	gmac = &machine->g5state.gmac;
-	MpicSetSource(machine, OSXG5IRQGMAC, (gmac->gregs[GMACSTAT >> 2] & ~GMACSTATTXNR & ~gmac->gregs[GMACIMASK >> 2]) != 0);
+	OsxGuestMpicSetSource(machine, OSXG5IRQGMAC, (gmac->gregs[GMACSTAT >> 2] & ~GMACSTATTXNR & ~gmac->gregs[GMACIMASK >> 2]) != 0);
 }
 
-static void GmacStatus(OsxMachine *machine, uint32 bits)
+static void OsxGuestGmacStatus(OsxMachine *machine, uint32 bits)
 {
 	machine->g5state.gmac.gregs[GMACSTAT >> 2] |= bits;
-	GmacUpdate(machine);
+	OsxGuestGmacUpdate(machine);
 }
 
 
-static void GmacResetRx(OsxGmac *gmac)
+static void OsxGuestGmacResetRx(OsxGmac *gmac)
 {
 	gmac->rxdma[GMACRXDONE >> 2] = 0;
 	gmac->rxdma[GMACRXKICK >> 2] = 0;
@@ -1105,7 +1105,7 @@ static void GmacResetRx(OsxGmac *gmac)
 	gmac->rxkicked = 0;
 }
 
-static void GmacResetTx(OsxGmac *gmac)
+static void OsxGuestGmacResetTx(OsxGmac *gmac)
 {
 	gmac->txdma[GMACTXDONE >> 2] = 0;
 	gmac->txdma[GMACTXKICK >> 2] = 0;
@@ -1114,16 +1114,16 @@ static void GmacResetTx(OsxGmac *gmac)
 	gmac->txfirst = 0;
 }
 
-static void GmacReset(OsxMachine *machine)
+static void OsxGuestGmacReset(OsxMachine *machine)
 {
 	OsxGmac *gmac;
 	uint8 address[6];
 	gmac = &machine->g5state.gmac;
-	GmacResetRx(gmac);
-	GmacResetTx(gmac);
+	OsxGuestGmacResetRx(gmac);
+	OsxGuestGmacResetTx(gmac);
 	gmac->gregs[GMACIMASK >> 2] = 0x0fffffff;
 	gmac->gregs[GMACSTAT >> 2] = 0;
-	OsxBmacHardwareAddress(address);
+	OsxGuestBmacHardwareAddress(address);
 	gmac->mac[GMACMACADDR0 >> 2] = ((uint32)address[4] << 8) | address[5];
 	gmac->mac[(GMACMACADDR0 >> 2) + 1] = ((uint32)address[2] << 8) | address[3];
 	gmac->mac[(GMACMACADDR0 >> 2) + 2] = ((uint32)address[0] << 8) | address[1];
@@ -1131,7 +1131,7 @@ static void GmacReset(OsxMachine *machine)
 	gmac->mif[GMACMIFCFG >> 2] = 0x100;
 }
 
-static uint16 GmacPhyRead(uint32 phy, uint32 reg)
+static uint16 OsxGuestGmacPhyRead(uint32 phy, uint32 reg)
 {
 	if (phy != GMACPHY)
 		return 0xffff;
@@ -1146,18 +1146,18 @@ static uint16 GmacPhyRead(uint32 phy, uint32 reg)
 	return 0;
 }
 
-static uint32 GmacPhyFrame(uint32 value)
+static uint32 OsxGuestGmacPhyFrame(uint32 value)
 {
 	if ((value >> 30) != 1)
 		return 0xffff;
 	if (((value >> 28) & 3) == 1)
 		return value | 0x10000;
 	if (((value >> 28) & 3) == 2)
-		return GmacPhyRead((value >> 23) & 0x1f, (value >> 18) & 0x1f) | 0x10000;
+		return OsxGuestGmacPhyRead((value >> 23) & 0x1f, (value >> 18) & 0x1f) | 0x10000;
 	return 0xffff | 0x10000;
 }
 
-static void GmacTransmit(OsxMachine *machine)
+static void OsxGuestGmacTransmit(OsxMachine *machine)
 {
 	OsxGmac *gmac;
 	uint8 *descriptor;
@@ -1174,15 +1174,15 @@ static void GmacTransmit(OsxMachine *machine)
 	gmac = &machine->g5state.gmac;
 	if (!(gmac->txdma[GMACTXCFG >> 2] & 1) || !(gmac->mac[GMACMACTXCFG >> 2] & 1))
 		return;
-	mask = GmacRingMask(gmac->txdma[GMACTXCFG >> 2]);
+	mask = OsxGuestGmacRingMask(gmac->txdma[GMACTXCFG >> 2]);
 	base = gmac->txdma[GMACTXDBLOW >> 2];
 	done = gmac->txdma[GMACTXDONE >> 2] & mask;
 	kick = gmac->txdma[GMACTXKICK >> 2] & mask;
 	while (done != kick) {
-		descriptor = OsxG5DmaHost(machine, base + done * 16, 16);
+		descriptor = OsxGuestG5DmaHost(machine, base + done * 16, 16);
 		if (descriptor == NULL)
 			break;
-		control = LoadLittle(descriptor, 4);
+		control = OsxGuestLoadLittle(descriptor, 4);
 		if (control & GMACTXSOF) {
 			gmac->txsize = 0;
 			gmac->txfirst = control;
@@ -1190,38 +1190,38 @@ static void GmacTransmit(OsxMachine *machine)
 		length = control & 0x7fff;
 		if (gmac->txsize + length > OSXG5GMACFRAME)
 			length = OSXG5GMACFRAME - gmac->txsize;
-		OsxG5DmaCopy(machine, LoadLittle(descriptor + 8, 4), gmac->txdata + gmac->txsize, length, 0);
+		OsxGuestG5DmaCopy(machine, OsxGuestLoadLittle(descriptor + 8, 4), gmac->txdata + gmac->txsize, length, 0);
 		gmac->txsize += length;
 		if ((control & GMACTXEOF) && gmac->txsize > 0) {
 			start = (gmac->txfirst >> 15) & 0x3f;
 			stuff = (gmac->txfirst >> 21) & 0xff;
 			if ((gmac->txfirst & GMACTXCENAB) && start + 2 <= gmac->txsize && stuff + 2 <= gmac->txsize) {
-				checksum = GmacChecksum(gmac->txdata + start, gmac->txsize - start);
+				checksum = OsxGuestGmacChecksum(gmac->txdata + start, gmac->txsize - start);
 				gmac->txdata[stuff] = (uint8)(checksum >> 8);
 				gmac->txdata[stuff + 1] = (uint8)checksum;
 			}
 			if (machine->bmac.ready)
-				OsxHostNetSend(machine->bmac.slirpthread, gmac->txdata, (int)gmac->txsize);
-			machine->bmac.busydeadline = OsxCpuTimebase(machine->cpu) + OSXTIMEBASEFREQUENCY * 2;
+				OsxGuestHostNetSend(machine->bmac.slirpthread, gmac->txdata, (int)gmac->txsize);
+			machine->bmac.busydeadline = OsxGuestCpuTimebase(machine->cpu) + OSXTIMEBASEFREQUENCY * 2;
 			gmac->txsize = 0;
 			gmac->txfirst = 0;
 		}
 		bits = GMACSTATTXDONE;
-		if (LoadLittle(descriptor + 4, 4) & GMACTXINTME)
+		if (OsxGuestLoadLittle(descriptor + 4, 4) & GMACTXINTME)
 			bits |= GMACSTATTXINTME;
 		done = (done + 1) & mask;
 		gmac->txdma[GMACTXDONE >> 2] = done;
-		GmacStatus(machine, bits);
+		OsxGuestGmacStatus(machine, bits);
 	}
-	GmacStatus(machine, GMACSTATTXALL);
+	OsxGuestGmacStatus(machine, GMACSTATTXALL);
 }
 
-static int GmacRxFull(OsxGmac *gmac, uint32 mask)
+static int OsxGuestGmacRxFull(OsxGmac *gmac, uint32 mask)
 {
 	return !gmac->rxkicked || (gmac->rxdma[GMACRXKICK >> 2] & mask) == ((gmac->rxdma[GMACRXDONE >> 2] + 1) & mask);
 }
 
-static int GmacAccepts(OsxGmac *gmac, const uint8 *frame)
+static int OsxGuestGmacAccepts(OsxGmac *gmac, const uint8 *frame)
 {
 	uint32 config;
 	config = gmac->mac[GMACMACRXCFG >> 2];
@@ -1232,7 +1232,7 @@ static int GmacAccepts(OsxGmac *gmac, const uint8 *frame)
 		gmac->mac[(GMACMACADDR0 >> 2) + 2] == (((uint32)frame[0] << 8) | frame[1]);
 }
 
-static int GmacDeliver(OsxMachine *machine, const uint8 *frame, uint32 length)
+static int OsxGuestGmacDeliver(OsxMachine *machine, const uint8 *frame, uint32 length)
 {
 	OsxGmac *gmac;
 	uint8 *descriptor;
@@ -1244,35 +1244,35 @@ static int GmacDeliver(OsxMachine *machine, const uint8 *frame, uint32 length)
 	uint32 offset;
 	gmac = &machine->g5state.gmac;
 	config = gmac->rxdma[GMACRXCFG >> 2];
-	mask = GmacRingMask(config);
-	if (GmacRxFull(gmac, mask))
+	mask = OsxGuestGmacRingMask(config);
+	if (OsxGuestGmacRxFull(gmac, mask))
 		return 0;
-	if (!GmacAccepts(gmac, frame))
+	if (!OsxGuestGmacAccepts(gmac, frame))
 		return 1;
 	done = gmac->rxdma[GMACRXDONE >> 2] & mask;
-	descriptor = OsxG5DmaHost(machine, gmac->rxdma[GMACRXDBLOW >> 2] + done * 16, 16);
+	descriptor = OsxGuestG5DmaHost(machine, gmac->rxdma[GMACRXDBLOW >> 2] + done * 16, 16);
 	if (descriptor == NULL)
 		return 1;
-	OsxG5DmaCopy(machine, (LoadLittle(descriptor + 8, 4) & ~7u) + ((config & 0x1c00) >> 10), (uint8 *)frame, length, 1);
+	OsxGuestG5DmaCopy(machine, (OsxGuestLoadLittle(descriptor + 8, 4) & ~7u) + ((config & 0x1c00) >> 10), (uint8 *)frame, length, 1);
 	fcs = 4;
 	if (gmac->mac[GMACMACRXCFG >> 2] & 4)
 		fcs = 0;
 	offset = (config >> 13) & 0x7f;
 	status = (length + fcs) << 16;
 	if (offset < length)
-		status |= GmacChecksum(frame + offset, length - offset);
-	StoreLittle(descriptor, 4, status);
-	StoreLittle(descriptor + 4, 4, 0);
+		status |= OsxGuestGmacChecksum(frame + offset, length - offset);
+	OsxGuestStoreLittle(descriptor, 4, status);
+	OsxGuestStoreLittle(descriptor + 4, 4, 0);
 	done = (done + 1) & mask;
 	gmac->rxdma[GMACRXDONE >> 2] = done;
 	status = GMACSTATRXDONE;
-	if (GmacRxFull(gmac, mask))
+	if (OsxGuestGmacRxFull(gmac, mask))
 		status |= GMACSTATRXNOBUF;
-	GmacStatus(machine, status);
+	OsxGuestGmacStatus(machine, status);
 	return 1;
 }
 
-void OsxG5GmacReceive(OsxMachine *machine)
+void OsxGuestG5GmacReceive(OsxMachine *machine)
 {
 	OsxGmac *gmac;
 	OsxBmac *bmac;
@@ -1281,7 +1281,7 @@ void OsxG5GmacReceive(OsxMachine *machine)
 	bmac = &machine->bmac;
 	while (bmac->ready && (gmac->rxdma[GMACRXCFG >> 2] & 1) && (gmac->mac[GMACMACRXCFG >> 2] & 1)) {
 		if (bmac->pendinglength == 0) {
-			length = OsxHostNetReceive(bmac->slirpthread, bmac->pending);
+			length = OsxGuestHostNetReceive(bmac->slirpthread, bmac->pending);
 			if (length <= 0)
 				return;
 			if (length > 1514)
@@ -1291,15 +1291,15 @@ void OsxG5GmacReceive(OsxMachine *machine)
 				length = 60;
 			}
 			bmac->pendinglength = length;
-			bmac->busydeadline = OsxCpuTimebase(machine->cpu) + OSXTIMEBASEFREQUENCY * 2;
+			bmac->busydeadline = OsxGuestCpuTimebase(machine->cpu) + OSXTIMEBASEFREQUENCY * 2;
 		}
-		if (!GmacDeliver(machine, bmac->pending, (uint32)bmac->pendinglength))
+		if (!OsxGuestGmacDeliver(machine, bmac->pending, (uint32)bmac->pendinglength))
 			return;
 		bmac->pendinglength = 0;
 	}
 }
 
-static uint32 GmacRead(OsxMachine *machine, uint32 offset)
+static uint32 OsxGuestGmacRead(OsxMachine *machine, uint32 offset)
 {
 	OsxGmac *gmac;
 	uint32 value;
@@ -1310,7 +1310,7 @@ static uint32 GmacRead(OsxMachine *machine, uint32 offset)
 		value = gmac->gregs[offset >> 2];
 		if (offset == GMACSTAT) {
 			gmac->gregs[GMACSTAT >> 2] &= ~GMACSTATLATCH;
-			GmacUpdate(machine);
+			OsxGuestGmacUpdate(machine);
 		}
 		if (offset == GMACSTAT || offset == GMACSTAT2)
 			value = (value & ~GMACSTATTXNR) | (gmac->txdma[GMACTXDONE >> 2] << 19);
@@ -1329,7 +1329,7 @@ static uint32 GmacRead(OsxMachine *machine, uint32 offset)
 	return 0;
 }
 
-static void GmacWrite(OsxMachine *machine, uint32 offset, uint32 value)
+static void OsxGuestGmacWrite(OsxMachine *machine, uint32 offset, uint32 value)
 {
 	OsxGmac *gmac;
 	uint32 reg;
@@ -1337,23 +1337,23 @@ static void GmacWrite(OsxMachine *machine, uint32 offset, uint32 value)
 	if (offset < 0x2000) {
 		if (offset == GMACIACK) {
 			gmac->gregs[GMACSTAT >> 2] &= ~(value & GMACSTATLATCH);
-			GmacUpdate(machine);
+			OsxGuestGmacUpdate(machine);
 			return;
 		}
 		if (offset == GMACIMASK) {
 			gmac->gregs[GMACIMASK >> 2] = value;
-			GmacUpdate(machine);
+			OsxGuestGmacUpdate(machine);
 			return;
 		}
 		if (offset == GMACSWRST) {
 			if ((value & 3) == 3)
-				GmacReset(machine);
+				OsxGuestGmacReset(machine);
 			else if (value & 2)
-				GmacResetRx(gmac);
+				OsxGuestGmacResetRx(gmac);
 			else if (value & 1)
-				GmacResetTx(gmac);
+				OsxGuestGmacResetTx(gmac);
 			gmac->gregs[GMACSWRST >> 2] = value & ~3u;
-			GmacUpdate(machine);
+			OsxGuestGmacUpdate(machine);
 			return;
 		}
 		if (offset >= 0x1000 && offset < 0x1010)
@@ -1366,7 +1366,7 @@ static void GmacWrite(OsxMachine *machine, uint32 offset, uint32 value)
 			return;
 		gmac->txdma[reg >> 2] = value;
 		if (reg == GMACTXKICK)
-			GmacTransmit(machine);
+			OsxGuestGmacTransmit(machine);
 		return;
 	}
 	if (offset < 0x4000)
@@ -1378,7 +1378,7 @@ static void GmacWrite(OsxMachine *machine, uint32 offset, uint32 value)
 		gmac->rxdma[reg >> 2] = value;
 		if (reg == GMACRXKICK) {
 			gmac->rxkicked = 1;
-			OsxG5GmacReceive(machine);
+			OsxGuestG5GmacReceive(machine);
 		}
 		return;
 	}
@@ -1392,58 +1392,58 @@ static void GmacWrite(OsxMachine *machine, uint32 offset, uint32 value)
 	if (offset < 0x6220) {
 		reg = offset - 0x6200;
 		if (reg == GMACMIFFRAME)
-			gmac->mif[reg >> 2] = GmacPhyFrame(value);
+			gmac->mif[reg >> 2] = OsxGuestGmacPhyFrame(value);
 		else if (reg == GMACMIFCFG)
 			gmac->mif[reg >> 2] = (value & ~0x200u) | 0x100;
 		return;
 	}
 }
 
-uint32 OsxG5BusRead(OsxMachine *machine, uint32 address, int size)
+uint32 OsxGuestG5BusRead(OsxMachine *machine, uint32 address, int size)
 {
 	if (address - OSXG5GMACBASE < OSXG5GMACSIZE)
-		return bswap_32(GmacRead(machine, (address - OSXG5GMACBASE) & ~3u)) >> ((4 - size) * 8);
+		return bswap_32(OsxGuestGmacRead(machine, (address - OSXG5GMACBASE) & ~3u)) >> ((4 - size) * 8);
 	if (address - OSXG5MACIOBASE < OSXG5MACIOSIZE)
-		return MacIoRead(machine, address - OSXG5MACIOBASE, size);
+		return OsxGuestMacIoRead(machine, address - OSXG5MACIOBASE, size);
 	if (address - OSXG5ATABASE < OSXG5ATASIZE * 2)
-		return AtaRead(machine, address - OSXG5ATABASE, size);
+		return OsxGuestG5AtaRead(machine, address - OSXG5ATABASE, size);
 	if (address - OSXG5HTCONFIG < OSXG5HTCONFIGSIZE)
-		return ConfigRead(machine, address - OSXG5HTCONFIG, size);
+		return OsxGuestConfigRead(machine, address - OSXG5HTCONFIG, size);
 	if (address - OSXG5U3BASE < OSXG5U3SIZE)
-		return U3Read(machine, address - OSXG5U3BASE, size);
+		return OsxGuestU3Read(machine, address - OSXG5U3BASE, size);
 	if (address - OSXFLASHBASE < OSXFLASHSIZE)
-		return OsxFlashRead(machine, address - OSXFLASHBASE, size);
+		return OsxGuestFlashRead(machine, address - OSXFLASHBASE, size);
 	machine->unknownreads++;
 	if (machine->log && machine->unknownreads < 200)
 		fprintf(machine->log, "g5 bus read %08x size %d pc %08x\n", address, size, machine->cpu->pc);
-	return AllOnes(size);
+	return OsxGuestAllOnes(size);
 }
 
-void OsxG5BusWrite(OsxMachine *machine, uint32 address, int size, uint32 value)
+void OsxGuestG5BusWrite(OsxMachine *machine, uint32 address, int size, uint32 value)
 {
 	if (address - OSXG5GMACBASE < OSXG5GMACSIZE) {
 		if (size == 4)
-			GmacWrite(machine, address - OSXG5GMACBASE, bswap_32(value));
+			OsxGuestGmacWrite(machine, address - OSXG5GMACBASE, bswap_32(value));
 		return;
 	}
 	if (address - OSXG5MACIOBASE < OSXG5MACIOSIZE) {
-		MacIoWrite(machine, address - OSXG5MACIOBASE, size, value);
+		OsxGuestMacIoWrite(machine, address - OSXG5MACIOBASE, size, value);
 		return;
 	}
 	if (address - OSXG5ATABASE < OSXG5ATASIZE * 2) {
-		AtaWrite(machine, address - OSXG5ATABASE, size, value);
+		OsxGuestG5AtaWrite(machine, address - OSXG5ATABASE, size, value);
 		return;
 	}
 	if (address - OSXG5HTCONFIG < OSXG5HTCONFIGSIZE) {
-		ConfigWrite(machine, address - OSXG5HTCONFIG, size, value);
+		OsxGuestConfigWrite(machine, address - OSXG5HTCONFIG, size, value);
 		return;
 	}
 	if (address - OSXG5U3BASE < OSXG5U3SIZE) {
-		U3Write(machine, address - OSXG5U3BASE, size, value);
+		OsxGuestU3Write(machine, address - OSXG5U3BASE, size, value);
 		return;
 	}
 	if (address - OSXFLASHBASE < OSXFLASHSIZE) {
-		OsxFlashWrite(machine, address - OSXFLASHBASE, size, value);
+		OsxGuestFlashWrite(machine, address - OSXFLASHBASE, size, value);
 		return;
 	}
 	machine->unknownwrites++;

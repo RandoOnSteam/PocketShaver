@@ -53,7 +53,7 @@
 
 static const uint8 BmacAddress[6] = { 0x00, 0x05, 0x02, 0x4f, 0x53, 0x58 };
 
-static uint8 ReverseBits(uint8 value)
+static uint8 OsxGuestReverseBits(uint8 value)
 {
 	uint8 result;
 	int index;
@@ -65,12 +65,12 @@ static uint8 ReverseBits(uint8 value)
 	return result;
 }
 
-void OsxBmacHardwareAddress(uint8 *address)
+void OsxGuestBmacHardwareAddress(uint8 *address)
 {
 	memcpy(address, BmacAddress, sizeof(BmacAddress));
 }
 
-void OsxBmacReset(OsxMachine *machine)
+void OsxGuestBmacReset(OsxMachine *machine)
 {
 	OsxBmac *bmac;
 	int index;
@@ -78,7 +78,7 @@ void OsxBmacReset(OsxMachine *machine)
 	memset(bmac->registers, 0, sizeof(bmac->registers));
 	memset(bmac->srom, 0xff, sizeof(bmac->srom));
 	for (index = 0; index < 3; index++)
-		bmac->srom[BMACSROMMACWORD + index] = (uint16)(ReverseBits(BmacAddress[index * 2]) | (ReverseBits(BmacAddress[index * 2 + 1]) << 8));
+		bmac->srom[BMACSROMMACWORD + index] = (uint16)(OsxGuestReverseBits(BmacAddress[index * 2]) | (OsxGuestReverseBits(BmacAddress[index * 2 + 1]) << 8));
 	bmac->status = 0;
 	bmac->srombits = 0;
 	bmac->sromcommand = 0;
@@ -89,19 +89,19 @@ void OsxBmacReset(OsxMachine *machine)
 	machine->dbdma[OSXDBDMABMACTX].irq = OSXIRQBMACTXDMA;
 	machine->dbdma[OSXDBDMABMACRX].irq = OSXIRQBMACRXDMA;
 	if (!bmac->attached && PrefsFindString("ether") && strcmp(PrefsFindString("ether"), "slirp") == 0) {
-		bmac->slirpthread = OsxHostNetOpen(BmacAddress);
+		bmac->slirpthread = OsxGuestHostNetOpen(BmacAddress);
 		bmac->attached = bmac->slirpthread != NULL;
 	}
 	if (machine->log)
 		fprintf(machine->log, "bmac backend attached %d\n", bmac->attached);
 }
 
-static int BackendReady(OsxBmac *bmac)
+static int OsxGuestBackendReady(OsxBmac *bmac)
 {
 	int state;
 	if (bmac->ready || !bmac->attached)
 		return bmac->ready;
-	state = OsxHostNetReady(bmac->slirpthread);
+	state = OsxGuestHostNetReady(bmac->slirpthread);
 	if (state > 0)
 		bmac->ready = 1;
 	else if (state < 0)
@@ -109,7 +109,7 @@ static int BackendReady(OsxBmac *bmac)
 	return bmac->ready;
 }
 
-static void SromWrite(OsxBmac *bmac, uint16 value)
+static void OsxGuestSromWrite(OsxBmac *bmac, uint16 value)
 {
 	int rising;
 	if (!(value & BMACSROMSELECT)) {
@@ -139,18 +139,18 @@ static void SromWrite(OsxBmac *bmac, uint16 value)
 	}
 }
 
-static void RaiseDevice(OsxMachine *machine, uint16 event)
+static void OsxGuestRaiseDevice(OsxMachine *machine, uint16 event)
 {
 	OsxBmac *bmac;
 	bmac = &machine->bmac;
 	bmac->status |= event;
 	if (bmac->registers[BMACINTDISABLE >> 4] & event)
 		return;
-	OsxPicSetLine(machine, OSXIRQBMAC, 1);
-	OsxPicSetLine(machine, OSXIRQBMAC, 0);
+	OsxGuestPicSetLine(machine, OSXIRQBMAC, 1);
+	OsxGuestPicSetLine(machine, OSXIRQBMAC, 0);
 }
 
-uint32 OsxBmacRead(OsxMachine *machine, uint32 offset)
+uint32 OsxGuestBmacRead(OsxMachine *machine, uint32 offset)
 {
 	OsxBmac *bmac;
 	uint32 value;
@@ -181,20 +181,20 @@ uint32 OsxBmacRead(OsxMachine *machine, uint32 offset)
 	return bmac->registers[offset >> 4];
 }
 
-void OsxBmacWrite(OsxMachine *machine, uint32 offset, uint32 value)
+void OsxGuestBmacWrite(OsxMachine *machine, uint32 offset, uint32 value)
 {
 	OsxBmac *bmac;
 	bmac = &machine->bmac;
 	offset &= 0xff0;
 	bmac->registers[offset >> 4] = (uint16)value;
 	if (offset == BMACSROMCSR)
-		SromWrite(bmac, (uint16)value);
+		OsxGuestSromWrite(bmac, (uint16)value);
 	else if (offset == BMACRXCFG && (value & BMACRXENABLE))
-		OsxBmacReceive(machine);
+		OsxGuestBmacReceive(machine);
 }
 
 #if OSXNETTRACE
-static void NetTrace(OsxMachine *machine, const char *dir, const uint8 *f, int n)
+static void OsxGuestNetTrace(OsxMachine *machine, const char *dir, const uint8 *f, int n)
 {
 	int type;
 	int ihl;
@@ -205,7 +205,7 @@ static void NetTrace(OsxMachine *machine, const char *dir, const uint8 *f, int n
 	if (!machine->log || n < 14)
 		return;
 	type = (f[12] << 8) | f[13];
-	fprintf(machine->log, "NET %s t=%llu len %d %02x:%02x:%02x:%02x:%02x:%02x<-%02x:%02x:%02x:%02x:%02x:%02x type %04x", dir, (unsigned long long)OsxCpuTimebase(machine->cpu), n, f[0],f[1],f[2],f[3],f[4],f[5],f[6],f[7],f[8],f[9],f[10],f[11], type);
+	fprintf(machine->log, "NET %s t=%llu len %d %02x:%02x:%02x:%02x:%02x:%02x<-%02x:%02x:%02x:%02x:%02x:%02x type %04x", dir, (unsigned long long)OsxGuestCpuTimebase(machine->cpu), n, f[0],f[1],f[2],f[3],f[4],f[5],f[6],f[7],f[8],f[9],f[10],f[11], type);
 	if (type == 0x0806 && n >= 42)
 		fprintf(machine->log, " arp op %d sha %02x:%02x:%02x:%02x:%02x:%02x spa %d.%d.%d.%d tpa %d.%d.%d.%d", f[21], f[22],f[23],f[24],f[25],f[26],f[27], f[28],f[29],f[30],f[31], f[38],f[39],f[40],f[41]);
 	if (type == 0x0800 && n >= 34) {
@@ -252,38 +252,38 @@ static void NetTrace(OsxMachine *machine, const char *dir, const uint8 *f, int n
 }
 #endif
 
-void OsxBmacTransmit(OsxMachine *machine)
+void OsxGuestBmacTransmit(OsxMachine *machine)
 {
 	OsxBmac *bmac;
 	int length;
 	bmac = &machine->bmac;
 	for (;;) {
-		length = OsxDbdmaOutputFrame(machine, OSXDBDMABMACTX, bmac->frame, sizeof(bmac->frame));
+		length = OsxGuestDbdmaOutputFrame(machine, OSXDBDMABMACTX, bmac->frame, sizeof(bmac->frame));
 		if (length < 0)
 			return;
-		if (BackendReady(bmac) && (bmac->registers[BMACTXCFG >> 4] & BMACTXENABLE) && length >= 14) {
+		if (OsxGuestBackendReady(bmac) && (bmac->registers[BMACTXCFG >> 4] & BMACTXENABLE) && length >= 14) {
 #if OSXNETTRACE
-			NetTrace(machine, "tx", bmac->frame, length);
+			OsxGuestNetTrace(machine, "tx", bmac->frame, length);
 #endif
-			OsxHostNetSend(bmac->slirpthread, bmac->frame, length);
-			bmac->busydeadline = OsxCpuTimebase(machine->cpu) + BMACBUSYPERIOD;
+			OsxGuestHostNetSend(bmac->slirpthread, bmac->frame, length);
+			bmac->busydeadline = OsxGuestCpuTimebase(machine->cpu) + BMACBUSYPERIOD;
 		}
-		RaiseDevice(machine, BMACFRAMESENT);
+		OsxGuestRaiseDevice(machine, BMACFRAMESENT);
 	}
 }
 
-void OsxBmacReceive(OsxMachine *machine)
+void OsxGuestBmacReceive(OsxMachine *machine)
 {
 	OsxBmac *bmac;
 	int length;
 	bmac = &machine->bmac;
-	while (BackendReady(bmac) && (bmac->registers[BMACRXCFG >> 4] & BMACRXENABLE)) {
+	while (OsxGuestBackendReady(bmac) && (bmac->registers[BMACRXCFG >> 4] & BMACRXENABLE)) {
 		if (bmac->pendinglength == 0) {
-			length = OsxHostNetReceive(bmac->slirpthread, bmac->pending);
+			length = OsxGuestHostNetReceive(bmac->slirpthread, bmac->pending);
 			if (length <= 0)
 				return;
 #if OSXNETTRACE
-			NetTrace(machine, "rx", bmac->pending, length);
+			OsxGuestNetTrace(machine, "rx", bmac->pending, length);
 #endif
 			if (length > BMACMAXFRAME)
 				length = BMACMAXFRAME;
@@ -294,26 +294,26 @@ void OsxBmacReceive(OsxMachine *machine)
 			bmac->pending[length] = (uint8)(length >> 8);
 			bmac->pending[length + 1] = (uint8)length;
 			bmac->pendinglength = length + 2;
-			bmac->busydeadline = OsxCpuTimebase(machine->cpu) + BMACBUSYPERIOD;
+			bmac->busydeadline = OsxGuestCpuTimebase(machine->cpu) + BMACBUSYPERIOD;
 		}
-		if (!OsxDbdmaInputFrame(machine, OSXDBDMABMACRX, bmac->pending, (uint32)bmac->pendinglength))
+		if (!OsxGuestDbdmaInputFrame(machine, OSXDBDMABMACRX, bmac->pending, (uint32)bmac->pendinglength))
 			return;
 		bmac->pendinglength = 0;
 #if OSXNETTRACE
 		if (machine->log)
-			fprintf(machine->log, "NET rxdone t=%llu\n", (unsigned long long)OsxCpuTimebase(machine->cpu));
+			fprintf(machine->log, "NET rxdone t=%llu\n", (unsigned long long)OsxGuestCpuTimebase(machine->cpu));
 #endif
 		bmac->status |= BMACFRAMERECEIVED;
 	}
 }
 
-void OsxBmacPoll(OsxMachine *machine, uint64 now)
+void OsxGuestBmacPoll(OsxMachine *machine, uint64 now)
 {
 	OsxBmac *bmac;
 	bmac = &machine->bmac;
 	if (!bmac->attached || now < bmac->polldeadline)
 		return;
-	if (!BackendReady(bmac)) {
+	if (!OsxGuestBackendReady(bmac)) {
 		bmac->polldeadline = now + BMACIDLEPOLL;
 		return;
 	}
@@ -321,17 +321,17 @@ void OsxBmacPoll(OsxMachine *machine, uint64 now)
 		bmac->polldeadline = now + BMACBUSYPOLL;
 	else
 		bmac->polldeadline = now + BMACIDLEPOLL;
-	OsxHostNetPoll(bmac->slirpthread);
+	OsxGuestHostNetPoll(bmac->slirpthread);
 #if OSXG5
 	if (machine->g5) {
-		OsxG5GmacReceive(machine);
+		OsxGuestG5GmacReceive(machine);
 		return;
 	}
 #endif
-	OsxBmacReceive(machine);
+	OsxGuestBmacReceive(machine);
 }
 
-uint64 OsxBmacNextDeadline(OsxMachine *machine)
+uint64 OsxGuestBmacNextDeadline(OsxMachine *machine)
 {
 	if (!machine->bmac.attached)
 		return OSXNEVER;

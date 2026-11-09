@@ -458,7 +458,7 @@ static bool ClassicStart(bool firstsession)
 							GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
 							FILE_ATTRIBUTE_NORMAL, NULL);
 	if (rom_fh == INVALID_HANDLE_VALUE) {
-		rom_tmp = OsxReadClassicRom(&actual);
+		rom_tmp = OsxGuestReadClassicRom(&actual);
 		rom_size = actual;
 	} else {
 		printf(GetString(STR_READING_ROM_FILE));
@@ -495,7 +495,7 @@ static bool ClassicStart(bool firstsession)
 
 	if (PrefsFindInt32("osxcputest") > 0) {
 		init_emul_ppc();
-		OsxLockstepTest(RAMBaseHost, RAMSize, PrefsFindInt32("osxcputest"), "osxcputest.log");
+		OsxGuestLockstepTest(RAMBaseHost, RAMSize, PrefsFindInt32("osxcputest"), "osxcputest.log");
 		Quit();
 	}
 

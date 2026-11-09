@@ -32,11 +32,11 @@ typedef struct OsxReferenceState {
 } OsxReferenceState;
 
 void OsxReferenceExecute(uint32 entry, OsxReferenceState *state);
-void OsxLockstepTest(uint8 *ramhost, uint32 ramsize, int iterations, const char *logpath);
+void OsxGuestLockstepTest(uint8 *ramhost, uint32 ramsize, int iterations, const char *logpath);
 #define OSXBOOTCLASSIC 1
 #define OSXBOOTNATIVE 2
-int OsxSelectBootImage(int *diskindex, int *partition);
-uint8 *OsxReadClassicRom(uint32 *size);
+int OsxGuestSelectBootImage(int *diskindex, int *partition);
+uint8 *OsxGuestReadClassicRom(uint32 *size);
 int OsxGuestRequested(void);
 int OsxGuestMain(void);
 

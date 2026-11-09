@@ -33,7 +33,7 @@ struct OsxHostVideo {
 	void *context;
 };
 
-static void OsxSflInput(void *context, int operation, int first, int second)
+static void OsxGuestSflInput(void *context, int operation, int first, int second)
 {
 	OsxHostVideo *video = (OsxHostVideo *)context;
 	switch (operation) {
@@ -42,6 +42,9 @@ static void OsxSflInput(void *context, int operation, int first, int second)
 		break;
 	case SFLUIINPUTBUTTON:
 		video->input(video->context, OSXHOSTBUTTON, first, second);
+		break;
+	case SFLUIINPUTWHEEL:
+		video->input(video->context, OSXHOSTWHEEL, first, 0);
 		break;
 	case SFLUIINPUTKEY:
 		video->input(video->context, OSXHOSTKEY, first, second);
@@ -52,7 +55,7 @@ static void OsxSflInput(void *context, int operation, int first, int second)
 	}
 }
 
-OsxHostVideo *OsxHostOpen(int width, int height, OsxHostInput input, void *context)
+OsxHostVideo *OsxGuestHostOpen(int width, int height, OsxHostInput input, void *context)
 {
 	OsxHostVideo *video = new OsxHostVideo;
 	video->pitch = width * 4;
@@ -64,13 +67,13 @@ OsxHostVideo *OsxHostOpen(int width, int height, OsxHostInput input, void *conte
 		delete video;
 		return NULL;
 	}
-	SflUiSetInput(OsxSflInput, video);
+	SflUiSetInput(OsxGuestSflInput, video);
 	WSTimerBeginPeriod(1);
 	SflUiSetFrame(video->pixels, width, height, video->pitch, 32);
 	return video;
 }
 
-void OsxHostSuspendFrame(OsxHostVideo *video)
+void OsxGuestHostSuspendFrame(OsxHostVideo *video)
 {
 	int width;
 	int height;
@@ -81,7 +84,7 @@ void OsxHostSuspendFrame(OsxHostVideo *video)
 	SflUiSetFrame(NULL, width, height, video->pitch, 32);
 }
 
-void OsxHostClose(OsxHostVideo *video)
+void OsxGuestHostClose(OsxHostVideo *video)
 {
 	WSTimerEndPeriod(1);
 	SflUiSetInput(NULL, NULL);
@@ -91,26 +94,26 @@ void OsxHostClose(OsxHostVideo *video)
 	delete video;
 }
 
-uint8 *OsxHostLock(OsxHostVideo *video, int *pitch, int *raw)
+uint8 *OsxGuestHostLock(OsxHostVideo *video, int *pitch, int *raw)
 {
 	*pitch = video->pitch;
 	*raw = 1;
 	return video->pixels;
 }
 
-int OsxHostPresent(OsxHostVideo *video, const uint32 *runstart, const uint32 *runend, int runs)
+int OsxGuestHostPresent(OsxHostVideo *video, const uint32 *runstart, const uint32 *runend, int runs)
 {
 	return runs && SflUiPresent(runstart[0], runend[runs - 1]);
 }
 
-void OsxHostEvents(OsxHostVideo *video, const uint8 *vram)
+void OsxGuestHostEvents(OsxHostVideo *video, const uint8 *vram)
 {
 	SflUiPumpEvents();
 	if (SflUiIsQuitting())
 		video->input(video->context, OSXHOSTQUIT, 0, 0);
 }
 
-void OsxHostSleep(uint32 milliseconds)
+void OsxGuestHostSleep(uint32 milliseconds)
 {
 	WSThreadSleep(milliseconds);
 }
@@ -123,7 +126,7 @@ struct OsxSflAudio {
 	OsxAudio *guest;
 };
 
-static void AudioFill(void *context, unsigned char *buffer, int length)
+static void OsxGuestAudioFill(void *context, unsigned char *buffer, int length)
 {
 	OsxSflAudio *stream = (OsxSflAudio *)context;
 	OsxAudio *audio = stream->guest;
@@ -158,17 +161,17 @@ static void AudioFill(void *context, unsigned char *buffer, int length)
 #endif
 }
 
-void OsxAudioLockHost(OsxAudio *audio)
+void OsxGuestAudioLockHost(OsxAudio *audio)
 {
 	WSCriticalSection_Lock(&((OsxSflAudio *)audio->stream)->lock);
 }
 
-void OsxAudioUnlockHost(OsxAudio *audio)
+void OsxGuestAudioUnlockHost(OsxAudio *audio)
 {
 	WSCriticalSection_Unlock(&((OsxSflAudio *)audio->stream)->lock);
 }
 
-void OsxAudioCloseHost(OsxAudio *audio)
+void OsxGuestAudioCloseHost(OsxAudio *audio)
 {
 	OsxSflAudio *stream = (OsxSflAudio *)audio->stream;
 	if (stream) {
@@ -180,13 +183,13 @@ void OsxAudioCloseHost(OsxAudio *audio)
 	}
 }
 
-void *OsxAudioStartHost(OsxAudio *audio)
+void *OsxGuestAudioStartHost(OsxAudio *audio)
 {
 	OsxSflAudio *stream = new OsxSflAudio;
 	stream->guest = audio;
 	WSCriticalSection_Construct(&stream->lock);
 	OpenAudio_bincue((int)audio->rate, BINCUE_SFL_AUDIO_S16MSB, 2, 0, AUDIOCDVOLUME);
-	stream->device = SflAudioOpen((int)audio->rate, 2, 16, 4096, AudioFill, stream);
+	stream->device = SflAudioOpen((int)audio->rate, 2, 16, 4096, OsxGuestAudioFill, stream);
 	if (!stream->device) {
 		CloseAudio_bincue();
 		WSCriticalSection_Destruct(&stream->lock);
@@ -196,7 +199,7 @@ void *OsxAudioStartHost(OsxAudio *audio)
 	return stream;
 }
 
-char *OsxHostClipboardGet(void)
+char *OsxGuestHostClipboardGet(void)
 {
 	char *text;
 	size_t length;
@@ -205,7 +208,7 @@ char *OsxHostClipboardGet(void)
 	return NULL;
 }
 
-void OsxHostClipboardSet(const char *text)
+void OsxGuestHostClipboardSet(const char *text)
 {
 	SflUiClipboardSet(text, strlen(text));
 }
@@ -221,7 +224,7 @@ struct OsxSflNetwork {
 	uint8 frames[OSXNETQUEUE][SFLNETFRAMESIZE];
 };
 
-static void NetReceive(void *context, const uint8 *frame, int length)
+static void OsxGuestNetReceive(void *context, const uint8 *frame, int length)
 {
 	OsxSflNetwork *network = (OsxSflNetwork *)context;
 	unsigned int index;
@@ -234,13 +237,13 @@ static void NetReceive(void *context, const uint8 *frame, int length)
 	WSCriticalSection_Unlock(&network->lock);
 }
 
-void *OsxHostNetOpen(const uint8 *address)
+void *OsxGuestHostNetOpen(const uint8 *address)
 {
 	OsxSflNetwork *network = new OsxSflNetwork;
 	WSCriticalSection_Construct(&network->lock);
 	network->read = 0;
 	network->write = 0;
-	network->device = SflNetOpenSlirp(address, NetReceive, network);
+	network->device = SflNetOpenSlirp(address, OsxGuestNetReceive, network);
 	if (!network->device) {
 		WSCriticalSection_Destruct(&network->lock);
 		delete network;
@@ -249,7 +252,7 @@ void *OsxHostNetOpen(const uint8 *address)
 	return network;
 }
 
-void OsxHostNetClose(void *context)
+void OsxGuestHostNetClose(void *context)
 {
 	OsxSflNetwork *network = (OsxSflNetwork *)context;
 	SflNetClose(network->device);
@@ -257,16 +260,16 @@ void OsxHostNetClose(void *context)
 	delete network;
 }
 
-int OsxHostNetReady(void *context)
+int OsxGuestHostNetReady(void *context)
 {
 	return 1;
 }
 
-void OsxHostNetPoll(void *context)
+void OsxGuestHostNetPoll(void *context)
 {
 }
 
-int OsxHostNetReceive(void *context, uint8 *packet)
+int OsxGuestHostNetReceive(void *context, uint8 *packet)
 {
 	OsxSflNetwork *network = (OsxSflNetwork *)context;
 	int length = 0;
@@ -281,7 +284,7 @@ int OsxHostNetReceive(void *context, uint8 *packet)
 	return length;
 }
 
-void OsxHostNetSend(void *context, const uint8 *packet, int length)
+void OsxGuestHostNetSend(void *context, const uint8 *packet, int length)
 {
 	OsxSflNetwork *network = (OsxSflNetwork *)context;
 	SflNetSend(network->device, packet, length);

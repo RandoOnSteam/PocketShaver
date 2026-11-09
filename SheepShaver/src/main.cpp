@@ -81,7 +81,7 @@ bool InitAll(const char *vmdir)
 
 	int startupindex;
 	int startuppartition;
-	if (OsxSelectBootImage(&startupindex, &startuppartition) == OSXBOOTCLASSIC && startupindex >= 0) {
+	if (OsxGuestSelectBootImage(&startupindex, &startuppartition) == OSXBOOTCLASSIC && startupindex >= 0) {
 		XPRAM[0x1378] = (startupindex + DiskFirstDrive) >> 8;
 		XPRAM[0x1379] = (startupindex + DiskFirstDrive) & 0xff;
 		XPRAM[0x137a] = (uint16)DiskRefNum >> 8;

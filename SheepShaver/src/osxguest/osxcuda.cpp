@@ -77,17 +77,17 @@
 #define ADBMOUSEADDRESS 3
 #define MACEPOCHOFFSET 2082844800u
 
-static uint64 MicrosecondsToTicks(uint32 microseconds)
+static uint64 OsxGuestMicrosecondsToTicks(uint32 microseconds)
 {
 	return (uint64)microseconds * OSXTIMEBASEFREQUENCY / 1000000;
 }
 
-static uint32 ViaTicks(uint64 timebase)
+static uint32 OsxGuestViaTicks(uint64 timebase)
 {
 	return (uint32)(timebase * VIAFREQUENCY / OSXTIMEBASEFREQUENCY);
 }
 
-static void UpdateIrq(OsxMachine *machine)
+static void OsxGuestUpdateIrq(OsxMachine *machine)
 {
 	OsxCuda *cuda;
 	int line;
@@ -95,22 +95,22 @@ static void UpdateIrq(OsxMachine *machine)
 	line = (cuda->ifr & cuda->ier & 0x7f) != 0;
 	if (line != cuda->irqline) {
 		cuda->irqline = line;
-		OsxPicSetLine(machine, OSXIRQCUDA, line);
+		OsxGuestPicSetLine(machine, OSXIRQCUDA, line);
 	}
 }
 
-static void DelaySrInterrupt(OsxMachine *machine)
+static void OsxGuestDelaySrInterrupt(OsxMachine *machine)
 {
-	machine->cuda.srdeadline = OsxCpuTimebase(machine->cpu) + MicrosecondsToTicks(30);
+	machine->cuda.srdeadline = OsxGuestCpuTimebase(machine->cpu) + OsxGuestMicrosecondsToTicks(30);
 }
 
-static void ResetAdbDevice(OsxAdbDevice *device)
+static void OsxGuestResetAdbDevice(OsxAdbDevice *device)
 {
 	device->address = device->defaultaddress;
 	device->handler = device->defaulthandler;
 }
 
-void OsxCudaReset(OsxMachine *machine)
+void OsxGuestCudaReset(OsxMachine *machine)
 {
 	OsxCuda *cuda;
 	cuda = &machine->cuda;
@@ -144,8 +144,8 @@ void OsxCudaReset(OsxMachine *machine)
 	cuda->keyboard.defaulthandler = 1;
 	cuda->mouse.defaultaddress = ADBMOUSEADDRESS;
 	cuda->mouse.defaulthandler = 2;
-	ResetAdbDevice(&cuda->keyboard);
-	ResetAdbDevice(&cuda->mouse);
+	OsxGuestResetAdbDevice(&cuda->keyboard);
+	OsxGuestResetAdbDevice(&cuda->mouse);
 	cuda->keyread = 0;
 	cuda->keywrite = 0;
 	cuda->mousedx = 0;
@@ -175,7 +175,7 @@ void OsxCudaReset(OsxMachine *machine)
 #endif
 }
 
-static void SendToHost(OsxMachine *machine, const uint8 *data, int length)
+static void OsxGuestSendToHost(OsxMachine *machine, const uint8 *data, int length)
 {
 	OsxCuda *cuda;
 	cuda = &machine->cuda;
@@ -184,30 +184,30 @@ static void SendToHost(OsxMachine *machine, const uint8 *data, int length)
 	cuda->inposition = 0;
 	if (cuda->b & CUDATIP)
 		cuda->b &= ~CUDATREQ;
-	DelaySrInterrupt(machine);
+	OsxGuestDelaySrInterrupt(machine);
 }
 
-static int KeyboardHasData(OsxCuda *cuda)
+static int OsxGuestKeyboardHasData(OsxCuda *cuda)
 {
 	return cuda->keyread != cuda->keywrite;
 }
 
-static int MouseHasData(OsxCuda *cuda)
+static int OsxGuestMouseHasData(OsxCuda *cuda)
 {
 	if (cuda->mouseabsolute)
 		return cuda->mouseread != cuda->mousewrite && (cuda->pointerwrite + 1) % OSXMOUSEQUEUE != cuda->pointerread;
 	return cuda->mousedx != 0 || cuda->mousedy != 0 || cuda->mousepending != 0;
 }
 
-static int TalkKeyboard(OsxCuda *cuda, int reg, uint8 *output)
+static int OsxGuestTalkKeyboard(OsxCuda *cuda, int reg, uint8 *output)
 {
 	if (reg == 0) {
-		if (!KeyboardHasData(cuda))
+		if (!OsxGuestKeyboardHasData(cuda))
 			return 0;
 		output[0] = cuda->keyqueue[cuda->keyread];
 		cuda->keyread = (cuda->keyread + 1) % OSXADBQUEUE;
 		output[1] = 0xff;
-		if (KeyboardHasData(cuda)) {
+		if (OsxGuestKeyboardHasData(cuda)) {
 			output[1] = cuda->keyqueue[cuda->keyread];
 			cuda->keyread = (cuda->keyread + 1) % OSXADBQUEUE;
 		}
@@ -226,7 +226,7 @@ static int TalkKeyboard(OsxCuda *cuda, int reg, uint8 *output)
 	return 0;
 }
 
-static int ClampDelta(int delta)
+static int OsxGuestClampDelta(int delta)
 {
 	if (delta > 63)
 		return 63;
@@ -235,13 +235,13 @@ static int ClampDelta(int delta)
 	return delta;
 }
 
-static int TalkMouse(OsxCuda *cuda, int reg, uint8 *output)
+static int OsxGuestTalkMouse(OsxCuda *cuda, int reg, uint8 *output)
 {
 	int dx;
 	int dy;
 	OsxMouseEvent *event;
 	if (reg == 0) {
-		if (!MouseHasData(cuda))
+		if (!OsxGuestMouseHasData(cuda))
 			return 0;
 		if (cuda->mouseabsolute) {
 			event = &cuda->mousequeue[cuda->mouseread];
@@ -255,8 +255,8 @@ static int TalkMouse(OsxCuda *cuda, int reg, uint8 *output)
 			cuda->mousereported = event->button & 1;
 			return 2;
 		}
-		dx = ClampDelta(cuda->mousedx);
-		dy = ClampDelta(cuda->mousedy);
+		dx = OsxGuestClampDelta(cuda->mousedx);
+		dy = OsxGuestClampDelta(cuda->mousedy);
 		cuda->mousedx -= dx;
 		cuda->mousedy -= dy;
 		if (cuda->mousepending) {
@@ -277,7 +277,7 @@ static int TalkMouse(OsxCuda *cuda, int reg, uint8 *output)
 	return 0;
 }
 
-static void ListenRegister3(OsxAdbDevice *device, const uint8 *data, int length, int keyboard)
+static void OsxGuestListenRegister3(OsxAdbDevice *device, const uint8 *data, int length, int keyboard)
 {
 	if (length < 3)
 		return;
@@ -296,7 +296,7 @@ static void ListenRegister3(OsxAdbDevice *device, const uint8 *data, int length,
 		device->handler = data[2];
 }
 
-static int AdbRequest(OsxMachine *machine, const uint8 *data, int length, uint8 *output)
+static int OsxGuestAdbRequest(OsxMachine *machine, const uint8 *data, int length, uint8 *output)
 {
 	OsxCuda *cuda;
 	int command;
@@ -306,8 +306,8 @@ static int AdbRequest(OsxMachine *machine, const uint8 *data, int length, uint8 
 	command = data[0] & 0x0f;
 	address = data[0] >> 4;
 	if (command == 0) {
-		ResetAdbDevice(&cuda->keyboard);
-		ResetAdbDevice(&cuda->mouse);
+		OsxGuestResetAdbDevice(&cuda->keyboard);
+		OsxGuestResetAdbDevice(&cuda->mouse);
 		return 0;
 	}
 	reg = command & 3;
@@ -318,11 +318,11 @@ static int AdbRequest(OsxMachine *machine, const uint8 *data, int length, uint8 
 		}
 		if ((command & 0x0c) == 0x08) {
 			if (reg == 3)
-				ListenRegister3(&cuda->keyboard, data, length, 1);
+				OsxGuestListenRegister3(&cuda->keyboard, data, length, 1);
 			return 0;
 		}
 		if ((command & 0x0c) == 0x0c)
-			return TalkKeyboard(cuda, reg, output);
+			return OsxGuestTalkKeyboard(cuda, reg, output);
 		return 0;
 	}
 	if (address == cuda->mouse.address) {
@@ -330,24 +330,24 @@ static int AdbRequest(OsxMachine *machine, const uint8 *data, int length, uint8 
 			return 0;
 		if ((command & 0x0c) == 0x08) {
 			if (reg == 3)
-				ListenRegister3(&cuda->mouse, data, length, 0);
+				OsxGuestListenRegister3(&cuda->mouse, data, length, 0);
 			return 0;
 		}
 		if ((command & 0x0c) == 0x0c)
-			return TalkMouse(cuda, reg, output);
+			return OsxGuestTalkMouse(cuda, reg, output);
 		return 0;
 	}
 	return -1;
 }
 
-static int64 HostSeconds(OsxMachine *machine)
+static int64 OsxGuestHostSeconds(OsxMachine *machine)
 {
 	if (machine->cpu->deterministic)
-		return OSXDETERMINISTICEPOCH + (int64)(OsxCpuTimebase(machine->cpu) / OSXTIMEBASEFREQUENCY);
+		return OSXDETERMINISTICEPOCH + (int64)(OsxGuestCpuTimebase(machine->cpu) / OSXTIMEBASEFREQUENCY);
 	return (int64)time(NULL);
 }
 
-static void ReceiveCudaCommand(OsxMachine *machine, const uint8 *data, int length)
+static void OsxGuestReceiveCudaCommand(OsxMachine *machine, const uint8 *data, int length)
 {
 	OsxCuda *cuda;
 	uint8 reply[OSXCUDABUFFER];
@@ -381,7 +381,7 @@ static void ReceiveCudaCommand(OsxMachine *machine, const uint8 *data, int lengt
 		reply[replylength++] = (uint8)cuda->pollmask;
 		break;
 	case CUDAGETTIME:
-		now = (uint32)(HostSeconds(machine) + MACEPOCHOFFSET + cuda->timeoffset);
+		now = (uint32)(OsxGuestHostSeconds(machine) + MACEPOCHOFFSET + cuda->timeoffset);
 		reply[replylength++] = (uint8)(now >> 24);
 		reply[replylength++] = (uint8)(now >> 16);
 		reply[replylength++] = (uint8)(now >> 8);
@@ -390,7 +390,7 @@ static void ReceiveCudaCommand(OsxMachine *machine, const uint8 *data, int lengt
 	case CUDASETTIME:
 		if (length > 4) {
 			now = ((uint32)data[1] << 24) | ((uint32)data[2] << 16) | ((uint32)data[3] << 8) | data[4];
-			cuda->timeoffset = (int64)now - (HostSeconds(machine) + MACEPOCHOFFSET);
+			cuda->timeoffset = (int64)now - (OsxGuestHostSeconds(machine) + MACEPOCHOFFSET);
 		}
 		break;
 	case CUDAGETPRAM:
@@ -429,39 +429,39 @@ static void ReceiveCudaCommand(OsxMachine *machine, const uint8 *data, int lengt
 		replylength = 4;
 		break;
 	}
-	SendToHost(machine, reply, replylength);
+	OsxGuestSendToHost(machine, reply, replylength);
 }
 
-static void ReceivePacket(OsxMachine *machine, const uint8 *data, int length)
+static void OsxGuestReceivePacket(OsxMachine *machine, const uint8 *data, int length)
 {
 	uint8 reply[OSXCUDABUFFER];
 	int result;
 	if (length < 1)
 		return;
 	if (data[0] == CUDAPACKETADB && length >= 2) {
-		result = AdbRequest(machine, data + 1, length - 1, reply + 3);
+		result = OsxGuestAdbRequest(machine, data + 1, length - 1, reply + 3);
 		reply[0] = CUDAPACKETADB;
 		reply[2] = data[1];
 		if (result < 0) {
 			reply[1] = 0x02;
-			SendToHost(machine, reply, 3);
+			OsxGuestSendToHost(machine, reply, 3);
 			return;
 		}
 		reply[1] = 0x00;
-		SendToHost(machine, reply, 3 + result);
+		OsxGuestSendToHost(machine, reply, 3 + result);
 		return;
 	}
 	if (data[0] == CUDAPACKETCUDA && length >= 2) {
-		ReceiveCudaCommand(machine, data + 1, length - 1);
+		OsxGuestReceiveCudaCommand(machine, data + 1, length - 1);
 		return;
 	}
 	reply[0] = CUDAPACKETERROR;
 	reply[1] = 0x01;
 	reply[2] = data[0];
-	SendToHost(machine, reply, 3);
+	OsxGuestSendToHost(machine, reply, 3);
 }
 
-static void CudaUpdate(OsxMachine *machine)
+static void OsxGuestCudaUpdate(OsxMachine *machine)
 {
 	OsxCuda *cuda;
 	int received;
@@ -473,14 +473,14 @@ static void CudaUpdate(OsxMachine *machine)
 			if ((cuda->b & (CUDATACK | CUDATIP)) != (cuda->lastb & (CUDATACK | CUDATIP))) {
 				if (cuda->outlength < OSXCUDABUFFER)
 					cuda->outbuffer[cuda->outlength++] = cuda->sr;
-				DelaySrInterrupt(machine);
+				OsxGuestDelaySrInterrupt(machine);
 			}
 		} else if (cuda->inposition < cuda->inlength) {
 			if ((cuda->b & (CUDATACK | CUDATIP)) != (cuda->lastb & (CUDATACK | CUDATIP))) {
 				cuda->sr = cuda->inbuffer[cuda->inposition++];
 				if (cuda->inposition >= cuda->inlength)
 					cuda->b |= CUDATREQ;
-				DelaySrInterrupt(machine);
+				OsxGuestDelaySrInterrupt(machine);
 			}
 		}
 	} else {
@@ -489,11 +489,11 @@ static void CudaUpdate(OsxMachine *machine)
 				cuda->b |= CUDATREQ;
 			else
 				cuda->b &= ~CUDATREQ;
-			DelaySrInterrupt(machine);
+			OsxGuestDelaySrInterrupt(machine);
 		} else {
 			if (!(cuda->lastb & CUDATIP)) {
 				received = cuda->outlength > 0;
-				DelaySrInterrupt(machine);
+				OsxGuestDelaySrInterrupt(machine);
 			}
 			if (cuda->inposition < cuda->inlength)
 				cuda->b &= ~CUDATREQ;
@@ -503,15 +503,15 @@ static void CudaUpdate(OsxMachine *machine)
 	if (received) {
 		length = cuda->outlength;
 		cuda->outlength = 0;
-		ReceivePacket(machine, cuda->outbuffer, length);
+		OsxGuestReceivePacket(machine, cuda->outbuffer, length);
 	}
 }
 
-static uint32 TimerCounter(OsxCuda *cuda, uint64 start, uint16 latch, int continuous, uint64 now)
+static uint32 OsxGuestTimerCounter(OsxCuda *cuda, uint64 start, uint16 latch, int continuous, uint64 now)
 {
 	uint32 elapsed;
 	uint32 period;
-	elapsed = ViaTicks(now - start);
+	elapsed = OsxGuestViaTicks(now - start);
 	if (continuous) {
 		period = (uint32)latch + 2;
 		return (uint32)(latch - (elapsed % period)) & 0xffff;
@@ -519,7 +519,7 @@ static uint32 TimerCounter(OsxCuda *cuda, uint64 start, uint16 latch, int contin
 	return (uint32)(latch - elapsed) & 0xffff;
 }
 
-static uint64 TimerDeadline(uint64 start, uint32 ticks)
+static uint64 OsxGuestTimerDeadline(uint64 start, uint32 ticks)
 {
 	return start + ((uint64)ticks + 1) * OSXTIMEBASEFREQUENCY / VIAFREQUENCY;
 }
@@ -585,20 +585,20 @@ static const signed char pmulengths[256][2] = {
 	{ -1, -1 }, { -1, -1 }, { -1, -1 }, { -1, -1 }, { -1, -1 }, { -1, -1 }, { -1, -1 }, { -1, -1 }
 };
 
-static void PmuUpdateRequest(OsxMachine *machine)
+static void OsxGuestPmuUpdateRequest(OsxMachine *machine)
 {
 	OsxCuda *cuda;
 	cuda = &machine->cuda;
-	OsxG5SetPmuRequest(machine, (cuda->pmuintbits & cuda->pmuintmask) != 0);
+	OsxGuestG5SetPmuRequest(machine, (cuda->pmuintbits & cuda->pmuintmask) != 0);
 }
 
-static void PmuRaiseSr(OsxMachine *machine)
+static void OsxGuestPmuRaiseSr(OsxMachine *machine)
 {
 	machine->cuda.ifr |= VIAIRQSR;
-	UpdateIrq(machine);
+	OsxGuestUpdateIrq(machine);
 }
 
-static void PmuAdbCommand(OsxMachine *machine, const uint8 *data, int length)
+static void OsxGuestPmuAdbCommand(OsxMachine *machine, const uint8 *data, int length)
 {
 	OsxCuda *cuda;
 	uint8 request[OSXCUDABUFFER];
@@ -617,17 +617,17 @@ static void PmuAdbCommand(OsxMachine *machine, const uint8 *data, int length)
 	if (length >= 3 && data[2] <= length - 3) {
 		request[0] = data[0];
 		memcpy(request + 1, data + 3, length - 3);
-		result = AdbRequest(machine, request, length - 2, cuda->adbreply + 1);
+		result = OsxGuestAdbRequest(machine, request, length - 2, cuda->adbreply + 1);
 	}
 	if (result < 0)
 		result = 0;
 	cuda->adbreply[0] = data[0];
 	cuda->adbreplysize = result + 1;
 	cuda->pmuintbits |= PMUINTADB;
-	PmuUpdateRequest(machine);
+	OsxGuestPmuUpdateRequest(machine);
 }
 
-static int PmuDispatch(OsxMachine *machine)
+static int OsxGuestPmuDispatch(OsxMachine *machine)
 {
 	OsxCuda *cuda;
 	uint8 *in;
@@ -655,15 +655,15 @@ static int PmuDispatch(OsxMachine *machine)
 			cuda->pmuintbits = 0;
 			cuda->pmuresponsesize = 1;
 		}
-		PmuUpdateRequest(machine);
+		OsxGuestPmuUpdateRequest(machine);
 		return 1;
 	case PMUSETINTRMASK:
 		if (length == 1)
 			cuda->pmuintmask = in[0];
-		PmuUpdateRequest(machine);
+		OsxGuestPmuUpdateRequest(machine);
 		return 1;
 	case PMUADBCOMMAND:
-		PmuAdbCommand(machine, in, length);
+		OsxGuestPmuAdbCommand(machine, in, length);
 		return 1;
 	case PMUADBPOLLOFF:
 		cuda->autopoll = 0;
@@ -678,7 +678,7 @@ static int PmuDispatch(OsxMachine *machine)
 			machine->quit = 1;
 		return 1;
 	case PMUREADRTC:
-		now = (uint32)(HostSeconds(machine) + MACEPOCHOFFSET + cuda->timeoffset);
+		now = (uint32)(OsxGuestHostSeconds(machine) + MACEPOCHOFFSET + cuda->timeoffset);
 		out[0] = (uint8)(now >> 24);
 		out[1] = (uint8)(now >> 16);
 		out[2] = (uint8)(now >> 8);
@@ -688,7 +688,7 @@ static int PmuDispatch(OsxMachine *machine)
 	case PMUSETRTC:
 		if (length == 4) {
 			now = ((uint32)in[0] << 24) | ((uint32)in[1] << 16) | ((uint32)in[2] << 8) | in[3];
-			cuda->timeoffset = (int64)now - (HostSeconds(machine) + MACEPOCHOFFSET);
+			cuda->timeoffset = (int64)now - (OsxGuestHostSeconds(machine) + MACEPOCHOFFSET);
 		}
 		return 1;
 	case PMUREADXPRAM:
@@ -731,11 +731,11 @@ static int PmuDispatch(OsxMachine *machine)
 	return 0;
 }
 
-static void PmuExecute(OsxMachine *machine)
+static void OsxGuestPmuExecute(OsxMachine *machine)
 {
 	OsxCuda *cuda;
 	cuda = &machine->cuda;
-	if (PmuDispatch(machine))
+	if (OsxGuestPmuDispatch(machine))
 		return;
 	if (machine->log)
 		fprintf(machine->log, "pmu unknown command %02x length %d\n", cuda->pmucommand, cuda->pmucommandposition);
@@ -745,7 +745,7 @@ static void PmuExecute(OsxMachine *machine)
 	}
 }
 
-static void PmuUpdate(OsxMachine *machine)
+static void OsxGuestPmuUpdate(OsxMachine *machine)
 {
 	OsxCuda *cuda;
 	cuda = &machine->cuda;
@@ -765,7 +765,7 @@ static void PmuUpdate(OsxMachine *machine)
 		if (!(cuda->acr & CUDASROUT))
 			return;
 		cuda->pmucommand = cuda->sr;
-		PmuRaiseSr(machine);
+		OsxGuestPmuRaiseSr(machine);
 		cuda->pmucommandlength = pmulengths[cuda->pmucommand][0];
 		cuda->pmuresponselength = pmulengths[cuda->pmucommand][1];
 		cuda->pmucommandposition = 0;
@@ -778,7 +778,7 @@ static void PmuUpdate(OsxMachine *machine)
 			cuda->pmucommandlength = cuda->sr;
 		else if (cuda->pmucommandposition++ < OSXCUDABUFFER)
 			cuda->pmucommandbuffer[cuda->pmucommandposition - 1] = cuda->sr;
-		PmuRaiseSr(machine);
+		OsxGuestPmuRaiseSr(machine);
 	} else {
 		if (cuda->acr & CUDASROUT)
 			return;
@@ -788,17 +788,17 @@ static void PmuUpdate(OsxMachine *machine)
 		} else if (cuda->pmuresponseposition < cuda->pmuresponsesize) {
 			cuda->sr = cuda->pmuresponse[cuda->pmuresponseposition++];
 		}
-		PmuRaiseSr(machine);
+		OsxGuestPmuRaiseSr(machine);
 	}
 	if (cuda->pmustate == PMUSTATECOMMAND && cuda->pmucommandlength == cuda->pmucommandposition) {
-		PmuExecute(machine);
+		OsxGuestPmuExecute(machine);
 		cuda->pmustate = PMUSTATERESPONSE;
 	}
 	if (cuda->pmustate == PMUSTATERESPONSE && cuda->pmuresponselength == cuda->pmuresponseposition)
 		cuda->pmustate = PMUSTATEIDLE;
 }
 
-static void PmuPoll(OsxMachine *machine, uint64 now)
+static void OsxGuestPmuPoll(OsxMachine *machine, uint64 now)
 {
 	OsxCuda *cuda;
 	int result;
@@ -807,29 +807,29 @@ static void PmuPoll(OsxMachine *machine, uint64 now)
 	if (now >= cuda->tickdeadline) {
 		cuda->tickdeadline = now + OSXTIMEBASEFREQUENCY;
 		cuda->pmuintbits |= PMUINTTICK;
-		PmuUpdateRequest(machine);
+		OsxGuestPmuUpdateRequest(machine);
 	}
 	if (!cuda->autopoll || (cuda->pmuintbits & PMUINTADB) || cuda->pmustate != PMUSTATEIDLE)
 		return;
 	result = 0;
 	request = 0;
-	if (KeyboardHasData(cuda) && (cuda->pollmask & (1u << cuda->keyboard.address))) {
+	if (OsxGuestKeyboardHasData(cuda) && (cuda->pollmask & (1u << cuda->keyboard.address))) {
 		request = (uint8)((cuda->keyboard.address << 4) | 0x0c);
-		result = TalkKeyboard(cuda, 0, cuda->adbreply + 1);
-	} else if (MouseHasData(cuda) && (cuda->pollmask & (1u << cuda->mouse.address))) {
+		result = OsxGuestTalkKeyboard(cuda, 0, cuda->adbreply + 1);
+	} else if (OsxGuestMouseHasData(cuda) && (cuda->pollmask & (1u << cuda->mouse.address))) {
 		request = (uint8)((cuda->mouse.address << 4) | 0x0c);
-		result = TalkMouse(cuda, 0, cuda->adbreply + 1);
+		result = OsxGuestTalkMouse(cuda, 0, cuda->adbreply + 1);
 	}
 	if (result <= 0)
 		return;
 	cuda->adbreply[0] = request;
 	cuda->adbreplysize = result + 1;
 	cuda->pmuintbits |= PMUINTADB | PMUINTADBAUTO;
-	PmuUpdateRequest(machine);
+	OsxGuestPmuUpdateRequest(machine);
 }
 #endif
 
-uint32 OsxCudaRead(OsxMachine *machine, uint32 reg)
+uint32 OsxGuestCudaRead(OsxMachine *machine, uint32 reg)
 {
 	OsxCuda *cuda;
 	uint32 value;
@@ -846,29 +846,29 @@ uint32 OsxCudaRead(OsxMachine *machine, uint32 reg)
 	case VIADIRA:
 		return cuda->dira;
 	case VIAT1CL:
-		now = OsxCpuTimebase(machine->cpu);
+		now = OsxGuestCpuTimebase(machine->cpu);
 		cuda->ifr &= ~VIAIRQT1;
-		UpdateIrq(machine);
-		return TimerCounter(cuda, cuda->t1start, cuda->t1latch, (cuda->acr & 0x40) != 0, now) & 0xff;
+		OsxGuestUpdateIrq(machine);
+		return OsxGuestTimerCounter(cuda, cuda->t1start, cuda->t1latch, (cuda->acr & 0x40) != 0, now) & 0xff;
 	case VIAT1CH:
-		now = OsxCpuTimebase(machine->cpu);
-		return TimerCounter(cuda, cuda->t1start, cuda->t1latch, (cuda->acr & 0x40) != 0, now) >> 8;
+		now = OsxGuestCpuTimebase(machine->cpu);
+		return OsxGuestTimerCounter(cuda, cuda->t1start, cuda->t1latch, (cuda->acr & 0x40) != 0, now) >> 8;
 	case VIAT1LL:
 		return cuda->t1latch & 0xff;
 	case VIAT1LH:
 		return cuda->t1latch >> 8;
 	case VIAT2CL:
-		now = OsxCpuTimebase(machine->cpu);
+		now = OsxGuestCpuTimebase(machine->cpu);
 		cuda->ifr &= ~VIAIRQT2;
-		UpdateIrq(machine);
-		return TimerCounter(cuda, cuda->t2start, cuda->t2latch, 0, now) & 0xff;
+		OsxGuestUpdateIrq(machine);
+		return OsxGuestTimerCounter(cuda, cuda->t2start, cuda->t2latch, 0, now) & 0xff;
 	case VIAT2CH:
-		now = OsxCpuTimebase(machine->cpu);
-		return TimerCounter(cuda, cuda->t2start, cuda->t2latch, 0, now) >> 8;
+		now = OsxGuestCpuTimebase(machine->cpu);
+		return OsxGuestTimerCounter(cuda, cuda->t2start, cuda->t2latch, 0, now) >> 8;
 	case VIASR:
 		value = cuda->sr;
 		cuda->ifr &= ~VIAIRQSR;
-		UpdateIrq(machine);
+		OsxGuestUpdateIrq(machine);
 		return value;
 	case VIAACR:
 		return cuda->acr;
@@ -885,7 +885,7 @@ uint32 OsxCudaRead(OsxMachine *machine, uint32 reg)
 	return 0;
 }
 
-void OsxCudaWrite(OsxMachine *machine, uint32 reg, uint32 value)
+void OsxGuestCudaWrite(OsxMachine *machine, uint32 reg, uint32 value)
 {
 	OsxCuda *cuda;
 	cuda = &machine->cuda;
@@ -894,11 +894,11 @@ void OsxCudaWrite(OsxMachine *machine, uint32 reg, uint32 value)
 		cuda->b = (uint8)((cuda->b & ~cuda->dirb) | (value & cuda->dirb));
 #if OSXG5
 		if (cuda->pmu) {
-			PmuUpdate(machine);
+			OsxGuestPmuUpdate(machine);
 			break;
 		}
 #endif
-		CudaUpdate(machine);
+		OsxGuestCudaUpdate(machine);
 		break;
 	case VIAA:
 	case VIAANH:
@@ -916,30 +916,30 @@ void OsxCudaWrite(OsxMachine *machine, uint32 reg, uint32 value)
 		break;
 	case VIAT1CH:
 		cuda->t1latch = (uint16)((cuda->t1latch & 0x00ff) | (value << 8));
-		cuda->t1start = OsxCpuTimebase(machine->cpu);
-		cuda->t1deadline = TimerDeadline(cuda->t1start, cuda->t1latch);
+		cuda->t1start = OsxGuestCpuTimebase(machine->cpu);
+		cuda->t1deadline = OsxGuestTimerDeadline(cuda->t1start, cuda->t1latch);
 		cuda->ifr &= ~VIAIRQT1;
-		UpdateIrq(machine);
+		OsxGuestUpdateIrq(machine);
 		break;
 	case VIAT1LH:
 		cuda->t1latch = (uint16)((cuda->t1latch & 0x00ff) | (value << 8));
 		cuda->ifr &= ~VIAIRQT1;
-		UpdateIrq(machine);
+		OsxGuestUpdateIrq(machine);
 		break;
 	case VIAT2CL:
 		cuda->t2latch = (uint16)((cuda->t2latch & 0xff00) | value);
 		break;
 	case VIAT2CH:
 		cuda->t2latch = (uint16)((cuda->t2latch & 0x00ff) | (value << 8));
-		cuda->t2start = OsxCpuTimebase(machine->cpu);
-		cuda->t2deadline = TimerDeadline(cuda->t2start, cuda->t2latch);
+		cuda->t2start = OsxGuestCpuTimebase(machine->cpu);
+		cuda->t2deadline = OsxGuestTimerDeadline(cuda->t2start, cuda->t2latch);
 		cuda->ifr &= ~VIAIRQT2;
-		UpdateIrq(machine);
+		OsxGuestUpdateIrq(machine);
 		break;
 	case VIASR:
 		cuda->sr = (uint8)value;
 		cuda->ifr &= ~VIAIRQSR;
-		UpdateIrq(machine);
+		OsxGuestUpdateIrq(machine);
 		break;
 	case VIAACR:
 		cuda->acr = (uint8)value;
@@ -947,26 +947,26 @@ void OsxCudaWrite(OsxMachine *machine, uint32 reg, uint32 value)
 		if (cuda->pmu)
 			break;
 #endif
-		CudaUpdate(machine);
+		OsxGuestCudaUpdate(machine);
 		break;
 	case VIAPCR:
 		cuda->pcr = (uint8)value;
 		break;
 	case VIAIFR:
 		cuda->ifr &= (uint8)~value;
-		UpdateIrq(machine);
+		OsxGuestUpdateIrq(machine);
 		break;
 	case VIAIER:
 		if (value & 0x80)
 			cuda->ier |= (uint8)(value & 0x7f);
 		else
 			cuda->ier &= (uint8)~value;
-		UpdateIrq(machine);
+		OsxGuestUpdateIrq(machine);
 		break;
 	}
 }
 
-static void AutoPoll(OsxMachine *machine)
+static void OsxGuestAutoPoll(OsxMachine *machine)
 {
 	OsxCuda *cuda;
 	uint8 packet[OSXCUDABUFFER];
@@ -976,78 +976,78 @@ static void AutoPoll(OsxMachine *machine)
 	if (!cuda->autopoll || cuda->inposition < cuda->inlength || !(cuda->b & CUDATIP) || cuda->outlength > 0)
 		return;
 	result = 0;
-	if (KeyboardHasData(cuda) && (cuda->pollmask & (1u << cuda->keyboard.address))) {
+	if (OsxGuestKeyboardHasData(cuda) && (cuda->pollmask & (1u << cuda->keyboard.address))) {
 		request = (uint8)((cuda->keyboard.address << 4) | 0x0c);
-		result = TalkKeyboard(cuda, 0, packet + 3);
-	} else if (MouseHasData(cuda) && (cuda->pollmask & (1u << cuda->mouse.address))) {
+		result = OsxGuestTalkKeyboard(cuda, 0, packet + 3);
+	} else if (OsxGuestMouseHasData(cuda) && (cuda->pollmask & (1u << cuda->mouse.address))) {
 		request = (uint8)((cuda->mouse.address << 4) | 0x0c);
-		result = TalkMouse(cuda, 0, packet + 3);
+		result = OsxGuestTalkMouse(cuda, 0, packet + 3);
 	}
 	if (result <= 0)
 		return;
 	packet[0] = CUDAPACKETADB;
 	packet[1] = 0x40;
 	packet[2] = request;
-	SendToHost(machine, packet, 3 + result);
+	OsxGuestSendToHost(machine, packet, 3 + result);
 }
 
-static uint64 EarlierDeadline(uint64 current, uint64 deadline)
+static uint64 OsxGuestEarlierDeadline(uint64 current, uint64 deadline)
 {
 	if (deadline && deadline < current)
 		return deadline;
 	return current;
 }
 
-uint64 OsxCudaNextDeadline(OsxMachine *machine)
+uint64 OsxGuestCudaNextDeadline(OsxMachine *machine)
 {
 	OsxCuda *cuda;
 	uint64 next;
 	cuda = &machine->cuda;
-	next = EarlierDeadline(OSXNEVER, cuda->srdeadline);
-	next = EarlierDeadline(next, cuda->t1deadline);
-	next = EarlierDeadline(next, cuda->t2deadline);
+	next = OsxGuestEarlierDeadline(OSXNEVER, cuda->srdeadline);
+	next = OsxGuestEarlierDeadline(next, cuda->t1deadline);
+	next = OsxGuestEarlierDeadline(next, cuda->t2deadline);
 	if (cuda->autopoll)
-		next = EarlierDeadline(next, cuda->polldeadline);
+		next = OsxGuestEarlierDeadline(next, cuda->polldeadline);
 	return next;
 }
 
-void OsxCudaPoll(OsxMachine *machine, uint64 now)
+void OsxGuestCudaPoll(OsxMachine *machine, uint64 now)
 {
 	OsxCuda *cuda;
 	cuda = &machine->cuda;
 	if (cuda->srdeadline && now >= cuda->srdeadline) {
 		cuda->srdeadline = 0;
 		cuda->ifr |= VIAIRQSR;
-		UpdateIrq(machine);
+		OsxGuestUpdateIrq(machine);
 	}
 	if (cuda->t1deadline && now >= cuda->t1deadline) {
 		cuda->ifr |= VIAIRQT1;
 		if (cuda->acr & 0x40) {
 			cuda->t1start = cuda->t1deadline;
-			cuda->t1deadline = TimerDeadline(cuda->t1start, (uint32)cuda->t1latch + 1);
+			cuda->t1deadline = OsxGuestTimerDeadline(cuda->t1start, (uint32)cuda->t1latch + 1);
 		} else {
 			cuda->t1deadline = 0;
 		}
-		UpdateIrq(machine);
+		OsxGuestUpdateIrq(machine);
 	}
 	if (cuda->t2deadline && now >= cuda->t2deadline) {
 		cuda->t2deadline = 0;
 		cuda->ifr |= VIAIRQT2;
-		UpdateIrq(machine);
+		OsxGuestUpdateIrq(machine);
 	}
 	if (now >= cuda->polldeadline) {
-		cuda->polldeadline = now + MicrosecondsToTicks(cuda->pollrate * 1000);
+		cuda->polldeadline = now + OsxGuestMicrosecondsToTicks(cuda->pollrate * 1000);
 #if OSXG5
 		if (cuda->pmu) {
-			PmuPoll(machine, now);
+			OsxGuestPmuPoll(machine, now);
 			return;
 		}
 #endif
-		AutoPoll(machine);
+		OsxGuestAutoPoll(machine);
 	}
 }
 
-void OsxCudaKey(OsxMachine *machine, int code, int down)
+void OsxGuestCudaKey(OsxMachine *machine, int code, int down)
 {
 	OsxCuda *cuda;
 	int next;
@@ -1062,7 +1062,7 @@ void OsxCudaKey(OsxMachine *machine, int code, int down)
 	cuda->keywrite = next;
 }
 
-void OsxCudaWheel(OsxMachine *machine, int delta)
+void OsxGuestCudaWheel(OsxMachine *machine, int delta)
 {
 	OsxCuda *cuda;
 	OsxMouseEvent *event;
@@ -1089,7 +1089,7 @@ void OsxCudaWheel(OsxMachine *machine, int delta)
 	cuda->mousewrite = next;
 }
 
-void OsxCudaMouse(OsxMachine *machine, int dx, int dy, int button)
+void OsxGuestCudaMouse(OsxMachine *machine, int dx, int dy, int button)
 {
 	OsxCuda *cuda;
 	OsxMouseEvent *event;

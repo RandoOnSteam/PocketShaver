@@ -553,6 +553,11 @@ static void setIdentity(float m[16])
 static GLContext *GLContextNew(int width, int height)
 {
 	GLContext *ctx = new GLContext();
+#if defined(OSXGLGUEST)
+	ctx->guesttextures = new GLGuestTextures();
+	ctx->guesttextures->referencecount = 1;
+	ctx->guesttextures->nexttexturename = 1;
+#endif
 	// Note: Do NOT memset here. GLContext contains std::map and
 	// std::vector members whose internal state would be destroyed by memset.
 	// Value-initialization via new GLContext() already zero-inits POD members,

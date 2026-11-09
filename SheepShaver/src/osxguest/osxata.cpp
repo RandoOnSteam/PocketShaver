@@ -44,21 +44,21 @@
 #define SENSEILLEGALREQUEST 0x05
 #define SENSEUNITATTENTION 0x06
 
-static void InsertNextMedia(OsxMachine *machine, OsxAtaDrive *drive);
+static void OsxGuestInsertNextMedia(OsxMachine *machine, OsxAtaDrive *drive);
 
-static OsxAtaDrive *SelectedDrive(OsxAtaBus *bus)
+static OsxAtaDrive *OsxGuestSelectedDrive(OsxAtaBus *bus)
 {
 	return &bus->drives[(bus->select >> 4) & 1];
 }
 
-static void RaiseIrq(OsxMachine *machine, OsxAtaBus *bus)
+static void OsxGuestRaiseIrq(OsxMachine *machine, OsxAtaBus *bus)
 {
 	bus->pendingstatus = bus->status;
 	bus->status = ATABUSY | ATAREADY;
-	bus->irqdeadline = OsxCpuTimebase(machine->cpu) + OSXATADELAY;
+	bus->irqdeadline = OsxGuestCpuTimebase(machine->cpu) + OSXATADELAY;
 }
 
-void OsxAtaPoll(OsxMachine *machine, uint64 now)
+void OsxGuestAtaPoll(OsxMachine *machine, uint64 now)
 {
 	OsxAtaBus *bus;
 	int index;
@@ -67,28 +67,28 @@ void OsxAtaPoll(OsxMachine *machine, uint64 now)
 		bus = &machine->ata[index];
 		for (unit = 0; unit < 2; unit++)
 			if (bus->drives[unit].insertdeadline && now >= bus->drives[unit].insertdeadline)
-				InsertNextMedia(machine, &bus->drives[unit]);
+				OsxGuestInsertNextMedia(machine, &bus->drives[unit]);
 		if (bus->irqdeadline == 0 || now < bus->irqdeadline)
 			continue;
 		bus->irqdeadline = 0;
 		bus->status = bus->pendingstatus;
 		bus->irqline = 1;
 		if (!(bus->control & 2))
-			OsxPicSetLine(machine, bus->irq, 1);
+			OsxGuestPicSetLine(machine, bus->irq, 1);
 	}
 }
 
-static void LowerIrq(OsxMachine *machine, OsxAtaBus *bus)
+static void OsxGuestLowerIrq(OsxMachine *machine, OsxAtaBus *bus)
 {
 	if (bus->irqdeadline) {
 		bus->irqdeadline = 0;
 		bus->status = bus->pendingstatus;
 	}
 	bus->irqline = 0;
-	OsxPicSetLine(machine, bus->irq, 0);
+	OsxGuestPicSetLine(machine, bus->irq, 0);
 }
 
-static void SetSignature(OsxAtaBus *bus, OsxAtaDrive *drive)
+static void OsxGuestSetSignature(OsxAtaBus *bus, OsxAtaDrive *drive)
 {
 	bus->count = 1;
 	bus->sector = 1;
@@ -102,7 +102,7 @@ static void SetSignature(OsxAtaBus *bus, OsxAtaDrive *drive)
 	bus->select &= 0x10;
 }
 
-static void ResetBus(OsxAtaBus *bus)
+static void OsxGuestResetBus(OsxAtaBus *bus)
 {
 	bus->error = 1;
 	bus->feature = 0;
@@ -116,10 +116,10 @@ static void ResetBus(OsxAtaBus *bus)
 	bus->drqremaining = 0;
 	bus->remaining = 0;
 	bus->select = 0xa0;
-	SetSignature(bus, &bus->drives[0]);
+	OsxGuestSetSignature(bus, &bus->drives[0]);
 }
 
-void OsxAtaReset(OsxMachine *machine)
+void OsxGuestAtaReset(OsxMachine *machine)
 {
 	OsxAtaBus *bus;
 	int index;
@@ -130,7 +130,7 @@ void OsxAtaReset(OsxMachine *machine)
 		bus->control = 0;
 		bus->timing = 0;
 		bus->irqline = 0;
-		ResetBus(bus);
+		OsxGuestResetBus(bus);
 	}
 	machine->ata[0].irq = OSXIRQIDE0;
 	machine->ata[1].irq = OSXIRQIDE1;
@@ -140,7 +140,7 @@ void OsxAtaReset(OsxMachine *machine)
 	machine->dbdma[OSXDBDMAIDE1].irq = OSXIRQIDE1DMA;
 }
 
-static void PutString(uint8 *identify, int word, int words, const char *text)
+static void OsxGuestPutString(uint8 *identify, int word, int words, const char *text)
 {
 	int index;
 	int length;
@@ -155,30 +155,30 @@ static void PutString(uint8 *identify, int word, int words, const char *text)
 	}
 }
 
-static void PutWord(uint8 *identify, int word, uint32 value)
+static void OsxGuestPutWord(uint8 *identify, int word, uint32 value)
 {
 	identify[word * 2] = (uint8)value;
 	identify[word * 2 + 1] = (uint8)(value >> 8);
 }
 
-static void BuildIdentify(OsxAtaDrive *drive, uint8 *identify)
+static void OsxGuestBuildIdentify(OsxAtaDrive *drive, uint8 *identify)
 {
 	uint64 cylinders;
 	uint32 capacity;
 	memset(identify, 0, 512);
 	if (drive->atapi) {
-		PutWord(identify, 0, 0x85c0);
-		PutWord(identify, 49, 0x0300);
-		PutWord(identify, 53, 0x0007);
-		PutWord(identify, 63, 0x0407);
-		PutWord(identify, 64, 0x0003);
-		PutWord(identify, 65, 0x00b4);
-		PutWord(identify, 66, 0x00b4);
-		PutWord(identify, 67, 0x012c);
-		PutWord(identify, 68, 0x00b4);
-		PutWord(identify, 71, 30);
-		PutWord(identify, 72, 30);
-		PutWord(identify, 80, 0x001e);
+		OsxGuestPutWord(identify, 0, 0x85c0);
+		OsxGuestPutWord(identify, 49, 0x0300);
+		OsxGuestPutWord(identify, 53, 0x0007);
+		OsxGuestPutWord(identify, 63, 0x0407);
+		OsxGuestPutWord(identify, 64, 0x0003);
+		OsxGuestPutWord(identify, 65, 0x00b4);
+		OsxGuestPutWord(identify, 66, 0x00b4);
+		OsxGuestPutWord(identify, 67, 0x012c);
+		OsxGuestPutWord(identify, 68, 0x00b4);
+		OsxGuestPutWord(identify, 71, 30);
+		OsxGuestPutWord(identify, 72, 30);
+		OsxGuestPutWord(identify, 80, 0x001e);
 	} else {
 		cylinders = drive->sectors / (16 * 63);
 		if (cylinders > 16383)
@@ -186,51 +186,51 @@ static void BuildIdentify(OsxAtaDrive *drive, uint8 *identify)
 		capacity = (uint32)drive->sectors;
 		if (drive->sectors > 0x0fffffff)
 			capacity = 0x0fffffff;
-		PutWord(identify, 0, 0x0040);
-		PutWord(identify, 1, (uint32)cylinders);
-		PutWord(identify, 3, 16);
-		PutWord(identify, 4, 512 * 63);
-		PutWord(identify, 5, 512);
-		PutWord(identify, 6, 63);
-		PutWord(identify, 20, 3);
-		PutWord(identify, 21, 512);
-		PutWord(identify, 22, 4);
-		PutWord(identify, 47, 0x8010);
-		PutWord(identify, 48, 0);
-		PutWord(identify, 49, 0x0300);
-		PutWord(identify, 51, 0x0200);
-		PutWord(identify, 52, 0x0200);
-		PutWord(identify, 53, 0x0007);
-		PutWord(identify, 54, (uint32)cylinders);
-		PutWord(identify, 55, 16);
-		PutWord(identify, 56, 63);
-		PutWord(identify, 57, (uint32)(cylinders * 16 * 63) & 0xffff);
-		PutWord(identify, 58, (uint32)(cylinders * 16 * 63) >> 16);
+		OsxGuestPutWord(identify, 0, 0x0040);
+		OsxGuestPutWord(identify, 1, (uint32)cylinders);
+		OsxGuestPutWord(identify, 3, 16);
+		OsxGuestPutWord(identify, 4, 512 * 63);
+		OsxGuestPutWord(identify, 5, 512);
+		OsxGuestPutWord(identify, 6, 63);
+		OsxGuestPutWord(identify, 20, 3);
+		OsxGuestPutWord(identify, 21, 512);
+		OsxGuestPutWord(identify, 22, 4);
+		OsxGuestPutWord(identify, 47, 0x8010);
+		OsxGuestPutWord(identify, 48, 0);
+		OsxGuestPutWord(identify, 49, 0x0300);
+		OsxGuestPutWord(identify, 51, 0x0200);
+		OsxGuestPutWord(identify, 52, 0x0200);
+		OsxGuestPutWord(identify, 53, 0x0007);
+		OsxGuestPutWord(identify, 54, (uint32)cylinders);
+		OsxGuestPutWord(identify, 55, 16);
+		OsxGuestPutWord(identify, 56, 63);
+		OsxGuestPutWord(identify, 57, (uint32)(cylinders * 16 * 63) & 0xffff);
+		OsxGuestPutWord(identify, 58, (uint32)(cylinders * 16 * 63) >> 16);
 		if (drive->multiple)
-			PutWord(identify, 59, 0x0100 | drive->multiple);
-		PutWord(identify, 60, capacity & 0xffff);
-		PutWord(identify, 61, capacity >> 16);
-		PutWord(identify, 63, 0x0407);
-		PutWord(identify, 64, 0x0003);
-		PutWord(identify, 65, 0x0078);
-		PutWord(identify, 66, 0x0078);
-		PutWord(identify, 67, 0x0078);
-		PutWord(identify, 68, 0x0078);
-		PutWord(identify, 80, 0x00f0);
-		PutWord(identify, 81, 0x0016);
-		PutWord(identify, 82, 0x4000);
-		PutWord(identify, 83, 0x4000);
-		PutWord(identify, 84, 0x4000);
-		PutWord(identify, 85, 0x4000);
-		PutWord(identify, 86, 0x4000);
-		PutWord(identify, 87, 0x4000);
+			OsxGuestPutWord(identify, 59, 0x0100 | drive->multiple);
+		OsxGuestPutWord(identify, 60, capacity & 0xffff);
+		OsxGuestPutWord(identify, 61, capacity >> 16);
+		OsxGuestPutWord(identify, 63, 0x0407);
+		OsxGuestPutWord(identify, 64, 0x0003);
+		OsxGuestPutWord(identify, 65, 0x0078);
+		OsxGuestPutWord(identify, 66, 0x0078);
+		OsxGuestPutWord(identify, 67, 0x0078);
+		OsxGuestPutWord(identify, 68, 0x0078);
+		OsxGuestPutWord(identify, 80, 0x00f0);
+		OsxGuestPutWord(identify, 81, 0x0016);
+		OsxGuestPutWord(identify, 82, 0x4000);
+		OsxGuestPutWord(identify, 83, 0x4000);
+		OsxGuestPutWord(identify, 84, 0x4000);
+		OsxGuestPutWord(identify, 85, 0x4000);
+		OsxGuestPutWord(identify, 86, 0x4000);
+		OsxGuestPutWord(identify, 87, 0x4000);
 	}
-	PutString(identify, 10, 10, "SHEEPSHAVER0001");
-	PutString(identify, 23, 4, "1.0");
-	PutString(identify, 27, 20, drive->model);
+	OsxGuestPutString(identify, 10, 10, "SHEEPSHAVER0001");
+	OsxGuestPutString(identify, 23, 4, "1.0");
+	OsxGuestPutString(identify, 27, 20, drive->model);
 }
 
-static int OpenMedia(OsxAtaDrive *drive, const char *path, int atapi)
+static int OsxGuestOpenMedia(OsxAtaDrive *drive, const char *path, int atapi)
 {
 	loff_t size;
 	drive->file = Sys_open(path, atapi != 0, atapi != 0);
@@ -256,7 +256,7 @@ static int OpenMedia(OsxAtaDrive *drive, const char *path, int atapi)
 	return 1;
 }
 
-static void PollMedia(OsxMachine *machine, OsxAtaDrive *drive)
+static void OsxGuestPollMedia(OsxMachine *machine, OsxAtaDrive *drive)
 { /* This prevents thrashing from
 		getting ASC 0x11 "unrecovered read error" 
 		instead of ASC 0x3A "not ready, medium not present" */
@@ -273,7 +273,7 @@ static void PollMedia(OsxMachine *machine, OsxAtaDrive *drive)
 		fprintf(machine->log, "cdrom media detected\n");
 }
 
-void OsxAtaCloseMedia(OsxAtaDrive *drive)
+void OsxGuestAtaCloseMedia(OsxAtaDrive *drive)
 {
 #if defined(BINCUE)
 	if (drive->cdimage)
@@ -287,11 +287,11 @@ void OsxAtaCloseMedia(OsxAtaDrive *drive)
 	drive->imagepath = NULL;
 }
 
-int OsxAtaAttach(OsxMachine *machine, int busindex, int unit, const char *path, int atapi)
+int OsxGuestAtaAttach(OsxMachine *machine, int busindex, int unit, const char *path, int atapi)
 {
 	OsxAtaDrive *drive;
 	drive = &machine->ata[busindex].drives[unit];
-	if (!OpenMedia(drive, path, atapi))
+	if (!OsxGuestOpenMedia(drive, path, atapi))
 		return 0;
 	drive->atapi = atapi;
 	drive->present = 1;
@@ -307,29 +307,29 @@ int OsxAtaAttach(OsxMachine *machine, int busindex, int unit, const char *path, 
 	else
 		strcpy(drive->model, "SheepShaver ATA Disk");
 	if (unit == 0)
-		SetSignature(&machine->ata[busindex], drive);
+		OsxGuestSetSignature(&machine->ata[busindex], drive);
 	return 1;
 }
 
-static void EjectMedia(OsxMachine *machine, OsxAtaDrive *drive)
+static void OsxGuestEjectMedia(OsxMachine *machine, OsxAtaDrive *drive)
 {
 	if (!drive->mediapresent)
 		return;
-	OsxAtaCloseMedia(drive);
+	OsxGuestAtaCloseMedia(drive);
 	drive->mediapresent = 0;
 	drive->mediachanged = 1;
 	drive->sectors = 0;
 	if (machine->cdromcount > 0)
-		drive->insertdeadline = OsxCpuTimebase(machine->cpu) + (uint64)OSXTIMEBASEFREQUENCY * 3;
+		drive->insertdeadline = OsxGuestCpuTimebase(machine->cpu) + (uint64)OSXTIMEBASEFREQUENCY * 3;
 	if (machine->log)
 		fprintf(machine->log, "cdrom ejected\n");
 }
 
-static void InsertNextMedia(OsxMachine *machine, OsxAtaDrive *drive)
+static void OsxGuestInsertNextMedia(OsxMachine *machine, OsxAtaDrive *drive)
 {
 	drive->insertdeadline = 0;
 	drive->mediaindex = (drive->mediaindex + 1) % machine->cdromcount;
-	if (!OpenMedia(drive, machine->cdrompaths[drive->mediaindex], 1))
+	if (!OsxGuestOpenMedia(drive, machine->cdrompaths[drive->mediaindex], 1))
 		return;
 	drive->unitattention = 1;
 	drive->mediachanged = 1;
@@ -337,7 +337,7 @@ static void InsertNextMedia(OsxMachine *machine, OsxAtaDrive *drive)
 		fprintf(machine->log, "cdrom inserted %s\n", machine->cdrompaths[drive->mediaindex]);
 }
 
-static void CompleteCommand(OsxMachine *machine, OsxAtaBus *bus, int failed)
+static void OsxGuestCompleteCommand(OsxMachine *machine, OsxAtaBus *bus, int failed)
 {
 	bus->transferdirection = ATADIRECTIONNONE;
 	bus->drqremaining = 0;
@@ -348,10 +348,10 @@ static void CompleteCommand(OsxMachine *machine, OsxAtaBus *bus, int failed)
 	} else {
 		bus->status = ATAREADY | ATASEEK;
 	}
-	RaiseIrq(machine, bus);
+	OsxGuestRaiseIrq(machine, bus);
 }
 
-static void AtapiComplete(OsxMachine *machine, OsxAtaBus *bus, OsxAtaDrive *drive, int failed)
+static void OsxGuestAtapiComplete(OsxMachine *machine, OsxAtaBus *bus, OsxAtaDrive *drive, int failed)
 {
 	bus->transferdirection = ATADIRECTIONNONE;
 	bus->drqremaining = 0;
@@ -365,18 +365,18 @@ static void AtapiComplete(OsxMachine *machine, OsxAtaBus *bus, OsxAtaDrive *driv
 		bus->status = ATAREADY | ATASEEK;
 		bus->error = 0;
 	}
-	RaiseIrq(machine, bus);
+	OsxGuestRaiseIrq(machine, bus);
 }
 
-static void AtapiFail(OsxMachine *machine, OsxAtaBus *bus, OsxAtaDrive *drive, uint8 sensekey, uint8 asc)
+static void OsxGuestAtapiFail(OsxMachine *machine, OsxAtaBus *bus, OsxAtaDrive *drive, uint8 sensekey, uint8 asc)
 {
 	drive->sensekey = sensekey;
 	drive->asc = asc;
 	drive->ascq = 0;
-	AtapiComplete(machine, bus, drive, 1);
+	OsxGuestAtapiComplete(machine, bus, drive, 1);
 }
 
-static void ApplyPatches(OsxAtaBus *bus, OsxAtaDrive *drive, uint8 *data, uint64 start, uint32 length)
+static void OsxGuestApplyPatches(OsxAtaBus *bus, OsxAtaDrive *drive, uint8 *data, uint64 start, uint32 length)
 {
 	OsxDiskPatch *patch;
 	int index;
@@ -393,7 +393,7 @@ static void ApplyPatches(OsxAtaBus *bus, OsxAtaDrive *drive, uint8 *data, uint64
 	}
 }
 
-static int ReadCDSector(OsxAtaDrive *drive, void *buffer, uint32 sector, uint8 type, uint8 flags)
+static int OsxGuestReadCDSector(OsxAtaDrive *drive, void *buffer, uint32 sector, uint8 type, uint8 flags)
 {
 #if defined(BINCUE)
 	if (drive->imagepath) {
@@ -410,7 +410,7 @@ static int ReadCDSector(OsxAtaDrive *drive, void *buffer, uint32 sector, uint8 t
 	return -1;
 #endif
 }
-static int FillBuffer(OsxAtaBus *bus, OsxAtaDrive *drive)
+static int OsxGuestFillBuffer(OsxAtaBus *bus, OsxAtaDrive *drive)
 {
 	uint32 sectors;
 	uint32 bytes;
@@ -425,18 +425,18 @@ static int FillBuffer(OsxAtaBus *bus, OsxAtaDrive *drive)
 		uint32 sector;
 		bytes = 0;
 		for (sector = 0; sector < sectors; sector++) {
-			length = ReadCDSector(drive, bus->buffer + bytes, (uint32)(bus->lba + sector),
+			length = OsxGuestReadCDSector(drive, bus->buffer + bytes, (uint32)(bus->lba + sector),
 				(bus->packet[1] >> 2) & 7, bus->packet[9]);
 			if (length < 0)
 				return 0;
 			if (length == OSXATAPISECTOR)
-				ApplyPatches(bus, drive, bus->buffer + bytes, (bus->lba + sector) * OSXATAPISECTOR, length);
+				OsxGuestApplyPatches(bus, drive, bus->buffer + bytes, (bus->lba + sector) * OSXATAPISECTOR, length);
 			bytes += length;
 		}
 	} else {
 		if (Sys_read(drive->file, bus->buffer, (loff_t)(bus->lba * bus->sectorsize), bytes) != bytes)
 			return 0;
-		ApplyPatches(bus, drive, bus->buffer, bus->lba * bus->sectorsize, bytes);
+		OsxGuestApplyPatches(bus, drive, bus->buffer, bus->lba * bus->sectorsize, bytes);
 	}
 	bus->lba += sectors;
 	bus->remaining -= sectors;
@@ -445,7 +445,7 @@ static int FillBuffer(OsxAtaBus *bus, OsxAtaDrive *drive)
 	return 1;
 }
 
-static void StartDrqBlock(OsxMachine *machine, OsxAtaBus *bus)
+static void OsxGuestStartDrqBlock(OsxMachine *machine, OsxAtaBus *bus)
 {
 	uint32 chunk;
 	chunk = bus->bufferlength - bus->bufferposition;
@@ -458,35 +458,35 @@ static void StartDrqBlock(OsxMachine *machine, OsxAtaBus *bus)
 		bus->count = 2;
 	}
 	bus->status = ATAREADY | ATASEEK | ATADRQ;
-	RaiseIrq(machine, bus);
+	OsxGuestRaiseIrq(machine, bus);
 }
 
-static void DataInBlockDone(OsxMachine *machine, OsxAtaBus *bus)
+static void OsxGuestDataInBlockDone(OsxMachine *machine, OsxAtaBus *bus)
 {
 	OsxAtaDrive *drive;
-	drive = SelectedDrive(bus);
+	drive = OsxGuestSelectedDrive(bus);
 	while (bus->bufferposition >= bus->bufferlength) {
 		if (bus->remaining == 0) {
 			if (bus->atapitransfer) {
-				AtapiComplete(machine, bus, drive, 0);
+				OsxGuestAtapiComplete(machine, bus, drive, 0);
 			} else {
 				bus->transferdirection = ATADIRECTIONNONE;
 				bus->status = ATAREADY | ATASEEK;
 			}
 			return;
 		}
-		if (!FillBuffer(bus, drive)) {
+		if (!OsxGuestFillBuffer(bus, drive)) {
 			if (bus->atapitransfer)
-				AtapiFail(machine, bus, drive, 0x03, 0x11);
+				OsxGuestAtapiFail(machine, bus, drive, 0x03, 0x11);
 			else
-				CompleteCommand(machine, bus, 1);
+				OsxGuestCompleteCommand(machine, bus, 1);
 			return;
 		}
 	}
-	StartDrqBlock(machine, bus);
+	OsxGuestStartDrqBlock(machine, bus);
 }
 
-static void BeginSectorsIn(OsxMachine *machine, OsxAtaBus *bus, uint64 lba, uint32 count, uint32 sectorsize, uint32 drqblock, int dma)
+static void OsxGuestBeginSectorsIn(OsxMachine *machine, OsxAtaBus *bus, uint64 lba, uint32 count, uint32 sectorsize, uint32 drqblock, int dma)
 {
 	bus->lba = lba;
 	bus->remaining = count;
@@ -498,13 +498,13 @@ static void BeginSectorsIn(OsxMachine *machine, OsxAtaBus *bus, uint64 lba, uint
 	if (dma) {
 		bus->dmapending = ATADMAREAD;
 		bus->status = ATAREADY | ATABUSY;
-		OsxAtaDmaReady(machine, (int)(bus - machine->ata));
+		OsxGuestAtaDmaReady(machine, (int)(bus - machine->ata));
 		return;
 	}
-	DataInBlockDone(machine, bus);
+	OsxGuestDataInBlockDone(machine, bus);
 }
 
-static void BeginBufferIn(OsxMachine *machine, OsxAtaBus *bus, uint32 length, uint32 drqblock, int dma)
+static void OsxGuestBeginBufferIn(OsxMachine *machine, OsxAtaBus *bus, uint32 length, uint32 drqblock, int dma)
 {
 	bus->remaining = 0;
 	bus->bufferlength = length;
@@ -514,17 +514,17 @@ static void BeginBufferIn(OsxMachine *machine, OsxAtaBus *bus, uint32 length, ui
 	if (dma) {
 		bus->dmapending = ATADMAREAD;
 		bus->status = ATAREADY | ATABUSY;
-		OsxAtaDmaReady(machine, (int)(bus - machine->ata));
+		OsxGuestAtaDmaReady(machine, (int)(bus - machine->ata));
 		return;
 	}
 	if (length == 0) {
-		AtapiComplete(machine, bus, SelectedDrive(bus), 0);
+		OsxGuestAtapiComplete(machine, bus, OsxGuestSelectedDrive(bus), 0);
 		return;
 	}
-	StartDrqBlock(machine, bus);
+	OsxGuestStartDrqBlock(machine, bus);
 }
 
-static uint64 CurrentLba(OsxAtaBus *bus)
+static uint64 OsxGuestCurrentLba(OsxAtaBus *bus)
 {
 	uint32 cylinder;
 	uint32 head;
@@ -535,33 +535,33 @@ static uint64 CurrentLba(OsxAtaBus *bus)
 	return ((uint64)cylinder * 16 + head) * 63 + bus->sector - 1;
 }
 
-static uint32 CurrentCount(OsxAtaBus *bus)
+static uint32 OsxGuestCurrentCount(OsxAtaBus *bus)
 {
 	if (bus->count == 0)
 		return 256;
 	return bus->count;
 }
 
-static void BeginWrite(OsxMachine *machine, OsxAtaBus *bus, uint32 drqblock, int dma)
+static void OsxGuestBeginWrite(OsxMachine *machine, OsxAtaBus *bus, uint32 drqblock, int dma)
 {
 	OsxAtaDrive *drive;
-	drive = SelectedDrive(bus);
+	drive = OsxGuestSelectedDrive(bus);
 	if (drive->readonly) {
-		CompleteCommand(machine, bus, 1);
+		OsxGuestCompleteCommand(machine, bus, 1);
 		return;
 	}
-	bus->lba = CurrentLba(bus);
-	bus->remaining = CurrentCount(bus);
+	bus->lba = OsxGuestCurrentLba(bus);
+	bus->remaining = OsxGuestCurrentCount(bus);
 	bus->sectorsize = OSXATASECTOR;
 	if (bus->lba + bus->remaining > drive->sectors) {
-		CompleteCommand(machine, bus, 1);
+		OsxGuestCompleteCommand(machine, bus, 1);
 		return;
 	}
 	bus->transferdirection = ATADIRECTIONOUT;
 	if (dma) {
 		bus->dmapending = ATADMAWRITE;
 		bus->status = ATAREADY | ATABUSY;
-		OsxAtaDmaReady(machine, (int)(bus - machine->ata));
+		OsxGuestAtaDmaReady(machine, (int)(bus - machine->ata));
 		return;
 	}
 	bus->drqblock = drqblock;
@@ -573,20 +573,20 @@ static void BeginWrite(OsxMachine *machine, OsxAtaBus *bus, uint32 drqblock, int
 	bus->status = ATAREADY | ATASEEK | ATADRQ;
 }
 
-static void WriteBlockDone(OsxMachine *machine, OsxAtaBus *bus)
+static void OsxGuestWriteBlockDone(OsxMachine *machine, OsxAtaBus *bus)
 {
 	OsxAtaDrive *drive;
 	uint32 sectors;
-	drive = SelectedDrive(bus);
+	drive = OsxGuestSelectedDrive(bus);
 	sectors = bus->bufferlength / OSXATASECTOR;
 	if (Sys_write(drive->file, bus->buffer, (loff_t)(bus->lba * OSXATASECTOR), bus->bufferlength) != bus->bufferlength) {
-		CompleteCommand(machine, bus, 1);
+		OsxGuestCompleteCommand(machine, bus, 1);
 		return;
 	}
 	bus->lba += sectors;
 	bus->remaining -= sectors;
 	if (bus->remaining == 0) {
-		CompleteCommand(machine, bus, 0);
+		OsxGuestCompleteCommand(machine, bus, 0);
 		return;
 	}
 	bus->bufferposition = 0;
@@ -595,17 +595,17 @@ static void WriteBlockDone(OsxMachine *machine, OsxAtaBus *bus)
 		bus->bufferlength = bus->drqblock;
 	bus->drqremaining = bus->bufferlength;
 	bus->status = ATAREADY | ATASEEK | ATADRQ;
-	RaiseIrq(machine, bus);
+	OsxGuestRaiseIrq(machine, bus);
 }
 
-static uint32 Allocation(uint32 wanted, uint32 available)
+static uint32 OsxGuestAllocation(uint32 wanted, uint32 available)
 {
 	if (wanted < available)
 		return wanted;
 	return available;
 }
 
-static void PutBig32(uint8 *data, uint32 value)
+static void OsxGuestPutBig32(uint8 *data, uint32 value)
 {
 	data[0] = (uint8)(value >> 24);
 	data[1] = (uint8)(value >> 16);
@@ -613,17 +613,17 @@ static void PutBig32(uint8 *data, uint32 value)
 	data[3] = (uint8)value;
 }
 
-static void PutBig16(uint8 *data, uint32 value)
+static void OsxGuestPutBig16(uint8 *data, uint32 value)
 {
 	data[0] = (uint8)(value >> 8);
 	data[1] = (uint8)value;
 }
 
-static void PutAddress(uint8 *data, uint32 lba, int msf)
+static void OsxGuestPutAddress(uint8 *data, uint32 lba, int msf)
 {
 	uint32 frames;
 	if (!msf) {
-		PutBig32(data, lba);
+		OsxGuestPutBig32(data, lba);
 		return;
 	}
 	frames = lba + 150;
@@ -633,7 +633,7 @@ static void PutAddress(uint8 *data, uint32 lba, int msf)
 	data[3] = (uint8)(frames % 75);
 }
 
-static uint32 BuildToc(OsxAtaDrive *drive, uint8 *data, uint8 *packet)
+static uint32 OsxGuestBuildToc(OsxAtaDrive *drive, uint8 *data, uint8 *packet)
 {
 	uint8 toc[804];
 	uint8 *entry;
@@ -654,10 +654,10 @@ static uint32 BuildToc(OsxAtaDrive *drive, uint8 *data, uint8 *packet)
 		toc[3] = 1;
 		toc[5] = 0x14;
 		toc[6] = 1;
-		PutAddress(toc + 8, 0, 1);
+		OsxGuestPutAddress(toc + 8, 0, 1);
 		toc[13] = 0x14;
 		toc[14] = 0xaa;
-		PutAddress(toc + 16, (uint32)drive->sectors, 1);
+		OsxGuestPutAddress(toc + 16, (uint32)drive->sectors, 1);
 	}
 	tracks = toc[3] - toc[2] + 1;
 	memset(data, 0, 4 + 11 * 102);
@@ -670,7 +670,7 @@ static uint32 BuildToc(OsxAtaDrive *drive, uint8 *data, uint8 *packet)
 		memcpy(data + 4, toc + 4, 8);
 		if (!msf) {
 			frames = ((uint32)toc[9] * 60 + toc[10]) * 75 + toc[11];
-			PutBig32(data + 8, frames - 150);
+			OsxGuestPutBig32(data + 8, frames - 150);
 		}
 		length += 8;
 	} else if (format == 2) {
@@ -704,17 +704,17 @@ static uint32 BuildToc(OsxAtaDrive *drive, uint8 *data, uint8 *packet)
 			memcpy(data + length, entry, 8);
 			frames = ((uint32)entry[5] * 60 + entry[6]) * 75 + entry[7];
 			address = frames - 150;
-			PutAddress(data + length + 4, address, msf);
+			OsxGuestPutAddress(data + length + 4, address, msf);
 			length += 8;
 		}
 	} else {
 		return 0;
 	}
-	PutBig16(data, length - 2);
+	OsxGuestPutBig16(data, length - 2);
 	return length;
 }
 
-static uint32 BuildModePages(OsxAtaDrive *drive, uint8 *data, uint32 page)
+static uint32 OsxGuestBuildModePages(OsxAtaDrive *drive, uint8 *data, uint32 page)
 {
 	uint32 length;
 	length = 0;
@@ -751,16 +751,16 @@ static uint32 BuildModePages(OsxAtaDrive *drive, uint8 *data, uint32 page)
 		data[length + 4] = 0x71;
 		data[length + 5] = 0x60;
 		data[length + 6] = 0x29;
-		PutBig16(data + length + 8, 706);
-		PutBig16(data + length + 10, 2);
-		PutBig16(data + length + 12, 512);
-		PutBig16(data + length + 14, 706);
+		OsxGuestPutBig16(data + length + 8, 706);
+		OsxGuestPutBig16(data + length + 10, 2);
+		OsxGuestPutBig16(data + length + 12, 512);
+		OsxGuestPutBig16(data + length + 14, 706);
 		length += 28;
 	}
 	return length;
 }
 
-static uint32 BuildSubChannel(OsxAtaDrive *drive, uint8 *data, const uint8 *packet)
+static uint32 OsxGuestBuildSubChannel(OsxAtaDrive *drive, uint8 *data, const uint8 *packet)
 {
 	uint8 position[16];
 #if defined(USE_SFL)
@@ -783,9 +783,9 @@ static uint32 BuildSubChannel(OsxAtaDrive *drive, uint8 *data, const uint8 *pack
 		data[4] = 1;
 		if (!(packet[1] & 2)) {
 			frames = ((uint32)position[9] * 60 + position[10]) * 75 + position[11] - 150;
-			PutBig32(data + 8, frames);
+			OsxGuestPutBig32(data + 8, frames);
 			frames = ((uint32)position[13] * 60 + position[14]) * 75 + position[15];
-			PutBig32(data + 12, frames);
+			OsxGuestPutBig32(data + 12, frames);
 		}
 		return 16;
 #if defined(USE_SFL)
@@ -813,7 +813,7 @@ static uint32 BuildSubChannel(OsxAtaDrive *drive, uint8 *data, const uint8 *pack
 	return 4;
 }
 
-static void AtapiModeSelect(OsxAtaDrive *drive, const uint8 *packet, const uint8 *buffer)
+static void OsxGuestAtapiModeSelect(OsxAtaDrive *drive, const uint8 *packet, const uint8 *buffer)
 {
 	const uint8 *page;
 	if (!drive->file)
@@ -828,7 +828,7 @@ static void AtapiModeSelect(OsxAtaDrive *drive, const uint8 *packet, const uint8
 		SysCDSetVolume(drive->file, page[9], page[11]);
 }
 
-static uint32 BuildConfiguration(OsxAtaDrive *drive, uint8 *data)
+static uint32 OsxGuestBuildConfiguration(OsxAtaDrive *drive, uint8 *data)
 {
 	uint32 length;
 	memset(data, 0, 96);
@@ -866,8 +866,8 @@ static uint32 BuildConfiguration(OsxAtaDrive *drive, uint8 *data)
 	data[length + 1] = 0x10;
 	data[length + 2] = 0x01;
 	data[length + 3] = 8;
-	PutBig32(data + length + 4, OSXATAPISECTOR);
-	PutBig16(data + length + 8, 1);
+	OsxGuestPutBig32(data + length + 4, OSXATAPISECTOR);
+	OsxGuestPutBig16(data + length + 8, 1);
 	length += 12;
 	data[length + 1] = 0x1e;
 	data[length + 2] = 0x08 | (uint8)!drive->dvd;
@@ -876,37 +876,37 @@ static uint32 BuildConfiguration(OsxAtaDrive *drive, uint8 *data)
 	data[length + 1] = 0x1f;
 	data[length + 2] = (uint8)drive->dvd;
 	length += 4;
-	PutBig32(data, length - 4);
+	OsxGuestPutBig32(data, length - 4);
 	return length;
 }
 
-static uint32 BuildDvdStructure(OsxAtaDrive *drive, uint8 *data, uint32 format)
+static uint32 OsxGuestBuildDvdStructure(OsxAtaDrive *drive, uint8 *data, uint32 format)
 {
 	if (format == 0) {
 		memset(data, 0, 4 + 2048);
-		PutBig16(data, 2048 + 2);
+		OsxGuestPutBig16(data, 2048 + 2);
 		data[4] = 0x01;
 		data[5] = 0x02;
 		data[6] = 0x01;
-		PutBig32(data + 8, 0x30000);
-		PutBig32(data + 12, 0x30000 + (uint32)drive->sectors - 1);
+		OsxGuestPutBig32(data + 8, 0x30000);
+		OsxGuestPutBig32(data + 12, 0x30000 + (uint32)drive->sectors - 1);
 		return 4 + 2048;
 	}
 	if (format == 1) {
 		memset(data, 0, 8);
-		PutBig16(data, 6);
+		OsxGuestPutBig16(data, 6);
 		return 8;
 	}
 	return 0;
 }
 
-static void AtapiPlay(OsxMachine *machine, OsxAtaBus *bus, OsxAtaDrive *drive, const uint8 *packet)
+static void OsxGuestAtapiPlay(OsxMachine *machine, OsxAtaBus *bus, OsxAtaDrive *drive, const uint8 *packet)
 {
 	uint32 startframe;
 	uint32 framecount;
 	uint32 endframe;
 	int result;
-	OsxAudioOpenForCdrom(machine);
+	OsxGuestAudioOpenForCdrom(machine);
 	if (packet[0] == 0x47)
 		result = SysCDPlay(drive->file, packet[3], packet[4], packet[5], packet[6], packet[7], packet[8]);
 	else {
@@ -921,12 +921,12 @@ static void AtapiPlay(OsxMachine *machine, OsxAtaBus *bus, OsxAtaDrive *drive, c
 			(uint8)(endframe / 4500), (uint8)((endframe / 75) % 60), (uint8)(endframe % 75));
 	}
 	if (result)
-		AtapiComplete(machine, bus, drive, 0);
+		OsxGuestAtapiComplete(machine, bus, drive, 0);
 	else
-		AtapiFail(machine, bus, drive, SENSEILLEGALREQUEST, 0x64);
+		OsxGuestAtapiFail(machine, bus, drive, SENSEILLEGALREQUEST, 0x64);
 }
 
-static void AtapiExecute(OsxMachine *machine, OsxAtaBus *bus)
+static void OsxGuestAtapiExecute(OsxMachine *machine, OsxAtaBus *bus)
 {
 	bool audioresult;
 	OsxAtaDrive *drive;
@@ -938,7 +938,7 @@ static void AtapiExecute(OsxMachine *machine, OsxAtaBus *bus)
 	uint32 count;
 	uint32 pages;
 	int dma;
-	drive = SelectedDrive(bus);
+	drive = OsxGuestSelectedDrive(bus);
 	packet = bus->packet;
 	data = bus->buffer;
 	dma = bus->feature & 1;
@@ -950,14 +950,14 @@ static void AtapiExecute(OsxMachine *machine, OsxAtaBus *bus)
 	length &= ~1u;
 	if (machine->log && packet[0] != 0x28 && packet[0] != 0x00 && packet[0] != 0x4a)
 		fprintf(machine->log, "atapi command %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n", packet[0], packet[1], packet[2], packet[3], packet[4], packet[5], packet[6], packet[7], packet[8], packet[9]);
-	PollMedia(machine, drive);
+	OsxGuestPollMedia(machine, drive);
 	if (!drive->mediapresent && packet[0] != 0x12 && packet[0] != 0x03 && packet[0] != 0x4a && packet[0] != 0x46 && packet[0] != 0x1b && packet[0] != 0x1e && packet[0] != 0x5a && packet[0] != 0x1a && packet[0] != 0xbd) {
-		AtapiFail(machine, bus, drive, SENSENOTREADY, 0x3a);
+		OsxGuestAtapiFail(machine, bus, drive, SENSENOTREADY, 0x3a);
 		return;
 	}
 	if (drive->unitattention && packet[0] != 0x12 && packet[0] != 0x03 && packet[0] != 0x4a) {
 		drive->unitattention = 0;
-		AtapiFail(machine, bus, drive, SENSEUNITATTENTION, 0x28);
+		OsxGuestAtapiFail(machine, bus, drive, SENSEUNITATTENTION, 0x28);
 		return;
 	}
 	switch (packet[0]) {
@@ -967,9 +967,9 @@ static void AtapiExecute(OsxMachine *machine, OsxAtaBus *bus)
 			if (drive->file)
 				SysEject(drive->file);
 #endif
-			EjectMedia(machine, drive);
+			OsxGuestEjectMedia(machine, drive);
 		}
-		AtapiComplete(machine, bus, drive, 0);
+		OsxGuestAtapiComplete(machine, bus, drive, 0);
 		return;
 #if defined(USE_SFL)
 	case 0x1e:
@@ -977,22 +977,22 @@ static void AtapiExecute(OsxMachine *machine, OsxAtaBus *bus)
 			SysPreventRemoval(drive->file);
 		else
 			SysAllowRemoval(drive->file);
-		AtapiComplete(machine, bus, drive, 0);
+		OsxGuestAtapiComplete(machine, bus, drive, 0);
 		return;
 	case 0xbb:
 		SysCDSetSpeed(drive->file, ((uint32)packet[2] << 8 | packet[3]) & 0xffff);
-		AtapiComplete(machine, bus, drive, 0);
+		OsxGuestAtapiComplete(machine, bus, drive, 0);
 		return;
 #else
 	case 0x1e:
 	case 0xbb:
-		AtapiComplete(machine, bus, drive, 0);
+		OsxGuestAtapiComplete(machine, bus, drive, 0);
 		return;
 #endif
 	case 0x45:
 	case 0xa5:
 	case 0x47:
-		AtapiPlay(machine, bus, drive, packet);
+		OsxGuestAtapiPlay(machine, bus, drive, packet);
 		return;
 	case 0x4b:
 		if (packet[8] & 1)
@@ -1000,25 +1000,25 @@ static void AtapiExecute(OsxMachine *machine, OsxAtaBus *bus)
 		else
 			audioresult = SysCDPause(drive->file);
 		if (audioresult)
-			AtapiComplete(machine, bus, drive, 0);
+			OsxGuestAtapiComplete(machine, bus, drive, 0);
 		else
-			AtapiFail(machine, bus, drive, SENSEILLEGALREQUEST, 0x64);
+			OsxGuestAtapiFail(machine, bus, drive, SENSEILLEGALREQUEST, 0x64);
 		return;
 	case 0x4e:
 		SysCDStop(drive->file, 0, 0, 0);
-		AtapiComplete(machine, bus, drive, 0);
+		OsxGuestAtapiComplete(machine, bus, drive, 0);
 		return;
 	case 0xba:
 		lba = ((uint32)packet[2] << 24) | ((uint32)packet[3] << 16) | ((uint32)packet[4] << 8) | packet[5];
 		lba += 150;
 		if (SysCDScan(drive->file, (uint8)(lba / 4500), (uint8)((lba / 75) % 60), (uint8)(lba % 75), (packet[1] & 0x10) != 0))
-			AtapiComplete(machine, bus, drive, 0);
+			OsxGuestAtapiComplete(machine, bus, drive, 0);
 		else
-			AtapiFail(machine, bus, drive, SENSEILLEGALREQUEST, 0x64);
+			OsxGuestAtapiFail(machine, bus, drive, SENSEILLEGALREQUEST, 0x64);
 		return;
 	case 0x00:
 	case 0x2b:
-		AtapiComplete(machine, bus, drive, 0);
+		OsxGuestAtapiComplete(machine, bus, drive, 0);
 		return;
 	case 0x03:
 		memset(data, 0, 18);
@@ -1030,7 +1030,7 @@ static void AtapiExecute(OsxMachine *machine, OsxAtaBus *bus)
 		drive->sensekey = SENSENONE;
 		drive->asc = 0;
 		drive->ascq = 0;
-		BeginBufferIn(machine, bus, Allocation(packet[4], 18), length, dma);
+		OsxGuestBeginBufferIn(machine, bus, OsxGuestAllocation(packet[4], 18), length, dma);
 		return;
 	case 0x12:
 		memset(data, 0, 36);
@@ -1042,35 +1042,35 @@ static void AtapiExecute(OsxMachine *machine, OsxAtaBus *bus)
 		memcpy(data + 8, "SHEEP   ", 8);
 		memcpy(data + 16, "SheepShaver CD  ", 16);
 		memcpy(data + 32, "1.0 ", 4);
-		BeginBufferIn(machine, bus, Allocation(packet[4], 36), length, dma);
+		OsxGuestBeginBufferIn(machine, bus, OsxGuestAllocation(packet[4], 36), length, dma);
 		return;
 	case 0x1a:
-		pages = BuildModePages(drive, data + 4, packet[2] & 0x3f);
+		pages = OsxGuestBuildModePages(drive, data + 4, packet[2] & 0x3f);
 		if (pages == 0) {
-			AtapiFail(machine, bus, drive, SENSEILLEGALREQUEST, 0x24);
+			OsxGuestAtapiFail(machine, bus, drive, SENSEILLEGALREQUEST, 0x24);
 			return;
 		}
 		data[0] = (uint8)(pages + 3);
 		data[1] = 0x01;
 		data[2] = 0;
 		data[3] = 0;
-		BeginBufferIn(machine, bus, Allocation(packet[4], pages + 4), length, dma);
+		OsxGuestBeginBufferIn(machine, bus, OsxGuestAllocation(packet[4], pages + 4), length, dma);
 		return;
 	case 0x5a:
-		pages = BuildModePages(drive, data + 8, packet[2] & 0x3f);
+		pages = OsxGuestBuildModePages(drive, data + 8, packet[2] & 0x3f);
 		if (pages == 0) {
-			AtapiFail(machine, bus, drive, SENSEILLEGALREQUEST, 0x24);
+			OsxGuestAtapiFail(machine, bus, drive, SENSEILLEGALREQUEST, 0x24);
 			return;
 		}
 		memset(data, 0, 8);
-		PutBig16(data, pages + 6);
+		OsxGuestPutBig16(data, pages + 6);
 		data[2] = 0x01;
-		BeginBufferIn(machine, bus, Allocation(((uint32)packet[7] << 8) | packet[8], pages + 8), length, dma);
+		OsxGuestBeginBufferIn(machine, bus, OsxGuestAllocation(((uint32)packet[7] << 8) | packet[8], pages + 8), length, dma);
 		return;
 	case 0x25:
-		PutBig32(data, (uint32)drive->sectors - 1);
-		PutBig32(data + 4, OSXATAPISECTOR);
-		BeginBufferIn(machine, bus, 8, length, dma);
+		OsxGuestPutBig32(data, (uint32)drive->sectors - 1);
+		OsxGuestPutBig32(data + 4, OSXATAPISECTOR);
+		OsxGuestBeginBufferIn(machine, bus, 8, length, dma);
 		return;
 	case 0x28:
 	case 0xa8:
@@ -1085,47 +1085,47 @@ static void AtapiExecute(OsxMachine *machine, OsxAtaBus *bus)
 #if defined(USE_SFL)
 		if (packet[0] == 0xbe && packet[9] == 0 && packet[10] == 1) {
 			if (count > OSXATABUFFER / 96 || !SysCDReadSubcodes(drive->file, data, lba, count)) {
-				AtapiFail(machine, bus, drive, SENSEILLEGALREQUEST, 0x24);
+				OsxGuestAtapiFail(machine, bus, drive, SENSEILLEGALREQUEST, 0x24);
 				return;
 			}
-			BeginBufferIn(machine, bus, count * 96, length, dma);
+			OsxGuestBeginBufferIn(machine, bus, count * 96, length, dma);
 			return;
 		}
 #endif
 		if (packet[0] == 0xbe && (((packet[1] >> 2) & 7) > 5 || (packet[9] & 7) || packet[10])) {
-			AtapiFail(machine, bus, drive, SENSEILLEGALREQUEST, 0x24);
+			OsxGuestAtapiFail(machine, bus, drive, SENSEILLEGALREQUEST, 0x24);
 			return;
 		}
 		if ((uint64)lba + count > drive->sectors) {
-			AtapiFail(machine, bus, drive, SENSEILLEGALREQUEST, 0x21);
+			OsxGuestAtapiFail(machine, bus, drive, SENSEILLEGALREQUEST, 0x21);
 			return;
 		}
 		if (count == 0) {
-			AtapiComplete(machine, bus, drive, 0);
+			OsxGuestAtapiComplete(machine, bus, drive, 0);
 			return;
 		}
 		if (packet[0] == 0xbe && !(packet[9] == 0x10 && ((packet[1] >> 2) & 7) == 2))
-			BeginSectorsIn(machine, bus, lba, count, 2352, length, dma);
+			OsxGuestBeginSectorsIn(machine, bus, lba, count, 2352, length, dma);
 		else
-			BeginSectorsIn(machine, bus, lba, count, OSXATAPISECTOR, length, dma);
+			OsxGuestBeginSectorsIn(machine, bus, lba, count, OSXATAPISECTOR, length, dma);
 		return;
 	case 0x43:
-		count = BuildToc(drive, data, packet);
-		BeginBufferIn(machine, bus, Allocation(((uint32)packet[7] << 8) | packet[8], count), length, dma);
+		count = OsxGuestBuildToc(drive, data, packet);
+		OsxGuestBeginBufferIn(machine, bus, OsxGuestAllocation(((uint32)packet[7] << 8) | packet[8], count), length, dma);
 		return;
 	case 0x42:
-		count = BuildSubChannel(drive, data, packet);
-		BeginBufferIn(machine, bus, Allocation(((uint32)packet[7] << 8) | packet[8], count), length, dma);
+		count = OsxGuestBuildSubChannel(drive, data, packet);
+		OsxGuestBeginBufferIn(machine, bus, OsxGuestAllocation(((uint32)packet[7] << 8) | packet[8], count), length, dma);
 		return;
 	case 0x46:
-		count = BuildConfiguration(drive, data);
-		BeginBufferIn(machine, bus, Allocation(((uint32)packet[7] << 8) | packet[8], count), length, dma);
+		count = OsxGuestBuildConfiguration(drive, data);
+		OsxGuestBeginBufferIn(machine, bus, OsxGuestAllocation(((uint32)packet[7] << 8) | packet[8], count), length, dma);
 		return;
 	case 0x4a:
 		allocation = ((uint32)packet[7] << 8) | packet[8];
 		memset(data, 0, 8);
 		if (!(packet[1] & 1)) {
-			AtapiFail(machine, bus, drive, SENSEILLEGALREQUEST, 0x24);
+			OsxGuestAtapiFail(machine, bus, drive, SENSEILLEGALREQUEST, 0x24);
 			return;
 		}
 		data[3] = 0x10;
@@ -1142,11 +1142,11 @@ static void AtapiExecute(OsxMachine *machine, OsxAtaBus *bus)
 					data[4] = 0x03;
 				drive->mediachanged = 0;
 			}
-			BeginBufferIn(machine, bus, Allocation(allocation, 8), length, dma);
+			OsxGuestBeginBufferIn(machine, bus, OsxGuestAllocation(allocation, 8), length, dma);
 		} else {
 			data[1] = 2;
 			data[2] = 0x80;
-			BeginBufferIn(machine, bus, Allocation(allocation, 4), length, dma);
+			OsxGuestBeginBufferIn(machine, bus, OsxGuestAllocation(allocation, 4), length, dma);
 		}
 		return;
 	case 0x51:
@@ -1161,8 +1161,8 @@ static void AtapiExecute(OsxMachine *machine, OsxAtaBus *bus)
 		data[17] = 0xff;
 		data[18] = 0xff;
 		data[19] = 0xff;
-		PutBig32(data + 20, (uint32)drive->sectors);
-		BeginBufferIn(machine, bus, Allocation(((uint32)packet[7] << 8) | packet[8], 34), length, dma);
+		OsxGuestPutBig32(data + 20, (uint32)drive->sectors);
+		OsxGuestBeginBufferIn(machine, bus, OsxGuestAllocation(((uint32)packet[7] << 8) | packet[8], 34), length, dma);
 		return;
 	case 0x52:
 		memset(data, 0, 36);
@@ -1171,22 +1171,22 @@ static void AtapiExecute(OsxMachine *machine, OsxAtaBus *bus)
 		data[3] = 1;
 		data[5] = 0x04;
 		data[6] = 0x01;
-		PutBig32(data + 24, (uint32)drive->sectors);
-		BeginBufferIn(machine, bus, Allocation(((uint32)packet[7] << 8) | packet[8], 36), length, dma);
+		OsxGuestPutBig32(data + 24, (uint32)drive->sectors);
+		OsxGuestBeginBufferIn(machine, bus, OsxGuestAllocation(((uint32)packet[7] << 8) | packet[8], 36), length, dma);
 		return;
 	case 0xad:
 		count = 0;
 		if (drive->dvd)
-			count = BuildDvdStructure(drive, data, packet[7]);
+			count = OsxGuestBuildDvdStructure(drive, data, packet[7]);
 		if (count == 0) {
-			AtapiFail(machine, bus, drive, SENSEILLEGALREQUEST, 0x30);
+			OsxGuestAtapiFail(machine, bus, drive, SENSEILLEGALREQUEST, 0x30);
 			return;
 		}
-		BeginBufferIn(machine, bus, Allocation(((uint32)packet[8] << 8) | packet[9], count), length, dma);
+		OsxGuestBeginBufferIn(machine, bus, OsxGuestAllocation(((uint32)packet[8] << 8) | packet[9], count), length, dma);
 		return;
 	case 0xbd:
 		memset(data, 0, 8);
-		BeginBufferIn(machine, bus, Allocation(((uint32)packet[8] << 8) | packet[9], 8), length, dma);
+		OsxGuestBeginBufferIn(machine, bus, OsxGuestAllocation(((uint32)packet[8] << 8) | packet[9], 8), length, dma);
 		return;
 	case 0x55:
 	case 0x15:
@@ -1195,7 +1195,7 @@ static void AtapiExecute(OsxMachine *machine, OsxAtaBus *bus)
 		else
 			count = packet[4];
 		if (count == 0) {
-			AtapiComplete(machine, bus, drive, 0);
+			OsxGuestAtapiComplete(machine, bus, drive, 0);
 			return;
 		}
 		bus->transferdirection = ATADIRECTIONOUT;
@@ -1207,22 +1207,22 @@ static void AtapiExecute(OsxMachine *machine, OsxAtaBus *bus)
 		bus->cylinderhigh = (uint8)(count >> 8);
 		bus->count = 0;
 		bus->status = ATAREADY | ATASEEK | ATADRQ;
-		RaiseIrq(machine, bus);
+		OsxGuestRaiseIrq(machine, bus);
 		return;
 	}
-	AtapiFail(machine, bus, drive, SENSEILLEGALREQUEST, 0x20);
+	OsxGuestAtapiFail(machine, bus, drive, SENSEILLEGALREQUEST, 0x20);
 }
 
-static void ExecuteCommand(OsxMachine *machine, OsxAtaBus *bus, uint8 command)
+static void OsxGuestExecuteCommand(OsxMachine *machine, OsxAtaBus *bus, uint8 command)
 {
 	OsxAtaDrive *drive;
 	uint64 lba;
 	uint32 count;
-	drive = SelectedDrive(bus);
+	drive = OsxGuestSelectedDrive(bus);
 	bus->command = command;
 	if (!drive->present)
 		return;
-	LowerIrq(machine, bus);
+	OsxGuestLowerIrq(machine, bus);
 	bus->error = 0;
 	bus->atapitransfer = 0;
 	if (drive->atapi) {
@@ -1237,24 +1237,24 @@ static void ExecuteCommand(OsxMachine *machine, OsxAtaBus *bus, uint8 command)
 			bus->status = ATAREADY | ATASEEK | ATADRQ;
 			return;
 		case 0xa1:
-			BuildIdentify(drive, bus->buffer);
+			OsxGuestBuildIdentify(drive, bus->buffer);
 			bus->remaining = 0;
 			bus->bufferlength = 512;
 			bus->bufferposition = 0;
 			bus->transferdirection = ATADIRECTIONIN;
 			bus->drqblock = 512;
-			StartDrqBlock(machine, bus);
+			OsxGuestStartDrqBlock(machine, bus);
 			return;
 		case 0x08:
-			SetSignature(bus, drive);
+			OsxGuestSetSignature(bus, drive);
 			bus->status = ATAREADY | ATASEEK;
-			RaiseIrq(machine, bus);
+			OsxGuestRaiseIrq(machine, bus);
 			return;
 		case 0x90:
-			SetSignature(bus, drive);
+			OsxGuestSetSignature(bus, drive);
 			bus->error = 1;
 			bus->status = ATAREADY | ATASEEK;
-			RaiseIrq(machine, bus);
+			OsxGuestRaiseIrq(machine, bus);
 			return;
 		case 0xef:
 		case 0xe0:
@@ -1263,69 +1263,69 @@ static void ExecuteCommand(OsxMachine *machine, OsxAtaBus *bus, uint8 command)
 		case 0xe7:
 			if (command == 0xe5)
 				bus->count = 0xff;
-			CompleteCommand(machine, bus, 0);
+			OsxGuestCompleteCommand(machine, bus, 0);
 			return;
 		}
-		SetSignature(bus, drive);
-		CompleteCommand(machine, bus, 1);
+		OsxGuestSetSignature(bus, drive);
+		OsxGuestCompleteCommand(machine, bus, 1);
 		return;
 	}
 	switch (command) {
 	case 0xec:
-		BuildIdentify(drive, bus->buffer);
+		OsxGuestBuildIdentify(drive, bus->buffer);
 		bus->remaining = 0;
 		bus->bufferlength = 512;
 		bus->bufferposition = 0;
 		bus->transferdirection = ATADIRECTIONIN;
 		bus->drqblock = 512;
-		StartDrqBlock(machine, bus);
+		OsxGuestStartDrqBlock(machine, bus);
 		return;
 	case 0x20:
 	case 0x21:
 	case 0xc4:
 	case 0xc8:
 	case 0xc9:
-		lba = CurrentLba(bus);
-		count = CurrentCount(bus);
+		lba = OsxGuestCurrentLba(bus);
+		count = OsxGuestCurrentCount(bus);
 		if (lba + count > drive->sectors) {
-			CompleteCommand(machine, bus, 1);
+			OsxGuestCompleteCommand(machine, bus, 1);
 			return;
 		}
 		if (command == 0xc8 || command == 0xc9)
-			BeginSectorsIn(machine, bus, lba, count, OSXATASECTOR, OSXATASECTOR, 1);
+			OsxGuestBeginSectorsIn(machine, bus, lba, count, OSXATASECTOR, OSXATASECTOR, 1);
 		else if (command == 0xc4)
-			BeginSectorsIn(machine, bus, lba, count, OSXATASECTOR, OSXATASECTOR * drive->multiple, 0);
+			OsxGuestBeginSectorsIn(machine, bus, lba, count, OSXATASECTOR, OSXATASECTOR * drive->multiple, 0);
 		else
-			BeginSectorsIn(machine, bus, lba, count, OSXATASECTOR, OSXATASECTOR, 0);
+			OsxGuestBeginSectorsIn(machine, bus, lba, count, OSXATASECTOR, OSXATASECTOR, 0);
 		return;
 	case 0x30:
 	case 0x31:
-		BeginWrite(machine, bus, OSXATASECTOR, 0);
+		OsxGuestBeginWrite(machine, bus, OSXATASECTOR, 0);
 		return;
 	case 0xc5:
-		BeginWrite(machine, bus, OSXATASECTOR * drive->multiple, 0);
+		OsxGuestBeginWrite(machine, bus, OSXATASECTOR * drive->multiple, 0);
 		return;
 	case 0xca:
 	case 0xcb:
-		BeginWrite(machine, bus, OSXATASECTOR, 1);
+		OsxGuestBeginWrite(machine, bus, OSXATASECTOR, 1);
 		return;
 	case 0xc6:
 		if (bus->count == 0 || bus->count > 16 || (bus->count & (bus->count - 1))) {
-			CompleteCommand(machine, bus, 1);
+			OsxGuestCompleteCommand(machine, bus, 1);
 			return;
 		}
 		drive->multiple = bus->count;
-		CompleteCommand(machine, bus, 0);
+		OsxGuestCompleteCommand(machine, bus, 0);
 		return;
 	case 0x90:
-		SetSignature(bus, drive);
+		OsxGuestSetSignature(bus, drive);
 		bus->error = 1;
 		bus->status = ATAREADY | ATASEEK;
-		RaiseIrq(machine, bus);
+		OsxGuestRaiseIrq(machine, bus);
 		return;
 	case 0xe5:
 		bus->count = 0xff;
-		CompleteCommand(machine, bus, 0);
+		OsxGuestCompleteCommand(machine, bus, 0);
 		return;
 	case 0x40:
 	case 0x41:
@@ -1346,15 +1346,15 @@ static void ExecuteCommand(OsxMachine *machine, OsxAtaBus *bus, uint8 command)
 	case 0x97:
 	case 0x98:
 	case 0x99:
-		CompleteCommand(machine, bus, 0);
+		OsxGuestCompleteCommand(machine, bus, 0);
 		return;
 	}
 	if (machine->log)
 		fprintf(machine->log, "ata unknown command %02x\n", command);
-	CompleteCommand(machine, bus, 1);
+	OsxGuestCompleteCommand(machine, bus, 1);
 }
 
-void OsxAtaDmaReady(OsxMachine *machine, int busindex)
+void OsxGuestAtaDmaReady(OsxMachine *machine, int busindex)
 {
 	OsxAtaBus *bus;
 	OsxAtaDrive *drive;
@@ -1367,19 +1367,19 @@ void OsxAtaDmaReady(OsxMachine *machine, int busindex)
 	dma = &machine->dbdma[bus->dmachannel];
 	if (bus->dmapending == ATADMANONE || !(dma->status & 0x8000) || !(dma->status & 0x0400))
 		return;
-	drive = SelectedDrive(bus);
+	drive = OsxGuestSelectedDrive(bus);
 	failed = 0;
 	if (bus->dmapending == ATADMAREAD) {
 		while (!failed) {
 			if (bus->bufferposition >= bus->bufferlength) {
 				if (bus->remaining == 0)
 					break;
-				if (!FillBuffer(bus, drive)) {
+				if (!OsxGuestFillBuffer(bus, drive)) {
 					failed = 1;
 					break;
 				}
 			}
-			consumed = (uint32)OsxDbdmaTransfer(machine, bus->dmachannel, bus->buffer + bus->bufferposition, bus->bufferlength - bus->bufferposition, 1);
+			consumed = (uint32)OsxGuestDbdmaTransfer(machine, bus->dmachannel, bus->buffer + bus->bufferposition, bus->bufferlength - bus->bufferposition, 1);
 			bus->bufferposition += consumed;
 			if (bus->bufferposition < bus->bufferlength)
 				break;
@@ -1390,7 +1390,7 @@ void OsxAtaDmaReady(OsxMachine *machine, int busindex)
 			if (sectors > OSXATABUFFER / OSXATASECTOR)
 				sectors = OSXATABUFFER / OSXATASECTOR;
 			bytes = sectors * OSXATASECTOR;
-			consumed = (uint32)OsxDbdmaTransfer(machine, bus->dmachannel, bus->buffer, bytes, 0);
+			consumed = (uint32)OsxGuestDbdmaTransfer(machine, bus->dmachannel, bus->buffer, bytes, 0);
 			consumed &= ~(uint32)(OSXATASECTOR - 1);
 			if (consumed && Sys_write(drive->file, bus->buffer, (loff_t)(bus->lba * OSXATASECTOR), consumed) != consumed) {
 				failed = 1;
@@ -1405,24 +1405,24 @@ void OsxAtaDmaReady(OsxMachine *machine, int busindex)
 	if (!failed && (bus->remaining > 0 || bus->bufferposition < bus->bufferlength)) {
 		if (machine->log) {
 			fprintf(machine->log, "ata dma wait bus %d remaining %u position %u length %u status %04x pointer %08x\n", busindex, bus->remaining, bus->bufferposition, bus->bufferlength, dma->status, dma->commandpointer);
-			OsxDbdmaDump(machine, bus->dmachannel);
+			OsxGuestDbdmaDump(machine, bus->dmachannel);
 		}
 		return;
 	}
 	if (machine->log)
 		fprintf(machine->log, "ata dma done bus %d failed %d remaining %u position %u length %u status %04x\n", busindex, failed, bus->remaining, bus->bufferposition, bus->bufferlength, dma->status);
-	OsxDbdmaFinish(machine, bus->dmachannel);
+	OsxGuestDbdmaFinish(machine, bus->dmachannel);
 	if (bus->atapitransfer) {
 		if (failed)
-			AtapiFail(machine, bus, drive, 0x03, 0x11);
+			OsxGuestAtapiFail(machine, bus, drive, 0x03, 0x11);
 		else
-			AtapiComplete(machine, bus, drive, 0);
+			OsxGuestAtapiComplete(machine, bus, drive, 0);
 	} else {
-		CompleteCommand(machine, bus, failed);
+		OsxGuestCompleteCommand(machine, bus, failed);
 	}
 }
 
-static uint32 ReadData(OsxMachine *machine, OsxAtaBus *bus)
+static uint32 OsxGuestReadData(OsxMachine *machine, OsxAtaBus *bus)
 {
 	uint32 value;
 	if (bus->transferdirection != ATADIRECTIONIN || bus->drqremaining == 0)
@@ -1436,11 +1436,11 @@ static uint32 ReadData(OsxMachine *machine, OsxAtaBus *bus)
 		bus->drqremaining -= 2;
 	}
 	if (bus->drqremaining == 0)
-		DataInBlockDone(machine, bus);
+		OsxGuestDataInBlockDone(machine, bus);
 	return value;
 }
 
-static void WriteData(OsxMachine *machine, OsxAtaBus *bus, uint32 value)
+static void OsxGuestWriteData(OsxMachine *machine, OsxAtaBus *bus, uint32 value)
 {
 	OsxAtaDrive *drive;
 	if (bus->transferdirection != ATADIRECTIONOUT || bus->drqremaining < 2)
@@ -1451,29 +1451,29 @@ static void WriteData(OsxMachine *machine, OsxAtaBus *bus, uint32 value)
 	bus->drqremaining -= 2;
 	if (bus->drqremaining != 0)
 		return;
-	drive = SelectedDrive(bus);
+	drive = OsxGuestSelectedDrive(bus);
 	if (bus->packetphase) {
 		bus->packetphase = 0;
 		memcpy(bus->packet, bus->buffer, 12);
 		bus->transferdirection = ATADIRECTIONNONE;
-		AtapiExecute(machine, bus);
+		OsxGuestAtapiExecute(machine, bus);
 		return;
 	}
 	if (drive->atapi) {
-		AtapiModeSelect(drive, bus->packet, bus->buffer);
-		AtapiComplete(machine, bus, drive, 0);
+		OsxGuestAtapiModeSelect(drive, bus->packet, bus->buffer);
+		OsxGuestAtapiComplete(machine, bus, drive, 0);
 		return;
 	}
-	WriteBlockDone(machine, bus);
+	OsxGuestWriteBlockDone(machine, bus);
 }
 
-uint32 OsxAtaRead(OsxMachine *machine, int busindex, uint32 offset, int size)
+uint32 OsxGuestAtaRead(OsxMachine *machine, int busindex, uint32 offset, int size)
 {
 	OsxAtaBus *bus;
 	OsxAtaDrive *drive;
 	uint32 value;
 	bus = &machine->ata[busindex];
-	drive = SelectedDrive(bus);
+	drive = OsxGuestSelectedDrive(bus);
 	if (offset == 0x200)
 		return bswap_32(bus->timing);
 	if (!drive->present) {
@@ -1483,9 +1483,9 @@ uint32 OsxAtaRead(OsxMachine *machine, int busindex, uint32 offset, int size)
 	}
 	switch (offset) {
 	case 0x00:
-		value = ReadData(machine, bus);
+		value = OsxGuestReadData(machine, bus);
 		if (size == 4)
-			value = (value << 16) | ReadData(machine, bus);
+			value = (value << 16) | OsxGuestReadData(machine, bus);
 		return value;
 	case 0x10: return bus->error;
 	case 0x20: return bus->count;
@@ -1495,7 +1495,7 @@ uint32 OsxAtaRead(OsxMachine *machine, int busindex, uint32 offset, int size)
 	case 0x60: return bus->select;
 	case 0x70:
 		if (bus->irqdeadline == 0 && bus->irqline)
-			LowerIrq(machine, bus);
+			OsxGuestLowerIrq(machine, bus);
 		return bus->status;
 	case 0x160:
 		return bus->status;
@@ -1503,17 +1503,17 @@ uint32 OsxAtaRead(OsxMachine *machine, int busindex, uint32 offset, int size)
 	return 0;
 }
 
-void OsxAtaWrite(OsxMachine *machine, int busindex, uint32 offset, int size, uint32 value)
+void OsxGuestAtaWrite(OsxMachine *machine, int busindex, uint32 offset, int size, uint32 value)
 {
 	OsxAtaBus *bus;
 	bus = &machine->ata[busindex];
 	switch (offset) {
 	case 0x00:
 		if (size == 4) {
-			WriteData(machine, bus, value >> 16);
-			WriteData(machine, bus, value & 0xffff);
+			OsxGuestWriteData(machine, bus, value >> 16);
+			OsxGuestWriteData(machine, bus, value & 0xffff);
 		} else {
-			WriteData(machine, bus, value);
+			OsxGuestWriteData(machine, bus, value);
 		}
 		return;
 	case 0x10: bus->feature = (uint8)value; return;
@@ -1523,18 +1523,18 @@ void OsxAtaWrite(OsxMachine *machine, int busindex, uint32 offset, int size, uin
 	case 0x50: bus->cylinderhigh = (uint8)value; return;
 	case 0x60: bus->select = (uint8)value; return;
 	case 0x70:
-		ExecuteCommand(machine, bus, (uint8)value);
+		OsxGuestExecuteCommand(machine, bus, (uint8)value);
 		return;
 	case 0x160:
 		if ((value & 4) && !(bus->control & 4)) {
-			ResetBus(bus);
-			LowerIrq(machine, bus);
+			OsxGuestResetBus(bus);
+			OsxGuestLowerIrq(machine, bus);
 		}
 		bus->control = (uint8)value;
 		if ((value & 2) && bus->irqline)
-			OsxPicSetLine(machine, bus->irq, 0);
+			OsxGuestPicSetLine(machine, bus->irq, 0);
 		else if (!(value & 2) && bus->irqline)
-			OsxPicSetLine(machine, bus->irq, 1);
+			OsxGuestPicSetLine(machine, bus->irq, 1);
 		return;
 	case 0x200:
 		bus->timing = bswap_32(value);

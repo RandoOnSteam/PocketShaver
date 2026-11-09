@@ -60,6 +60,36 @@ void SflEmulatorMouseButton(int button, int down)
 		ADBMouseUp(button);
 }
 
+void SflEmulatorWheel(int notches)
+{
+	int32 lines;
+	int scrolldown;
+	int key;
+	int index;
+	if (!notches || SflUiQueueInput(SFLUIINPUTWHEEL, notches, 0))
+		return;
+	lines = PrefsFindInt32("mousewheellines");
+	scrolldown = notches < 0;
+	if (lines < 0) {
+		scrolldown = !scrolldown;
+		lines = -lines;
+	}
+	if (PrefsFindInt32("mousewheelmode")) {
+		key = 0x3e;
+		if (scrolldown)
+			key = 0x3d;
+	} else {
+		lines = 1;
+		key = 0x74;
+		if (scrolldown)
+			key = 0x79;
+	}
+	for (index = 0; index < lines; index++) {
+		ADBKeyDown(key);
+		ADBKeyUp(key);
+	}
+}
+
 int SflEmulatorRelativeMouse(int operation)
 {
 	const char *mode;

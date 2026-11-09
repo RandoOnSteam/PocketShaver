@@ -41,18 +41,18 @@
 #define AUDIOFRAMEBYTES 4
 #define AUDIOPOLLTICKS (OSXTIMEBASEFREQUENCY / 1000)
 
-static uint32 SampleRate(uint32 control)
+static uint32 OsxGuestSampleRate(uint32 control)
 {
 	const uint32 rates[8] = {44100, 29400, 22050, 17640, 14700, 11025, 8820, 7350};
 	return rates[(control >> 8) & 7];
 }
 
-static int32 AttenuationGain(uint32 steps)
+static int32 OsxGuestAttenuationGain(uint32 steps)
 {
 	return (int32)(pow(10.0, -1.5 * (double)steps / 20.0) * 65536.0);
 }
 
-static void UpdateGain(OsxAudio *audio)
+static void OsxGuestUpdateGain(OsxAudio *audio)
 {
 	uint32 mute;
 	uint32 volume;
@@ -66,19 +66,19 @@ static void UpdateGain(OsxAudio *audio)
 		audio->rightgain = 0;
 		return;
 	}
-	audio->leftgain = AttenuationGain((volume >> 6) & 15);
-	audio->rightgain = AttenuationGain(volume & 15);
+	audio->leftgain = OsxGuestAttenuationGain((volume >> 6) & 15);
+	audio->rightgain = OsxGuestAttenuationGain(volume & 15);
 }
 
-static void OpenHost(OsxMachine *machine)
+static void OsxGuestOpenHost(OsxMachine *machine)
 {
 	OsxAudio *audio;
 	audio = &machine->audio;
-	OsxAudioCloseHost(audio);
+	OsxGuestAudioCloseHost(audio);
 	audio->head = 0;
 	audio->tail = 0;
 	audio->openrate = audio->rate;
-	audio->stream = OsxAudioStartHost(audio);
+	audio->stream = OsxGuestAudioStartHost(audio);
 	if (audio->stream == NULL) {
 		if (machine->log)
 			fprintf(machine->log, "audio open failed\n");
@@ -89,34 +89,34 @@ static void OpenHost(OsxMachine *machine)
 		fprintf(machine->log, "audio opened %u Hz\n", audio->rate);
 }
 
-void OsxAudioReset(OsxMachine *machine)
+void OsxGuestAudioReset(OsxMachine *machine)
 {
 	OsxAudio *audio;
 	audio = &machine->audio;
-	OsxAudioCloseHost(audio);
+	OsxGuestAudioCloseHost(audio);
 	audio->running = 0;
 	audio->control = 0;
 	audio->codeccontrol = 0;
 	memset(audio->codec, 0, sizeof(audio->codec));
 	audio->readback = 0;
 	audio->byteswap = 0;
-	audio->rate = SampleRate(0);
+	audio->rate = OsxGuestSampleRate(0);
 	audio->openrate = 0;
 	audio->disabled = PrefsFindBool("nosound");
 	audio->head = 0;
 	audio->tail = 0;
 	audio->lasttime = 0;
-	UpdateGain(audio);
+	OsxGuestUpdateGain(audio);
 	machine->dbdma[OSXDBDMAAUDIOOUT].irq = OSXIRQAUDIOOUTDMA;
 	machine->dbdma[OSXDBDMAAUDIOIN].irq = OSXIRQAUDIOINDMA;
 }
 
-void OsxAudioExit(OsxMachine *machine)
+void OsxGuestAudioExit(OsxMachine *machine)
 {
-	OsxAudioCloseHost(&machine->audio);
+	OsxGuestAudioCloseHost(&machine->audio);
 }
 
-uint32 OsxAudioRead(OsxMachine *machine, uint32 offset)
+uint32 OsxGuestAudioRead(OsxMachine *machine, uint32 offset)
 {
 	OsxAudio *audio;
 	audio = &machine->audio;
@@ -135,7 +135,7 @@ uint32 OsxAudioRead(OsxMachine *machine, uint32 offset)
 	return 0;
 }
 
-void OsxAudioWrite(OsxMachine *machine, uint32 offset, uint32 value)
+void OsxGuestAudioWrite(OsxMachine *machine, uint32 offset, uint32 value)
 {
 	OsxAudio *audio;
 	uint32 address;
@@ -144,7 +144,7 @@ void OsxAudioWrite(OsxMachine *machine, uint32 offset, uint32 value)
 	switch (offset & 0xf0) {
 	case AUDIOCONTROL:
 		audio->control = value;
-		audio->rate = SampleRate(value);
+		audio->rate = OsxGuestSampleRate(value);
 		break;
 	case AUDIOCODECCONTROL:
 		audio->codeccontrol = value & ~AUDIOCODECBUSY;
@@ -158,7 +158,7 @@ void OsxAudioWrite(OsxMachine *machine, uint32 offset, uint32 value)
 		}
 		if (address < 8) {
 			audio->codec[address] = data;
-			UpdateGain(audio);
+			OsxGuestUpdateGain(audio);
 		}
 		break;
 	case AUDIOBYTESWAP:
@@ -167,7 +167,7 @@ void OsxAudioWrite(OsxMachine *machine, uint32 offset, uint32 value)
 	}
 }
 
-static void StoreBlock(OsxAudio *audio, uint32 length)
+static void OsxGuestStoreBlock(OsxAudio *audio, uint32 length)
 {
 	uint8 *data;
 	uint32 index;
@@ -190,13 +190,13 @@ static void StoreBlock(OsxAudio *audio, uint32 length)
 	}
 }
 
-void OsxAudioOpenForCdrom(OsxMachine *machine)
+void OsxGuestAudioOpenForCdrom(OsxMachine *machine)
 {
 	if (!machine->audio.disabled && !machine->audio.stream)
-		OpenHost(machine);
+		OsxGuestOpenHost(machine);
 }
 
-void OsxAudioPoll(OsxMachine *machine, uint64 now)
+void OsxGuestAudioPoll(OsxMachine *machine, uint64 now)
 {
 	OsxAudio *audio;
 	uint32 target;
@@ -216,21 +216,21 @@ void OsxAudioPoll(OsxMachine *machine, uint64 now)
 		return;
 	}
 	if (!audio->disabled && (!audio->stream || audio->openrate != audio->rate))
-		OpenHost(machine);
+		OsxGuestOpenHost(machine);
 	level = 0;
 	if (audio->stream) {
 		if (audio->running && now < audio->lasttime)
 			return;
 		audio->lasttime = now + AUDIOPOLLTICKS;
 		target = audio->rate * AUDIOFRAMEBYTES / AUDIOLATENCYDIVISOR;
-		OsxAudioLockHost(audio);
+		OsxGuestAudioLockHost(audio);
 		level = audio->head - audio->tail;
 		while (!audio->running && level + AUDIOFRAMEBYTES <= target) {
 			memset(audio->ring + (audio->head & (OSXAUDIORING - 1)), 0, AUDIOFRAMEBYTES);
 			audio->head += AUDIOFRAMEBYTES;
 			level += AUDIOFRAMEBYTES;
 		}
-		OsxAudioUnlockHost(audio);
+		OsxGuestAudioUnlockHost(audio);
 		audio->running = 1;
 	} else {
 		if (now <= audio->lasttime)
@@ -244,17 +244,17 @@ void OsxAudioPoll(OsxMachine *machine, uint64 now)
 		want = (target - level) & ~(uint32)(AUDIOFRAMEBYTES - 1);
 		if (want > OSXAUDIOBLOCK)
 			want = OSXAUDIOBLOCK;
-		got = OsxDbdmaTransfer(machine, channel, audio->block, want, 0);
+		got = OsxGuestDbdmaTransfer(machine, channel, audio->block, want, 0);
 		if (got <= 0)
 			return;
 #if OSXG5
 		machine->g5state.i2sframes += (uint32)got / AUDIOFRAMEBYTES;
 #endif
 		if (audio->stream) {
-			OsxAudioLockHost(audio);
-			StoreBlock(audio, (uint32)got);
+			OsxGuestAudioLockHost(audio);
+			OsxGuestStoreBlock(audio, (uint32)got);
 			audio->head += (uint32)got;
-			OsxAudioUnlockHost(audio);
+			OsxGuestAudioUnlockHost(audio);
 		}
 		level += (uint32)got;
 	}

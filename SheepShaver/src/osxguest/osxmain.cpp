@@ -113,22 +113,22 @@ int OsxGuestRequested(void)
 	int diskindex;
 	int partition;
 	XPRAMInit(NULL);
-	return OsxSelectBootImage(&diskindex, &partition) == OSXBOOTNATIVE;
+	return OsxGuestSelectBootImage(&diskindex, &partition) == OSXBOOTNATIVE;
 }
 
-static void ConsoleCharacter(OsxSession *session, int character);
+static void OsxGuestConsoleCharacter(OsxSession *session, int character);
 
-static void ConsoleHook(OsxCpu *cpu, void *context, uint32 address)
+static void OsxGuestConsoleHook(OsxCpu *cpu, void *context, uint32 address)
 {
-	ConsoleCharacter((OsxSession *)context, (int)(cpu->gpr[3] & 0xff));
+	OsxGuestConsoleCharacter((OsxSession *)context, (int)(cpu->gpr[3] & 0xff));
 }
 
-static void TerminalHook(OsxCpu *cpu, void *context, uint32 address)
+static void OsxGuestTerminalHook(OsxCpu *cpu, void *context, uint32 address)
 {
-	ConsoleCharacter((OsxSession *)context, (int)(cpu->gpr[3] & 0xff));
+	OsxGuestConsoleCharacter((OsxSession *)context, (int)(cpu->gpr[3] & 0xff));
 }
 
-static void ConsoleCharacter(OsxSession *session, int character)
+static void OsxGuestConsoleCharacter(OsxSession *session, int character)
 {
 	OsxMachine *machine;
 	machine = session->machine;
@@ -137,7 +137,7 @@ static void ConsoleCharacter(OsxSession *session, int character)
 		fprintf(stdout, "%s\n", session->consoleline);
 		fflush(stdout);
 		if (machine->console) {
-			fprintf(machine->console, "[%6.2f] %s\n", (double)OsxCpuTimebase(machine->cpu) / OSXTIMEBASEFREQUENCY, session->consoleline);
+			fprintf(machine->console, "[%6.2f] %s\n", (double)OsxGuestCpuTimebase(machine->cpu) / OSXTIMEBASEFREQUENCY, session->consoleline);
 			fflush(machine->console);
 		}
 		session->consolelength = 0;
@@ -147,13 +147,13 @@ static void ConsoleCharacter(OsxSession *session, int character)
 		session->consoleline[session->consolelength++] = (char)character;
 }
 
-static void GuestString(OsxCpu *cpu, uint32 address, char *output, int length)
+static void OsxGuestString(OsxCpu *cpu, uint32 address, char *output, int length)
 {
 	uint32 word;
 	int index;
 	char character;
 	for (index = 0; index < length - 1; index++) {
-		if (!OsxCpuReadVirtual(cpu, (address + index) & ~3u, &word))
+		if (!OsxGuestCpuReadVirtual(cpu, (address + index) & ~3u, &word))
 			break;
 		character = (char)(word >> (24 - ((address + index) & 3) * 8));
 		if (character == 0)
@@ -163,7 +163,7 @@ static void GuestString(OsxCpu *cpu, uint32 address, char *output, int length)
 	output[index] = 0;
 }
 
-static void FormatGuest(OsxMachine *machine, OsxCpu *cpu, char *output, int length)
+static void OsxGuestFormatGuest(OsxMachine *machine, OsxCpu *cpu, char *output, int length)
 {
 	char format[512];
 	char piece[256];
@@ -173,7 +173,7 @@ static void FormatGuest(OsxMachine *machine, OsxCpu *cpu, char *output, int leng
 	int index;
 	int width;
 	uint32 value;
-	GuestString(cpu, cpu->gpr[3], format, sizeof(format));
+	OsxGuestString(cpu, cpu->gpr[3], format, sizeof(format));
 	used = 0;
 	argument = 4;
 	for (index = 0; format[index] && used < length - 64; index++) {
@@ -197,7 +197,7 @@ static void FormatGuest(OsxMachine *machine, OsxCpu *cpu, char *output, int leng
 			value = cpu->gpr[argument];
 		argument++;
 		if (format[index] == 's') {
-			GuestString(cpu, value, piece, 128);
+			OsxGuestString(cpu, value, piece, 128);
 		} else {
 			specifier[width] = 0;
 			strcat(specifier, "u");
@@ -215,7 +215,7 @@ static void FormatGuest(OsxMachine *machine, OsxCpu *cpu, char *output, int leng
 	output[used] = 0;
 }
 
-static void TrapHook(OsxCpu *cpu, void *context, uint32 address)
+static void OsxGuestTrapHook(OsxCpu *cpu, void *context, uint32 address)
 {
 	OsxSession *session;
 	uint32 *entry;
@@ -224,14 +224,14 @@ static void TrapHook(OsxCpu *cpu, void *context, uint32 address)
 	entry[0] = cpu->gpr[3];
 	entry[1] = 0;
 	entry[2] = 0;
-	OsxCpuReadVirtual(cpu, cpu->gpr[4] + 0x100, &entry[1]);
-	OsxCpuReadVirtual(cpu, cpu->gpr[4] + 0x104, &entry[2]);
+	OsxGuestCpuReadVirtual(cpu, cpu->gpr[4] + 0x100, &entry[1]);
+	OsxGuestCpuReadVirtual(cpu, cpu->gpr[4] + 0x104, &entry[2]);
 	entry[3] = cpu->gpr[5];
 	entry[4] = cpu->gpr[6];
 	session->trapcount++;
 }
 
-static void TraceStartHook(OsxCpu *cpu, void *context, uint32 address)
+static void OsxGuestTraceStartHook(OsxCpu *cpu, void *context, uint32 address)
 {
 	OsxSession *session;
 	session = (OsxSession *)context;
@@ -240,30 +240,30 @@ static void TraceStartHook(OsxCpu *cpu, void *context, uint32 address)
 	cpu->tracefile = session->trace;
 }
 
-static void TraceStopHook(OsxCpu *cpu, void *context, uint32 address)
+static void OsxGuestTraceStopHook(OsxCpu *cpu, void *context, uint32 address)
 {
 	cpu->tracefile = NULL;
 }
 
-static void NewWorldEpochHook(OsxCpu *cpu, void *context, uint32 address)
+static void OsxGuestNewWorldEpochHook(OsxCpu *cpu, void *context, uint32 address)
 {
 	cpu->gpr[3] = 1;
 	cpu->nextpc = cpu->lr;
 }
 
-static void RefuseSleepHook(OsxCpu *cpu, void *context, uint32 address)
+static void OsxGuestRefuseSleepHook(OsxCpu *cpu, void *context, uint32 address)
 {
 	cpu->gpr[3] = 0;
 	cpu->nextpc = cpu->lr;
 }
 
-static void ReturnHook(OsxCpu *cpu, void *context, uint32 address)
+static void OsxGuestReturnHook(OsxCpu *cpu, void *context, uint32 address)
 {
 	cpu->nextpc = cpu->lr;
 }
 
 #if OSXG5
-static void NapHook(OsxCpu *cpu, void *context, uint32 address)
+static void OsxGuestNapHook(OsxCpu *cpu, void *context, uint32 address)
 {
 	cpu->msr |= OSXMSREE;
 	cpu->nextpc = cpu->lr;
@@ -274,12 +274,12 @@ static void NapHook(OsxCpu *cpu, void *context, uint32 address)
 }
 #endif
 
-static void AllowStalledClassLookup(OsxMachine *machine)
+static void OsxGuestAllowStalledClassLookup(OsxMachine *machine)
 {
 	uint8 *code;
 	uint32 address;
 	uint32 index;
-	address = OsxFindKernelSymbol(machine, "_getMetaClassWithName__11OSMetaClassPC8OSSymbol");
+	address = OsxGuestFindKernelSymbol(machine, "_getMetaClassWithName__11OSMetaClassPC8OSSymbol");
 	if (address == 0 || address + 0x100 > machine->ramsize)
 		return;
 	code = machine->ram + address;
@@ -288,19 +288,21 @@ static void AllowStalledClassLookup(OsxMachine *machine)
 			memcpy(code + index, "\x60\x00\x00\x00", 4);
 }
 
-static void HookKernelSymbol(OsxMachine *machine, const char *name, OsxHookFunction function)
+static void OsxGuestHookKernelSymbol(OsxMachine *machine, const char *name, OsxHookFunction function)
 {
-	if (OsxFindKernelSymbol(machine, name))
-		OsxCpuAddHook(machine->cpu, OsxFindKernelSymbol(machine, name), function, NULL);
+	if (OsxGuestFindKernelSymbol(machine, name))
+		OsxGuestCpuAddHook(machine->cpu, OsxGuestFindKernelSymbol(machine, name), function, NULL);
 }
 
-static void SettleHook(OsxCpu *cpu, void *context, uint32 address)
+static void OsxGuestSettleHook(OsxCpu *cpu, void *context, uint32 address)
 {
 	if ((cpu->gpr[3] == OSXSETTLEMS || cpu->gpr[3] == OSXAMPSETTLEMS) && cpu->lr >= ((OsxMachine *)context)->kernelend)
 		cpu->gpr[3] = 0;
 }
 
-static void CallHook(OsxCpu *cpu, void *context, uint32 address)
+
+
+static void OsxGuestCallHook(OsxCpu *cpu, void *context, uint32 address)
 {
 	OsxSession *session;
 	char text[64];
@@ -310,15 +312,15 @@ static void CallHook(OsxCpu *cpu, void *context, uint32 address)
 	for (index = 0; index < session->callcount; index++) {
 		if (session->calladdresses[index] != address)
 			continue;
-		GuestString(cpu, cpu->gpr[10], text, sizeof(text));
+		OsxGuestString(cpu, cpu->gpr[10], text, sizeof(text));
 		word = 0;
-		OsxCpuReadVirtual(cpu, cpu->gpr[3] + 0x28, &word);
+		OsxGuestCpuReadVirtual(cpu, cpu->gpr[3] + 0x28, &word);
 		if (session->machine->log)
 			fprintf(session->machine->log, "call %s [%s] state %08x r3 %08x r4 %08x r5 %08x r6 %08x r7 %08x r8 %08x lr %08x\n", session->callnames[index], text, word, cpu->gpr[3], cpu->gpr[4], cpu->gpr[5], cpu->gpr[6], cpu->gpr[7], cpu->gpr[8], cpu->lr);
 	}
 }
 
-static void InstallCallHooks(OsxSession *session)
+static void OsxGuestInstallCallHooks(OsxSession *session)
 {
 	const char *list;
 	char name[64];
@@ -337,17 +339,17 @@ static void InstallCallHooks(OsxSession *session)
 		list += length;
 		if (length == 0)
 			break;
-		address = OsxFindKernelSymbol(session->machine, name);
+		address = OsxGuestFindKernelSymbol(session->machine, name);
 		if (address == 0)
 			continue;
 		strcpy(session->callnames[session->callcount], name);
 		session->calladdresses[session->callcount] = address;
 		session->callcount++;
-		OsxCpuAddHook(session->machine->cpu, address, CallHook, session);
+		OsxGuestCpuAddHook(session->machine->cpu, address, OsxGuestCallHook, session);
 	}
 }
 
-static void ParseKextHooks(OsxSession *session)
+static void OsxGuestParseKextHooks(OsxSession *session)
 {
 	const char *list;
 	char entry[256];
@@ -382,7 +384,7 @@ static void ParseKextHooks(OsxSession *session)
 	}
 }
 
-static void InstallKextHooks(OsxSession *session)
+static void OsxGuestInstallKextHooks(OsxSession *session)
 {
 	OsxMachine *machine;
 	OsxCpu *cpu;
@@ -397,31 +399,31 @@ static void InstallKextHooks(OsxSession *session)
 	for (index = 0; index < session->kextcount && session->callcount < 16; index++) {
 		if (session->kextstates[index])
 			continue;
-		if (!OsxKextSymbolOffset(machine, session->kextbundles[index], session->kextsymbols[index], &offset)) {
+		if (!OsxGuestKextSymbolOffset(machine, session->kextbundles[index], session->kextsymbols[index], &offset)) {
 			session->kextstates[index] = -1;
 			continue;
 		}
-		if (!OsxKextTextAddress(machine, session->kextbundles[index], &text))
+		if (!OsxGuestKextTextAddress(machine, session->kextbundles[index], &text))
 			continue;
-		if (!OsxCpuTranslate(cpu, text + offset + session->kextoffsets[index], OSXTLBREAD, 0, &physical))
+		if (!OsxGuestCpuTranslate(cpu, text + offset + session->kextoffsets[index], OSXTLBREAD, 0, &physical))
 			continue;
 		sprintf(session->callnames[session->callcount], "%.40s+%x", session->kextsymbols[index], session->kextoffsets[index]);
 		session->calladdresses[session->callcount] = physical;
 		session->callcount++;
-		OsxCpuAddHook(cpu, physical, CallHook, session);
+		OsxGuestCpuAddHook(cpu, physical, OsxGuestCallHook, session);
 		session->kextstates[index] = 1;
 	}
 }
 
-static void InstallPowerHook(OsxSession *session);
+static void OsxGuestInstallPowerHook(OsxSession *session);
 
-static void KmodStartHook(OsxCpu *cpu, void *context, uint32 address)
+static void OsxGuestKmodStartHook(OsxCpu *cpu, void *context, uint32 address)
 {
-	InstallPowerHook((OsxSession *)context);
-	InstallKextHooks((OsxSession *)context);
+	OsxGuestInstallPowerHook((OsxSession *)context);
+	OsxGuestInstallKextHooks((OsxSession *)context);
 }
 
-static void XmlHook(OsxCpu *cpu, void *context, uint32 address)
+static void OsxGuestXmlHook(OsxCpu *cpu, void *context, uint32 address)
 {
 	OsxSession *session;
 	char *text;
@@ -434,7 +436,7 @@ static void XmlHook(OsxCpu *cpu, void *context, uint32 address)
 		return;
 	text = (char *)malloc(length + 1);
 	for (index = 0; index < length; index++) {
-		if (!OsxCpuReadVirtual(cpu, (cpu->gpr[3] + index) & ~3u, &word))
+		if (!OsxGuestCpuReadVirtual(cpu, (cpu->gpr[3] + index) & ~3u, &word))
 			break;
 		text[index] = (char)(word >> (24 - ((cpu->gpr[3] + index) & 3) * 8));
 	}
@@ -446,17 +448,17 @@ static void XmlHook(OsxCpu *cpu, void *context, uint32 address)
 	free(text);
 }
 
-static void PanicHook(OsxCpu *cpu, void *context, uint32 address)
+static void OsxGuestPanicHook(OsxCpu *cpu, void *context, uint32 address)
 {
 	OsxSession *session;
 	char message[1024];
 	int index;
 	session = (OsxSession *)context;
-	FormatGuest(session->machine, cpu, message, sizeof(message));
+	OsxGuestFormatGuest(session->machine, cpu, message, sizeof(message));
 	fprintf(stdout, "PANIC: %s\n", message);
 	if (session->machine->log) {
 		fprintf(session->machine->log, "PANIC: %s lr %08x\n", message, cpu->lr);
-		OsxCpuDumpFaults(cpu, session->machine->log);
+		OsxGuestCpuDumpFaults(cpu, session->machine->log);
 		for (index = session->trapcount - 32; index < session->trapcount; index++)
 			if (index >= 0)
 				fprintf(session->machine->log, "trap %x srr0 %08x srr1 %08x dsisr %08x dar %08x\n", session->traps[index & 31][0], session->traps[index & 31][1], session->traps[index & 31][2], session->traps[index & 31][3], session->traps[index & 31][4]);
@@ -464,27 +466,27 @@ static void PanicHook(OsxCpu *cpu, void *context, uint32 address)
 	}
 }
 
-static void KprintfHook(OsxCpu *cpu, void *context, uint32 address)
+static void OsxGuestKprintfHook(OsxCpu *cpu, void *context, uint32 address)
 {
 	OsxSession *session;
 	char message[1024];
 	session = (OsxSession *)context;
-	FormatGuest(session->machine, cpu, message, sizeof(message));
+	OsxGuestFormatGuest(session->machine, cpu, message, sizeof(message));
 	if (session->machine->console) {
 		fprintf(session->machine->console, "kprintf: %s", message);
 		fflush(session->machine->console);
 	}
 }
 
-static int FindPointerSymbol(OsxSession *session, const char *name, uint32 *offset)
+static int OsxGuestFindPointerSymbol(OsxSession *session, const char *name, uint32 *offset)
 {
 	if (session->pointerbundle)
-		return OsxKextSymbolOffset(session->machine, session->pointerbundle, name, offset);
-	*offset = OsxFindKernelSymbol(session->machine, name);
+		return OsxGuestKextSymbolOffset(session->machine, session->pointerbundle, name, offset);
+	*offset = OsxGuestFindKernelSymbol(session->machine, name);
 	return *offset != 0;
 }
 
-static int FindPointerSymbols(OsxSession *session)
+static int OsxGuestFindPointerSymbols(OsxSession *session)
 {
 	static const char *const bundles[4] = { "com.apple.iokit.IOHIDFamily", "com.apple.iokit.IOHIDFamily", "com.apple.iokit.IOHIDSystem", NULL };
 	static const char *const relatives[4] = {
@@ -509,11 +511,11 @@ static int FindPointerSymbols(OsxSession *session)
 	for (index = 0; index < 4; index++) {
 		session->pointerbundle = bundles[index];
 		session->pointer.sender = index == 1;
-		if (FindPointerSymbol(session, relatives[index], &session->pointeroffset) && FindPointerSymbol(session, absolutes[index], &session->absoluteoffset)) {
+		if (OsxGuestFindPointerSymbol(session, relatives[index], &session->pointeroffset) && OsxGuestFindPointerSymbol(session, absolutes[index], &session->absoluteoffset)) {
 			session->pointer.compactwheel = 0;
-			if (!FindPointerSymbol(session, wheels[index], &session->wheeloffset)) {
+			if (!OsxGuestFindPointerSymbol(session, wheels[index], &session->wheeloffset)) {
 				session->wheeloffset = 0;
-				if (session->pointer.sender && FindPointerSymbol(session, "__ZN11IOHIDSystem21scrollWheelEventGatedEssslll12UnsignedWideP8OSObject", &session->wheeloffset))
+				if (session->pointer.sender && OsxGuestFindPointerSymbol(session, "__ZN11IOHIDSystem21scrollWheelEventGatedEssslll12UnsignedWideP8OSObject", &session->wheeloffset))
 					session->pointer.compactwheel = 1;
 				else
 					session->wheeloffset = 0;
@@ -525,7 +527,7 @@ static int FindPointerSymbols(OsxSession *session)
 	return 0;
 }
 
-static void InstallPointerHook(OsxSession *session)
+static void OsxGuestInstallPointerHook(OsxSession *session)
 {
 	OsxMachine *machine;
 	OsxCpu *cpu;
@@ -535,34 +537,34 @@ static void InstallPointerHook(OsxSession *session)
 	cpu = machine->cpu;
 	if (session->pointerhooked || (cpu->msr & OSXMSRPR) || !(cpu->msr & OSXMSRDR))
 		return;
-	if (session->pointeroffset == 0 && !FindPointerSymbols(session)) {
+	if (session->pointeroffset == 0 && !OsxGuestFindPointerSymbols(session)) {
 		session->pointerhooked = -1;
 		return;
 	}
 	text = 0;
-	if (session->pointerbundle && !OsxKextTextAddress(machine, session->pointerbundle, &text))
+	if (session->pointerbundle && !OsxGuestKextTextAddress(machine, session->pointerbundle, &text))
 		return;
-	if (!OsxCpuTranslate(cpu, text + session->pointeroffset, OSXTLBREAD, 0, &physical))
+	if (!OsxGuestCpuTranslate(cpu, text + session->pointeroffset, OSXTLBREAD, 0, &physical))
 		return;
 	session->pointer.machine = machine;
 	session->pointer.absoluteaddress = text + session->absoluteoffset;
 	session->pointer.wheeladdress = 0;
 	if (session->wheeloffset)
 		session->pointer.wheeladdress = text + session->wheeloffset;
-	OsxCpuAddHook(cpu, physical, OsxPointerHook, &session->pointer);
+	OsxGuestCpuAddHook(cpu, physical, OsxGuestPointerHook, &session->pointer);
 	machine->cuda.mouseabsolute = 1;
 	session->pointerhooked = 1;
 	if (machine->log)
 		fprintf(machine->log, "pointer hook at %08x physical %08x\n", text + session->pointeroffset, physical);
 }
 
-static void PowerRegisterHook(OsxCpu *cpu, void *context, uint32 address)
+static void OsxGuestPowerRegisterHook(OsxCpu *cpu, void *context, uint32 address)
 {
 	if (cpu->gpr[4] == cpu->gpr[5])
 		cpu->gpr[4] = 0;
 }
 
-static void InstallPowerHook(OsxSession *session)
+static void OsxGuestInstallPowerHook(OsxSession *session)
 {
 	OsxMachine *machine;
 	OsxCpu *cpu;
@@ -573,30 +575,30 @@ static void InstallPowerHook(OsxSession *session)
 	cpu = machine->cpu;
 	if (session->powerhooked || (cpu->msr & OSXMSRPR) || !(cpu->msr & OSXMSRDR))
 		return;
-	if (!OsxKextSymbolOffset(machine, "com.apple.driver.AppleGossamerPE", "__ZN10GossamerPE16PMRegisterDeviceEP9IOServiceS1_", &offset)) {
+	if (!OsxGuestKextSymbolOffset(machine, "com.apple.driver.AppleGossamerPE", "__ZN10GossamerPE16PMRegisterDeviceEP9IOServiceS1_", &offset)) {
 		session->powerhooked = -1;
 		return;
 	}
-	if (!OsxKextTextAddress(machine, "com.apple.driver.AppleGossamerPE", &text) || !OsxCpuTranslate(cpu, text + offset, OSXTLBREAD, 0, &physical))
+	if (!OsxGuestKextTextAddress(machine, "com.apple.driver.AppleGossamerPE", &text) || !OsxGuestCpuTranslate(cpu, text + offset, OSXTLBREAD, 0, &physical))
 		return;
-	OsxCpuAddHook(cpu, physical, PowerRegisterHook, NULL);
+	OsxGuestCpuAddHook(cpu, physical, OsxGuestPowerRegisterHook, NULL);
 	session->powerhooked = 1;
 }
 
-static void MovePointer(OsxSession *session, int x, int y)
+static void OsxGuestMovePointer(OsxSession *session, int x, int y)
 {
-	OsxCudaMouse(session->machine, x - session->hostx, y - session->hosty, session->buttons & 1);
+	OsxGuestCudaMouse(session->machine, x - session->hostx, y - session->hosty, session->buttons & 1);
 	session->hostx = x;
 	session->hosty = y;
 }
 
-static void PressButton(OsxSession *session, int button, int down)
+static void OsxGuestPressButton(OsxSession *session, int button, int down)
 {
 	if (button == 3 || button == 4) {
 		if (down && button == 3)
-			OsxCudaWheel(session->machine, 1);
+			OsxGuestCudaWheel(session->machine, 1);
 		else if (down)
-			OsxCudaWheel(session->machine, -1);
+			OsxGuestCudaWheel(session->machine, -1);
 		return;
 	}
 	if (button < 0 || button > 2)
@@ -605,10 +607,10 @@ static void PressButton(OsxSession *session, int button, int down)
 		session->buttons |= 1 << button;
 	else
 		session->buttons &= ~(1 << button);
-	OsxCudaMouse(session->machine, 0, 0, session->buttons);
+	OsxGuestCudaMouse(session->machine, 0, 0, session->buttons);
 }
 
-static void HostInput(void *context, int operation, int first, int second)
+static void OsxGuestHostInput(void *context, int operation, int first, int second)
 {
 	OsxSession *session = (OsxSession *)context;
 	switch (operation) {
@@ -616,16 +618,16 @@ static void HostInput(void *context, int operation, int first, int second)
 		session->machine->quit = 1;
 		break;
 	case OSXHOSTMOUSE:
-		MovePointer(session, first, second);
+		OsxGuestMovePointer(session, first, second);
 		break;
 	case OSXHOSTBUTTON:
-		PressButton(session, first, second);
+		OsxGuestPressButton(session, first, second);
 		break;
 	case OSXHOSTWHEEL:
-		OsxCudaWheel(session->machine, first);
+		OsxGuestCudaWheel(session->machine, first);
 		break;
 	case OSXHOSTKEY:
-		OsxCudaKey(session->machine, first, second);
+		OsxGuestCudaKey(session->machine, first, second);
 		break;
 	case OSXHOSTREDRAW:
 		memset(session->shadow, 0xff, session->machine->rowbytes * session->machine->height);
@@ -634,7 +636,7 @@ static void HostInput(void *context, int operation, int first, int second)
 }
 
 #if OSXHOSTX64
-static OSXSSSE3 uint32 ShufflePixels(uint32 *target, const uint8 *source, uint32 width)
+static OSXSSSE3 uint32 OsxGuestShufflePixels(uint32 *target, const uint8 *source, uint32 width)
 {
 	__m128i order;
 	__m128i pixels;
@@ -649,19 +651,19 @@ static OSXSSSE3 uint32 ShufflePixels(uint32 *target, const uint8 *source, uint32
 }
 #endif
 
-static void ConvertPixels(uint32 *target, const uint8 *source, uint32 width, int shuffle)
+static void OsxGuestConvertPixels(uint32 *target, const uint8 *source, uint32 width, int shuffle)
 {
 	uint32 column;
 	column = 0;
 #if OSXHOSTX64
 	if (shuffle)
-		column = ShufflePixels(target, source, width);
+		column = OsxGuestShufflePixels(target, source, width);
 #endif
 	for (; column < width; column++)
 		target[column] = ((uint32)source[column * 4 + 1] << 16) | ((uint32)source[column * 4 + 2] << 8) | source[column * 4 + 3];
 }
 
-static void PresentFrame(OsxSession *session)
+static void OsxGuestPresentFrame(OsxSession *session)
 {
 	OsxMachine *machine;
 	const uint8 *source;
@@ -682,16 +684,17 @@ static void PresentFrame(OsxSession *session)
 	rowbytes = machine->rowbytes;
 #if OSXGLBRIDGE
 	if (MetalCompositorIsInitialized()) {
-		GlCompose(session->quartz, machine->vram, session->glpresent, rowbytes * machine->height);
+		OsxGuestQuartzComposeWindows(session->quartz, machine->vram, session->glpresent, rowbytes * machine->height);
+		OsxGl::OsxGuestEngineBeforePresent();
 		MetalCompositorPresentWithoutVBL();
-		OsxGl::EngineAfterPresent();
+		OsxGl::OsxGuestEngineAfterPresent();
 		return;
 	}
 #endif
 	runs = 0;
 	open = 0;
 	openrow = 0;
-	pixels = OsxHostLock(session->video, &pitch, &raw);
+	pixels = OsxGuestHostLock(session->video, &pitch, &raw);
 	if (!pixels)
 		return;
 	for (row = 0; row < machine->height; row++) {
@@ -717,7 +720,7 @@ static void PresentFrame(OsxSession *session)
 		if (raw)
 			memcpy(target, source, machine->width * 4);
 		else
-			ConvertPixels(target, source, machine->width, session->pixelshuffle);
+			OsxGuestConvertPixels(target, source, machine->width, session->pixelshuffle);
 		if (!open) {
 			openrow = row;
 			open = 1;
@@ -731,13 +734,13 @@ static void PresentFrame(OsxSession *session)
 		} else
 			runend[runs - 1] = machine->height - 1;
 	}
-	presented = OsxHostPresent(session->video, runstart, runend, runs);
+	presented = OsxGuestHostPresent(session->video, runstart, runend, runs);
 #if OSXPROFILE
 	session->tmpframes += presented;
 #endif
 }
 
-static void ParseScreen(OsxMachine *machine)
+static void OsxGuestParseScreen(OsxMachine *machine)
 {
 	const char *screen;
 	int width;
@@ -753,7 +756,7 @@ static void ParseScreen(OsxMachine *machine)
 	machine->rowbytes = machine->width * 4;
 }
 
-static void AttachDisks(OsxMachine *machine, const char **bootimage, int *bootbus, int *bootunit)
+static void OsxGuestAttachDisks(OsxMachine *machine, const char **bootimage, int *bootbus, int *bootunit)
 {
 	static const int diskslots[3] = { 0, 1, 3 };
 	const char *path;
@@ -764,10 +767,10 @@ static void AttachDisks(OsxMachine *machine, const char **bootimage, int *bootbu
 	*bootimage = NULL;
 	*bootbus = 0;
 	*bootunit = 0;
-	OsxSelectBootImage(&diskindex, &machine->bootpartition);
+	OsxGuestSelectBootImage(&diskindex, &machine->bootpartition);
 	used = 0;
 	for (index = 0; (path = PrefsFindString("disk", index)) != NULL && used < 3; index++) {
-		if (!OsxAtaAttach(machine, diskslots[used] >> 1, diskslots[used] & 1, path, 0))
+		if (!OsxGuestAtaAttach(machine, diskslots[used] >> 1, diskslots[used] & 1, path, 0))
 			continue;
 		if (used == diskindex) {
 			*bootimage = path;
@@ -780,7 +783,7 @@ static void AttachDisks(OsxMachine *machine, const char **bootimage, int *bootbu
 		strncpy(machine->cdrompaths[index], path, 511);
 	machine->cdromcount = index;
 	path = PrefsFindString("cdrom", 0);
-	cdromattached = path != NULL && OsxAtaAttach(machine, 1, 0, path, 1);
+	cdromattached = path != NULL && OsxGuestAtaAttach(machine, 1, 0, path, 1);
 	if (cdromattached && diskindex == -1) {
 		*bootimage = path;
 		*bootbus = 1;
@@ -788,7 +791,7 @@ static void AttachDisks(OsxMachine *machine, const char **bootimage, int *bootbu
 	}
 }
 
-static int SyscallObserver(OsxCpu *cpu, void *context, uint32 instruction)
+static int OsxGuestSyscallObserver(OsxCpu *cpu, void *context, uint32 instruction)
 {
 	OsxSession *session;
 	uint32 key;
@@ -804,11 +807,11 @@ static int SyscallObserver(OsxCpu *cpu, void *context, uint32 instruction)
 	if (session->machine->quartz && (cpu->msr & OSXMSRPR) &&
 		(instruction & 0xfffc00ffu) == OSXQUARTZTRAP) {
 		if (!session->quartz)
-			session->quartz = CreateQuartzBridge(session->machine->width, session->machine->height,
-				session->machine->quartzbase, session->machine->quartzstrings, session->machine->quartzextensions,
+			session->quartz = OsxGuestCreateQuartzBridge(session->machine->width, session->machine->height,
+				session->machine->quartzbase, session->machine->quartzstrings, session->machine->quartzextensions, session->machine->quartzallocatedextensions,
 				session->machine->clip.functions[OSXCLIPMALLOC],
 				session->machine->clip.functions[OSXCLIPBZERO], session->machine->vram, session->machine->rowbytes, session->video, &session->glpresent, session->machine->quartzwindow);
-		if (session->quartz && QuartzBridgeCall(session->quartz, cpu,
+		if (session->quartz && OsxGuestQuartzBridgeCall(session->quartz, cpu,
 			session->machine->quartztails, (instruction >> 8) & 1023, session->machine->log))
 			return 1;
 	}
@@ -831,8 +834,8 @@ static int SyscallObserver(OsxCpu *cpu, void *context, uint32 instruction)
 			if (!(base & 4095)) {
 				if (width == session->machine->width && height == session->machine->height) {
 					if (session->gl)
-						DestroyGlBridge(session->gl);
-					session->gl = CreateGlBridge(cpu, session->machine->width, session->machine->height, session->machine->vram, session->machine->rowbytes, session->video, &session->glpresent);
+						OsxGuestDestroyGlBridge(session->gl);
+					session->gl = OsxGuestCreateGlBridge(cpu, session->machine->width, session->machine->height, session->machine->vram, session->machine->rowbytes, session->video, &session->glpresent);
 					session->glbase = base;
 					session->glsegment = segment;
 				}
@@ -845,13 +848,13 @@ static int SyscallObserver(OsxCpu *cpu, void *context, uint32 instruction)
 			if (stub && !(base & 4095)) {
 				next = cpu->nextpc;
 				handled = session->gl && base == session->glbase && segment == session->glsegment &&
-					GlBridgeCall(session->gl, cpu, call);
+					OsxGuestGlBridgeCall(session->gl, cpu, call);
 				if (cpu->nextpc != next)
 					return 1;
 				if (handled) {
 					cpu->nextpc = cpu->lr & ~3u;
 					if (call == OSXFLURRYFLUSH)
-						PresentFrame(session);
+						OsxGuestPresentFrame(session);
 				} else
 					cpu->nextpc = cpu->ctr & ~3u;
 				return 1;
@@ -859,10 +862,10 @@ static int SyscallObserver(OsxCpu *cpu, void *context, uint32 instruction)
 		}
 	}
 #endif
-	if (OsxClipSyscall(session->machine, cpu))
+	if (OsxGuestClipSyscall(session->machine, cpu))
 		return 1;
 	if (cpu->gpr[0] == 4 && session->machine->log && session->writelogs < 2000) {
-		GuestString(cpu, cpu->gpr[4], text, sizeof(text));
+		OsxGuestString(cpu, cpu->gpr[4], text, sizeof(text));
 		if (cpu->gpr[5] < sizeof(text))
 			text[cpu->gpr[5]] = 0;
 		fprintf(session->machine->log, "write fd %u: %s\n", cpu->gpr[3], text);
@@ -873,9 +876,9 @@ static int SyscallObserver(OsxCpu *cpu, void *context, uint32 instruction)
 		index = ((cpu->sr[0] * 31u) ^ (cpu->gpr[1] >> 14)) & 255;
 		if (session->pending[index][0] == (cpu->sr[0] & 0xffffff) + 1 && session->pending[index][1] == cpu->gpr[1] >> 14) {
 			for (frame = 0; frame < 6; frame++)
-				if (!OsxCpuReadVirtual(cpu, session->pending[index][2] + frame * 4, &header[frame]))
+				if (!OsxGuestCpuReadVirtual(cpu, session->pending[index][2] + frame * 4, &header[frame]))
 					header[frame] = 0xffffffffu;
-			fprintf(session->msglog, "%llu sr %06x recv bits %x size %u remote %x local %x id %d\n", (unsigned long long)OsxCpuTimebase(cpu), cpu->sr[0] & 0xffffff, header[0], header[1], header[2], header[3], (int32)header[5]);
+			fprintf(session->msglog, "%llu sr %06x recv bits %x size %u remote %x local %x id %d\n", (unsigned long long)OsxGuestCpuTimebase(cpu), cpu->sr[0] & 0xffffff, header[0], header[1], header[2], header[3], (int32)header[5]);
 			session->pending[index][0] = 0;
 		}
 		if ((int32)cpu->gpr[0] == -31 && (cpu->gpr[4] & 2)) {
@@ -886,13 +889,13 @@ static int SyscallObserver(OsxCpu *cpu, void *context, uint32 instruction)
 	}
 #endif
 	key = cpu->gpr[0] << 16;
-	if ((int32)cpu->gpr[0] == -31 && OsxCpuReadVirtual(cpu, cpu->gpr[3] + 20, &identifier)) {
+	if ((int32)cpu->gpr[0] == -31 && OsxGuestCpuReadVirtual(cpu, cpu->gpr[3] + 20, &identifier)) {
 		key = 0xffe10000u | (identifier & 0xffff);
-		if (session->msglog && OsxCpuReadVirtual(cpu, cpu->gpr[3] + 8, &frame)) {
-			fprintf(session->msglog, "%llu sr %06x lr %08x option %x id %d remote %x size %u rsize %u rname %x timeout %u bt", (unsigned long long)OsxCpuTimebase(cpu), cpu->sr[0] & 0xffffff, cpu->lr, cpu->gpr[4], identifier, frame, cpu->gpr[5], cpu->gpr[6], cpu->gpr[7], cpu->gpr[8]);
+		if (session->msglog && OsxGuestCpuReadVirtual(cpu, cpu->gpr[3] + 8, &frame)) {
+			fprintf(session->msglog, "%llu sr %06x lr %08x option %x id %d remote %x size %u rsize %u rname %x timeout %u bt", (unsigned long long)OsxGuestCpuTimebase(cpu), cpu->sr[0] & 0xffffff, cpu->lr, cpu->gpr[4], identifier, frame, cpu->gpr[5], cpu->gpr[6], cpu->gpr[7], cpu->gpr[8]);
 			frame = cpu->gpr[1];
 			for (index = 0; index < 12; index++) {
-				if (!OsxCpuReadVirtual(cpu, frame, &frame) || frame == 0 || !OsxCpuReadVirtual(cpu, frame + 8, &identifier))
+				if (!OsxGuestCpuReadVirtual(cpu, frame, &frame) || frame == 0 || !OsxGuestCpuReadVirtual(cpu, frame + 8, &identifier))
 					break;
 				fprintf(session->msglog, " %08x", identifier);
 			}
@@ -901,15 +904,15 @@ static int SyscallObserver(OsxCpu *cpu, void *context, uint32 instruction)
 	}
 #if OSXMSGTRACE
 	else if (session->msglog) {
-		fprintf(session->msglog, "%llu sr %06x lr %08x syscall %d args %x %x %x %x bt", (unsigned long long)OsxCpuTimebase(cpu), cpu->sr[0] & 0xffffff, cpu->lr, (int32)cpu->gpr[0], cpu->gpr[3], cpu->gpr[4], cpu->gpr[5], cpu->gpr[6]);
+		fprintf(session->msglog, "%llu sr %06x lr %08x syscall %d args %x %x %x %x bt", (unsigned long long)OsxGuestCpuTimebase(cpu), cpu->sr[0] & 0xffffff, cpu->lr, (int32)cpu->gpr[0], cpu->gpr[3], cpu->gpr[4], cpu->gpr[5], cpu->gpr[6]);
 		frame = cpu->gpr[1];
 		for (index = 0; index < 12; index++) {
-			if (!OsxCpuReadVirtual(cpu, frame, &frame) || frame == 0 || !OsxCpuReadVirtual(cpu, frame + 8, &identifier))
+			if (!OsxGuestCpuReadVirtual(cpu, frame, &frame) || frame == 0 || !OsxGuestCpuReadVirtual(cpu, frame + 8, &identifier))
 				break;
 			fprintf(session->msglog, " %08x", identifier);
 		}
 		if (cpu->gpr[0] == 59) {
-			GuestString(cpu, cpu->gpr[3], text, sizeof(text));
+			OsxGuestString(cpu, cpu->gpr[3], text, sizeof(text));
 			fprintf(session->msglog, " exec %s", text);
 		}
 		fprintf(session->msglog, "\n");
@@ -919,7 +922,7 @@ static int SyscallObserver(OsxCpu *cpu, void *context, uint32 instruction)
 		frame = cpu->gpr[1];
 		session->backtraces[session->backtracecount][0] = cpu->lr;
 		for (index = 1; index < 6; index++) {
-			if (!OsxCpuReadVirtual(cpu, frame, &frame) || !OsxCpuReadVirtual(cpu, frame + 8, &session->backtraces[session->backtracecount][index]))
+			if (!OsxGuestCpuReadVirtual(cpu, frame, &frame) || !OsxGuestCpuReadVirtual(cpu, frame + 8, &session->backtraces[session->backtracecount][index]))
 				break;
 		}
 		session->backtracecount++;
@@ -940,7 +943,7 @@ static int SyscallObserver(OsxCpu *cpu, void *context, uint32 instruction)
 	return 0;
 }
 
-static void DumpSyscalls(OsxSession *session)
+static void OsxGuestDumpSyscalls(OsxSession *session)
 {
 	int index;
 	if (session->machine->log == NULL)
@@ -956,7 +959,7 @@ static void DumpSyscalls(OsxSession *session)
 	session->backtracecount = 0;
 }
 
-static int CompareSamples(const void *left, const void *right)
+static int OsxGuestCompareSamples(const void *left, const void *right)
 {
 	uint32 a;
 	uint32 b;
@@ -969,7 +972,7 @@ static int CompareSamples(const void *left, const void *right)
 	return 0;
 }
 
-static void DumpSamples(OsxSession *session)
+static void OsxGuestDumpSamples(OsxSession *session)
 {
 	uint32 best[8];
 	int bestcount[8];
@@ -979,7 +982,7 @@ static void DumpSamples(OsxSession *session)
 	int lowest;
 	if (session->samplecount == 0 || session->machine->log == NULL)
 		return;
-	qsort(session->samples, session->samplecount, sizeof(uint32), CompareSamples);
+	qsort(session->samples, session->samplecount, sizeof(uint32), OsxGuestCompareSamples);
 	memset(bestcount, 0, sizeof(bestcount));
 	memset(best, 0, sizeof(best));
 	run = 1;
@@ -1005,7 +1008,7 @@ static void DumpSamples(OsxSession *session)
 	session->samplecount = 0;
 }
 
-static void ParseDiskPatches(OsxMachine *machine)
+static void OsxGuestParseDiskPatches(OsxMachine *machine)
 {
 	const char *text;
 	const char *colon;
@@ -1037,7 +1040,7 @@ static void ParseDiskPatches(OsxMachine *machine)
 	}
 }
 
-static int KernelRead32(OsxCpu *cpu, uint32 address, uint32 *value)
+static int OsxGuestKernelRead32(OsxCpu *cpu, uint32 address, uint32 *value)
 {
 	uint32 savedmsr;
 	uint32 savedsr[16];
@@ -1048,18 +1051,18 @@ static int KernelRead32(OsxCpu *cpu, uint32 address, uint32 *value)
 	for (index = 0; index < 16; index++)
 		cpu->sr[index] = 0x20000000u | ((uint32)index << 20);
 	cpu->msr = OSXMSRDR | OSXMSRIR;
-	result = OsxCpuReadVirtual(cpu, address, value);
+	result = OsxGuestCpuReadVirtual(cpu, address, value);
 	cpu->msr = savedmsr;
 	memcpy(cpu->sr, savedsr, sizeof(savedsr));
 	return result;
 }
 
-static uint32 AccessorOffset(OsxCpu *cpu, uint32 address, uint32 opcode, uint32 target)
+static uint32 OsxGuestAccessorOffset(OsxCpu *cpu, uint32 address, uint32 opcode, uint32 target)
 {
 	uint32 word;
 	int index;
 	for (index = 0; address != 0 && index < 48; index++) {
-		if (!KernelRead32(cpu, address + index * 4, &word))
+		if (!OsxGuestKernelRead32(cpu, address + index * 4, &word))
 			return 0;
 		if ((word >> 26) == opcode && ((word >> 21) & 31) == target)
 			return word & 0xffff;
@@ -1067,7 +1070,7 @@ static uint32 AccessorOffset(OsxCpu *cpu, uint32 address, uint32 opcode, uint32 
 	return 0;
 }
 
-static void DumpProcesses(OsxSession *session)
+static void OsxGuestDumpProcesses(OsxSession *session)
 {
 	OsxMachine *machine;
 	OsxCpu *cpu;
@@ -1081,18 +1084,18 @@ static void DumpProcesses(OsxSession *session)
 	int index;
 	machine = session->machine;
 	cpu = machine->cpu;
-	if (machine->log == NULL || !KernelRead32(cpu, OsxFindKernelSymbol(machine, "_allproc"), &proc))
+	if (machine->log == NULL || !OsxGuestKernelRead32(cpu, OsxGuestFindKernelSymbol(machine, "_allproc"), &proc))
 		return;
-	pidoffset = AccessorOffset(cpu, OsxFindKernelSymbol(machine, "_proc_pid"), 32, 3);
-	nameoffset = AccessorOffset(cpu, OsxFindKernelSymbol(machine, "_proc_name"), 14, 4);
+	pidoffset = OsxGuestAccessorOffset(cpu, OsxGuestFindKernelSymbol(machine, "_proc_pid"), 32, 3);
+	nameoffset = OsxGuestAccessorOffset(cpu, OsxGuestFindKernelSymbol(machine, "_proc_name"), 14, 4);
 	if (pidoffset == 0 || nameoffset == 0)
 		return;
 	fprintf(machine->log, "ps");
 	for (guard = 0; proc != 0 && guard < 64; guard++) {
 		pid = 0;
-		KernelRead32(cpu, proc + pidoffset, &pid);
+		OsxGuestKernelRead32(cpu, proc + pidoffset, &pid);
 		for (index = 0; index < 16; index++) {
-			if (!KernelRead32(cpu, (proc + nameoffset + index) & ~3u, &word))
+			if (!OsxGuestKernelRead32(cpu, (proc + nameoffset + index) & ~3u, &word))
 				break;
 			name[index] = (char)(word >> (24 - ((proc + nameoffset + index) & 3) * 8));
 			if (name[index] == 0)
@@ -1100,16 +1103,16 @@ static void DumpProcesses(OsxSession *session)
 		}
 		name[index] = 0;
 		fprintf(machine->log, " %u:%s", pid, name);
-		if (!KernelRead32(cpu, proc, &proc))
+		if (!OsxGuestKernelRead32(cpu, proc, &proc))
 			break;
 	}
 	fprintf(machine->log, "\n");
 }
 
-static void SaveFramebuffer(OsxMachine *machine, const char *path)
+static void OsxGuestSaveScreenPixelsAsImage(OsxMachine *machine, const uint8 *source, const char *path)
 {
 	FILE *file;
-	uint8 *row;
+	const uint8 *row;
 	uint8 *pixels;
 	uint32 y;
 	uint32 x;
@@ -1119,7 +1122,7 @@ static void SaveFramebuffer(OsxMachine *machine, const char *path)
 	pixels = (uint8 *)malloc(machine->width * 3);
 	fprintf(file, "P6\n%u %u\n255\n", machine->width, machine->height);
 	for (y = 0; y < machine->height; y++) {
-		row = machine->vram + y * machine->rowbytes;
+		row = source + y * machine->rowbytes;
 		for (x = 0; x < machine->width; x++) {
 			pixels[x * 3] = row[x * 4 + 1];
 			pixels[x * 3 + 1] = row[x * 4 + 2];
@@ -1131,7 +1134,7 @@ static void SaveFramebuffer(OsxMachine *machine, const char *path)
 	fclose(file);
 }
 
-static int NextScriptLine(OsxSession *session)
+static int OsxGuestNextScriptLine(OsxSession *session)
 {
 	double seconds;
 	int consumed;
@@ -1147,7 +1150,18 @@ static int NextScriptLine(OsxSession *session)
 	return 0;
 }
 
-static void ExecuteScriptCommand(OsxSession *session, const char *command)
+static void OsxGuestSaveScriptScreenshot(OsxSession *session, const char *path)
+{
+#if OSXGLBRIDGE
+	if (session->glpresent) {
+		OsxGuestSaveScreenPixelsAsImage(session->machine, session->glpresent, path);
+		return;
+	}
+#endif
+	OsxGuestSaveScreenPixelsAsImage(session->machine, session->machine->vram, path);
+}
+
+static void OsxGuestExecuteScriptCommand(OsxSession *session, const char *command)
 {
 	OsxMachine *machine;
 	char path[256];
@@ -1160,34 +1174,34 @@ static void ExecuteScriptCommand(OsxSession *session, const char *command)
 #endif
 	machine = session->machine;
 	if (machine->log)
-		fprintf(machine->log, "script %llu host %u %s", (unsigned long long)OsxCpuTimebase(machine->cpu), (unsigned)(OsxHostNanoseconds() / 1000000), command);
+		fprintf(machine->log, "script %llu host %u %s", (unsigned long long)OsxGuestCpuTimebase(machine->cpu), (unsigned)(OsxGuestHostNanoseconds() / 1000000), command);
 	if (sscanf(command, "mouse %d %d", &first, &second) == 2)
-		MovePointer(session, first, second);
+		OsxGuestMovePointer(session, first, second);
 	else if (sscanf(command, "down %d", &first) == 1)
-		PressButton(session, first, 1);
+		OsxGuestPressButton(session, first, 1);
 	else if (sscanf(command, "up %d", &first) == 1)
-		PressButton(session, first, 0);
+		OsxGuestPressButton(session, first, 0);
 	else if (sscanf(command, "wheel %d", &first) == 1)
-		OsxCudaWheel(machine, first);
+		OsxGuestCudaWheel(machine, first);
 #if OSXMSGTRACE
 	else if (sscanf(command, "det %d", &first) == 1 && first > 0 && machine->cpu->deterministic) {
-		before = OsxCpuTimebase(machine->cpu);
+		before = OsxGuestCpuTimebase(machine->cpu);
 		machine->cpu->deterministic = (uint32)first;
-		machine->cpu->virtualticks += before - OsxCpuTimebase(machine->cpu);
+		machine->cpu->virtualticks += before - OsxGuestCpuTimebase(machine->cpu);
 	}
 #endif
 	else if (sscanf(command, "keydown %d", &first) == 1)
-		OsxCudaKey(machine, first, 1);
+		OsxGuestCudaKey(machine, first, 1);
 	else if (sscanf(command, "keyup %d", &first) == 1)
-		OsxCudaKey(machine, first, 0);
+		OsxGuestCudaKey(machine, first, 0);
 	else if (sscanf(command, "shot %255s", path) == 1)
-		SaveFramebuffer(machine, path);
+		OsxGuestSaveScriptScreenshot(session, path);
 	else if (sscanf(command, "watch %d %d %d %d %255s", &first, &second, &third, &fourth, path) == 5)
-		OsxCpuWatch(machine->cpu, fopen(path, "w"), machine->rowbytes, (uint32)first, (uint32)second, (uint32)third, (uint32)fourth);
+		OsxGuestCpuWatch(machine->cpu, fopen(path, "w"), machine->rowbytes, (uint32)first, (uint32)second, (uint32)third, (uint32)fourth);
 	else if (strncmp(command, "unwatch", 7) == 0 && machine->cpu->watchfile) {
 		fclose(machine->cpu->watchfile);
 		machine->cpu->watchfile = NULL;
-		OsxCpuFlushTlb(machine->cpu);
+		OsxGuestCpuFlushTlb(machine->cpu);
 	} else if (sscanf(command, "msglog %255s", path) == 1)
 		session->msglog = fopen(path, "w");
 	else if (strncmp(command, "msgunlog", 8) == 0 && session->msglog) {
@@ -1197,15 +1211,15 @@ static void ExecuteScriptCommand(OsxSession *session, const char *command)
 		machine->quit = 1;
 }
 
-static void RunScript(OsxSession *session, uint64 now)
+static void OsxGuestRunScript(OsxSession *session, uint64 now)
 {
 	while (session->script && now >= session->scriptticks) {
-		ExecuteScriptCommand(session, session->scriptcommand);
-		NextScriptLine(session);
+		OsxGuestExecuteScriptCommand(session, session->scriptcommand);
+		OsxGuestNextScriptLine(session);
 	}
 }
 
-static void LogSlice(FILE *slicelog, OsxCpu *cpu)
+static void OsxGuestLogSlice(FILE *slicelog, OsxCpu *cpu)
 {
 	uint32 hash;
 	int index;
@@ -1216,7 +1230,7 @@ static void LogSlice(FILE *slicelog, OsxCpu *cpu)
 }
 
 #if OSXPROFILE
-static void TmpDumpForms(FILE *log, OsxCpu *cpu)
+static void OsxGuestTmpDumpForms(FILE *log, OsxCpu *cpu)
 {
 	static const char *const names[4] = { "callout", "dispatch", "sampled", "generic" };
 	uint32 *counts;
@@ -1257,7 +1271,7 @@ static void TmpDumpForms(FILE *log, OsxCpu *cpu)
 }
 #endif
 
-static void RunMachine(OsxSession *session)
+static void OsxGuestRunMachine(OsxSession *session)
 {
 	OsxMachine *machine;
 	OsxCpu *cpu;
@@ -1299,16 +1313,16 @@ static void RunMachine(OsxSession *session)
 	stoptime = OSXNEVER;
 	if (seconds > 0)
 		stoptime = (uint64)seconds * OSXTIMEBASEFREQUENCY;
-	now = OsxCpuTimebase(cpu);
+	now = OsxGuestCpuTimebase(cpu);
 	slicesize = 20000;
 	while (!machine->quit) {
 #if OSXG5
 		if (cpu->core970)
-			Osx970CheckInterrupts((Osx970 *)cpu->core970, now);
+			OsxGuest970CheckInterrupts((Osx970 *)cpu->core970, now);
 		else
-			OsxCpuCheckInterrupts(cpu, now);
+			OsxGuestCpuCheckInterrupts(cpu, now);
 #else
-		OsxCpuCheckInterrupts(cpu, now);
+		OsxGuestCpuCheckInterrupts(cpu, now);
 #endif
 		if (cpu->halted) {
 			waitticks = 0;
@@ -1321,8 +1335,8 @@ static void RunMachine(OsxSession *session)
 				waitticks = eventwait;
 			if (cpu->decdeadline != OSXNEVER && cpu->decdeadline > now && cpu->decdeadline - now < waitticks)
 				waitticks = cpu->decdeadline - now;
-			cudadeadline = OsxCudaNextDeadline(machine);
-			bmacdeadline = OsxBmacNextDeadline(machine);
+			cudadeadline = OsxGuestCudaNextDeadline(machine);
+			bmacdeadline = OsxGuestBmacNextDeadline(machine);
 			if (bmacdeadline < cudadeadline)
 				cudadeadline = bmacdeadline;
 			atadeadline = 0;
@@ -1346,22 +1360,22 @@ static void RunMachine(OsxSession *session)
 			if (cpu->deterministic)
 				cpu->virtualticks += waitticks + 1;
 			else if (milliseconds > 0)
-				OsxHostSleep(milliseconds);
-			now = OsxCpuTimebase(cpu);
+				OsxGuestHostSleep(milliseconds);
+			now = OsxGuestCpuTimebase(cpu);
 		} else {
 			runstart = now;
 			runinstructions = cpu->instructions;
 #if OSXG5
 			if (cpu->core970)
-				Osx970Run((Osx970 *)cpu->core970, slicesize);
+				OsxGuest970Run((Osx970 *)cpu->core970, slicesize);
 			else
-				OsxJitRun(cpu, slicesize);
+				OsxGuestJitRun(cpu, slicesize);
 #else
-			OsxJitRun(cpu, slicesize);
+			OsxGuestJitRun(cpu, slicesize);
 #endif
 			if (session->slicelog)
-				LogSlice(session->slicelog, cpu);
-			now = OsxCpuTimebase(cpu);
+				OsxGuestLogSlice(session->slicelog, cpu);
+			now = OsxGuestCpuTimebase(cpu);
 			if (!cpu->deterministic && cpu->instructions - runinstructions >= (uint32)slicesize && now > runstart) {
 				sliceticks = (cpu->instructions - runinstructions) * (OSXTIMEBASEFREQUENCY / 4000) / (now - runstart);
 				if (sliceticks < 256)
@@ -1374,25 +1388,25 @@ static void RunMachine(OsxSession *session)
 			if (session->samplecount < 8192)
 				session->samples[session->samplecount++] = cpu->pc | ((cpu->msr >> 14) & 1);
 #if OSXPROFILE
-			if (!cpu->halted && OsxCpuReadVirtual(cpu, cpu->pc, &tmpword))
-				cpu->tmpform[2][OsxCpuTmpFormKey(tmpword)]++;
+			if (!cpu->halted && OsxGuestCpuReadVirtual(cpu, cpu->pc, &tmpword))
+				cpu->tmpform[2][OsxGuestCpuTmpFormKey(tmpword)]++;
 			if (session->tmpsamplefile) {
 				tmprecord[0] = cpu->pc;
 				tmprecord[1] = cpu->sr[0] & 0xffffff;
-				tmprecord[2] = ((cpu->msr >> 14) & 1) | ((uint32)cpu->halted << 1) | ((uint32)(OsxCpuTimebase(cpu) / (OSXTIMEBASEFREQUENCY / 1000)) << 2);
+				tmprecord[2] = ((cpu->msr >> 14) & 1) | ((uint32)cpu->halted << 1) | ((uint32)(OsxGuestCpuTimebase(cpu) / (OSXTIMEBASEFREQUENCY / 1000)) << 2);
 				fwrite(tmprecord, sizeof(tmprecord), 1, session->tmpsamplefile);
 			}
 #endif
 			slices++;
 		}
-		OsxCudaPoll(machine, now);
-		OsxBmacPoll(machine, now);
-		OsxAtaPoll(machine, now);
-		OsxAudioPoll(machine, now);
-		RunScript(session, now);
+		OsxGuestCudaPoll(machine, now);
+		OsxGuestBmacPoll(machine, now);
+		OsxGuestAtaPoll(machine, now);
+		OsxGuestAudioPoll(machine, now);
+		OsxGuestRunScript(session, now);
 		if (now >= nextevent) {
 			nextevent = now + eventticks;
-			OsxHostEvents(session->video, machine->vram);
+			OsxGuestHostEvents(session->video, machine->vram);
 		}
 		presentnow = now >= nextframe;
 		if (presentnow) {
@@ -1400,26 +1414,26 @@ static void RunMachine(OsxSession *session)
 				nextframe = now + frameticks - (now - nextframe) % frameticks;
 			else
 				nextframe = now + frameticks;
-			PresentFrame(session);
+			OsxGuestPresentFrame(session);
 		}
 		if (now >= nextstatus) {
-			InstallPointerHook(session);
-			InstallPowerHook(session);
-			InstallKextHooks(session);
-			DumpSamples(session);
-			DumpSyscalls(session);
+			OsxGuestInstallPointerHook(session);
+			OsxGuestInstallPowerHook(session);
+			OsxGuestInstallKextHooks(session);
+			OsxGuestDumpSamples(session);
+			OsxGuestDumpSyscalls(session);
 			if ((cpu->decrementercount & 7) == 0)
-				DumpProcesses(session);
+				OsxGuestDumpProcesses(session);
 			nextstatus = now + OSXTIMEBASEFREQUENCY * 2;
-			OsxCpuCalibrateTimebase(cpu);
-			now = OsxCpuTimebase(cpu);
+			OsxGuestCpuCalibrateTimebase(cpu);
+			now = OsxGuestCpuTimebase(cpu);
 			if (machine->log) {
 				fprintf(machine->log, "status pc %08x lr %08x msr %08x instructions %llu halted %d dec %u ext %u slow %llu exceptions %llu runms %llu slices %llu\n", cpu->pc, cpu->lr, cpu->msr, (unsigned long long)cpu->instructions, cpu->halted, cpu->decrementercount, cpu->externalcount, (unsigned long long)cpu->slowaccesses, (unsigned long long)cpu->exceptions, (unsigned long long)(runtime * 1000 / OSXTIMEBASEFREQUENCY), (unsigned long long)slices);
 #if OSXPROFILEJIT
-				OsxJitTmpStats(cpu, machine->log);
+				OsxGuestJitTmpStats(cpu, machine->log);
 #endif
 #if OSXPROFILE
-				TmpDumpForms(machine->log, cpu);
+				OsxGuestTmpDumpForms(machine->log, cpu);
 				fprintf(machine->log, "TMPRENDER frames %u rows %u\n", session->tmpframes, session->tmprows);
 				session->tmpframes = 0;
 				session->tmprows = 0;
@@ -1434,21 +1448,21 @@ static void RunMachine(OsxSession *session)
 	}
 }
 
-static void DestroySession(OsxSession *session)
+static void OsxGuestDestroySession(OsxSession *session)
 {
 	OsxMachine *machine;
 	int busindex;
 	int unitindex;
 	machine = session->machine;
 	if (machine) {
-		OsxAudioExit(machine);
+		OsxGuestAudioExit(machine);
 		if (machine->bmac.slirpthread)
-			OsxHostNetClose(machine->bmac.slirpthread);
+			OsxGuestHostNetClose(machine->bmac.slirpthread);
 		if (machine->cpu) {
-			OsxJitDestroy(machine->cpu);
+			OsxGuestJitDestroy(machine->cpu);
 #if OSXG5
 			if (machine->cpu->core970) {
-				Osx970JitDestroy((Osx970 *)machine->cpu->core970);
+				OsxGuest970JitDestroy((Osx970 *)machine->cpu->core970);
 				free(machine->cpu->core970);
 			}
 #endif
@@ -1458,7 +1472,7 @@ static void DestroySession(OsxSession *session)
 		}
 		for (busindex = 0; busindex < OSXATABUSES; busindex++) {
 			for (unitindex = 0; unitindex < 2; unitindex++) {
-				OsxAtaCloseMedia(&machine->ata[busindex].drives[unitindex]);
+				OsxGuestAtaCloseMedia(&machine->ata[busindex].drives[unitindex]);
 			}
 			free(machine->ata[busindex].buffer);
 		}
@@ -1488,17 +1502,17 @@ static void DestroySession(OsxSession *session)
 	free(session->shadow);
 #if OSXGLBRIDGE
 	if (session->gl)
-		DestroyGlBridge(session->gl);
+		OsxGuestDestroyGlBridge(session->gl);
 	if (session->quartz)
-		DestroyQuartzBridge(session->quartz);
-	GlShutdownHost();
+		OsxGuestDestroyQuartzBridge(session->quartz);
+	OsxGuestGlShutdownHost();
 	free(session->glpresent);
 #endif
 	if (session->video)
-		OsxHostClose(session->video);
+		OsxGuestHostClose(session->video);
 }
 
-static int RunSession(OsxSession *session)
+static int OsxGuestRunSession(OsxSession *session)
 {
 	OsxMachine *machine;
 	OsxCpu *cpu;
@@ -1541,8 +1555,8 @@ static int RunSession(OsxSession *session)
 		ErrorAlert("Not enough memory for the Mac OS X guest.");
 		return 1;
 	}
-	ParseScreen(machine);
-	OsxCpuReset(cpu, OSXPVR, OSXTIMEBASEFREQUENCY);
+	OsxGuestParseScreen(machine);
+	OsxGuestCpuReset(cpu, OSXPVR, OSXTIMEBASEFREQUENCY);
 	if (PrefsFindInt32("osxdeterministic") > 0) {
 		cpu->deterministic = (uint32)PrefsFindInt32("osxdeterministic");
 		session->slicelog = fopen("osxslices.log", "w");
@@ -1550,7 +1564,7 @@ static int RunSession(OsxSession *session)
 	if (PrefsFindString("osxinputscript")) {
 		session->script = fopen(PrefsFindString("osxinputscript"), "r");
 		if (session->script)
-			NextScriptLine(session);
+			OsxGuestNextScriptLine(session);
 	}
 	cpu->ram = machine->ram;
 	cpu->ramsize = machine->ramsize;
@@ -1561,28 +1575,28 @@ static int RunSession(OsxSession *session)
 	cpu->vrambase = OSXVRAMBASE;
 	cpu->vramsize = OSXVRAMSIZE;
 	cpu->buscontext = machine;
-	cpu->busread = OsxBusRead;
-	cpu->buswrite = OsxBusWrite;
+	cpu->busread = OsxGuestBusRead;
+	cpu->buswrite = OsxGuestBusWrite;
 	cpu->logfile = machine->log;
 #if OSXG5
 	if (PrefsFindString("osxmodel") && strcmp(PrefsFindString("osxmodel"), "PowerMac7,3") == 0)
 		machine->g5 = 1;
 #endif
-	OsxPciReset(machine);
-	OsxAtaReset(machine);
-	OsxCudaReset(machine);
-	OsxBmacReset(machine);
-	OsxAudioReset(machine);
+	OsxGuestPciReset(machine);
+	OsxGuestAtaReset(machine);
+	OsxGuestCudaReset(machine);
+	OsxGuestBmacReset(machine);
+	OsxGuestAudioReset(machine);
 #if OSXG5
 	if (machine->g5)
-		OsxG5Reset(machine);
+		OsxGuestG5Reset(machine);
 #endif
 	XPRAMInit(NULL);
 	session->nvramready = 1;
 	memcpy(machine->nvram, XPRAM, OSXNVRAMSIZE);
-	OsxFlashLoad(machine, "osx_nvram.bin");
-	AttachDisks(machine, &bootimage, &bootbus, &bootunit);
-	ParseDiskPatches(machine);
+	OsxGuestFlashLoad(machine, "osx_nvram.bin");
+	OsxGuestAttachDisks(machine, &bootimage, &bootbus, &bootunit);
+	OsxGuestParseDiskPatches(machine);
 #if OSXGLBRIDGE
 #if OSXGLBRIDGE
 	machine->flurry = PrefsFindBool("osxflurry");
@@ -1593,11 +1607,11 @@ static int RunSession(OsxSession *session)
 		ErrorAlert("No Mac OS X boot disc or disk image is configured.");
 		return 1;
 	}
-	if (!OsxNvramPrepareBoot(machine, bootbus, bootunit, machine->bootpartition)) {
+	if (!OsxGuestNvramPrepareBoot(machine, bootbus, bootunit, machine->bootpartition)) {
 		ErrorAlert("The Startup Disk selection could not be stored.");
 		return 1;
 	}
-	session->video = OsxHostOpen((int)machine->width, (int)machine->height, HostInput, session);
+	session->video = OsxGuestHostOpen((int)machine->width, (int)machine->height, OsxGuestHostInput, session);
 	if (!session->video) {
 		ErrorAlert("The host video output could not be opened.");
 		return 1;
@@ -1605,66 +1619,66 @@ static int RunSession(OsxSession *session)
 	bootargs = PrefsFindString("osxbootargs");
 	if (bootargs == NULL)
 		bootargs = "";
-	if (!OsxBootLoad(machine, bootimage, bootbus, bootunit, bootargs))
+	if (!OsxGuestBootLoad(machine, bootimage, bootbus, bootunit, bootargs))
 		return 1;
-	AllowStalledClassLookup(machine);
-	if (OsxFindKernelSymbol(machine, "_IOSleep"))
-		OsxCpuAddHook(cpu, OsxFindKernelSymbol(machine, "_IOSleep"), SettleHook, machine);
-	if (OsxFindKernelSymbol(machine, "_conslog_putc"))
-		OsxCpuAddHook(cpu, OsxFindKernelSymbol(machine, "_conslog_putc"), ConsoleHook, session);
-	if (OsxFindKernelSymbol(machine, "_kmputc"))
-		OsxCpuAddHook(cpu, OsxFindKernelSymbol(machine, "_kmputc"), TerminalHook, session);
-	if (OsxFindKernelSymbol(machine, "_kprintf"))
-		OsxCpuAddHook(cpu, OsxFindKernelSymbol(machine, "_kprintf"), KprintfHook, session);
-	if (OsxFindKernelSymbol(machine, "_trap"))
-		OsxCpuAddHook(cpu, OsxFindKernelSymbol(machine, "_trap"), TrapHook, session);
-	if (PrefsFindString("osxtracestart") && OsxFindKernelSymbol(machine, PrefsFindString("osxtracestart")))
-		OsxCpuAddHook(cpu, OsxFindKernelSymbol(machine, PrefsFindString("osxtracestart")), TraceStartHook, session);
-	if (PrefsFindString("osxtracestop") && OsxFindKernelSymbol(machine, PrefsFindString("osxtracestop")))
-		OsxCpuAddHook(cpu, OsxFindKernelSymbol(machine, PrefsFindString("osxtracestop")), TraceStopHook, session);
-	InstallCallHooks(session);
+	OsxGuestAllowStalledClassLookup(machine);
+	if (OsxGuestFindKernelSymbol(machine, "_IOSleep"))
+		OsxGuestCpuAddHook(cpu, OsxGuestFindKernelSymbol(machine, "_IOSleep"), OsxGuestSettleHook, machine);
+	if (OsxGuestFindKernelSymbol(machine, "_conslog_putc"))
+		OsxGuestCpuAddHook(cpu, OsxGuestFindKernelSymbol(machine, "_conslog_putc"), OsxGuestConsoleHook, session);
+	if (OsxGuestFindKernelSymbol(machine, "_kmputc"))
+		OsxGuestCpuAddHook(cpu, OsxGuestFindKernelSymbol(machine, "_kmputc"), OsxGuestTerminalHook, session);
+	if (OsxGuestFindKernelSymbol(machine, "_kprintf"))
+		OsxGuestCpuAddHook(cpu, OsxGuestFindKernelSymbol(machine, "_kprintf"), OsxGuestKprintfHook, session);
+	if (OsxGuestFindKernelSymbol(machine, "_trap"))
+		OsxGuestCpuAddHook(cpu, OsxGuestFindKernelSymbol(machine, "_trap"), OsxGuestTrapHook, session);
+	if (PrefsFindString("osxtracestart") && OsxGuestFindKernelSymbol(machine, PrefsFindString("osxtracestart")))
+		OsxGuestCpuAddHook(cpu, OsxGuestFindKernelSymbol(machine, PrefsFindString("osxtracestart")), OsxGuestTraceStartHook, session);
+	if (PrefsFindString("osxtracestop") && OsxGuestFindKernelSymbol(machine, PrefsFindString("osxtracestop")))
+		OsxGuestCpuAddHook(cpu, OsxGuestFindKernelSymbol(machine, PrefsFindString("osxtracestop")), OsxGuestTraceStopHook, session);
+	OsxGuestInstallCallHooks(session);
 	if (PrefsFindString("osxlogxml"))
-		OsxCpuAddHook(cpu, (uint32)strtoul(PrefsFindString("osxlogxml"), NULL, 16), XmlHook, session);
-	ParseKextHooks(session);
-	if (OsxFindKernelSymbol(machine, "_kmod_start_or_stop"))
-		OsxCpuAddHook(cpu, OsxFindKernelSymbol(machine, "_kmod_start_or_stop"), KmodStartHook, session);
+		OsxGuestCpuAddHook(cpu, (uint32)strtoul(PrefsFindString("osxlogxml"), NULL, 16), OsxGuestXmlHook, session);
+	OsxGuestParseKextHooks(session);
+	if (OsxGuestFindKernelSymbol(machine, "_kmod_start_or_stop"))
+		OsxGuestCpuAddHook(cpu, OsxGuestFindKernelSymbol(machine, "_kmod_start_or_stop"), OsxGuestKmodStartHook, session);
 	session->backtracekey = 0xffe10afeu;
 	if (PrefsFindString("osxbacktracekey"))
 		session->backtracekey = (uint32)strtoul(PrefsFindString("osxbacktracekey"), NULL, 16);
-	cpu->syscallobserver = SyscallObserver;
+	cpu->syscallobserver = OsxGuestSyscallObserver;
 	cpu->syscallcontext = session;
-	if (OsxFindKernelSymbol(machine, "_panic"))
-		OsxCpuAddHook(cpu, OsxFindKernelSymbol(machine, "_panic"), PanicHook, session);
+	if (OsxGuestFindKernelSymbol(machine, "_panic"))
+		OsxGuestCpuAddHook(cpu, OsxGuestFindKernelSymbol(machine, "_panic"), OsxGuestPanicHook, session);
 	memcpy(machine->nvramclassic, machine->nvram, OSXNVRAMSIZE);
-	OsxNvramMakeNewWorld(machine->nvram);
+	OsxGuestNvramMakeNewWorld(machine->nvram);
 #if OSXG5
 	if (machine->g5)
-		OsxG5PrepareNvram(machine);
+		OsxGuestG5PrepareNvram(machine);
 #endif
-	HookKernelSymbol(machine, "__ZN16IOPlatformExpert14getBootROMTypeEv", NewWorldEpochHook);
-	HookKernelSymbol(machine, "_getBootROMType__16IOPlatformExpert", NewWorldEpochHook);
-	HookKernelSymbol(machine, "_sleepSystem__14IOPMrootDomain", RefuseSleepHook);
-	HookKernelSymbol(machine, "_handleSleepTimerExpiration__14IOPMrootDomain", ReturnHook);
-	HookKernelSymbol(machine, "_sleepKernel__16IOPlatformExpert", ReturnHook);
-	HookKernelSymbol(machine, "_PE_Determine_Clock_Speeds", ReturnHook);
+	OsxGuestHookKernelSymbol(machine, "__ZN16IOPlatformExpert14getBootROMTypeEv", OsxGuestNewWorldEpochHook);
+	OsxGuestHookKernelSymbol(machine, "_getBootROMType__16IOPlatformExpert", OsxGuestNewWorldEpochHook);
+	OsxGuestHookKernelSymbol(machine, "_sleepSystem__14IOPMrootDomain", OsxGuestRefuseSleepHook);
+	OsxGuestHookKernelSymbol(machine, "_handleSleepTimerExpiration__14IOPMrootDomain", OsxGuestReturnHook);
+	OsxGuestHookKernelSymbol(machine, "_sleepKernel__16IOPlatformExpert", OsxGuestReturnHook);
+	OsxGuestHookKernelSymbol(machine, "_PE_Determine_Clock_Speeds", OsxGuestReturnHook);
 #if OSXG5
 	if (machine->pvr == OSX970PVR)
-		HookKernelSymbol(machine, "_machine_idle", NapHook);
+		OsxGuestHookKernelSymbol(machine, "_machine_idle", OsxGuestNapHook);
 #endif
 	if (machine->pvr == OSXPVRG4 || machine->ata[bootbus].drives[bootunit].atapi)
-		HookKernelSymbol(machine, "_PEGetPlatformEpoch", NewWorldEpochHook);
+		OsxGuestHookKernelSymbol(machine, "_PEGetPlatformEpoch", OsxGuestNewWorldEpochHook);
 	cpu->pc = machine->kernelentry;
 	cpu->msr = 0;
 	cpu->gpr[1] = machine->scratch + 0x8000;
 	cpu->gpr[3] = machine->bootargs;
 	cpu->gpr[4] = 0x426f6f58;
-	OsxCpuUpdateModes(cpu);
+	OsxGuestCpuUpdateModes(cpu);
 #if OSXG5
 	if (machine->pvr == OSX970PVR) {
 		core = (Osx970 *)calloc(1, sizeof(Osx970));
 		if (core == NULL)
 			return 1;
-		Osx970Reset(core, cpu, OSX970PVR);
+		OsxGuest970Reset(core, cpu, OSX970PVR);
 		core->pc = machine->kernelentry;
 		core->nextpc = core->pc + 4;
 		core->msr = OSX970MSRHV;
@@ -1672,7 +1686,7 @@ static int RunSession(OsxSession *session)
 		core->gpr[3] = machine->bootargs;
 		core->gpr[4] = 0x426f6f58;
 		cpu->core970 = core;
-		if (PrefsFindBool("osxjit") && Osx970JitCreate(core))
+		if (PrefsFindBool("osxjit") && OsxGuest970JitCreate(core))
 			fprintf(machine->log, "cpu 970 jit\n");
 		else
 			fprintf(machine->log, "cpu 970 interpreter\n");
@@ -1680,13 +1694,13 @@ static int RunSession(OsxSession *session)
 #else
 	if (PrefsFindBool("osxjit")) {
 #endif
-		if (OsxJitCreate(cpu))
+		if (OsxGuestJitCreate(cpu))
 			fprintf(machine->log, "cpu native %s soft TLB\n", OSXHOSTNAME);
 		else
 			fprintf(machine->log, "cpu interpreter\n");
 	}
 #if OSXHOSTX64
-	session->pixelshuffle = OsxHostFeature(OSXFEATURESSSE3);
+	session->pixelshuffle = OsxGuestHostFeature(OSXFEATURESSSE3);
 #endif
 	session->shadow = (uint8 *)malloc(machine->rowbytes * machine->height);
 	if (session->shadow == NULL)
@@ -1695,13 +1709,13 @@ static int RunSession(OsxSession *session)
 #if OSXPROFILE
 	session->tmpsamplefile = fopen("osxsamples.bin", "wb");
 #endif
-	RunMachine(session);
-	OsxNvramFinishBoot(machine, XPRAM + 0x1378);
-	OsxNvramRestoreOldWorld(machine->nvram, machine->nvramclassic);
+	OsxGuestRunMachine(session);
+	OsxGuestNvramFinishBoot(machine, XPRAM + 0x1378);
+	OsxGuestNvramRestoreOldWorld(machine->nvram, machine->nvramclassic);
 	memcpy(XPRAM, machine->nvram, OSXNVRAMSIZE);
-	OsxFlashSave(machine);
+	OsxGuestFlashSave(machine);
 	if (machine->log)
-		OsxCpuDump(cpu, machine->log);
+		OsxGuestCpuDump(cpu, machine->log);
 	if (PrefsFindString("osxdump")) {
 		dump = fopen(PrefsFindString("osxdump"), "wb");
 		if (dump) {
@@ -1719,7 +1733,7 @@ int OsxGuestMain(void)
 	OsxSession session;
 	int result;
 	memset(&session, 0, sizeof(session));
-	result = RunSession(&session);
-	DestroySession(&session);
+	result = OsxGuestRunSession(&session);
+	OsxGuestDestroySession(&session);
 	return result;
 }

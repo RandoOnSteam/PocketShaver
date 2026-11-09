@@ -50,7 +50,7 @@ typedef struct OsxTestRandom {
 	uint64 state;
 } OsxTestRandom;
 
-static uint32 NextRandom(OsxTestRandom *random)
+static uint32 OsxGuestNextRandom(OsxTestRandom *random)
 {
 	uint64 value;
 	value = random->state;
@@ -61,7 +61,7 @@ static uint32 NextRandom(OsxTestRandom *random)
 	return (uint32)(value >> 16);
 }
 
-static uint32 InterestingInteger(OsxTestRandom *random)
+static uint32 OsxGuestInterestingInteger(OsxTestRandom *random)
 {
 	static const uint32 values[] = {
 		0, 1, 2, 3, 0xffffffffu, 0xfffffffeu, 0x80000000u, 0x7fffffffu, 0x80000001u,
@@ -69,15 +69,15 @@ static uint32 InterestingInteger(OsxTestRandom *random)
 		0x55555555u, 0xaaaaaaaau, 0x0000ffffu, 0xffff0000u
 	};
 	uint32 choice;
-	choice = NextRandom(random) % 3;
+	choice = OsxGuestNextRandom(random) % 3;
 	if (choice == 0)
-		return values[NextRandom(random) % (sizeof(values) / sizeof(values[0]))];
+		return values[OsxGuestNextRandom(random) % (sizeof(values) / sizeof(values[0]))];
 	if (choice == 1)
-		return NextRandom(random) % 70;
-	return NextRandom(random) ^ (NextRandom(random) << 16);
+		return OsxGuestNextRandom(random) % 70;
+	return OsxGuestNextRandom(random) ^ (OsxGuestNextRandom(random) << 16);
 }
 
-static uint64 InterestingFloat(OsxTestRandom *random)
+static uint64 OsxGuestInterestingFloat(OsxTestRandom *random)
 {
 	static const uint64 values[] = {
 		0x0000000000000000ULL, 0x8000000000000000ULL, 0x3ff0000000000000ULL, 0xbff0000000000000ULL,
@@ -90,21 +90,21 @@ static uint64 InterestingFloat(OsxTestRandom *random)
 	};
 	uint32 choice;
 	OsxFloat value;
-	choice = NextRandom(random) % 4;
+	choice = OsxGuestNextRandom(random) % 4;
 	if (choice == 0)
-		return values[NextRandom(random) % (sizeof(values) / sizeof(values[0]))];
+		return values[OsxGuestNextRandom(random) % (sizeof(values) / sizeof(values[0]))];
 	if (choice == 1) {
-		value.value = (double)(int32)NextRandom(random) / (double)(1 + (NextRandom(random) & 0xffff));
+		value.value = (double)(int32)OsxGuestNextRandom(random) / (double)(1 + (OsxGuestNextRandom(random) & 0xffff));
 		return value.bits;
 	}
 	if (choice == 2) {
-		value.value = (double)(float)((double)(int32)NextRandom(random) * 1.0e-3);
+		value.value = (double)(float)((double)(int32)OsxGuestNextRandom(random) * 1.0e-3);
 		return value.bits;
 	}
-	return ((uint64)NextRandom(random) << 32) ^ ((uint64)NextRandom(random) << 16) ^ NextRandom(random);
+	return ((uint64)OsxGuestNextRandom(random) << 32) ^ ((uint64)OsxGuestNextRandom(random) << 16) ^ OsxGuestNextRandom(random);
 }
 
-static const OsxTestTemplate *Templates(int *count)
+static const OsxTestTemplate *OsxGuestTemplates(int *count)
 {
 	static const OsxTestTemplate templates[] = {
 		{ "addi", 14u << 26, 0x03ffffff, TESTKINDALU, 0 },
@@ -262,7 +262,7 @@ static const OsxTestTemplate *Templates(int *count)
 	return templates;
 }
 
-static uint32 BuildMemoryInstruction(OsxTestRandom *random, const OsxTestTemplate *test, OsxReferenceState *state, uint32 database)
+static uint32 OsxGuestBuildMemoryInstruction(OsxTestRandom *random, const OsxTestTemplate *test, OsxReferenceState *state, uint32 database)
 {
 	uint32 instruction;
 	uint32 target;
@@ -270,62 +270,62 @@ static uint32 BuildMemoryInstruction(OsxTestRandom *random, const OsxTestTemplat
 	uint32 index;
 	int32 displacement;
 	instruction = test->base;
-	base = 1 + NextRandom(random) % 31;
-	target = NextRandom(random) % 32;
+	base = 1 + OsxGuestNextRandom(random) % 31;
+	target = OsxGuestNextRandom(random) % 32;
 	if ((test->flags & TESTFLAGUPDATE) && test->kind != TESTKINDFLOATMEMORY && !(test->flags & TESTFLAGSTORE)) {
 		while (target == base)
-			target = NextRandom(random) % 32;
+			target = OsxGuestNextRandom(random) % 32;
 	}
 	if (test->kind == TESTKINDMULTIPLE) {
-		target = 16 + NextRandom(random) % 16;
-		base = 1 + NextRandom(random) % 15;
+		target = 16 + OsxGuestNextRandom(random) % 16;
+		base = 1 + OsxGuestNextRandom(random) % 15;
 	}
-	state->gpr[base] = database + 0x800 + (NextRandom(random) % 0x100);
+	state->gpr[base] = database + 0x800 + (OsxGuestNextRandom(random) % 0x100);
 	if (test->kind == TESTKINDMULTIPLE)
 		state->gpr[base] &= ~3u;
 	if (test->flags & TESTFLAGINDEXED) {
-		index = NextRandom(random) % 32;
+		index = OsxGuestNextRandom(random) % 32;
 		while (index == base || index == target)
-			index = NextRandom(random) % 32;
-		state->gpr[index] = (uint32)((int32)(NextRandom(random) % 0x600) - 0x300);
+			index = OsxGuestNextRandom(random) % 32;
+		state->gpr[index] = (uint32)((int32)(OsxGuestNextRandom(random) % 0x600) - 0x300);
 		instruction |= (target << 21) | (base << 16) | (index << 11);
 		return instruction;
 	}
-	displacement = (int32)(NextRandom(random) % 0x600) - 0x300;
+	displacement = (int32)(OsxGuestNextRandom(random) % 0x600) - 0x300;
 	instruction |= (target << 21) | (base << 16) | ((uint32)displacement & 0xffff);
 	return instruction;
 }
 
-static uint32 BuildStringInstruction(OsxTestRandom *random, const OsxTestTemplate *test, OsxReferenceState *state, uint32 database)
+static uint32 OsxGuestBuildStringInstruction(OsxTestRandom *random, const OsxTestTemplate *test, OsxReferenceState *state, uint32 database)
 {
 	uint32 target;
 	uint32 count;
-	target = 2 + NextRandom(random) % 20;
-	count = 1 + NextRandom(random) % ((32 - target) * 4 - 1);
+	target = 2 + OsxGuestNextRandom(random) % 20;
+	count = 1 + OsxGuestNextRandom(random) % ((32 - target) * 4 - 1);
 	if (count > 31)
 		count = 31;
-	state->gpr[1] = database + 0x800 + (NextRandom(random) % 0x100);
+	state->gpr[1] = database + 0x800 + (OsxGuestNextRandom(random) % 0x100);
 	return test->base | (target << 21) | (1u << 16) | (count << 11);
 }
 
-static void FillState(OsxTestRandom *random, OsxReferenceState *state)
+static void OsxGuestFillState(OsxTestRandom *random, OsxReferenceState *state)
 {
 	int index;
 	for (index = 0; index < 32; index++) {
-		state->gpr[index] = InterestingInteger(random);
-		state->fpr[index] = InterestingFloat(random);
+		state->gpr[index] = OsxGuestInterestingInteger(random);
+		state->fpr[index] = OsxGuestInterestingFloat(random);
 	}
-	state->cr = NextRandom(random) ^ (NextRandom(random) << 16);
-	state->xer = (NextRandom(random) & 0xe0000000u) | (NextRandom(random) & 0x7f);
-	state->lr = InterestingInteger(random);
-	state->ctr = InterestingInteger(random);
+	state->cr = OsxGuestNextRandom(random) ^ (OsxGuestNextRandom(random) << 16);
+	state->xer = (OsxGuestNextRandom(random) & 0xe0000000u) | (OsxGuestNextRandom(random) & 0x7f);
+	state->lr = OsxGuestInterestingInteger(random);
+	state->ctr = OsxGuestInterestingInteger(random);
 	state->fpscr = 0;
-	if (NextRandom(random) % 4 == 0)
-		state->fpscr = NextRandom(random) & 3;
+	if (OsxGuestNextRandom(random) % 4 == 0)
+		state->fpscr = OsxGuestNextRandom(random) & 3;
 	state->pc = 0;
 }
 
-static void LoadMine(OsxCpu *cpu, const OsxReferenceState *state, uint32 entry)
+static void OsxGuestLoadMine(OsxCpu *cpu, const OsxReferenceState *state, uint32 entry)
 {
 	int index;
 	for (index = 0; index < 32; index++) {
@@ -339,11 +339,11 @@ static void LoadMine(OsxCpu *cpu, const OsxReferenceState *state, uint32 entry)
 	cpu->fpscr = state->fpscr;
 	cpu->pc = entry;
 	cpu->msr = OSXMSRFP;
-	OsxCpuUpdateModes(cpu);
+	OsxGuestCpuUpdateModes(cpu);
 	cpu->fetchtag = 0;
 }
 
-static void SaveMine(OsxCpu *cpu, OsxReferenceState *state)
+static void OsxGuestSaveMine(OsxCpu *cpu, OsxReferenceState *state)
 {
 	int index;
 	for (index = 0; index < 32; index++) {
@@ -358,7 +358,7 @@ static void SaveMine(OsxCpu *cpu, OsxReferenceState *state)
 	state->pc = cpu->pc;
 }
 
-static int CompareStates(const OsxReferenceState *expected, const OsxReferenceState *actual, char *report, size_t reportsize, int *fpscronly)
+static int OsxGuestCompareStates(const OsxReferenceState *expected, const OsxReferenceState *actual, char *report, size_t reportsize, int *fpscronly)
 {
 	int index;
 	int differences;
@@ -402,7 +402,7 @@ static int CompareStates(const OsxReferenceState *expected, const OsxReferenceSt
 	return differences;
 }
 
-void OsxLockstepTest(uint8 *ramhost, uint32 ramsize, int iterations, const char *logpath)
+void OsxGuestLockstepTest(uint8 *ramhost, uint32 ramsize, int iterations, const char *logpath)
 {
 	OsxTestRandom random;
 	OsxReferenceState initial;
@@ -435,7 +435,7 @@ void OsxLockstepTest(uint8 *ramhost, uint32 ramsize, int iterations, const char 
 	cpu = (OsxCpu *)calloc(1, sizeof(OsxCpu));
 	saved = (uint8 *)malloc(TESTDATASIZE);
 	referencememory = (uint8 *)malloc(TESTDATASIZE);
-	OsxCpuReset(cpu, 0x00080202, 16666666);
+	OsxGuestCpuReset(cpu, 0x00080202, 16666666);
 	cpu->ram = ramhost;
 	cpu->ramsize = ramsize;
 	cpu->vramsize = 0;
@@ -443,24 +443,24 @@ void OsxLockstepTest(uint8 *ramhost, uint32 ramsize, int iterations, const char 
 	entry = ramsize - TESTCODEOFFSET;
 	database = ramsize - TESTDATAOFFSET;
 	data = ramhost + database;
-	templates = Templates(&templatecount);
+	templates = OsxGuestTemplates(&templatecount);
 	memset(failures, 0, sizeof(failures));
 	memset(fpscrfailures, 0, sizeof(fpscrfailures));
 	memset(runs, 0, sizeof(runs));
 	random.state = 0x9e3779b97f4a7c15ULL;
 	reports = 0;
 	for (iteration = 0; iteration < iterations; iteration++) {
-		index = (int)(NextRandom(&random) % (uint32)templatecount);
+		index = (int)(OsxGuestNextRandom(&random) % (uint32)templatecount);
 		test = &templates[index];
-		FillState(&random, &initial);
+		OsxGuestFillState(&random, &initial);
 		if (test->kind == TESTKINDMEMORY || test->kind == TESTKINDFLOATMEMORY || test->kind == TESTKINDMULTIPLE)
-			instruction = BuildMemoryInstruction(&random, test, &initial, database);
+			instruction = OsxGuestBuildMemoryInstruction(&random, test, &initial, database);
 		else if (test->kind == TESTKINDSTRING)
-			instruction = BuildStringInstruction(&random, test, &initial, database);
+			instruction = OsxGuestBuildStringInstruction(&random, test, &initial, database);
 		else
-			instruction = test->base | ((NextRandom(&random) ^ (NextRandom(&random) << 16)) & test->randommask);
+			instruction = test->base | ((OsxGuestNextRandom(&random) ^ (OsxGuestNextRandom(&random) << 16)) & test->randommask);
 		for (index = 0; index < TESTDATASIZE; index++)
-			saved[index] = (uint8)NextRandom(&random);
+			saved[index] = (uint8)OsxGuestNextRandom(&random);
 		ramhost[entry] = (uint8)(instruction >> 24);
 		ramhost[entry + 1] = (uint8)(instruction >> 16);
 		ramhost[entry + 2] = (uint8)(instruction >> 8);
@@ -474,12 +474,12 @@ void OsxLockstepTest(uint8 *ramhost, uint32 ramsize, int iterations, const char 
 		OsxReferenceExecute(entry, &expected);
 		memcpy(referencememory, data, TESTDATASIZE);
 		memcpy(data, saved, TESTDATASIZE);
-		LoadMine(cpu, &initial, entry);
-		OsxCpuRun(cpu, 1);
-		SaveMine(cpu, &actual);
+		OsxGuestLoadMine(cpu, &initial, entry);
+		OsxGuestCpuRun(cpu, 1);
+		OsxGuestSaveMine(cpu, &actual);
 		memorydiffers = memcmp(referencememory, data, TESTDATASIZE) != 0;
 		runs[test - templates]++;
-		if (CompareStates(&expected, &actual, report, sizeof(report), &fpscronly) || memorydiffers || actual.pc != entry + 4) {
+		if (OsxGuestCompareStates(&expected, &actual, report, sizeof(report), &fpscronly) || memorydiffers || actual.pc != entry + 4) {
 			if (fpscronly && !memorydiffers && actual.pc == entry + 4)
 				fpscrfailures[test - templates]++;
 			else

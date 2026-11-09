@@ -43,48 +43,48 @@
 #define OSXFORCEINLINE inline
 #endif
 
-static inline uint32 LoadHost32(const uint8 *host)
+static inline uint32 OsxGuestLoadHost32(const uint8 *host)
 {
 	uint32 value;
 	memcpy(&value, host, 4);
 	return tswap32(value);
 }
 
-static inline uint32 LoadHost16(const uint8 *host)
+static inline uint32 OsxGuestLoadHost16(const uint8 *host)
 {
 	uint16 value;
 	memcpy(&value, host, 2);
 	return tswap16(value);
 }
 
-static inline void StoreHost32(uint8 *host, uint32 value)
+static inline void OsxGuestStoreHost32(uint8 *host, uint32 value)
 {
 	value = tswap32(value);
 	memcpy(host, &value, 4);
 }
 
-static inline void StoreHost16(uint8 *host, uint32 value)
+static inline void OsxGuestStoreHost16(uint8 *host, uint32 value)
 {
 	uint16 half;
 	half = tswap16((uint16)value);
 	memcpy(host, &half, 2);
 }
 
-static inline uint32 LoadHostSized(const uint8 *host, int size)
+static inline uint32 OsxGuestLoadHostSized(const uint8 *host, int size)
 {
 	if (size == 4)
-		return LoadHost32(host);
+		return OsxGuestLoadHost32(host);
 	if (size == 2)
-		return LoadHost16(host);
+		return OsxGuestLoadHost16(host);
 	return host[0];
 }
 
-static inline void StoreHostSized(uint8 *host, int size, uint32 value)
+static inline void OsxGuestStoreHostSized(uint8 *host, int size, uint32 value)
 {
 	if (size == 4)
-		StoreHost32(host, value);
+		OsxGuestStoreHost32(host, value);
 	else if (size == 2)
-		StoreHost16(host, value);
+		OsxGuestStoreHost16(host, value);
 	else
 		host[0] = (uint8)value;
 }
@@ -95,7 +95,7 @@ static inline void StoreHostSized(uint8 *host, int size, uint32 value)
 #define OSXHOSTTSC 0
 #endif
 
-static uint64 HostTicks(void)
+static uint64 OsxGuestHostTicks(void)
 {
 #if defined(_WIN32)
 	/* QueryPerformanceCounter() takes up around 20%
@@ -118,29 +118,29 @@ static uint64 HostTicks(void)
 #endif
 }
 
-static uint64 MultiplyDivide(uint64 value, uint64 multiplier, uint64 divisor)
+static uint64 OsxGuestMultiplyDivide(uint64 value, uint64 multiplier, uint64 divisor)
 {
 	return (value / divisor) * multiplier + ((value % divisor) * multiplier) / divisor;
 }
 
-static uint64 HostCounter(void);
+static uint64 OsxGuestHostCounter(void);
 
-static uint64 HostFrequency(uint64 ticks, uint64 counter)
+static uint64 OsxGuestHostFrequency(uint64 ticks, uint64 counter)
 {
 #ifdef _WIN32
 	LARGE_INTEGER now;
 	LARGE_INTEGER frequency;
 	QueryPerformanceCounter(&now);
 	QueryPerformanceFrequency(&frequency);
-	return MultiplyDivide(HostTicks() - ticks, (uint64)frequency.QuadPart, (uint64)now.QuadPart - counter);
+	return OsxGuestMultiplyDivide(OsxGuestHostTicks() - ticks, (uint64)frequency.QuadPart, (uint64)now.QuadPart - counter);
 #elif OSXHOSTTSC
-	return MultiplyDivide(HostTicks() - ticks, 1000000000ULL, HostCounter() - counter);
+	return OsxGuestMultiplyDivide(OsxGuestHostTicks() - ticks, 1000000000ULL, OsxGuestHostCounter() - counter);
 #else
 	return 1000000000ULL;
 #endif
 }
 
-static uint64 HostCounter(void)
+static uint64 OsxGuestHostCounter(void)
 {
 #ifdef _WIN32
 	LARGE_INTEGER counter;
@@ -155,27 +155,27 @@ static uint64 HostCounter(void)
 #endif
 }
 
-static uint64 CalibrateHostFrequency(OsxCpu *cpu)
+static uint64 OsxGuestCalibrateHostFrequency(OsxCpu *cpu)
 {
 #ifdef _WIN32
 	DWORD megahertz;
 	DWORD length;
-	cpu->calibrationticks = HostTicks();
-	cpu->calibrationcounter = HostCounter();
+	cpu->calibrationticks = OsxGuestHostTicks();
+	cpu->calibrationcounter = OsxGuestHostCounter();
 	length = sizeof(megahertz);
 	if (RegGetValueA(HKEY_LOCAL_MACHINE, "HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0", "~MHz", RRF_RT_REG_DWORD, NULL, &megahertz, &length) == ERROR_SUCCESS && megahertz != 0)
 		return (uint64)megahertz * 1000000ULL;
 	return 3000000000ULL;
 #elif OSXHOSTTSC
-	cpu->calibrationticks = HostTicks();
-	cpu->calibrationcounter = HostCounter();
+	cpu->calibrationticks = OsxGuestHostTicks();
+	cpu->calibrationcounter = OsxGuestHostCounter();
 	return 3000000000ULL;
 #else
 	return 1000000000ULL;
 #endif
 }
 
-uint64 OsxHostNanoseconds(void)
+uint64 OsxGuestHostNanoseconds(void)
 {
 #ifdef _WIN32
 	LARGE_INTEGER counter;
@@ -194,7 +194,7 @@ uint64 OsxHostNanoseconds(void)
 #endif
 }
 
-int OsxHostFeature(int feature)
+int OsxGuestHostFeature(int feature)
 {
 #if defined(_WIN32)
 	return IsProcessorFeaturePresent(feature) != 0;
@@ -211,7 +211,7 @@ int OsxHostFeature(int feature)
 #endif
 }
 
-uint8 *OsxJitAllocate(uint32 size)
+uint8 *OsxGuestJitAllocate(uint32 size)
 {
 #ifdef _WIN32
 	return (uint8 *)VirtualAlloc(NULL, size, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
@@ -224,7 +224,7 @@ uint8 *OsxJitAllocate(uint32 size)
 #endif
 }
 
-void OsxJitRelease(uint8 *memory, uint32 size)
+void OsxGuestJitRelease(uint8 *memory, uint32 size)
 {
 #ifdef _WIN32
 	VirtualFree(memory, 0, MEM_RELEASE);
@@ -233,7 +233,7 @@ void OsxJitRelease(uint8 *memory, uint32 size)
 #endif
 }
 
-void OsxJitFlush(uint8 *memory, uint32 size)
+void OsxGuestJitFlush(uint8 *memory, uint32 size)
 {
 #if defined(_WIN32)
 	FlushInstructionCache(GetCurrentProcess(), memory, size);
@@ -242,34 +242,34 @@ void OsxJitFlush(uint8 *memory, uint32 size)
 #endif
 }
 
-OSXJITABI uint64 OsxCpuTimebase(OsxCpu *cpu)
+OSXJITABI uint64 OsxGuestCpuTimebase(OsxCpu *cpu)
 {
 	uint64 elapsed;
 	if (cpu->deterministic)
 		return cpu->instructions / cpu->deterministic + cpu->virtualticks;
-	elapsed = HostTicks() - cpu->hostbase;
+	elapsed = OsxGuestHostTicks() - cpu->hostbase;
 	return (elapsed >> 32) * cpu->hostscale + (((elapsed & 0xffffffffULL) * cpu->hostscale) >> 32) + cpu->tboffset;
 }
 
-void OsxCpuCalibrateTimebase(OsxCpu *cpu)
+void OsxGuestCpuCalibrateTimebase(OsxCpu *cpu)
 {
 	uint64 current;
 	uint64 frequency;
-	if (cpu->deterministic || HostCounter() == cpu->calibrationcounter)
+	if (cpu->deterministic || OsxGuestHostCounter() == cpu->calibrationcounter)
 		return;
-	frequency = HostFrequency(cpu->calibrationticks, cpu->calibrationcounter);
-	current = OsxCpuTimebase(cpu);
-	cpu->hostbase = HostTicks();
+	frequency = OsxGuestHostFrequency(cpu->calibrationticks, cpu->calibrationcounter);
+	current = OsxGuestCpuTimebase(cpu);
+	cpu->hostbase = OsxGuestHostTicks();
 	cpu->hostscale = (cpu->tbfrequency << 32) / frequency;
 	cpu->tboffset = current;
 }
 
-uint64 OsxCpuNextDeadline(OsxCpu *cpu)
+uint64 OsxGuestCpuNextDeadline(OsxCpu *cpu)
 {
 	return cpu->decdeadline;
 }
 
-void OsxCpuFlushTlb(OsxCpu *cpu)
+void OsxGuestCpuFlushTlb(OsxCpu *cpu)
 {
 	int mode;
 	int kind;
@@ -281,7 +281,7 @@ void OsxCpuFlushTlb(OsxCpu *cpu)
 	cpu->fetchtag = 0;
 }
 
-static void InvalidateTlbPage(OsxCpu *cpu, uint32 address)
+static void OsxGuestInvalidateTlbPage(OsxCpu *cpu, uint32 address)
 {
 	int mode;
 	int kind;
@@ -293,7 +293,7 @@ static void InvalidateTlbPage(OsxCpu *cpu, uint32 address)
 	cpu->fetchtag = 0;
 }
 
-void OsxCpuUpdateModes(OsxCpu *cpu)
+void OsxGuestCpuUpdateModes(OsxCpu *cpu)
 {
 	int privilege;
 	if (cpu->msr & OSXMSRPR)
@@ -320,13 +320,13 @@ void OsxCpuUpdateModes(OsxCpu *cpu)
 	cpu->fetchtag = 0;
 }
 
-void OsxCpuSetModel(OsxCpu *cpu, uint32 pvr)
+void OsxGuestCpuSetModel(OsxCpu *cpu, uint32 pvr)
 {
 	cpu->pvr = pvr;
 	cpu->altivec = (pvr >> 16) == 0x000c;
 }
 
-void OsxCpuReset(OsxCpu *cpu, uint32 pvr, uint64 tbfrequency)
+void OsxGuestCpuReset(OsxCpu *cpu, uint32 pvr, uint64 tbfrequency)
 {
 	memset(cpu->gpr, 0, sizeof(cpu->gpr));
 	memset(cpu->fpr, 0, sizeof(cpu->fpr));
@@ -353,7 +353,7 @@ void OsxCpuReset(OsxCpu *cpu, uint32 pvr, uint64 tbfrequency)
 	cpu->sdr1 = 0;
 	cpu->hid0 = 0;
 	cpu->hid1 = 0;
-	OsxCpuSetModel(cpu, pvr);
+	OsxGuestCpuSetModel(cpu, pvr);
 	memset(cpu->vr, 0, sizeof(cpu->vr));
 	cpu->vscr = 0x00010000;
 	cpu->vrsave = 0;
@@ -368,8 +368,8 @@ void OsxCpuReset(OsxCpu *cpu, uint32 pvr, uint64 tbfrequency)
 	cpu->reservation = 0;
 	cpu->reservationvalid = 0;
 	cpu->tbfrequency = tbfrequency;
-	cpu->hostscale = (tbfrequency << 32) / CalibrateHostFrequency(cpu);
-	cpu->hostbase = HostTicks();
+	cpu->hostscale = (tbfrequency << 32) / OsxGuestCalibrateHostFrequency(cpu);
+	cpu->hostbase = OsxGuestHostTicks();
 	cpu->tboffset = 0;
 	cpu->decvalue = 0xffffffff;
 	cpu->decstamp = 0;
@@ -387,12 +387,12 @@ void OsxCpuReset(OsxCpu *cpu, uint32 pvr, uint64 tbfrequency)
 	cpu->faultlogs = 0;
 	cpu->unknownspr = 0;
 	cpu->nativejit = NULL;
-	OsxCpuFlushTlb(cpu);
-	OsxCpuUpdateModes(cpu);
+	OsxGuestCpuFlushTlb(cpu);
+	OsxGuestCpuUpdateModes(cpu);
 }
 
 #if OSXPROFILE
-uint32 OsxCpuTmpFormKey(uint32 instruction)
+uint32 OsxGuestCpuTmpFormKey(uint32 instruction)
 {
 	uint32 opcode;
 	uint32 sub;
@@ -408,7 +408,7 @@ uint32 OsxCpuTmpFormKey(uint32 instruction)
 }
 #endif
 
-void OsxCpuRaiseException(OsxCpu *cpu, uint32 vector, uint32 srr1bits, uint32 srr0)
+void OsxGuestCpuRaiseException(OsxCpu *cpu, uint32 vector, uint32 srr1bits, uint32 srr0)
 {
 	uint32 newmsr;
 #if OSXPROFILE
@@ -426,10 +426,10 @@ void OsxCpuRaiseException(OsxCpu *cpu, uint32 vector, uint32 srr1bits, uint32 sr
 	else
 		cpu->nextpc = vector;
 	cpu->halted = 0;
-	OsxCpuUpdateModes(cpu);
+	OsxGuestCpuUpdateModes(cpu);
 }
 
-static inline int PhysicalHost(OsxCpu *cpu, uint32 physical, uint8 **host)
+static inline int OsxGuestPhysicalHost(OsxCpu *cpu, uint32 physical, uint8 **host)
 {
 	if (physical < cpu->ramsize) {
 		*host = cpu->ram + physical;
@@ -448,7 +448,7 @@ static inline int PhysicalHost(OsxCpu *cpu, uint32 physical, uint8 **host)
 	return 0;
 }
 
-static uint32 PtegAddress(uint32 sdr1, uint32 hash)
+static uint32 OsxGuestPtegAddress(uint32 sdr1, uint32 hash)
 {
 	uint32 htaborg;
 	uint32 htabmask;
@@ -457,7 +457,7 @@ static uint32 PtegAddress(uint32 sdr1, uint32 hash)
 	return (htaborg & 0xfe000000) | ((((htaborg >> 16) & 0x1ff) | ((hash >> 10) & htabmask)) << 16) | ((hash & 0x3ff) << 6);
 }
 
-static void RecordFault(OsxCpu *cpu, uint32 address, uint32 reason, int instruction)
+static void OsxGuestRecordFault(OsxCpu *cpu, uint32 address, uint32 reason, int instruction)
 {
 	OsxFaultRecord *record;
 	if (cpu->msr & OSXMSRPR)
@@ -470,7 +470,7 @@ static void RecordFault(OsxCpu *cpu, uint32 address, uint32 reason, int instruct
 	cpu->faultlogs++;
 }
 
-void OsxCpuDumpFaults(OsxCpu *cpu, FILE *output)
+void OsxGuestCpuDumpFaults(OsxCpu *cpu, FILE *output)
 {
 	OsxFaultRecord *record;
 	int index;
@@ -487,11 +487,11 @@ void OsxCpuDumpFaults(OsxCpu *cpu, FILE *output)
 	}
 }
 
-static void TranslationFault(OsxCpu *cpu, uint32 address, int kind, uint32 reason)
+static void OsxGuestTranslationFault(OsxCpu *cpu, uint32 address, int kind, uint32 reason)
 {
 	if (kind == OSXTLBFETCH) {
-		RecordFault(cpu, cpu->pc, reason, 1);
-		OsxCpuRaiseException(cpu, OSXVECTORISI, reason, cpu->pc);
+		OsxGuestRecordFault(cpu, cpu->pc, reason, 1);
+		OsxGuestCpuRaiseException(cpu, OSXVECTORISI, reason, cpu->pc);
 		return;
 	}
 	cpu->dar = address;
@@ -499,11 +499,11 @@ static void TranslationFault(OsxCpu *cpu, uint32 address, int kind, uint32 reaso
 		cpu->dsisr = reason | OSXDSISRSTORE;
 	else
 		cpu->dsisr = reason;
-	RecordFault(cpu, address, cpu->dsisr, 0);
-	OsxCpuRaiseException(cpu, OSXVECTORDSI, 0, cpu->pc);
+	OsxGuestRecordFault(cpu, address, cpu->dsisr, 0);
+	OsxGuestCpuRaiseException(cpu, OSXVECTORDSI, 0, cpu->pc);
 }
 
-static int CheckProtection(int key, uint32 pp, int kind)
+static int OsxGuestCheckProtection(int key, uint32 pp, int kind)
 {
 	if (key == 0) {
 		if (kind == OSXTLBWRITE && pp == 3)
@@ -517,7 +517,7 @@ static int CheckProtection(int key, uint32 pp, int kind)
 	return 1;
 }
 
-int OsxCpuTranslate(OsxCpu *cpu, uint32 address, int kind, int raise, uint32 *physical)
+int OsxGuestCpuTranslate(OsxCpu *cpu, uint32 address, int kind, int raise, uint32 *physical)
 {
 	uint32 *bats;
 	uint32 upper;
@@ -541,7 +541,7 @@ int OsxCpuTranslate(OsxCpu *cpu, uint32 address, int kind, int raise, uint32 *ph
 	int key;
 #if OSXG5
 	if (cpu->core970)
-		return Osx970TranslateVirtual((Osx970 *)cpu->core970, address, kind, physical);
+		return OsxGuest970TranslateVirtual((Osx970 *)cpu->core970, address, kind, physical);
 #endif
 	if (kind == OSXTLBFETCH) {
 		translated = (cpu->msr & OSXMSRIR) != 0;
@@ -567,7 +567,7 @@ int OsxCpuTranslate(OsxCpu *cpu, uint32 address, int kind, int raise, uint32 *ph
 		lower = bats[index + 1];
 		if ((lower & 3) == 0 || (kind == OSXTLBWRITE && (lower & 1))) {
 			if (raise)
-				TranslationFault(cpu, address, kind, OSXDSISRPROTECTION);
+				OsxGuestTranslationFault(cpu, address, kind, OSXDSISRPROTECTION);
 			return 0;
 		}
 		*physical = (lower & 0xfffe0000 & ~blockmask) | (address & (blockmask | 0x1ffff));
@@ -577,15 +577,15 @@ int OsxCpuTranslate(OsxCpu *cpu, uint32 address, int kind, int raise, uint32 *ph
 	if (segment & 0x80000000) {
 		if (raise) {
 			if (kind == OSXTLBFETCH)
-				TranslationFault(cpu, address, kind, OSXISIGUARDED);
+				OsxGuestTranslationFault(cpu, address, kind, OSXISIGUARDED);
 			else
-				TranslationFault(cpu, address, kind, OSXDSISRDIRECTSTORE);
+				OsxGuestTranslationFault(cpu, address, kind, OSXDSISRDIRECTSTORE);
 		}
 		return 0;
 	}
 	if (kind == OSXTLBFETCH && (segment & 0x10000000)) {
 		if (raise)
-			TranslationFault(cpu, address, kind, OSXISIGUARDED);
+			OsxGuestTranslationFault(cpu, address, kind, OSXISIGUARDED);
 		return 0;
 	}
 	if (user)
@@ -596,21 +596,21 @@ int OsxCpuTranslate(OsxCpu *cpu, uint32 address, int kind, int raise, uint32 *ph
 	pageindex = (address >> 12) & 0xffff;
 	hash = (vsid & 0x7ffff) ^ pageindex;
 	for (pass = 0; pass < 2; pass++) {
-		pteg = PtegAddress(cpu->sdr1, hash);
+		pteg = OsxGuestPtegAddress(cpu->sdr1, hash);
 		want = 0x80000000 | (vsid << 7) | ((uint32)pass << 6) | (pageindex >> 10);
 		for (slot = 0; slot < 8; slot++) {
-			if (!PhysicalHost(cpu, pteg + slot * 8, &host))
+			if (!OsxGuestPhysicalHost(cpu, pteg + slot * 8, &host))
 				break;
-			word0 = LoadHost32(host);
+			word0 = OsxGuestLoadHost32(host);
 			if (word0 != want)
 				continue;
-			word1 = LoadHost32(host + 4);
-			if (!CheckProtection(key, word1 & 3, kind) || (kind == OSXTLBFETCH && (word1 & 0x08))) {
+			word1 = OsxGuestLoadHost32(host + 4);
+			if (!OsxGuestCheckProtection(key, word1 & 3, kind) || (kind == OSXTLBFETCH && (word1 & 0x08))) {
 				if (raise) {
 					if (kind == OSXTLBFETCH && (word1 & 0x08))
-						TranslationFault(cpu, address, kind, OSXISIGUARDED);
+						OsxGuestTranslationFault(cpu, address, kind, OSXISIGUARDED);
 					else
-						TranslationFault(cpu, address, kind, OSXDSISRPROTECTION);
+						OsxGuestTranslationFault(cpu, address, kind, OSXDSISRPROTECTION);
 				}
 				return 0;
 			}
@@ -618,18 +618,18 @@ int OsxCpuTranslate(OsxCpu *cpu, uint32 address, int kind, int raise, uint32 *ph
 			if (kind == OSXTLBWRITE)
 				updated |= 0x80;
 			if (updated != word1)
-				StoreHost32(host + 4, updated);
+				OsxGuestStoreHost32(host + 4, updated);
 			*physical = (word1 & OSXPAGEMASK) | (address & 0xfff);
 			return 1;
 		}
 		hash = ~hash;
 	}
 	if (raise)
-		TranslationFault(cpu, address, kind, OSXDSISRNOTFOUND);
+		OsxGuestTranslationFault(cpu, address, kind, OSXDSISRNOTFOUND);
 	return 0;
 }
 
-void OsxCpuWatch(OsxCpu *cpu, FILE *file, uint32 rowbytes, uint32 left, uint32 top, uint32 right, uint32 bottom)
+void OsxGuestCpuWatch(OsxCpu *cpu, FILE *file, uint32 rowbytes, uint32 left, uint32 top, uint32 right, uint32 bottom)
 {
 	cpu->watchfile = file;
 	cpu->watchrowbytes = rowbytes;
@@ -637,10 +637,10 @@ void OsxCpuWatch(OsxCpu *cpu, FILE *file, uint32 rowbytes, uint32 left, uint32 t
 	cpu->watchright = right;
 	cpu->watchlow = cpu->vrambase + top * rowbytes;
 	cpu->watchhigh = cpu->vrambase + bottom * rowbytes;
-	OsxCpuFlushTlb(cpu);
+	OsxGuestCpuFlushTlb(cpu);
 }
 
-static void WatchWrite(OsxCpu *cpu, uint32 physical, int size, uint32 value)
+static void OsxGuestWatchWrite(OsxCpu *cpu, uint32 physical, int size, uint32 value)
 {
 	uint32 column;
 	if (physical < cpu->watchlow || physical >= cpu->watchhigh)
@@ -648,10 +648,10 @@ static void WatchWrite(OsxCpu *cpu, uint32 physical, int size, uint32 value)
 	column = ((physical - cpu->vrambase) % cpu->watchrowbytes) / 4;
 	if (column < cpu->watchleft || column >= cpu->watchright)
 		return;
-	fprintf(cpu->watchfile, "%llu %llu pc %08x lr %08x pr %u sr %06x x %u y %u size %d value %08x\n", (unsigned long long)OsxCpuTimebase(cpu), (unsigned long long)cpu->instructions, cpu->pc, cpu->lr, (cpu->msr >> 14) & 1, cpu->sr[0] & 0xffffff, column, (physical - cpu->vrambase) / cpu->watchrowbytes, size, value);
+	fprintf(cpu->watchfile, "%llu %llu pc %08x lr %08x pr %u sr %06x x %u y %u size %d value %08x\n", (unsigned long long)OsxGuestCpuTimebase(cpu), (unsigned long long)cpu->instructions, cpu->pc, cpu->lr, (cpu->msr >> 14) & 1, cpu->sr[0] & 0xffffff, column, (physical - cpu->vrambase) / cpu->watchrowbytes, size, value);
 }
 
-static void FillTlbEntry(OsxCpu *cpu, uint32 address, int kind, uint8 *host)
+static void OsxGuestFillTlbEntry(OsxCpu *cpu, uint32 address, int kind, uint8 *host)
 {
 	OsxTlbEntry *entry;
 	uint32 *segments;
@@ -670,32 +670,32 @@ static void FillTlbEntry(OsxCpu *cpu, uint32 address, int kind, uint8 *host)
 	entry->host = host - (address & 0xfff);
 }
 
-static int AccessSlow(OsxCpu *cpu, uint32 address, int kind, uint8 **host, uint32 *physical)
+static int OsxGuestAccessSlow(OsxCpu *cpu, uint32 address, int kind, uint8 **host, uint32 *physical)
 {
 	cpu->slowaccesses++;
-	if (!OsxCpuTranslate(cpu, address, kind, 1, physical))
+	if (!OsxGuestCpuTranslate(cpu, address, kind, 1, physical))
 		return OSXACCESSFAULT;
-	if (!PhysicalHost(cpu, *physical, host))
+	if (!OsxGuestPhysicalHost(cpu, *physical, host))
 		return OSXACCESSBUS;
 	if (kind == OSXTLBWRITE && cpu->watchfile && *physical - cpu->vrambase < cpu->vramsize)
 		return OSXACCESSHOST;
-	FillTlbEntry(cpu, address, kind, *host);
+	OsxGuestFillTlbEntry(cpu, address, kind, *host);
 	return OSXACCESSHOST;
 }
 
-OSXJITABI int OsxCpuFillTlb(OsxCpu *cpu, uint32 address, int kind)
+OSXJITABI int OsxGuestCpuFillTlb(OsxCpu *cpu, uint32 address, int kind)
 {
 	uint8 *host;
 	uint32 physical;
-	if (!OsxCpuTranslate(cpu, address, kind, 0, &physical) || !PhysicalHost(cpu, physical, &host))
+	if (!OsxGuestCpuTranslate(cpu, address, kind, 0, &physical) || !OsxGuestPhysicalHost(cpu, physical, &host))
 		return 0;
 	if (kind == OSXTLBWRITE && cpu->watchfile && physical - cpu->vrambase < cpu->vramsize)
 		return 0;
-	FillTlbEntry(cpu, address, kind, host);
+	OsxGuestFillTlbEntry(cpu, address, kind, host);
 	return 1;
 }
 
-static int ReadSlow(OsxCpu *cpu, uint32 address, int size, uint32 *value)
+static int OsxGuestReadSlow(OsxCpu *cpu, uint32 address, int size, uint32 *value)
 {
 	uint8 *host;
 	uint32 physical;
@@ -706,24 +706,24 @@ static int ReadSlow(OsxCpu *cpu, uint32 address, int size, uint32 *value)
 	if ((address & 0xfff) + (uint32)size > 0x1000) {
 		result = 0;
 		for (index = 0; index < size; index++) {
-			if (!ReadSlow(cpu, address + index, 1, &byte))
+			if (!OsxGuestReadSlow(cpu, address + index, 1, &byte))
 				return 0;
 			result = (result << 8) | byte;
 		}
 		*value = result;
 		return 1;
 	}
-	status = AccessSlow(cpu, address, OSXTLBREAD, &host, &physical);
+	status = OsxGuestAccessSlow(cpu, address, OSXTLBREAD, &host, &physical);
 	if (status == OSXACCESSFAULT)
 		return 0;
 	if (status == OSXACCESSHOST)
-		*value = LoadHostSized(host, size);
+		*value = OsxGuestLoadHostSized(host, size);
 	else
 		*value = cpu->busread(cpu->buscontext, physical, size);
 	return 1;
 }
 
-static int WriteSlow(OsxCpu *cpu, uint32 address, int size, uint32 value)
+static int OsxGuestWriteSlow(OsxCpu *cpu, uint32 address, int size, uint32 value)
 {
 	uint8 *host;
 	uint32 physical;
@@ -731,23 +731,23 @@ static int WriteSlow(OsxCpu *cpu, uint32 address, int size, uint32 value)
 	int index;
 	if ((address & 0xfff) + (uint32)size > 0x1000) {
 		for (index = 0; index < size; index++)
-			if (!WriteSlow(cpu, address + index, 1, (value >> ((size - 1 - index) * 8)) & 0xff))
+			if (!OsxGuestWriteSlow(cpu, address + index, 1, (value >> ((size - 1 - index) * 8)) & 0xff))
 				return 0;
 		return 1;
 	}
-	status = AccessSlow(cpu, address, OSXTLBWRITE, &host, &physical);
+	status = OsxGuestAccessSlow(cpu, address, OSXTLBWRITE, &host, &physical);
 	if (status == OSXACCESSFAULT)
 		return 0;
 	if (cpu->watchfile)
-		WatchWrite(cpu, physical, size, value);
+		OsxGuestWatchWrite(cpu, physical, size, value);
 	if (status == OSXACCESSHOST)
-		StoreHostSized(host, size, value);
+		OsxGuestStoreHostSized(host, size, value);
 	else
 		cpu->buswrite(cpu->buscontext, physical, size, value);
 	return 1;
 }
 
-static OSXFORCEINLINE uint8 *ReadHost(OsxCpu *cpu, uint32 address, uint32 limit)
+static OSXFORCEINLINE uint8 *OsxGuestReadHost(OsxCpu *cpu, uint32 address, uint32 limit)
 {
 	OsxTlbEntry *entry;
 	entry = &cpu->readtlb[(address >> 12) & OSXTLBMASK];
@@ -756,7 +756,7 @@ static OSXFORCEINLINE uint8 *ReadHost(OsxCpu *cpu, uint32 address, uint32 limit)
 	return NULL;
 }
 
-static OSXFORCEINLINE uint8 *WriteHost(OsxCpu *cpu, uint32 address, uint32 limit)
+static OSXFORCEINLINE uint8 *OsxGuestWriteHost(OsxCpu *cpu, uint32 address, uint32 limit)
 {
 	OsxTlbEntry *entry;
 	entry = &cpu->writetlb[(address >> 12) & OSXTLBMASK];
@@ -765,189 +765,189 @@ static OSXFORCEINLINE uint8 *WriteHost(OsxCpu *cpu, uint32 address, uint32 limit
 	return NULL;
 }
 
-static OSXFORCEINLINE int Read32(OsxCpu *cpu, uint32 address, uint32 *value)
+static OSXFORCEINLINE int OsxGuestCpuRead32(OsxCpu *cpu, uint32 address, uint32 *value)
 {
 	uint8 *host;
-	host = ReadHost(cpu, address, 0xffc);
+	host = OsxGuestReadHost(cpu, address, 0xffc);
 	if (host) {
-		*value = LoadHost32(host);
+		*value = OsxGuestLoadHost32(host);
 		return 1;
 	}
-	return ReadSlow(cpu, address, 4, value);
+	return OsxGuestReadSlow(cpu, address, 4, value);
 }
 
-static OSXFORCEINLINE int Read16(OsxCpu *cpu, uint32 address, uint32 *value)
+static OSXFORCEINLINE int OsxGuestCpuRead16(OsxCpu *cpu, uint32 address, uint32 *value)
 {
 	uint8 *host;
-	host = ReadHost(cpu, address, 0xffe);
+	host = OsxGuestReadHost(cpu, address, 0xffe);
 	if (host) {
-		*value = LoadHost16(host);
+		*value = OsxGuestLoadHost16(host);
 		return 1;
 	}
-	return ReadSlow(cpu, address, 2, value);
+	return OsxGuestReadSlow(cpu, address, 2, value);
 }
 
-static OSXFORCEINLINE int Read8(OsxCpu *cpu, uint32 address, uint32 *value)
+static OSXFORCEINLINE int OsxGuestCpuRead8(OsxCpu *cpu, uint32 address, uint32 *value)
 {
 	uint8 *host;
-	host = ReadHost(cpu, address, 0xfff);
+	host = OsxGuestReadHost(cpu, address, 0xfff);
 	if (host) {
 		*value = host[0];
 		return 1;
 	}
-	return ReadSlow(cpu, address, 1, value);
+	return OsxGuestReadSlow(cpu, address, 1, value);
 }
 
-static OSXFORCEINLINE int Write32(OsxCpu *cpu, uint32 address, uint32 value)
+static OSXFORCEINLINE int OsxGuestCpuWrite32(OsxCpu *cpu, uint32 address, uint32 value)
 {
 	uint8 *host;
-	host = WriteHost(cpu, address, 0xffc);
+	host = OsxGuestWriteHost(cpu, address, 0xffc);
 	if (host) {
-		StoreHost32(host, value);
+		OsxGuestStoreHost32(host, value);
 		return 1;
 	}
-	return WriteSlow(cpu, address, 4, value);
+	return OsxGuestWriteSlow(cpu, address, 4, value);
 }
 
-static OSXFORCEINLINE int Write16(OsxCpu *cpu, uint32 address, uint32 value)
+static OSXFORCEINLINE int OsxGuestCpuWrite16(OsxCpu *cpu, uint32 address, uint32 value)
 {
 	uint8 *host;
-	host = WriteHost(cpu, address, 0xffe);
+	host = OsxGuestWriteHost(cpu, address, 0xffe);
 	if (host) {
-		StoreHost16(host, value);
+		OsxGuestStoreHost16(host, value);
 		return 1;
 	}
-	return WriteSlow(cpu, address, 2, value);
+	return OsxGuestWriteSlow(cpu, address, 2, value);
 }
 
-int OsxCpuReadData(OsxCpu *cpu, uint32 address, int size, uint32 *value)
+int OsxGuestCpuReadData(OsxCpu *cpu, uint32 address, int size, uint32 *value)
 {
 	if (size == 4)
-		return Read32(cpu, address, value);
+		return OsxGuestCpuRead32(cpu, address, value);
 	if (size == 2)
-		return Read16(cpu, address, value);
-	return Read8(cpu, address, value);
+		return OsxGuestCpuRead16(cpu, address, value);
+	return OsxGuestCpuRead8(cpu, address, value);
 }
 
-static OSXFORCEINLINE int Write8(OsxCpu *cpu, uint32 address, uint32 value)
+static OSXFORCEINLINE int OsxGuestCpuWrite8(OsxCpu *cpu, uint32 address, uint32 value)
 {
 	uint8 *host;
-	host = WriteHost(cpu, address, 0xfff);
+	host = OsxGuestWriteHost(cpu, address, 0xfff);
 	if (host) {
 		host[0] = (uint8)value;
 		return 1;
 	}
-	return WriteSlow(cpu, address, 1, value);
+	return OsxGuestWriteSlow(cpu, address, 1, value);
 }
 
-int OsxCpuWriteData(OsxCpu *cpu, uint32 address, int size, uint32 value)
+int OsxGuestCpuWriteData(OsxCpu *cpu, uint32 address, int size, uint32 value)
 {
 	if (size == 4)
-		return Write32(cpu, address, value);
+		return OsxGuestCpuWrite32(cpu, address, value);
 	if (size == 2)
-		return Write16(cpu, address, value);
-	return Write8(cpu, address, value);
+		return OsxGuestCpuWrite16(cpu, address, value);
+	return OsxGuestCpuWrite8(cpu, address, value);
 }
 
-int OsxCpuReadQuad(OsxCpu *cpu, uint32 address, uint32 *words)
+int OsxGuestCpuReadQuad(OsxCpu *cpu, uint32 address, uint32 *words)
 {
 	uint8 *host;
 	uint32 values[4];
 	int index;
-	host = ReadHost(cpu, address, 0xff0);
+	host = OsxGuestReadHost(cpu, address, 0xff0);
 	if (host) {
-		words[0] = LoadHost32(host);
-		words[1] = LoadHost32(host + 4);
-		words[2] = LoadHost32(host + 8);
-		words[3] = LoadHost32(host + 12);
+		words[0] = OsxGuestLoadHost32(host);
+		words[1] = OsxGuestLoadHost32(host + 4);
+		words[2] = OsxGuestLoadHost32(host + 8);
+		words[3] = OsxGuestLoadHost32(host + 12);
 		return 1;
 	}
 	for (index = 0; index < 4; index++)
-		if (!Read32(cpu, address + index * 4, &values[index]))
+		if (!OsxGuestCpuRead32(cpu, address + index * 4, &values[index]))
 			return 0;
 	for (index = 0; index < 4; index++)
 		words[index] = values[index];
 	return 1;
 }
 
-int OsxCpuWriteQuad(OsxCpu *cpu, uint32 address, const uint32 *words)
+int OsxGuestCpuWriteQuad(OsxCpu *cpu, uint32 address, const uint32 *words)
 {
 	uint8 *host;
 	int index;
-	host = WriteHost(cpu, address, 0xff0);
+	host = OsxGuestWriteHost(cpu, address, 0xff0);
 	if (host) {
-		StoreHost32(host, words[0]);
-		StoreHost32(host + 4, words[1]);
-		StoreHost32(host + 8, words[2]);
-		StoreHost32(host + 12, words[3]);
+		OsxGuestStoreHost32(host, words[0]);
+		OsxGuestStoreHost32(host + 4, words[1]);
+		OsxGuestStoreHost32(host + 8, words[2]);
+		OsxGuestStoreHost32(host + 12, words[3]);
 		return 1;
 	}
 	for (index = 0; index < 4; index++)
-		if (!Write32(cpu, address + index * 4, words[index]))
+		if (!OsxGuestCpuWrite32(cpu, address + index * 4, words[index]))
 			return 0;
 	return 1;
 }
 
-static int Read64(OsxCpu *cpu, uint32 address, uint64 *value)
+static int OsxGuestRead64(OsxCpu *cpu, uint32 address, uint64 *value)
 {
 	uint8 *host;
 	uint32 high;
 	uint32 low;
-	host = ReadHost(cpu, address, 0xff8);
+	host = OsxGuestReadHost(cpu, address, 0xff8);
 	if (host) {
-		*value = ((uint64)LoadHost32(host) << 32) | LoadHost32(host + 4);
+		*value = ((uint64)OsxGuestLoadHost32(host) << 32) | OsxGuestLoadHost32(host + 4);
 		return 1;
 	}
-	if (!ReadSlow(cpu, address, 4, &high))
+	if (!OsxGuestReadSlow(cpu, address, 4, &high))
 		return 0;
-	if (!ReadSlow(cpu, address + 4, 4, &low))
+	if (!OsxGuestReadSlow(cpu, address + 4, 4, &low))
 		return 0;
 	*value = ((uint64)high << 32) | low;
 	return 1;
 }
 
-static int Write64(OsxCpu *cpu, uint32 address, uint64 value)
+static int OsxGuestWrite64(OsxCpu *cpu, uint32 address, uint64 value)
 {
 	uint8 *host;
 	uint32 physical;
-	host = WriteHost(cpu, address, 0xff8);
+	host = OsxGuestWriteHost(cpu, address, 0xff8);
 	if (host) {
-		StoreHost32(host, (uint32)(value >> 32));
-		StoreHost32(host + 4, (uint32)value);
+		OsxGuestStoreHost32(host, (uint32)(value >> 32));
+		OsxGuestStoreHost32(host + 4, (uint32)value);
 		return 1;
 	}
-	if (((address + 4) & OSXPAGEMASK) != (address & OSXPAGEMASK) && !OsxCpuTranslate(cpu, address + 4, OSXTLBWRITE, 1, &physical))
+	if (((address + 4) & OSXPAGEMASK) != (address & OSXPAGEMASK) && !OsxGuestCpuTranslate(cpu, address + 4, OSXTLBWRITE, 1, &physical))
 		return 0;
-	if (!WriteSlow(cpu, address, 4, (uint32)(value >> 32)))
+	if (!OsxGuestWriteSlow(cpu, address, 4, (uint32)(value >> 32)))
 		return 0;
-	return WriteSlow(cpu, address + 4, 4, (uint32)value);
+	return OsxGuestWriteSlow(cpu, address + 4, 4, (uint32)value);
 }
 
-int OsxCpuReadVirtual(OsxCpu *cpu, uint32 address, uint32 *value)
+int OsxGuestCpuReadVirtual(OsxCpu *cpu, uint32 address, uint32 *value)
 {
 	uint32 physical;
 	uint8 *host;
-	if (!OsxCpuTranslate(cpu, address, OSXTLBREAD, 0, &physical))
+	if (!OsxGuestCpuTranslate(cpu, address, OSXTLBREAD, 0, &physical))
 		return 0;
-	if (!PhysicalHost(cpu, physical, &host))
+	if (!OsxGuestPhysicalHost(cpu, physical, &host))
 		return 0;
-	*value = LoadHost32(host);
+	*value = OsxGuestLoadHost32(host);
 	return 1;
 }
 
-int OsxCpuWriteVirtual(OsxCpu *cpu, uint32 address, uint32 value)
+int OsxGuestCpuWriteVirtual(OsxCpu *cpu, uint32 address, uint32 value)
 {
 	uint32 physical;
 	uint8 *host;
-	if (!OsxCpuTranslate(cpu, address, OSXTLBWRITE, 0, &physical))
+	if (!OsxGuestCpuTranslate(cpu, address, OSXTLBWRITE, 0, &physical))
 		return 0;
-	if (!PhysicalHost(cpu, physical, &host))
+	if (!OsxGuestPhysicalHost(cpu, physical, &host))
 		return 0;
-	StoreHost32(host, value);
+	OsxGuestStoreHost32(host, value);
 	return 1;
 }
 
-int OsxCpuFetchPage(OsxCpu *cpu)
+int OsxGuestCpuFetchPage(OsxCpu *cpu)
 {
 	OsxTlbEntry *entry;
 	uint8 *host;
@@ -957,11 +957,11 @@ int OsxCpuFetchPage(OsxCpu *cpu)
 	if (entry->page == (cpu->pc & OSXPAGEMASK) && entry->segment == cpu->fetchsr[cpu->pc >> 28]) {
 		cpu->fetchhost = entry->host;
 	} else {
-		status = AccessSlow(cpu, cpu->pc, OSXTLBFETCH, &host, &physical);
+		status = OsxGuestAccessSlow(cpu, cpu->pc, OSXTLBFETCH, &host, &physical);
 		if (status == OSXACCESSFAULT)
 			return 0;
 		if (status == OSXACCESSBUS) {
-			OsxCpuRaiseException(cpu, OSXVECTORMACHINECHECK, 0, cpu->pc);
+			OsxGuestCpuRaiseException(cpu, OSXVECTORMACHINECHECK, 0, cpu->pc);
 			return 0;
 		}
 		cpu->fetchhost = host - (cpu->pc & 0xfff);
@@ -970,23 +970,23 @@ int OsxCpuFetchPage(OsxCpu *cpu)
 	return 1;
 }
 
-int OsxCpuAddHook(OsxCpu *cpu, uint32 address, OsxHookFunction function, void *context)
+int OsxGuestCpuAddHook(OsxCpu *cpu, uint32 address, OsxHookFunction function, void *context)
 {
 	OsxHook *hook;
 	if (cpu->hookcount >= OSXMAXHOOKS || address + 4 > cpu->ramsize)
 		return 0;
 	hook = &cpu->hooks[cpu->hookcount];
 	hook->address = address;
-	hook->original = LoadHost32(cpu->ram + address);
+	hook->original = OsxGuestLoadHost32(cpu->ram + address);
 	hook->function = function;
 	hook->context = context;
-	StoreHost32(cpu->ram + address, OSXHOOKOPCODE | (uint32)cpu->hookcount);
-	OsxJitInvalidate(cpu, address, 4);
+	OsxGuestStoreHost32(cpu->ram + address, OSXHOOKOPCODE | (uint32)cpu->hookcount);
+	OsxGuestJitInvalidate(cpu, address, 4);
 	cpu->hookcount++;
 	return 1;
 }
 
-static OSXFORCEINLINE void SetCr0(OsxCpu *cpu, uint32 result)
+static OSXFORCEINLINE void OsxGuestSetCr0(OsxCpu *cpu, uint32 result)
 {
 	uint32 field;
 	if ((int32)result < 0)
@@ -999,19 +999,19 @@ static OSXFORCEINLINE void SetCr0(OsxCpu *cpu, uint32 result)
 	cpu->cr = (cpu->cr & 0x0fffffff) | (field << 28);
 }
 
-static OSXFORCEINLINE void SetCrField(OsxCpu *cpu, int field, uint32 value)
+static OSXFORCEINLINE void OsxGuestSetCrField(OsxCpu *cpu, int field, uint32 value)
 {
 	int shift;
 	shift = (7 - field) * 4;
 	cpu->cr = (cpu->cr & ~(0xfu << shift)) | (value << shift);
 }
 
-static OSXFORCEINLINE uint32 CrBit(OsxCpu *cpu, int bit)
+static OSXFORCEINLINE uint32 OsxGuestCrBit(OsxCpu *cpu, int bit)
 {
 	return (cpu->cr >> (31 - bit)) & 1;
 }
 
-static OSXFORCEINLINE void SetCrBit(OsxCpu *cpu, int bit, uint32 value)
+static OSXFORCEINLINE void OsxGuestSetCrBit(OsxCpu *cpu, int bit, uint32 value)
 {
 	uint32 mask;
 	mask = 0x80000000u >> bit;
@@ -1021,7 +1021,7 @@ static OSXFORCEINLINE void SetCrBit(OsxCpu *cpu, int bit, uint32 value)
 		cpu->cr &= ~mask;
 }
 
-static OSXFORCEINLINE void SetCarry(OsxCpu *cpu, int carry)
+static OSXFORCEINLINE void OsxGuestSetCarry(OsxCpu *cpu, int carry)
 {
 	if (carry)
 		cpu->xer |= OSXXERCA;
@@ -1029,7 +1029,7 @@ static OSXFORCEINLINE void SetCarry(OsxCpu *cpu, int carry)
 		cpu->xer &= ~OSXXERCA;
 }
 
-static OSXFORCEINLINE void SetOverflow(OsxCpu *cpu, int overflow)
+static OSXFORCEINLINE void OsxGuestSetOverflow(OsxCpu *cpu, int overflow)
 {
 	if (overflow)
 		cpu->xer |= OSXXEROV | OSXXERSO;
@@ -1037,7 +1037,7 @@ static OSXFORCEINLINE void SetOverflow(OsxCpu *cpu, int overflow)
 		cpu->xer &= ~OSXXEROV;
 }
 
-static OSXFORCEINLINE uint32 RotateLeft(uint32 value, uint32 count)
+static OSXFORCEINLINE uint32 OsxGuestRotateLeft(uint32 value, uint32 count)
 {
 	count &= 31;
 	if (count == 0)
@@ -1045,7 +1045,7 @@ static OSXFORCEINLINE uint32 RotateLeft(uint32 value, uint32 count)
 	return (value << count) | (value >> (32 - count));
 }
 
-static OSXFORCEINLINE uint32 RotateMask(uint32 begin, uint32 end)
+static OSXFORCEINLINE uint32 OsxGuestRotateMask(uint32 begin, uint32 end)
 {
 	uint32 first;
 	uint32 last;
@@ -1056,7 +1056,7 @@ static OSXFORCEINLINE uint32 RotateMask(uint32 begin, uint32 end)
 	return first | last;
 }
 
-static uint32 CountLeadingZeros(uint32 value)
+static uint32 OsxGuestCountLeadingZeros(uint32 value)
 {
 	uint32 count;
 	if (value == 0)
@@ -1069,58 +1069,58 @@ static uint32 CountLeadingZeros(uint32 value)
 	return count;
 }
 
-static void ProgramException(OsxCpu *cpu, uint32 reason)
+static void OsxGuestProgramException(OsxCpu *cpu, uint32 reason)
 {
-	OsxCpuRaiseException(cpu, OSXVECTORPROGRAM, reason, cpu->pc);
+	OsxGuestCpuRaiseException(cpu, OSXVECTORPROGRAM, reason, cpu->pc);
 }
 
-static void IllegalInstruction(OsxCpu *cpu, uint32 instruction)
+static void OsxGuestIllegalInstruction(OsxCpu *cpu, uint32 instruction)
 {
 	if (cpu->logfile && !(cpu->msr & OSXMSRPR))
 		fprintf(cpu->logfile, "illegal instruction %08x at %08x\n", instruction, cpu->pc);
-	ProgramException(cpu, OSXPROGRAMILLEGAL);
+	OsxGuestProgramException(cpu, OSXPROGRAMILLEGAL);
 }
 
-static inline int RequireSupervisor(OsxCpu *cpu)
+static inline int OsxGuestRequireSupervisor(OsxCpu *cpu)
 {
 	if (cpu->msr & OSXMSRPR) {
-		ProgramException(cpu, OSXPROGRAMPRIVILEGED);
+		OsxGuestProgramException(cpu, OSXPROGRAMPRIVILEGED);
 		return 0;
 	}
 	return 1;
 }
 
-static inline int RequireFloat(OsxCpu *cpu)
+static inline int OsxGuestRequireFloat(OsxCpu *cpu)
 {
 	if (!(cpu->msr & OSXMSRFP)) {
-		OsxCpuRaiseException(cpu, OSXVECTORFPUNAVAILABLE, 0, cpu->pc);
+		OsxGuestCpuRaiseException(cpu, OSXVECTORFPUNAVAILABLE, 0, cpu->pc);
 		return 0;
 	}
 	return 1;
 }
 
-static uint32 AddExtended(OsxCpu *cpu, uint32 left, uint32 right, uint32 carryin, int instruction)
+static uint32 OsxGuestAddExtended(OsxCpu *cpu, uint32 left, uint32 right, uint32 carryin, int instruction)
 {
 	uint64 sum;
 	uint32 result;
 	sum = (uint64)left + right + carryin;
 	result = (uint32)sum;
-	SetCarry(cpu, (int)(sum >> 32));
+	OsxGuestSetCarry(cpu, (int)(sum >> 32));
 	if (instruction & 0x400)
-		SetOverflow(cpu, (int)((~(left ^ right) & (left ^ result)) >> 31));
+		OsxGuestSetOverflow(cpu, (int)((~(left ^ right) & (left ^ result)) >> 31));
 	return result;
 }
 
-static uint32 AddPlain(OsxCpu *cpu, uint32 left, uint32 right, int instruction)
+static uint32 OsxGuestAddPlain(OsxCpu *cpu, uint32 left, uint32 right, int instruction)
 {
 	uint32 result;
 	result = left + right;
 	if (instruction & 0x400)
-		SetOverflow(cpu, (int)((~(left ^ right) & (left ^ result)) >> 31));
+		OsxGuestSetOverflow(cpu, (int)((~(left ^ right) & (left ^ result)) >> 31));
 	return result;
 }
 
-static OSXFORCEINLINE void CompareSigned(OsxCpu *cpu, int field, int32 left, int32 right)
+static OSXFORCEINLINE void OsxGuestCompareSigned(OsxCpu *cpu, int field, int32 left, int32 right)
 {
 	uint32 value;
 	if (left < right)
@@ -1129,10 +1129,10 @@ static OSXFORCEINLINE void CompareSigned(OsxCpu *cpu, int field, int32 left, int
 		value = 4;
 	else
 		value = 2;
-	SetCrField(cpu, field, value | (cpu->xer >> 31));
+	OsxGuestSetCrField(cpu, field, value | (cpu->xer >> 31));
 }
 
-static OSXFORCEINLINE void CompareUnsigned(OsxCpu *cpu, int field, uint32 left, uint32 right)
+static OSXFORCEINLINE void OsxGuestCompareUnsigned(OsxCpu *cpu, int field, uint32 left, uint32 right)
 {
 	uint32 value;
 	if (left < right)
@@ -1141,10 +1141,10 @@ static OSXFORCEINLINE void CompareUnsigned(OsxCpu *cpu, int field, uint32 left, 
 		value = 4;
 	else
 		value = 2;
-	SetCrField(cpu, field, value | (cpu->xer >> 31));
+	OsxGuestSetCrField(cpu, field, value | (cpu->xer >> 31));
 }
 
-static OSXFORCEINLINE int BranchConditionTaken(OsxCpu *cpu, uint32 options, uint32 bit)
+static OSXFORCEINLINE int OsxGuestBranchConditionTaken(OsxCpu *cpu, uint32 options, uint32 bit)
 {
 	int counterok;
 	int conditionok;
@@ -1160,24 +1160,24 @@ static OSXFORCEINLINE int BranchConditionTaken(OsxCpu *cpu, uint32 options, uint
 	if (options & 16)
 		conditionok = 1;
 	else
-		conditionok = CrBit(cpu, (int)bit) == ((options >> 3) & 1);
+		conditionok = OsxGuestCrBit(cpu, (int)bit) == ((options >> 3) & 1);
 	return counterok && conditionok;
 }
 
-static uint32 ReadTimebaseRegister(OsxCpu *cpu, uint32 number)
+static uint32 OsxGuestReadTimebaseRegister(OsxCpu *cpu, uint32 number)
 {
 	uint64 timebase;
-	timebase = OsxCpuTimebase(cpu);
+	timebase = OsxGuestCpuTimebase(cpu);
 	if (number == 269)
 		return (uint32)(timebase >> 32);
 	return (uint32)timebase;
 }
 
-static void WriteTimebase(OsxCpu *cpu, uint32 number, uint32 value)
+static void OsxGuestWriteTimebase(OsxCpu *cpu, uint32 number, uint32 value)
 {
 	uint64 current;
 	uint64 wanted;
-	current = OsxCpuTimebase(cpu);
+	current = OsxGuestCpuTimebase(cpu);
 	if (number == 285)
 		wanted = ((uint64)value << 32) | (current & 0xffffffffu);
 	else
@@ -1188,17 +1188,17 @@ static void WriteTimebase(OsxCpu *cpu, uint32 number, uint32 value)
 	cpu->decstamp += wanted - current;
 }
 
-static void WriteDecrementer(OsxCpu *cpu, uint32 value)
+static void OsxGuestWriteDecrementer(OsxCpu *cpu, uint32 value)
 {
 	cpu->decvalue = value;
-	cpu->decstamp = OsxCpuTimebase(cpu);
+	cpu->decstamp = OsxGuestCpuTimebase(cpu);
 	if ((int32)value >= 0)
 		cpu->decdeadline = cpu->decstamp + value + 1;
 	else
 		cpu->decdeadline = OSXNEVER;
 }
 
-static int ReadSpr(OsxCpu *cpu, uint32 number, uint32 *value)
+static int OsxGuestReadSpr(OsxCpu *cpu, uint32 number, uint32 *value)
 {
 	switch (number) {
 	case 1: *value = cpu->xer; return 1;
@@ -1206,11 +1206,11 @@ static int ReadSpr(OsxCpu *cpu, uint32 number, uint32 *value)
 	case 9: *value = cpu->ctr; return 1;
 	case 18: *value = cpu->dsisr; return 1;
 	case 19: *value = cpu->dar; return 1;
-	case 22: *value = (uint32)(cpu->decvalue - (uint32)(OsxCpuTimebase(cpu) - cpu->decstamp)); return 1;
+	case 22: *value = (uint32)(cpu->decvalue - (uint32)(OsxGuestCpuTimebase(cpu) - cpu->decstamp)); return 1;
 	case 25: *value = cpu->sdr1; return 1;
 	case 26: *value = cpu->srr0; return 1;
 	case 27: *value = cpu->srr1; return 1;
-	case 268: case 269: *value = ReadTimebaseRegister(cpu, number); return 1;
+	case 268: case 269: *value = OsxGuestReadTimebaseRegister(cpu, number); return 1;
 	case 272: case 273: case 274: case 275: *value = cpu->sprg[number - 272]; return 1;
 	case 282: *value = cpu->ear; return 1;
 	case 256: *value = cpu->vrsave; return 1;
@@ -1245,7 +1245,7 @@ static int ReadSpr(OsxCpu *cpu, uint32 number, uint32 *value)
 	return 0;
 }
 
-static int WriteSpr(OsxCpu *cpu, uint32 number, uint32 value)
+static int OsxGuestWriteSpr(OsxCpu *cpu, uint32 number, uint32 value)
 {
 	switch (number) {
 	case 1: cpu->xer = value & 0xe000007f; return 1;
@@ -1253,11 +1253,11 @@ static int WriteSpr(OsxCpu *cpu, uint32 number, uint32 value)
 	case 9: cpu->ctr = value; return 1;
 	case 18: cpu->dsisr = value; return 1;
 	case 19: cpu->dar = value; return 1;
-	case 22: WriteDecrementer(cpu, value); return 1;
+	case 22: OsxGuestWriteDecrementer(cpu, value); return 1;
 	case 25:
 		if (cpu->sdr1 != value) {
 			cpu->sdr1 = value;
-			OsxCpuFlushTlb(cpu);
+			OsxGuestCpuFlushTlb(cpu);
 		}
 		return 1;
 	case 26: cpu->srr0 = value; return 1;
@@ -1265,17 +1265,17 @@ static int WriteSpr(OsxCpu *cpu, uint32 number, uint32 value)
 	case 272: case 273: case 274: case 275: cpu->sprg[number - 272] = value; return 1;
 	case 256: cpu->vrsave = value; return 1;
 	case 282: cpu->ear = value; return 1;
-	case 284: case 285: WriteTimebase(cpu, number, value); return 1;
+	case 284: case 285: OsxGuestWriteTimebase(cpu, number, value); return 1;
 	case 528: case 529: case 530: case 531: case 532: case 533: case 534: case 535:
 		if (cpu->ibat[number - 528] != value) {
 			cpu->ibat[number - 528] = value;
-			OsxCpuFlushTlb(cpu);
+			OsxGuestCpuFlushTlb(cpu);
 		}
 		return 1;
 	case 536: case 537: case 538: case 539: case 540: case 541: case 542: case 543:
 		if (cpu->dbat[number - 536] != value) {
 			cpu->dbat[number - 536] = value;
-			OsxCpuFlushTlb(cpu);
+			OsxGuestCpuFlushTlb(cpu);
 		}
 		return 1;
 	case 952: cpu->mmcr[0] = value; return 1;
@@ -1297,14 +1297,14 @@ static int WriteSpr(OsxCpu *cpu, uint32 number, uint32 value)
 	return 0;
 }
 
-static void MoveFromSpr(OsxCpu *cpu, uint32 instruction)
+static void OsxGuestMoveFromSpr(OsxCpu *cpu, uint32 instruction)
 {
 	uint32 number;
 	uint32 value;
 	number = ((instruction >> 16) & 0x1f) | ((instruction >> 6) & 0x3e0);
-	if ((number & 0x10) && !RequireSupervisor(cpu))
+	if ((number & 0x10) && !OsxGuestRequireSupervisor(cpu))
 		return;
-	if (!ReadSpr(cpu, number, &value)) {
+	if (!OsxGuestReadSpr(cpu, number, &value)) {
 		if (cpu->logfile && !(cpu->msr & OSXMSRPR))
 			fprintf(cpu->logfile, "mfspr unknown %u at %08x\n", number, cpu->pc);
 		cpu->unknownspr = number;
@@ -1313,26 +1313,26 @@ static void MoveFromSpr(OsxCpu *cpu, uint32 instruction)
 	cpu->gpr[(instruction >> 21) & 31] = value;
 }
 
-static void MoveToSpr(OsxCpu *cpu, uint32 instruction)
+static void OsxGuestMoveToSpr(OsxCpu *cpu, uint32 instruction)
 {
 	uint32 number;
 	number = ((instruction >> 16) & 0x1f) | ((instruction >> 6) & 0x3e0);
-	if ((number & 0x10) && !RequireSupervisor(cpu))
+	if ((number & 0x10) && !OsxGuestRequireSupervisor(cpu))
 		return;
-	if (!WriteSpr(cpu, number, cpu->gpr[(instruction >> 21) & 31])) {
+	if (!OsxGuestWriteSpr(cpu, number, cpu->gpr[(instruction >> 21) & 31])) {
 		if (cpu->logfile && !(cpu->msr & OSXMSRPR))
 			fprintf(cpu->logfile, "mtspr unknown %u at %08x\n", number, cpu->pc);
 		cpu->unknownspr = number;
 	}
 }
 
-static void WriteMsr(OsxCpu *cpu, uint32 value)
+static void OsxGuestWriteMsr(OsxCpu *cpu, uint32 value)
 {
 	uint32 changed;
 	changed = cpu->msr ^ value;
 	cpu->msr = value;
 	if (changed & (OSXMSRPR | OSXMSRIR | OSXMSRDR)) {
-		OsxCpuUpdateModes(cpu);
+		OsxGuestCpuUpdateModes(cpu);
 		cpu->jitflush = 1;
 	}
 	if (changed & OSXMSRSE)
@@ -1348,7 +1348,7 @@ static void WriteMsr(OsxCpu *cpu, uint32 value)
 	}
 }
 
-static void StoreString(OsxCpu *cpu, uint32 address, int first, uint32 count)
+static void OsxGuestStoreString(OsxCpu *cpu, uint32 address, int first, uint32 count)
 {
 	uint32 index;
 	int reg;
@@ -1356,7 +1356,7 @@ static void StoreString(OsxCpu *cpu, uint32 address, int first, uint32 count)
 	reg = first;
 	shift = 24;
 	for (index = 0; index < count; index++) {
-		if (!Write8(cpu, address + index, (cpu->gpr[reg] >> shift) & 0xff))
+		if (!OsxGuestCpuWrite8(cpu, address + index, (cpu->gpr[reg] >> shift) & 0xff))
 			return;
 		if (shift == 0) {
 			shift = 24;
@@ -1367,7 +1367,7 @@ static void StoreString(OsxCpu *cpu, uint32 address, int first, uint32 count)
 	}
 }
 
-static void LoadString(OsxCpu *cpu, uint32 address, int first, uint32 count)
+static void OsxGuestLoadString(OsxCpu *cpu, uint32 address, int first, uint32 count)
 {
 	uint32 index;
 	uint32 byte;
@@ -1376,7 +1376,7 @@ static void LoadString(OsxCpu *cpu, uint32 address, int first, uint32 count)
 	reg = first;
 	shift = 24;
 	for (index = 0; index < count; index++) {
-		if (!Read8(cpu, address + index, &byte))
+		if (!OsxGuestCpuRead8(cpu, address + index, &byte))
 			return;
 		if (shift == 24)
 			cpu->gpr[reg] = byte << 24;
@@ -1391,24 +1391,24 @@ static void LoadString(OsxCpu *cpu, uint32 address, int first, uint32 count)
 	}
 }
 
-static void ZeroCacheBlock(OsxCpu *cpu, uint32 address)
+static void OsxGuestZeroCacheBlock(OsxCpu *cpu, uint32 address)
 {
 	uint8 *host;
 	uint32 physical;
 	int status;
 	int index;
 	address &= ~31u;
-	host = WriteHost(cpu, address, 0xfe0);
+	host = OsxGuestWriteHost(cpu, address, 0xfe0);
 	if (host) {
 		memset(host, 0, 32);
 		return;
 	}
-	status = AccessSlow(cpu, address, OSXTLBWRITE, &host, &physical);
+	status = OsxGuestAccessSlow(cpu, address, OSXTLBWRITE, &host, &physical);
 	if (status == OSXACCESSFAULT)
 		return;
 	if (status == OSXACCESSHOST) {
 		if (cpu->watchfile)
-			WatchWrite(cpu, physical, 32, 0);
+			OsxGuestWatchWrite(cpu, physical, 32, 0);
 		memset(host, 0, 32);
 		return;
 	}
@@ -1416,7 +1416,7 @@ static void ZeroCacheBlock(OsxCpu *cpu, uint32 address)
 		cpu->buswrite(cpu->buscontext, physical + index, 4, 0);
 }
 
-static uint64 SingleToDouble(uint32 word)
+static uint64 OsxGuestSingleToDouble(uint32 word)
 {
 	uint64 sign;
 	uint64 fraction;
@@ -1440,7 +1440,7 @@ static uint64 SingleToDouble(uint32 word)
 	return sign | ((uint64)(adjusted + 1023) << 52) | (fraction << 29);
 }
 
-static uint32 DoubleToSingle(uint64 bits)
+static uint32 OsxGuestDoubleToSingle(uint64 bits)
 {
 	uint32 exponent;
 	uint64 fraction;
@@ -1459,81 +1459,81 @@ static uint32 DoubleToSingle(uint64 bits)
 	return ((uint32)(bits >> 32) & 0x80000000u) | (uint32)((fraction >> 29) & 0x7fffff);
 }
 
-OSXJITABI uint64 OsxCpuSingleToDouble(uint32 word)
+OSXJITABI uint64 OsxGuestCpuSingleToDouble(uint32 word)
 {
-	return SingleToDouble(word);
+	return OsxGuestSingleToDouble(word);
 }
 
-OSXJITABI uint32 OsxCpuDoubleToSingle(uint64 bits)
+OSXJITABI uint32 OsxGuestCpuDoubleToSingle(uint64 bits)
 {
-	return DoubleToSingle(bits);
+	return OsxGuestDoubleToSingle(bits);
 }
 
-static OSXFORCEINLINE uint32 OffsetAddress(OsxCpu *cpu, uint32 opcode, int ra, uint32 base, uint32 offset)
+static OSXFORCEINLINE uint32 OsxGuestOffsetAddress(OsxCpu *cpu, uint32 opcode, int ra, uint32 base, uint32 offset)
 {
 	if (opcode & 1)
 		return cpu->gpr[ra] + offset;
 	return base + offset;
 }
 
-static OSXFORCEINLINE void UpdateBase(OsxCpu *cpu, uint32 opcode, int ra, uint32 address)
+static OSXFORCEINLINE void OsxGuestUpdateBase(OsxCpu *cpu, uint32 opcode, int ra, uint32 address)
 {
 	if (opcode & 1)
 		cpu->gpr[ra] = address;
 }
 
-static void ExecuteFloatLoadStore(OsxCpu *cpu, uint32 instruction, uint32 opcode, uint32 address)
+static void OsxGuestExecuteFloatLoadStore(OsxCpu *cpu, uint32 instruction, uint32 opcode, uint32 address)
 {
 	uint32 value;
 	uint64 wide;
 	int target;
-	if (!RequireFloat(cpu))
+	if (!OsxGuestRequireFloat(cpu))
 		return;
 	target = (instruction >> 21) & 31;
 	switch (opcode & ~1u) {
 	case 48:
-		if (!Read32(cpu, address, &value))
+		if (!OsxGuestCpuRead32(cpu, address, &value))
 			return;
-		cpu->fpr[target].bits = SingleToDouble(value);
+		cpu->fpr[target].bits = OsxGuestSingleToDouble(value);
 		break;
 	case 50:
-		if (!Read64(cpu, address, &wide))
+		if (!OsxGuestRead64(cpu, address, &wide))
 			return;
 		cpu->fpr[target].bits = wide;
 		break;
 	case 52:
-		if (!Write32(cpu, address, DoubleToSingle(cpu->fpr[target].bits)))
+		if (!OsxGuestCpuWrite32(cpu, address, OsxGuestDoubleToSingle(cpu->fpr[target].bits)))
 			return;
 		break;
 	case 54:
-		if (!Write64(cpu, address, cpu->fpr[target].bits))
+		if (!OsxGuestWrite64(cpu, address, cpu->fpr[target].bits))
 			return;
 		break;
 	}
-	UpdateBase(cpu, opcode, (instruction >> 16) & 31, address);
+	OsxGuestUpdateBase(cpu, opcode, (instruction >> 16) & 31, address);
 }
 
-static void LoadMultiple(OsxCpu *cpu, uint32 instruction, uint32 address)
+static void OsxGuestLoadMultiple(OsxCpu *cpu, uint32 instruction, uint32 address)
 {
 	int first;
 	int reg;
 	first = (instruction >> 21) & 31;
 	for (reg = first; reg < 32; reg++)
-		if (!Read32(cpu, address + (uint32)(reg - first) * 4, &cpu->gpr[reg]))
+		if (!OsxGuestCpuRead32(cpu, address + (uint32)(reg - first) * 4, &cpu->gpr[reg]))
 			return;
 }
 
-static void StoreMultiple(OsxCpu *cpu, uint32 instruction, uint32 address)
+static void OsxGuestStoreMultiple(OsxCpu *cpu, uint32 instruction, uint32 address)
 {
 	int first;
 	int reg;
 	first = (instruction >> 21) & 31;
 	for (reg = first; reg < 32; reg++)
-		if (!Write32(cpu, address + (uint32)(reg - first) * 4, cpu->gpr[reg]))
+		if (!OsxGuestCpuWrite32(cpu, address + (uint32)(reg - first) * 4, cpu->gpr[reg]))
 			return;
 }
 
-static void ExecuteGroup19(OsxCpu *cpu, uint32 instruction)
+static void OsxGuestExecuteGroup19(OsxCpu *cpu, uint32 instruction)
 {
 	uint32 extended;
 	uint32 target;
@@ -1547,31 +1547,31 @@ static void ExecuteGroup19(OsxCpu *cpu, uint32 instruction)
 	bitd = (instruction >> 21) & 31;
 	bita = (instruction >> 16) & 31;
 	bitb = (instruction >> 11) & 31;
-	left = CrBit(cpu, bita);
-	right = CrBit(cpu, bitb);
+	left = OsxGuestCrBit(cpu, bita);
+	right = OsxGuestCrBit(cpu, bitb);
 	switch (extended) {
 	case 0:
-		SetCrField(cpu, bitd >> 2, (cpu->cr >> ((7 - (bita >> 2)) * 4)) & 0xf);
+		OsxGuestSetCrField(cpu, bitd >> 2, (cpu->cr >> ((7 - (bita >> 2)) * 4)) & 0xf);
 		return;
 	case 16:
 		target = cpu->lr & ~3u;
-		if (BranchConditionTaken(cpu, (uint32)bitd, (uint32)bita))
+		if (OsxGuestBranchConditionTaken(cpu, (uint32)bitd, (uint32)bita))
 			cpu->nextpc = target;
 		if (instruction & 1)
 			cpu->lr = cpu->pc + 4;
 		return;
 	case 528:
 		target = cpu->ctr & ~3u;
-		if (BranchConditionTaken(cpu, (uint32)bitd | 4, (uint32)bita))
+		if (OsxGuestBranchConditionTaken(cpu, (uint32)bitd | 4, (uint32)bita))
 			cpu->nextpc = target;
 		if (instruction & 1)
 			cpu->lr = cpu->pc + 4;
 		return;
 	case 50:
-		if (!RequireSupervisor(cpu))
+		if (!OsxGuestRequireSupervisor(cpu))
 			return;
 		cpu->nextpc = cpu->srr0 & ~3u;
-		WriteMsr(cpu, (cpu->srr1 & OSXMSRSAVED) | (cpu->msr & OSXMSRILE));
+		OsxGuestWriteMsr(cpu, (cpu->srr1 & OSXMSRSAVED) | (cpu->msr & OSXMSRILE));
 		if ((cpu->msr & OSXMSREE) && (cpu->externalline || cpu->decpending))
 			cpu->slice = 0;
 		return;
@@ -1586,13 +1586,13 @@ static void ExecuteGroup19(OsxCpu *cpu, uint32 instruction)
 	case 417: result = left | !right; break;
 	case 449: result = left | right; break;
 	default:
-		IllegalInstruction(cpu, instruction);
+		OsxGuestIllegalInstruction(cpu, instruction);
 		return;
 	}
-	SetCrBit(cpu, bitd, result);
+	OsxGuestSetCrBit(cpu, bitd, result);
 }
 
-static void TrapCheck(OsxCpu *cpu, uint32 options, uint32 left, uint32 right)
+static void OsxGuestTrapCheck(OsxCpu *cpu, uint32 options, uint32 left, uint32 right)
 {
 	int trap;
 	trap = 0;
@@ -1607,10 +1607,10 @@ static void TrapCheck(OsxCpu *cpu, uint32 options, uint32 left, uint32 right)
 	if ((options & 1) && left > right)
 		trap = 1;
 	if (trap)
-		ProgramException(cpu, OSXPROGRAMTRAP);
+		OsxGuestProgramException(cpu, OSXPROGRAMTRAP);
 }
 
-static void ExecuteGroup31(OsxCpu *cpu, uint32 instruction)
+static void OsxGuestExecuteGroup31(OsxCpu *cpu, uint32 instruction)
 {
 	uint32 extended;
 	int rd;
@@ -1639,60 +1639,60 @@ static void ExecuteGroup31(OsxCpu *cpu, uint32 instruction)
 		address = operand;
 	switch (extended) {
 	case 0:
-		CompareSigned(cpu, rd >> 2, (int32)cpu->gpr[ra], (int32)operand);
+		OsxGuestCompareSigned(cpu, rd >> 2, (int32)cpu->gpr[ra], (int32)operand);
 		return;
 	case 32:
-		CompareUnsigned(cpu, rd >> 2, cpu->gpr[ra], operand);
+		OsxGuestCompareUnsigned(cpu, rd >> 2, cpu->gpr[ra], operand);
 		return;
 	case 4:
-		TrapCheck(cpu, (uint32)rd, cpu->gpr[ra], operand);
+		OsxGuestTrapCheck(cpu, (uint32)rd, cpu->gpr[ra], operand);
 		return;
 	case 8: case 520:
-		result = AddExtended(cpu, ~cpu->gpr[ra], operand, 1, (int)instruction);
+		result = OsxGuestAddExtended(cpu, ~cpu->gpr[ra], operand, 1, (int)instruction);
 		cpu->gpr[rd] = result;
 		break;
 	case 10: case 522:
-		result = AddExtended(cpu, cpu->gpr[ra], operand, 0, (int)instruction);
+		result = OsxGuestAddExtended(cpu, cpu->gpr[ra], operand, 0, (int)instruction);
 		cpu->gpr[rd] = result;
 		break;
 	case 136: case 648:
-		result = AddExtended(cpu, ~cpu->gpr[ra], operand, (cpu->xer >> 29) & 1, (int)instruction);
+		result = OsxGuestAddExtended(cpu, ~cpu->gpr[ra], operand, (cpu->xer >> 29) & 1, (int)instruction);
 		cpu->gpr[rd] = result;
 		break;
 	case 138: case 650:
-		result = AddExtended(cpu, cpu->gpr[ra], operand, (cpu->xer >> 29) & 1, (int)instruction);
+		result = OsxGuestAddExtended(cpu, cpu->gpr[ra], operand, (cpu->xer >> 29) & 1, (int)instruction);
 		cpu->gpr[rd] = result;
 		break;
 	case 200: case 712:
-		result = AddExtended(cpu, ~cpu->gpr[ra], 0, (cpu->xer >> 29) & 1, (int)instruction);
+		result = OsxGuestAddExtended(cpu, ~cpu->gpr[ra], 0, (cpu->xer >> 29) & 1, (int)instruction);
 		cpu->gpr[rd] = result;
 		break;
 	case 202: case 714:
-		result = AddExtended(cpu, cpu->gpr[ra], 0, (cpu->xer >> 29) & 1, (int)instruction);
+		result = OsxGuestAddExtended(cpu, cpu->gpr[ra], 0, (cpu->xer >> 29) & 1, (int)instruction);
 		cpu->gpr[rd] = result;
 		break;
 	case 232: case 744:
-		result = AddExtended(cpu, ~cpu->gpr[ra], 0xffffffffu, (cpu->xer >> 29) & 1, (int)instruction);
+		result = OsxGuestAddExtended(cpu, ~cpu->gpr[ra], 0xffffffffu, (cpu->xer >> 29) & 1, (int)instruction);
 		cpu->gpr[rd] = result;
 		break;
 	case 234: case 746:
-		result = AddExtended(cpu, cpu->gpr[ra], 0xffffffffu, (cpu->xer >> 29) & 1, (int)instruction);
+		result = OsxGuestAddExtended(cpu, cpu->gpr[ra], 0xffffffffu, (cpu->xer >> 29) & 1, (int)instruction);
 		cpu->gpr[rd] = result;
 		break;
 	case 40: case 552:
 		result = operand - cpu->gpr[ra];
 		if (instruction & 0x400)
-			SetOverflow(cpu, (int)(((cpu->gpr[ra] ^ operand) & (operand ^ result)) >> 31));
+			OsxGuestSetOverflow(cpu, (int)(((cpu->gpr[ra] ^ operand) & (operand ^ result)) >> 31));
 		cpu->gpr[rd] = result;
 		break;
 	case 266: case 778:
-		result = AddPlain(cpu, cpu->gpr[ra], operand, (int)instruction);
+		result = OsxGuestAddPlain(cpu, cpu->gpr[ra], operand, (int)instruction);
 		cpu->gpr[rd] = result;
 		break;
 	case 104: case 616:
 		result = 0u - cpu->gpr[ra];
 		if (instruction & 0x400)
-			SetOverflow(cpu, cpu->gpr[ra] == 0x80000000u);
+			OsxGuestSetOverflow(cpu, cpu->gpr[ra] == 0x80000000u);
 		cpu->gpr[rd] = result;
 		break;
 	case 11:
@@ -1709,7 +1709,7 @@ static void ExecuteGroup31(OsxCpu *cpu, uint32 instruction)
 		product = (int64)(int32)cpu->gpr[ra] * (int64)(int32)operand;
 		result = (uint32)product;
 		if (instruction & 0x400)
-			SetOverflow(cpu, product != (int64)(int32)result);
+			OsxGuestSetOverflow(cpu, product != (int64)(int32)result);
 		cpu->gpr[rd] = result;
 		break;
 	case 491: case 1003:
@@ -1719,11 +1719,11 @@ static void ExecuteGroup31(OsxCpu *cpu, uint32 instruction)
 			else
 				result = 0;
 			if (instruction & 0x400)
-				SetOverflow(cpu, 1);
+				OsxGuestSetOverflow(cpu, 1);
 		} else {
 			result = (uint32)((int32)cpu->gpr[ra] / (int32)operand);
 			if (instruction & 0x400)
-				SetOverflow(cpu, 0);
+				OsxGuestSetOverflow(cpu, 0);
 		}
 		cpu->gpr[rd] = result;
 		break;
@@ -1731,11 +1731,11 @@ static void ExecuteGroup31(OsxCpu *cpu, uint32 instruction)
 		if (operand == 0) {
 			result = 0;
 			if (instruction & 0x400)
-				SetOverflow(cpu, 1);
+				OsxGuestSetOverflow(cpu, 1);
 		} else {
 			result = cpu->gpr[ra] / operand;
 			if (instruction & 0x400)
-				SetOverflow(cpu, 0);
+				OsxGuestSetOverflow(cpu, 0);
 		}
 		cpu->gpr[rd] = result;
 		break;
@@ -1749,7 +1749,7 @@ static void ExecuteGroup31(OsxCpu *cpu, uint32 instruction)
 	case 284: result = ~(source ^ operand); cpu->gpr[ra] = result; break;
 	case 954: result = (uint32)(int32)(int8)source; cpu->gpr[ra] = result; break;
 	case 922: result = (uint32)(int32)(int16)source; cpu->gpr[ra] = result; break;
-	case 26: result = CountLeadingZeros(source); cpu->gpr[ra] = result; break;
+	case 26: result = OsxGuestCountLeadingZeros(source); cpu->gpr[ra] = result; break;
 	case 24:
 		shift = operand & 0x3f;
 		if (shift > 31)
@@ -1773,13 +1773,13 @@ static void ExecuteGroup31(OsxCpu *cpu, uint32 instruction)
 				result = 0xffffffffu;
 			else
 				result = 0;
-			SetCarry(cpu, (int32)source < 0);
+			OsxGuestSetCarry(cpu, (int32)source < 0);
 		} else if (shift == 0) {
 			result = source;
-			SetCarry(cpu, 0);
+			OsxGuestSetCarry(cpu, 0);
 		} else {
 			result = (uint32)((int32)source >> shift);
-			SetCarry(cpu, (int32)source < 0 && (source & ((1u << shift) - 1)) != 0);
+			OsxGuestSetCarry(cpu, (int32)source < 0 && (source & ((1u << shift) - 1)) != 0);
 		}
 		cpu->gpr[ra] = result;
 		break;
@@ -1787,10 +1787,10 @@ static void ExecuteGroup31(OsxCpu *cpu, uint32 instruction)
 		shift = (uint32)rb;
 		if (shift == 0) {
 			result = source;
-			SetCarry(cpu, 0);
+			OsxGuestSetCarry(cpu, 0);
 		} else {
 			result = (uint32)((int32)source >> shift);
-			SetCarry(cpu, (int32)source < 0 && (source & ((1u << shift) - 1)) != 0);
+			OsxGuestSetCarry(cpu, (int32)source < 0 && (source & ((1u << shift) - 1)) != 0);
 		}
 		cpu->gpr[ra] = result;
 		break;
@@ -1805,40 +1805,40 @@ static void ExecuteGroup31(OsxCpu *cpu, uint32 instruction)
 		cpu->cr = (cpu->cr & ~mask) | (source & mask);
 		return;
 	case 512:
-		SetCrField(cpu, rd >> 2, cpu->xer >> 28);
+		OsxGuestSetCrField(cpu, rd >> 2, cpu->xer >> 28);
 		cpu->xer &= 0x0fffffffu;
 		return;
 	case 83:
-		if (!RequireSupervisor(cpu))
+		if (!OsxGuestRequireSupervisor(cpu))
 			return;
 		cpu->gpr[rd] = cpu->msr;
 		return;
 	case 146:
-		if (!RequireSupervisor(cpu))
+		if (!OsxGuestRequireSupervisor(cpu))
 			return;
-		WriteMsr(cpu, source);
+		OsxGuestWriteMsr(cpu, source);
 		return;
 	case 339:
-		MoveFromSpr(cpu, instruction);
+		OsxGuestMoveFromSpr(cpu, instruction);
 		return;
 	case 467:
-		MoveToSpr(cpu, instruction);
+		OsxGuestMoveToSpr(cpu, instruction);
 		return;
 	case 371:
-		cpu->gpr[rd] = ReadTimebaseRegister(cpu, ((instruction >> 16) & 0x1f) | ((instruction >> 6) & 0x3e0));
+		cpu->gpr[rd] = OsxGuestReadTimebaseRegister(cpu, ((instruction >> 16) & 0x1f) | ((instruction >> 6) & 0x3e0));
 		return;
 	case 595:
-		if (!RequireSupervisor(cpu))
+		if (!OsxGuestRequireSupervisor(cpu))
 			return;
 		cpu->gpr[rd] = cpu->sr[ra & 15];
 		return;
 	case 659:
-		if (!RequireSupervisor(cpu))
+		if (!OsxGuestRequireSupervisor(cpu))
 			return;
 		cpu->gpr[rd] = cpu->sr[operand >> 28];
 		return;
 	case 210:
-		if (!RequireSupervisor(cpu))
+		if (!OsxGuestRequireSupervisor(cpu))
 			return;
 		cpu->sr[ra & 15] = source;
 		cpu->fetchtag = 0;
@@ -1846,7 +1846,7 @@ static void ExecuteGroup31(OsxCpu *cpu, uint32 instruction)
 			cpu->jitflush = 1;
 		return;
 	case 242:
-		if (!RequireSupervisor(cpu))
+		if (!OsxGuestRequireSupervisor(cpu))
 			return;
 		cpu->sr[operand >> 28] = source;
 		cpu->fetchtag = 0;
@@ -1854,41 +1854,41 @@ static void ExecuteGroup31(OsxCpu *cpu, uint32 instruction)
 			cpu->jitflush = 1;
 		return;
 	case 306:
-		if (!RequireSupervisor(cpu))
+		if (!OsxGuestRequireSupervisor(cpu))
 			return;
-		InvalidateTlbPage(cpu, operand);
+		OsxGuestInvalidateTlbPage(cpu, operand);
 		return;
 	case 370:
-		if (!RequireSupervisor(cpu))
+		if (!OsxGuestRequireSupervisor(cpu))
 			return;
-		OsxCpuFlushTlb(cpu);
+		OsxGuestCpuFlushTlb(cpu);
 		return;
 	case 566:
-		if (!RequireSupervisor(cpu))
+		if (!OsxGuestRequireSupervisor(cpu))
 			return;
 		return;
 	case 470:
-		if (!RequireSupervisor(cpu))
+		if (!OsxGuestRequireSupervisor(cpu))
 			return;
 		return;
 	case 54: case 86: case 246: case 278: case 598: case 758: case 854:
 		return;
 	case 982:
 		cpu->fetchtag = 0;
-		if (cpu->nativejit && OsxCpuTranslate(cpu, address, OSXTLBREAD, 1, &value) && OsxJitInvalidate(cpu, value & ~31u, 32))
+		if (cpu->nativejit && OsxGuestCpuTranslate(cpu, address, OSXTLBREAD, 1, &value) && OsxGuestJitInvalidate(cpu, value & ~31u, 32))
 			cpu->jitflush = 1;
 		return;
 	case 1014:
-		ZeroCacheBlock(cpu, address);
+		OsxGuestZeroCacheBlock(cpu, address);
 		return;
 	case 20:
 		if (address & 3) {
 			cpu->dar = address;
 			cpu->dsisr = 0;
-			OsxCpuRaiseException(cpu, OSXVECTORALIGNMENT, 0, cpu->pc);
+			OsxGuestCpuRaiseException(cpu, OSXVECTORALIGNMENT, 0, cpu->pc);
 			return;
 		}
-		if (!Read32(cpu, address, &value))
+		if (!OsxGuestCpuRead32(cpu, address, &value))
 			return;
 		cpu->reservation = address;
 		cpu->reservationvalid = 1;
@@ -1898,86 +1898,86 @@ static void ExecuteGroup31(OsxCpu *cpu, uint32 instruction)
 		if (address & 3) {
 			cpu->dar = address;
 			cpu->dsisr = 0;
-			OsxCpuRaiseException(cpu, OSXVECTORALIGNMENT, 0, cpu->pc);
+			OsxGuestCpuRaiseException(cpu, OSXVECTORALIGNMENT, 0, cpu->pc);
 			return;
 		}
 		if (cpu->reservationvalid && cpu->reservation == address) {
-			if (!Write32(cpu, address, source))
+			if (!OsxGuestCpuWrite32(cpu, address, source))
 				return;
 			cpu->reservationvalid = 0;
-			SetCrField(cpu, 0, 2 | (cpu->xer >> 31));
+			OsxGuestSetCrField(cpu, 0, 2 | (cpu->xer >> 31));
 		} else {
 			cpu->reservationvalid = 0;
-			SetCrField(cpu, 0, cpu->xer >> 31);
+			OsxGuestSetCrField(cpu, 0, cpu->xer >> 31);
 		}
 		return;
 	case 23: case 55:
-		if (!Read32(cpu, address, &value))
+		if (!OsxGuestCpuRead32(cpu, address, &value))
 			return;
 		cpu->gpr[rd] = value;
 		if (extended == 55)
 			cpu->gpr[ra] = address;
 		return;
 	case 87: case 119:
-		if (!Read8(cpu, address, &value))
+		if (!OsxGuestCpuRead8(cpu, address, &value))
 			return;
 		cpu->gpr[rd] = value;
 		if (extended == 119)
 			cpu->gpr[ra] = address;
 		return;
 	case 279: case 311:
-		if (!Read16(cpu, address, &value))
+		if (!OsxGuestCpuRead16(cpu, address, &value))
 			return;
 		cpu->gpr[rd] = value;
 		if (extended == 311)
 			cpu->gpr[ra] = address;
 		return;
 	case 343: case 375:
-		if (!Read16(cpu, address, &value))
+		if (!OsxGuestCpuRead16(cpu, address, &value))
 			return;
 		cpu->gpr[rd] = (uint32)(int32)(int16)value;
 		if (extended == 375)
 			cpu->gpr[ra] = address;
 		return;
 	case 151: case 183:
-		if (!Write32(cpu, address, source))
+		if (!OsxGuestCpuWrite32(cpu, address, source))
 			return;
 		if (extended == 183)
 			cpu->gpr[ra] = address;
 		return;
 	case 215: case 247:
-		if (!Write8(cpu, address, source))
+		if (!OsxGuestCpuWrite8(cpu, address, source))
 			return;
 		if (extended == 247)
 			cpu->gpr[ra] = address;
 		return;
 	case 407: case 439:
-		if (!Write16(cpu, address, source))
+		if (!OsxGuestCpuWrite16(cpu, address, source))
 			return;
 		if (extended == 439)
 			cpu->gpr[ra] = address;
 		return;
 	case 534:
-		if (!Read32(cpu, address, &value))
+		if (!OsxGuestCpuRead32(cpu, address, &value))
 			return;
 		cpu->gpr[rd] = bswap_32(value);
 		return;
 	case 790:
-		if (!Read16(cpu, address, &value))
+		if (!OsxGuestCpuRead16(cpu, address, &value))
 			return;
 		cpu->gpr[rd] = ((value & 0xff) << 8) | (value >> 8);
 		return;
 	case 662:
-		Write32(cpu, address, bswap_32(source));
+		OsxGuestCpuWrite32(cpu, address, bswap_32(source));
 		return;
 	case 918:
-		Write16(cpu, address, ((source & 0xff) << 8) | ((source >> 8) & 0xff));
+		OsxGuestCpuWrite16(cpu, address, ((source & 0xff) << 8) | ((source >> 8) & 0xff));
 		return;
 	case 533:
-		LoadString(cpu, address, rd, cpu->xer & 0x7f);
+		OsxGuestLoadString(cpu, address, rd, cpu->xer & 0x7f);
 		return;
 	case 661:
-		StoreString(cpu, address, rd, cpu->xer & 0x7f);
+		OsxGuestStoreString(cpu, address, rd, cpu->xer & 0x7f);
 		return;
 	case 597:
 		if (ra)
@@ -1985,9 +1985,9 @@ static void ExecuteGroup31(OsxCpu *cpu, uint32 instruction)
 		else
 			address = 0;
 		if (rb == 0)
-			LoadString(cpu, address, rd, 32);
+			OsxGuestLoadString(cpu, address, rd, 32);
 		else
-			LoadString(cpu, address, rd, (uint32)rb);
+			OsxGuestLoadString(cpu, address, rd, (uint32)rb);
 		return;
 	case 725:
 		if (ra)
@@ -1995,61 +1995,61 @@ static void ExecuteGroup31(OsxCpu *cpu, uint32 instruction)
 		else
 			address = 0;
 		if (rb == 0)
-			StoreString(cpu, address, rd, 32);
+			OsxGuestStoreString(cpu, address, rd, 32);
 		else
-			StoreString(cpu, address, rd, (uint32)rb);
+			OsxGuestStoreString(cpu, address, rd, (uint32)rb);
 		return;
 	case 535: case 567:
-		if (!RequireFloat(cpu) || !Read32(cpu, address, &value))
+		if (!OsxGuestRequireFloat(cpu) || !OsxGuestCpuRead32(cpu, address, &value))
 			return;
-		cpu->fpr[rd].bits = SingleToDouble(value);
+		cpu->fpr[rd].bits = OsxGuestSingleToDouble(value);
 		if (extended == 567)
 			cpu->gpr[ra] = address;
 		return;
 	case 599: case 631:
-		if (!RequireFloat(cpu) || !Read64(cpu, address, &wide))
+		if (!OsxGuestRequireFloat(cpu) || !OsxGuestRead64(cpu, address, &wide))
 			return;
 		cpu->fpr[rd].bits = wide;
 		if (extended == 631)
 			cpu->gpr[ra] = address;
 		return;
 	case 663: case 695:
-		if (!RequireFloat(cpu) || !Write32(cpu, address, DoubleToSingle(cpu->fpr[rd].bits)))
+		if (!OsxGuestRequireFloat(cpu) || !OsxGuestCpuWrite32(cpu, address, OsxGuestDoubleToSingle(cpu->fpr[rd].bits)))
 			return;
 		if (extended == 695)
 			cpu->gpr[ra] = address;
 		return;
 	case 727: case 759:
-		if (!RequireFloat(cpu) || !Write64(cpu, address, cpu->fpr[rd].bits))
+		if (!OsxGuestRequireFloat(cpu) || !OsxGuestWrite64(cpu, address, cpu->fpr[rd].bits))
 			return;
 		if (extended == 759)
 			cpu->gpr[ra] = address;
 		return;
 	case 983:
-		if (!RequireFloat(cpu))
+		if (!OsxGuestRequireFloat(cpu))
 			return;
-		Write32(cpu, address, (uint32)cpu->fpr[rd].bits);
+		OsxGuestCpuWrite32(cpu, address, (uint32)cpu->fpr[rd].bits);
 		return;
 	case 310:
-		if (!Read32(cpu, address, &value))
+		if (!OsxGuestCpuRead32(cpu, address, &value))
 			return;
 		cpu->gpr[rd] = value;
 		return;
 	case 438:
-		Write32(cpu, address, source);
+		OsxGuestCpuWrite32(cpu, address, source);
 		return;
 	default:
-		if (!OsxCpuExecuteVectorMemory(cpu, instruction, extended, address))
-			IllegalInstruction(cpu, instruction);
+		if (!OsxGuestCpuExecuteVectorMemory(cpu, instruction, extended, address))
+			OsxGuestIllegalInstruction(cpu, instruction);
 		return;
 	}
 	if (setcr)
-		SetCr0(cpu, result);
+		OsxGuestSetCr0(cpu, result);
 }
 
-static OSXFORCEINLINE void Execute(OsxCpu *cpu, uint32 instruction);
+static OSXFORCEINLINE void OsxGuestExecute(OsxCpu *cpu, uint32 instruction);
 
-static void ExecuteVectorQuad(OsxCpu *cpu, uint32 instruction)
+static void OsxGuestExecuteVectorQuad(OsxCpu *cpu, uint32 instruction)
 {
 	uint32 *vector;
 	uint32 address;
@@ -2060,50 +2060,50 @@ static void ExecuteVectorQuad(OsxCpu *cpu, uint32 instruction)
 	if (ra)
 		address += cpu->gpr[ra];
 	if (!cpu->altivec || !(cpu->msr & OSXMSRVEC)) {
-		OsxCpuExecuteVectorMemory(cpu, instruction, (instruction >> 1) & 0x3ff, address);
+		OsxGuestCpuExecuteVectorMemory(cpu, instruction, (instruction >> 1) & 0x3ff, address);
 		return;
 	}
 	address &= ~15u;
 	vector = cpu->vr[(instruction >> 21) & 31];
 	if (instruction & 0x100) {
-		host = WriteHost(cpu, address, 0xff0);
+		host = OsxGuestWriteHost(cpu, address, 0xff0);
 		if (host) {
-			StoreHost32(host, vector[0]);
-			StoreHost32(host + 4, vector[1]);
-			StoreHost32(host + 8, vector[2]);
-			StoreHost32(host + 12, vector[3]);
+			OsxGuestStoreHost32(host, vector[0]);
+			OsxGuestStoreHost32(host + 4, vector[1]);
+			OsxGuestStoreHost32(host + 8, vector[2]);
+			OsxGuestStoreHost32(host + 12, vector[3]);
 			return;
 		}
-		OsxCpuWriteQuad(cpu, address, vector);
+		OsxGuestCpuWriteQuad(cpu, address, vector);
 		return;
 	}
-	host = ReadHost(cpu, address, 0xff0);
+	host = OsxGuestReadHost(cpu, address, 0xff0);
 	if (host) {
-		vector[0] = LoadHost32(host);
-		vector[1] = LoadHost32(host + 4);
-		vector[2] = LoadHost32(host + 8);
-		vector[3] = LoadHost32(host + 12);
+		vector[0] = OsxGuestLoadHost32(host);
+		vector[1] = OsxGuestLoadHost32(host + 4);
+		vector[2] = OsxGuestLoadHost32(host + 8);
+		vector[3] = OsxGuestLoadHost32(host + 12);
 		return;
 	}
-	OsxCpuReadQuad(cpu, address, vector);
+	OsxGuestCpuReadQuad(cpu, address, vector);
 }
 
-static void ExecuteHook(OsxCpu *cpu, uint32 instruction)
+static void OsxGuestExecuteHook(OsxCpu *cpu, uint32 instruction)
 {
 	uint32 index;
 	OsxHook *hook;
 	index = instruction & 0x03ffffff;
 	if ((cpu->msr & OSXMSRPR) || index >= (uint32)cpu->hookcount) {
-		IllegalInstruction(cpu, instruction);
+		OsxGuestIllegalInstruction(cpu, instruction);
 		return;
 	}
 	hook = &cpu->hooks[index];
 	hook->function(cpu, hook->context, hook->address);
 	if (cpu->nextpc == cpu->pc + 4)
-		Execute(cpu, hook->original);
+		OsxGuestExecute(cpu, hook->original);
 }
 
-static OSXFORCEINLINE void Execute(OsxCpu *cpu, uint32 instruction)
+static OSXFORCEINLINE void OsxGuestExecute(OsxCpu *cpu, uint32 instruction)
 {
 	uint32 opcode;
 	int rd;
@@ -2129,10 +2129,10 @@ static OSXFORCEINLINE void Execute(OsxCpu *cpu, uint32 instruction)
 		base = 0;
 	switch (opcode) {
 	case 3:
-		TrapCheck(cpu, (uint32)rd, cpu->gpr[ra], signedimmediate);
+		OsxGuestTrapCheck(cpu, (uint32)rd, cpu->gpr[ra], signedimmediate);
 		return;
 	case 6:
-		ExecuteHook(cpu, instruction);
+		OsxGuestExecuteHook(cpu, instruction);
 		return;
 	case 7:
 		cpu->gpr[rd] = (uint32)((int32)cpu->gpr[ra] * (int32)signedimmediate);
@@ -2140,21 +2140,21 @@ static OSXFORCEINLINE void Execute(OsxCpu *cpu, uint32 instruction)
 	case 8:
 		sum = (uint64)(uint32)~cpu->gpr[ra] + signedimmediate + 1;
 		cpu->gpr[rd] = (uint32)sum;
-		SetCarry(cpu, (int)(sum >> 32));
+		OsxGuestSetCarry(cpu, (int)(sum >> 32));
 		return;
 	case 10:
-		CompareUnsigned(cpu, rd >> 2, cpu->gpr[ra], immediate);
+		OsxGuestCompareUnsigned(cpu, rd >> 2, cpu->gpr[ra], immediate);
 		return;
 	case 11:
-		CompareSigned(cpu, rd >> 2, (int32)cpu->gpr[ra], (int32)signedimmediate);
+		OsxGuestCompareSigned(cpu, rd >> 2, (int32)cpu->gpr[ra], (int32)signedimmediate);
 		return;
 	case 12:
 	case 13:
 		sum = (uint64)cpu->gpr[ra] + signedimmediate;
 		cpu->gpr[rd] = (uint32)sum;
-		SetCarry(cpu, (int)(sum >> 32));
+		OsxGuestSetCarry(cpu, (int)(sum >> 32));
 		if (opcode == 13)
-			SetCr0(cpu, (uint32)sum);
+			OsxGuestSetCr0(cpu, (uint32)sum);
 		return;
 	case 14:
 		cpu->gpr[rd] = base + signedimmediate;
@@ -2167,7 +2167,7 @@ static OSXFORCEINLINE void Execute(OsxCpu *cpu, uint32 instruction)
 			target = signedimmediate & ~3u;
 		else
 			target = cpu->pc + (signedimmediate & ~3u);
-		if (BranchConditionTaken(cpu, (uint32)rd, (uint32)ra))
+		if (OsxGuestBranchConditionTaken(cpu, (uint32)rd, (uint32)ra))
 			cpu->nextpc = target;
 		if (instruction & 1)
 			cpu->lr = cpu->pc + 4;
@@ -2175,7 +2175,7 @@ static OSXFORCEINLINE void Execute(OsxCpu *cpu, uint32 instruction)
 	case 17:
 		if (cpu->syscallobserver && cpu->syscallobserver(cpu, cpu->syscallcontext, instruction))
 			return;
-		OsxCpuRaiseException(cpu, OSXVECTORSYSCALL, 0, cpu->pc + 4);
+		OsxGuestCpuRaiseException(cpu, OSXVECTORSYSCALL, 0, cpu->pc + 4);
 		return;
 	case 18:
 		target = instruction & 0x03fffffc;
@@ -2188,29 +2188,29 @@ static OSXFORCEINLINE void Execute(OsxCpu *cpu, uint32 instruction)
 			cpu->lr = cpu->pc + 4;
 		return;
 	case 19:
-		ExecuteGroup19(cpu, instruction);
+		OsxGuestExecuteGroup19(cpu, instruction);
 		return;
 	case 20:
-		rotated = RotateLeft(cpu->gpr[rd], (instruction >> 11) & 31);
-		mask = RotateMask((instruction >> 6) & 31, (instruction >> 1) & 31);
+		rotated = OsxGuestRotateLeft(cpu->gpr[rd], (instruction >> 11) & 31);
+		mask = OsxGuestRotateMask((instruction >> 6) & 31, (instruction >> 1) & 31);
 		result = (rotated & mask) | (cpu->gpr[ra] & ~mask);
 		cpu->gpr[ra] = result;
 		if (instruction & 1)
-			SetCr0(cpu, result);
+			OsxGuestSetCr0(cpu, result);
 		return;
 	case 21:
-		rotated = RotateLeft(cpu->gpr[rd], (instruction >> 11) & 31);
-		result = rotated & RotateMask((instruction >> 6) & 31, (instruction >> 1) & 31);
+		rotated = OsxGuestRotateLeft(cpu->gpr[rd], (instruction >> 11) & 31);
+		result = rotated & OsxGuestRotateMask((instruction >> 6) & 31, (instruction >> 1) & 31);
 		cpu->gpr[ra] = result;
 		if (instruction & 1)
-			SetCr0(cpu, result);
+			OsxGuestSetCr0(cpu, result);
 		return;
 	case 23:
-		rotated = RotateLeft(cpu->gpr[rd], cpu->gpr[(instruction >> 11) & 31] & 31);
-		result = rotated & RotateMask((instruction >> 6) & 31, (instruction >> 1) & 31);
+		rotated = OsxGuestRotateLeft(cpu->gpr[rd], cpu->gpr[(instruction >> 11) & 31] & 31);
+		result = rotated & OsxGuestRotateMask((instruction >> 6) & 31, (instruction >> 1) & 31);
 		cpu->gpr[ra] = result;
 		if (instruction & 1)
-			SetCr0(cpu, result);
+			OsxGuestSetCr0(cpu, result);
 		return;
 	case 24:
 		cpu->gpr[ra] = cpu->gpr[rd] | immediate;
@@ -2227,111 +2227,111 @@ static OSXFORCEINLINE void Execute(OsxCpu *cpu, uint32 instruction)
 	case 28:
 		result = cpu->gpr[rd] & immediate;
 		cpu->gpr[ra] = result;
-		SetCr0(cpu, result);
+		OsxGuestSetCr0(cpu, result);
 		return;
 	case 29:
 		result = cpu->gpr[rd] & (immediate << 16);
 		cpu->gpr[ra] = result;
-		SetCr0(cpu, result);
+		OsxGuestSetCr0(cpu, result);
 		return;
 	case 4:
-		OsxCpuExecuteVector(cpu, instruction);
+		OsxGuestCpuExecuteVector(cpu, instruction);
 		return;
 	case 31:
 		if ((instruction & 0x7fe) == 0xce || (instruction & 0x7fe) == 0x1ce) {
-			ExecuteVectorQuad(cpu, instruction);
+			OsxGuestExecuteVectorQuad(cpu, instruction);
 			return;
 		}
-		ExecuteGroup31(cpu, instruction);
+		OsxGuestExecuteGroup31(cpu, instruction);
 		return;
 	case 32:
 	case 33:
-		address = OffsetAddress(cpu, opcode, ra, base, signedimmediate);
-		if (Read32(cpu, address, &value)) {
+		address = OsxGuestOffsetAddress(cpu, opcode, ra, base, signedimmediate);
+		if (OsxGuestCpuRead32(cpu, address, &value)) {
 			cpu->gpr[rd] = value;
-			UpdateBase(cpu, opcode, ra, address);
+			OsxGuestUpdateBase(cpu, opcode, ra, address);
 		}
 		return;
 	case 34:
 	case 35:
-		address = OffsetAddress(cpu, opcode, ra, base, signedimmediate);
-		if (Read8(cpu, address, &value)) {
+		address = OsxGuestOffsetAddress(cpu, opcode, ra, base, signedimmediate);
+		if (OsxGuestCpuRead8(cpu, address, &value)) {
 			cpu->gpr[rd] = value;
-			UpdateBase(cpu, opcode, ra, address);
+			OsxGuestUpdateBase(cpu, opcode, ra, address);
 		}
 		return;
 	case 40:
 	case 41:
-		address = OffsetAddress(cpu, opcode, ra, base, signedimmediate);
-		if (Read16(cpu, address, &value)) {
+		address = OsxGuestOffsetAddress(cpu, opcode, ra, base, signedimmediate);
+		if (OsxGuestCpuRead16(cpu, address, &value)) {
 			cpu->gpr[rd] = value;
-			UpdateBase(cpu, opcode, ra, address);
+			OsxGuestUpdateBase(cpu, opcode, ra, address);
 		}
 		return;
 	case 42:
 	case 43:
-		address = OffsetAddress(cpu, opcode, ra, base, signedimmediate);
-		if (Read16(cpu, address, &value)) {
+		address = OsxGuestOffsetAddress(cpu, opcode, ra, base, signedimmediate);
+		if (OsxGuestCpuRead16(cpu, address, &value)) {
 			cpu->gpr[rd] = (uint32)(int32)(int16)value;
-			UpdateBase(cpu, opcode, ra, address);
+			OsxGuestUpdateBase(cpu, opcode, ra, address);
 		}
 		return;
 	case 36:
 	case 37:
-		address = OffsetAddress(cpu, opcode, ra, base, signedimmediate);
-		if (Write32(cpu, address, cpu->gpr[rd]))
-			UpdateBase(cpu, opcode, ra, address);
+		address = OsxGuestOffsetAddress(cpu, opcode, ra, base, signedimmediate);
+		if (OsxGuestCpuWrite32(cpu, address, cpu->gpr[rd]))
+			OsxGuestUpdateBase(cpu, opcode, ra, address);
 		return;
 	case 38:
 	case 39:
-		address = OffsetAddress(cpu, opcode, ra, base, signedimmediate);
-		if (Write8(cpu, address, cpu->gpr[rd]))
-			UpdateBase(cpu, opcode, ra, address);
+		address = OsxGuestOffsetAddress(cpu, opcode, ra, base, signedimmediate);
+		if (OsxGuestCpuWrite8(cpu, address, cpu->gpr[rd]))
+			OsxGuestUpdateBase(cpu, opcode, ra, address);
 		return;
 	case 44:
 	case 45:
-		address = OffsetAddress(cpu, opcode, ra, base, signedimmediate);
-		if (Write16(cpu, address, cpu->gpr[rd]))
-			UpdateBase(cpu, opcode, ra, address);
+		address = OsxGuestOffsetAddress(cpu, opcode, ra, base, signedimmediate);
+		if (OsxGuestCpuWrite16(cpu, address, cpu->gpr[rd]))
+			OsxGuestUpdateBase(cpu, opcode, ra, address);
 		return;
 	case 48: case 49: case 50: case 51: case 52: case 53: case 54: case 55:
-		ExecuteFloatLoadStore(cpu, instruction, opcode, OffsetAddress(cpu, opcode, ra, base, signedimmediate));
+		OsxGuestExecuteFloatLoadStore(cpu, instruction, opcode, OsxGuestOffsetAddress(cpu, opcode, ra, base, signedimmediate));
 		return;
 	case 46:
-		LoadMultiple(cpu, instruction, base + signedimmediate);
+		OsxGuestLoadMultiple(cpu, instruction, base + signedimmediate);
 		return;
 	case 47:
-		StoreMultiple(cpu, instruction, base + signedimmediate);
+		OsxGuestStoreMultiple(cpu, instruction, base + signedimmediate);
 		return;
 	case 59:
 	case 63:
-		if (!RequireFloat(cpu))
+		if (!OsxGuestRequireFloat(cpu))
 			return;
-		OsxCpuExecuteFloat(cpu, instruction);
+		OsxGuestCpuExecuteFloat(cpu, instruction);
 		return;
 	}
-	IllegalInstruction(cpu, instruction);
+	OsxGuestIllegalInstruction(cpu, instruction);
 }
 
-static void ExecuteTraced(OsxCpu *cpu, uint32 instruction)
+static void OsxGuestExecuteTraced(OsxCpu *cpu, uint32 instruction)
 {
 	uint64 exceptions;
 	exceptions = cpu->exceptions;
-	Execute(cpu, instruction);
+	OsxGuestExecute(cpu, instruction);
 	if (cpu->exceptions == exceptions)
-		OsxCpuRaiseException(cpu, OSXVECTORTRACE, 0, cpu->nextpc);
+		OsxGuestCpuRaiseException(cpu, OSXVECTORTRACE, 0, cpu->nextpc);
 }
 
-OSXJITABI int OsxCpuExecuteInline(OsxCpu *cpu, uint32 instruction)
+OSXJITABI int OsxGuestCpuExecuteInline(OsxCpu *cpu, uint32 instruction)
 {
 	uint32 expected;
 	expected = cpu->pc + 4;
 #if OSXPROFILE
-	cpu->tmpform[0][OsxCpuTmpFormKey(instruction)]++;
+	cpu->tmpform[0][OsxGuestCpuTmpFormKey(instruction)]++;
 #endif
 	cpu->nextpc = expected;
 	cpu->jitflush = 0;
-	Execute(cpu, instruction);
+	OsxGuestExecute(cpu, instruction);
 	if (cpu->nextpc == expected && !cpu->jitflush)
 		return 0;
 	cpu->jitflush = 0;
@@ -2339,21 +2339,21 @@ OSXJITABI int OsxCpuExecuteInline(OsxCpu *cpu, uint32 instruction)
 	return 1;
 }
 
-void OsxCpuExecuteInstruction(OsxCpu *cpu, uint32 instruction)
+void OsxGuestCpuExecuteInstruction(OsxCpu *cpu, uint32 instruction)
 {
 #if OSXPROFILE
-	cpu->tmpform[1][OsxCpuTmpFormKey(instruction)]++;
+	cpu->tmpform[1][OsxGuestCpuTmpFormKey(instruction)]++;
 #endif
 	cpu->nextpc = cpu->pc + 4;
 	if (cpu->msr & OSXMSRSE)
-		ExecuteTraced(cpu, instruction);
+		OsxGuestExecuteTraced(cpu, instruction);
 	else
-		Execute(cpu, instruction);
+		OsxGuestExecute(cpu, instruction);
 	cpu->pc = cpu->nextpc;
 	cpu->instructions++;
 }
 
-void OsxCpuCheckInterrupts(OsxCpu *cpu, uint64 now)
+void OsxGuestCpuCheckInterrupts(OsxCpu *cpu, uint64 now)
 {
 	if (!cpu->decpending && cpu->decdeadline != OSXNEVER && now >= cpu->decdeadline) {
 		cpu->decpending = 1;
@@ -2363,19 +2363,19 @@ void OsxCpuCheckInterrupts(OsxCpu *cpu, uint64 now)
 		return;
 	if (cpu->externalline) {
 		cpu->externalcount++;
-		OsxCpuRaiseException(cpu, OSXVECTOREXTERNAL, 0, cpu->pc);
+		OsxGuestCpuRaiseException(cpu, OSXVECTOREXTERNAL, 0, cpu->pc);
 		cpu->pc = cpu->nextpc;
 		return;
 	}
 	if (cpu->decpending) {
 		cpu->decpending = 0;
 		cpu->decrementercount++;
-		OsxCpuRaiseException(cpu, OSXVECTORDECREMENTER, 0, cpu->pc);
+		OsxGuestCpuRaiseException(cpu, OSXVECTORDECREMENTER, 0, cpu->pc);
 		cpu->pc = cpu->nextpc;
 	}
 }
 
-void OsxCpuRun(OsxCpu *cpu, int32 count)
+void OsxGuestCpuRun(OsxCpu *cpu, int32 count)
 {
 	uint32 instruction;
 	if (cpu->halted)
@@ -2383,24 +2383,24 @@ void OsxCpuRun(OsxCpu *cpu, int32 count)
 	cpu->slice = count;
 	while (cpu->slice > 0) {
 		cpu->slice--;
-		if (((cpu->pc & OSXPAGEMASK) | 1) != cpu->fetchtag && !OsxCpuFetchPage(cpu)) {
+		if (((cpu->pc & OSXPAGEMASK) | 1) != cpu->fetchtag && !OsxGuestCpuFetchPage(cpu)) {
 			cpu->pc = cpu->nextpc;
 			continue;
 		}
-		instruction = LoadHost32(cpu->fetchhost + (cpu->pc & 0xfff));
+		instruction = OsxGuestLoadHost32(cpu->fetchhost + (cpu->pc & 0xfff));
 		if (cpu->tracefile)
 			fprintf(cpu->tracefile, "%08x %08x r3=%08x r4=%08x lr=%08x\n", cpu->pc, instruction, cpu->gpr[3], cpu->gpr[4], cpu->lr);
 		cpu->nextpc = cpu->pc + 4;
 		if (cpu->msr & OSXMSRSE)
-			ExecuteTraced(cpu, instruction);
+			OsxGuestExecuteTraced(cpu, instruction);
 		else
-			Execute(cpu, instruction);
+			OsxGuestExecute(cpu, instruction);
 		cpu->pc = cpu->nextpc;
 		cpu->instructions++;
 	}
 }
 
-void OsxCpuDump(OsxCpu *cpu, FILE *output)
+void OsxGuestCpuDump(OsxCpu *cpu, FILE *output)
 {
 	int index;
 	fprintf(output, "pc %08x msr %08x lr %08x ctr %08x cr %08x xer %08x\n", cpu->pc, cpu->msr, cpu->lr, cpu->ctr, cpu->cr, cpu->xer);

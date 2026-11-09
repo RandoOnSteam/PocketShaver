@@ -546,6 +546,7 @@ struct OsxMachine {
 	uint32 quartzwindow[OSXQUARTZWINDOWCALLS];
 	uint32 quartzstrings;
 	int quartzextensions;
+	int quartzallocatedextensions;
 	uint32 flurrystubs[86];
 	uint32 flurryinit;
 	uint32 kernelend;
@@ -567,88 +568,88 @@ struct OsxMachine {
 #endif
 };
 
-uint32 OsxBusRead(void *context, uint32 address, int size);
-void OsxBusWrite(void *context, uint32 address, int size, uint32 value);
-void OsxPciReset(OsxMachine *machine);
-uint32 OsxPciConfigRead(OsxMachine *machine, uint32 offset, int size);
-void OsxPciConfigWrite(OsxMachine *machine, uint32 offset, int size, uint32 value);
+uint32 OsxGuestBusRead(void *context, uint32 address, int size);
+void OsxGuestBusWrite(void *context, uint32 address, int size, uint32 value);
+void OsxGuestPciReset(OsxMachine *machine);
+uint32 OsxGuestPciConfigRead(OsxMachine *machine, uint32 offset, int size);
+void OsxGuestPciConfigWrite(OsxMachine *machine, uint32 offset, int size, uint32 value);
 
-void OsxPicSetLine(OsxMachine *machine, int source, int level);
+void OsxGuestPicSetLine(OsxMachine *machine, int source, int level);
 #if OSXG5
-void OsxG5Reset(OsxMachine *machine);
-uint32 OsxG5BusRead(OsxMachine *machine, uint32 address, int size);
-void OsxG5BusWrite(OsxMachine *machine, uint32 address, int size, uint32 value);
-void OsxG5SetLine(OsxMachine *machine, int source, int level);
-void OsxG5SetPmuRequest(OsxMachine *machine, int level);
-void OsxG5PrepareNvram(OsxMachine *machine);
-void OsxG5GmacReceive(OsxMachine *machine);
-uint8 *OsxG5DmaHost(OsxMachine *machine, uint32 bus, uint32 length);
-int OsxG5DmaCopy(OsxMachine *machine, uint32 bus, uint8 *data, uint32 length, int towardmemory);
+void OsxGuestG5Reset(OsxMachine *machine);
+uint32 OsxGuestG5BusRead(OsxMachine *machine, uint32 address, int size);
+void OsxGuestG5BusWrite(OsxMachine *machine, uint32 address, int size, uint32 value);
+void OsxGuestG5SetLine(OsxMachine *machine, int source, int level);
+void OsxGuestG5SetPmuRequest(OsxMachine *machine, int level);
+void OsxGuestG5PrepareNvram(OsxMachine *machine);
+void OsxGuestG5GmacReceive(OsxMachine *machine);
+uint8 *OsxGuestG5DmaHost(OsxMachine *machine, uint32 bus, uint32 length);
+int OsxGuestG5DmaCopy(OsxMachine *machine, uint32 bus, uint8 *data, uint32 length, int towardmemory);
 #endif
-uint32 OsxHeathrowRead(OsxMachine *machine, uint32 offset, int size);
-void OsxHeathrowWrite(OsxMachine *machine, uint32 offset, int size, uint32 value);
-void OsxDbdmaKick(OsxMachine *machine, int channel);
+uint32 OsxGuestHeathrowRead(OsxMachine *machine, uint32 offset, int size);
+void OsxGuestHeathrowWrite(OsxMachine *machine, uint32 offset, int size, uint32 value);
+void OsxGuestDbdmaKick(OsxMachine *machine, int channel);
 
-void OsxAtaReset(OsxMachine *machine);
-int OsxAtaAttach(OsxMachine *machine, int bus, int unit, const char *path, int atapi);
-void OsxAtaCloseMedia(OsxAtaDrive *drive);
-uint32 OsxAtaRead(OsxMachine *machine, int bus, uint32 offset, int size);
-void OsxAtaWrite(OsxMachine *machine, int bus, uint32 offset, int size, uint32 value);
-void OsxAtaDmaReady(OsxMachine *machine, int bus);
-void OsxAtaPoll(OsxMachine *machine, uint64 now);
-int OsxDbdmaTransfer(OsxMachine *machine, int channel, uint8 *data, uint32 length, int towardmemory);
-void OsxDbdmaFinish(OsxMachine *machine, int channel);
-void OsxDbdmaDump(OsxMachine *machine, int channel);
-int OsxDbdmaOutputFrame(OsxMachine *machine, int channel, uint8 *data, uint32 limit);
-int OsxDbdmaInputFrame(OsxMachine *machine, int channel, const uint8 *data, uint32 length);
+void OsxGuestAtaReset(OsxMachine *machine);
+int OsxGuestAtaAttach(OsxMachine *machine, int bus, int unit, const char *path, int atapi);
+void OsxGuestAtaCloseMedia(OsxAtaDrive *drive);
+uint32 OsxGuestAtaRead(OsxMachine *machine, int bus, uint32 offset, int size);
+void OsxGuestAtaWrite(OsxMachine *machine, int bus, uint32 offset, int size, uint32 value);
+void OsxGuestAtaDmaReady(OsxMachine *machine, int bus);
+void OsxGuestAtaPoll(OsxMachine *machine, uint64 now);
+int OsxGuestDbdmaTransfer(OsxMachine *machine, int channel, uint8 *data, uint32 length, int towardmemory);
+void OsxGuestDbdmaFinish(OsxMachine *machine, int channel);
+void OsxGuestDbdmaDump(OsxMachine *machine, int channel);
+int OsxGuestDbdmaOutputFrame(OsxMachine *machine, int channel, uint8 *data, uint32 limit);
+int OsxGuestDbdmaInputFrame(OsxMachine *machine, int channel, const uint8 *data, uint32 length);
 
-void OsxBmacHardwareAddress(uint8 *address);
-void OsxBmacReset(OsxMachine *machine);
-uint32 OsxBmacRead(OsxMachine *machine, uint32 offset);
-void OsxBmacWrite(OsxMachine *machine, uint32 offset, uint32 value);
-void OsxBmacTransmit(OsxMachine *machine);
-void OsxBmacReceive(OsxMachine *machine);
-void OsxBmacPoll(OsxMachine *machine, uint64 now);
-uint64 OsxBmacNextDeadline(OsxMachine *machine);
+void OsxGuestBmacHardwareAddress(uint8 *address);
+void OsxGuestBmacReset(OsxMachine *machine);
+uint32 OsxGuestBmacRead(OsxMachine *machine, uint32 offset);
+void OsxGuestBmacWrite(OsxMachine *machine, uint32 offset, uint32 value);
+void OsxGuestBmacTransmit(OsxMachine *machine);
+void OsxGuestBmacReceive(OsxMachine *machine);
+void OsxGuestBmacPoll(OsxMachine *machine, uint64 now);
+uint64 OsxGuestBmacNextDeadline(OsxMachine *machine);
 
-void OsxAudioReset(OsxMachine *machine);
-uint32 OsxAudioRead(OsxMachine *machine, uint32 offset);
-void OsxAudioWrite(OsxMachine *machine, uint32 offset, uint32 value);
-void OsxAudioPoll(OsxMachine *machine, uint64 now);
-void OsxAudioExit(OsxMachine *machine);
-void OsxAudioOpenForCdrom(OsxMachine *machine);
+void OsxGuestAudioReset(OsxMachine *machine);
+uint32 OsxGuestAudioRead(OsxMachine *machine, uint32 offset);
+void OsxGuestAudioWrite(OsxMachine *machine, uint32 offset, uint32 value);
+void OsxGuestAudioPoll(OsxMachine *machine, uint64 now);
+void OsxGuestAudioExit(OsxMachine *machine);
+void OsxGuestAudioOpenForCdrom(OsxMachine *machine);
 
 
 
-uint32 OsxFlashRead(OsxMachine *machine, uint32 offset, int size);
-void OsxFlashWrite(OsxMachine *machine, uint32 offset, int size, uint32 value);
-void OsxFlashLoad(OsxMachine *machine, const char *path);
-void OsxNvramReadString(const uint8 *nvram, int index, char *output, int size);
-int OsxNvramWantsClassic(const char *device, const char *command);
-int OsxNvramIsNewWorld(const uint8 *nvram);
-void OsxNvramMakeNewWorld(uint8 *nvram);
-void OsxNvramRestoreOldWorld(uint8 *nvram, const uint8 *classic);
-int OsxNvramPrepareBoot(OsxMachine *machine, int bus, int unit, int partition);
-void OsxNvramFinishBoot(OsxMachine *machine, const uint8 *startup);
-void OsxFlashSave(OsxMachine *machine);
+uint32 OsxGuestFlashRead(OsxMachine *machine, uint32 offset, int size);
+void OsxGuestFlashWrite(OsxMachine *machine, uint32 offset, int size, uint32 value);
+void OsxGuestFlashLoad(OsxMachine *machine, const char *path);
+void OsxGuestNvramReadString(const uint8 *nvram, int index, char *output, int size);
+int OsxGuestNvramWantsClassic(const char *device, const char *command);
+int OsxGuestNvramIsNewWorld(const uint8 *nvram);
+void OsxGuestNvramMakeNewWorld(uint8 *nvram);
+void OsxGuestNvramRestoreOldWorld(uint8 *nvram, const uint8 *classic);
+int OsxGuestNvramPrepareBoot(OsxMachine *machine, int bus, int unit, int partition);
+void OsxGuestNvramFinishBoot(OsxMachine *machine, const uint8 *startup);
+void OsxGuestFlashSave(OsxMachine *machine);
 
-void OsxCudaReset(OsxMachine *machine);
-uint32 OsxCudaRead(OsxMachine *machine, uint32 offset);
-void OsxCudaWrite(OsxMachine *machine, uint32 offset, uint32 value);
-void OsxCudaPoll(OsxMachine *machine, uint64 now);
-uint64 OsxCudaNextDeadline(OsxMachine *machine);
-void OsxCudaKey(OsxMachine *machine, int code, int down);
-void OsxCudaMouse(OsxMachine *machine, int dx, int dy, int button);
-void OsxCudaWheel(OsxMachine *machine, int delta);
-void OsxPointerHook(OsxCpu *cpu, void *context, uint32 address);
+void OsxGuestCudaReset(OsxMachine *machine);
+uint32 OsxGuestCudaRead(OsxMachine *machine, uint32 offset);
+void OsxGuestCudaWrite(OsxMachine *machine, uint32 offset, uint32 value);
+void OsxGuestCudaPoll(OsxMachine *machine, uint64 now);
+uint64 OsxGuestCudaNextDeadline(OsxMachine *machine);
+void OsxGuestCudaKey(OsxMachine *machine, int code, int down);
+void OsxGuestCudaMouse(OsxMachine *machine, int dx, int dy, int button);
+void OsxGuestCudaWheel(OsxMachine *machine, int delta);
+void OsxGuestPointerHook(OsxCpu *cpu, void *context, uint32 address);
 
-int OsxBootLoad(OsxMachine *machine, const char *imagepath, int bootbus, int bootunit, const char *commandline);
-uint32 OsxFindKernelSymbol(OsxMachine *machine, const char *name);
-int OsxClipSyscall(OsxMachine *machine, OsxCpu *cpu);
-int OsxKextSymbolOffset(OsxMachine *machine, const char *bundle, const char *symbol, uint32 *offset);
-uint32 OsxAdler32(const uint8 *data, uint32 length);
-int OsxMkextHasBundle(const uint8 *mkext, uint32 size, const char *bundle);
-uint8 *OsxMkextAddBundles(const uint8 *base, uint32 basesize, const uint8 *donor, uint32 donorsize, const char *const *bundles, int bundlecount, const char *const *aliases, int aliascount, uint32 *size);
-int OsxKextTextAddress(OsxMachine *machine, const char *bundle, uint32 *address);
+int OsxGuestBootLoad(OsxMachine *machine, const char *imagepath, int bootbus, int bootunit, const char *commandline);
+uint32 OsxGuestFindKernelSymbol(OsxMachine *machine, const char *name);
+int OsxGuestClipSyscall(OsxMachine *machine, OsxCpu *cpu);
+int OsxGuestKextSymbolOffset(OsxMachine *machine, const char *bundle, const char *symbol, uint32 *offset);
+uint32 OsxGuestAdler32(const uint8 *data, uint32 length);
+int OsxGuestMkextHasBundle(const uint8 *mkext, uint32 size, const char *bundle);
+uint8 *OsxGuestMkextAddBundles(const uint8 *base, uint32 basesize, const uint8 *donor, uint32 donorsize, const char *const *bundles, int bundlecount, const char *const *aliases, int aliascount, uint32 *size);
+int OsxGuestKextTextAddress(OsxMachine *machine, const char *bundle, uint32 *address);
 
 #endif

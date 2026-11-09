@@ -29,7 +29,7 @@
 #define AUDIOCDBLOCK 8192
 
 #if SDL_VERSION_ATLEAST(3, 0, 0)
-static void SDLCALL AudioCallback(void *context, SDL_AudioStream *stream, int length, int total)
+static void SDLCALL OsxGuestAudioCallback(void *context, SDL_AudioStream *stream, int length, int total)
 {
 	OsxAudio *audio;
 	uint32 count;
@@ -72,17 +72,17 @@ static void SDLCALL AudioCallback(void *context, SDL_AudioStream *stream, int le
 	audio->tail += count;
 }
 
-void OsxAudioLockHost(OsxAudio *audio)
+void OsxGuestAudioLockHost(OsxAudio *audio)
 {
 	SDL_LockAudioStream((SDL_AudioStream *)audio->stream);
 }
 
-void OsxAudioUnlockHost(OsxAudio *audio)
+void OsxGuestAudioUnlockHost(OsxAudio *audio)
 {
 	SDL_UnlockAudioStream((SDL_AudioStream *)audio->stream);
 }
 
-void OsxAudioCloseHost(OsxAudio *audio)
+void OsxGuestAudioCloseHost(OsxAudio *audio)
 {
 	if (audio->stream) {
 		SDL_DestroyAudioStream((SDL_AudioStream *)audio->stream);
@@ -91,7 +91,7 @@ void OsxAudioCloseHost(OsxAudio *audio)
 	audio->stream = NULL;
 }
 
-void *OsxAudioStartHost(OsxAudio *audio)
+void *OsxGuestAudioStartHost(OsxAudio *audio)
 {
 	SDL_AudioSpec spec;
 	SDL_AudioStream *stream;
@@ -101,13 +101,13 @@ void *OsxAudioStartHost(OsxAudio *audio)
 	spec.format = SDL_AUDIO_S16BE;
 	spec.channels = 2;
 	OpenAudio_bincue(spec.freq, spec.format, spec.channels, 0, AUDIOCDVOLUME);
-	stream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, AudioCallback, audio);
+	stream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, OsxGuestAudioCallback, audio);
 	if (stream)
 		SDL_ResumeAudioStreamDevice(stream);
 	return stream;
 }
 #else
-static void AudioCallback(void *context, Uint8 *stream, int length)
+static void OsxGuestAudioCallback(void *context, Uint8 *stream, int length)
 {
 	OsxAudio *audio;
 	uint32 available;
@@ -125,17 +125,17 @@ static void AudioCallback(void *context, Uint8 *stream, int length)
 	MixAudio_bincue(stream, length);
 }
 
-void OsxAudioLockHost(OsxAudio *audio)
+void OsxGuestAudioLockHost(OsxAudio *audio)
 {
 	SDL_LockAudio();
 }
 
-void OsxAudioUnlockHost(OsxAudio *audio)
+void OsxGuestAudioUnlockHost(OsxAudio *audio)
 {
 	SDL_UnlockAudio();
 }
 
-void OsxAudioCloseHost(OsxAudio *audio)
+void OsxGuestAudioCloseHost(OsxAudio *audio)
 {
 	if (audio->stream) {
 		SDL_CloseAudio();
@@ -144,7 +144,7 @@ void OsxAudioCloseHost(OsxAudio *audio)
 	audio->stream = NULL;
 }
 
-void *OsxAudioStartHost(OsxAudio *audio)
+void *OsxGuestAudioStartHost(OsxAudio *audio)
 {
 	SDL_AudioSpec spec;
 	if (SDL_InitSubSystem(SDL_INIT_AUDIO) != 0)
@@ -153,7 +153,7 @@ void *OsxAudioStartHost(OsxAudio *audio)
 	spec.format = AUDIO_S16MSB;
 	spec.channels = 2;
 	spec.samples = 1024;
-	spec.callback = AudioCallback;
+	spec.callback = OsxGuestAudioCallback;
 	spec.userdata = audio;
 	OpenAudio_bincue(spec.freq, spec.format, spec.channels, 0, AUDIOCDVOLUME);
 	if (SDL_OpenAudio(&spec, NULL) < 0)

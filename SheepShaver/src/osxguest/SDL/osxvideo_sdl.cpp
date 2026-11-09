@@ -97,7 +97,7 @@ struct OsxHostVideo {
 #define OSXEVENTKEYUP SDL_KEYUP
 #define OSXEVENTKEY(event) ((event).key.keysym.sym)
 #endif
-static int MapKey(int key)
+static int OsxGuestMapKey(int key)
 {
 	static const OsxKeyMapping mappings[] = {
 		{ 'a', 0x00 }, { 's', 0x01 }, { 'd', 0x02 }, { 'f', 0x03 }, { 'h', 0x04 },
@@ -130,7 +130,7 @@ static int MapKey(int key)
 	return -1;
 }
 
-static int HostButton(int button)
+static int OsxGuestHostButton(int button)
 {
 	if (button == SDL_BUTTON_LEFT)
 		return 0;
@@ -147,7 +147,7 @@ static int HostButton(int button)
 	return -1;
 }
 #if SDL_VERSION_ATLEAST(2, 0, 0)
-static int HostWheelButton(int wheely)
+static int OsxGuestHostWheelButton(int wheely)
 {
 	if (wheely > 0)
 		return 3; /* up */
@@ -157,7 +157,7 @@ static int HostWheelButton(int wheely)
 }
 #endif
 #ifdef ENABLE_EMULATOR_MONITOR
-static void MonitorInput(void *context, int operation, int first, int second)
+static void OsxGuestMonitorInput(void *context, int operation, int first, int second)
 {
 	OsxHostVideo *video = (OsxHostVideo *)context;
 	switch (operation) {
@@ -183,7 +183,7 @@ static void MonitorInput(void *context, int operation, int first, int second)
 }
 #endif
 
-OsxHostVideo *OsxHostOpen(int width, int height, OsxHostInput input, void *context)
+OsxHostVideo *OsxGuestHostOpen(int width, int height, OsxHostInput input, void *context)
 {
 	OsxHostVideo *video;
 	if (SDL_Init(SDL_INIT_VIDEO) != OSXSDLSUCCESS)
@@ -203,7 +203,7 @@ OsxHostVideo *OsxHostOpen(int width, int height, OsxHostInput input, void *conte
 #endif
 	video->screen = SDLSetVideoModeQuietly(width, height, 32, OSXVIDEOFLAGS);
 	if (!video->screen) {
-		OsxHostClose(video);
+		OsxGuestHostClose(video);
 		return NULL;
 	}
 #if SDL_VERSION_ATLEAST(2, 0, 0)
@@ -226,11 +226,11 @@ OsxHostVideo *OsxHostOpen(int width, int height, OsxHostInput input, void *conte
 	return video;
 }
 
-void OsxHostSuspendFrame(OsxHostVideo *video)
+void OsxGuestHostSuspendFrame(OsxHostVideo *video)
 {
 }
 
-void OsxHostClose(OsxHostVideo *video)
+void OsxGuestHostClose(OsxHostVideo *video)
 {
 #ifdef ENABLE_EMULATOR_MONITOR
 	delete video->monitor;
@@ -243,7 +243,7 @@ void OsxHostClose(OsxHostVideo *video)
 	delete video;
 }
 
-uint8 *OsxHostLock(OsxHostVideo *video, int *pitch, int *raw)
+uint8 *OsxGuestHostLock(OsxHostVideo *video, int *pitch, int *raw)
 {
 #if SDL_VERSION_ATLEAST(3, 0, 0)
 	video->window = SDL_GetWindowSurface(sdl_window);
@@ -266,7 +266,7 @@ uint8 *OsxHostLock(OsxHostVideo *video, int *pitch, int *raw)
 }
 
 #if SDL_VERSION_ATLEAST(2, 0, 0)
-static void OsxSdlRestoreContext(void)
+static void OsxGuestSdlRestoreContext(void)
 {
 	SDL_GLContext context;
 	SDL_Window *window;
@@ -279,7 +279,7 @@ static void OsxSdlRestoreContext(void)
 }
 #endif
 
-int OsxHostPresent(OsxHostVideo *video, const uint32 *runstart, const uint32 *runend, int runs)
+int OsxGuestHostPresent(OsxHostVideo *video, const uint32 *runstart, const uint32 *runend, int runs)
 {
 	int index;
 #if SDL_VERSION_ATLEAST(2, 0, 0)
@@ -289,7 +289,7 @@ int OsxHostPresent(OsxHostVideo *video, const uint32 *runstart, const uint32 *ru
 	if (!runs)
 		return 0;
 #if SDL_VERSION_ATLEAST(2, 0, 0)
-	OsxSdlRestoreContext();
+	OsxGuestSdlRestoreContext();
 #endif
 #if SDL_VERSION_ATLEAST(3, 0, 0)
 	if (video->window != video->screen)
@@ -311,12 +311,12 @@ int OsxHostPresent(OsxHostVideo *video, const uint32 *runstart, const uint32 *ru
 #endif
 }
 
-void OsxHostSleep(uint32 milliseconds)
+void OsxGuestHostSleep(uint32 milliseconds)
 {
 	SDL_Delay(milliseconds);
 }
 
-void OsxHostEvents(OsxHostVideo *video, const uint8 *vram)
+void OsxGuestHostEvents(OsxHostVideo *video, const uint8 *vram)
 {
 	OsxHostInput input = video->input;
 	void *context = video->context;
@@ -330,7 +330,7 @@ void OsxHostEvents(OsxHostVideo *video, const uint8 *vram)
 #ifdef ENABLE_EMULATOR_MONITOR
 		if (video->monitor) {
 			EmulatorMonitorView view;
-			view.inputfunction = MonitorInput;
+			view.inputfunction = OsxGuestMonitorInput;
 			view.inputcontext = video;
 			view.framebuffer = (uint8 *)vram;
 			view.palette = NULL;
@@ -359,14 +359,14 @@ void OsxHostEvents(OsxHostVideo *video, const uint8 *vram)
 			input(context, OSXHOSTMOUSE, (int)event.motion.x, (int)event.motion.y);
 			break;
 		case OSXEVENTBUTTONDOWN:
-			input(context, OSXHOSTBUTTON, HostButton(event.button.button), 1);
+			input(context, OSXHOSTBUTTON, OsxGuestHostButton(event.button.button), 1);
 			break;
 		case OSXEVENTBUTTONUP:
-			input(context, OSXHOSTBUTTON, HostButton(event.button.button), 0);
+			input(context, OSXHOSTBUTTON, OsxGuestHostButton(event.button.button), 0);
 			break;
 		#if SDL_VERSION_ATLEAST(2, 0, 0)
 		case OSXEVENTWHEEL:
-			input(context, OSXHOSTBUTTON, HostWheelButton((int)event.wheel.y), 1);
+			input(context, OSXHOSTBUTTON, OsxGuestHostWheelButton((int)event.wheel.y), 1);
 			break;
 		#if SDL_VERSION_ATLEAST(3, 0, 0)
 		case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
@@ -380,12 +380,12 @@ void OsxHostEvents(OsxHostVideo *video, const uint8 *vram)
 			break;
 		#endif
 		case OSXEVENTKEYDOWN:
-			code = MapKey(OSXEVENTKEY(event));
+			code = OsxGuestMapKey(OSXEVENTKEY(event));
 			if (code >= 0)
 				input(context, OSXHOSTKEY, code, 1);
 			break;
 		case OSXEVENTKEYUP:
-			code = MapKey(OSXEVENTKEY(event));
+			code = OsxGuestMapKey(OSXEVENTKEY(event));
 			if (code >= 0)
 				input(context, OSXHOSTKEY, code, 0);
 			break;
@@ -399,31 +399,31 @@ void EtherSlirpPoll(void);
 int EtherSlirpReceive(uint8 *packet);
 void EtherSlirpSend(const uint8 *packet, int length);
 
-void *OsxHostNetOpen(const uint8 *address)
+void *OsxGuestHostNetOpen(const uint8 *address)
 {
 	return EtherSlirpOpen();
 }
 
-void OsxHostNetClose(void *network)
+void OsxGuestHostNetClose(void *network)
 {
 }
 
-int OsxHostNetReady(void *network)
+int OsxGuestHostNetReady(void *network)
 {
 	return EtherSlirpReady(network);
 }
 
-void OsxHostNetPoll(void *network)
+void OsxGuestHostNetPoll(void *network)
 {
 	EtherSlirpPoll();
 }
 
-int OsxHostNetReceive(void *network, uint8 *packet)
+int OsxGuestHostNetReceive(void *network, uint8 *packet)
 {
 	return EtherSlirpReceive(packet);
 }
 
-void OsxHostNetSend(void *network, const uint8 *packet, int length)
+void OsxGuestHostNetSend(void *network, const uint8 *packet, int length)
 {
 	EtherSlirpSend(packet, length);
 }

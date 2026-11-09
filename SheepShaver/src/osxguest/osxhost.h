@@ -31,27 +31,27 @@
 struct OsxHostVideo;
 typedef void (*OsxHostInput)(void *context, int operation, int first, int second);
 
-OsxHostVideo *OsxHostOpen(int width, int height, OsxHostInput input, void *context);
-void OsxHostClose(OsxHostVideo *video);
-void OsxHostSuspendFrame(OsxHostVideo *video);
-uint8 *OsxHostLock(OsxHostVideo *video, int *pitch, int *raw);
-int OsxHostPresent(OsxHostVideo *video, const uint32 *runstart, const uint32 *runend, int runs);
-void OsxHostEvents(OsxHostVideo *video, const uint8 *vram);
-void OsxHostSleep(uint32 milliseconds);
+OsxHostVideo *OsxGuestHostOpen(int width, int height, OsxHostInput input, void *context);
+void OsxGuestHostClose(OsxHostVideo *video);
+void OsxGuestHostSuspendFrame(OsxHostVideo *video);
+uint8 *OsxGuestHostLock(OsxHostVideo *video, int *pitch, int *raw);
+int OsxGuestHostPresent(OsxHostVideo *video, const uint32 *runstart, const uint32 *runend, int runs);
+void OsxGuestHostEvents(OsxHostVideo *video, const uint8 *vram);
+void OsxGuestHostSleep(uint32 milliseconds);
 
 struct OsxAudio;
-void OsxAudioLockHost(OsxAudio *audio);
-void OsxAudioUnlockHost(OsxAudio *audio);
-void OsxAudioCloseHost(OsxAudio *audio);
-void *OsxAudioStartHost(OsxAudio *audio);
-char *OsxHostClipboardGet(void);
-void OsxHostClipboardSet(const char *text);
+void OsxGuestAudioLockHost(OsxAudio *audio);
+void OsxGuestAudioUnlockHost(OsxAudio *audio);
+void OsxGuestAudioCloseHost(OsxAudio *audio);
+void *OsxGuestAudioStartHost(OsxAudio *audio);
+char *OsxGuestHostClipboardGet(void);
+void OsxGuestHostClipboardSet(const char *text);
 
-void *OsxHostNetOpen(const uint8 *address);
-void OsxHostNetClose(void *network);
-int OsxHostNetReady(void *network);
-void OsxHostNetPoll(void *network);
-int OsxHostNetReceive(void *network, uint8 *packet);
-void OsxHostNetSend(void *network, const uint8 *packet, int length);
+void *OsxGuestHostNetOpen(const uint8 *address);
+void OsxGuestHostNetClose(void *network);
+int OsxGuestHostNetReady(void *network);
+void OsxGuestHostNetPoll(void *network);
+int OsxGuestHostNetReceive(void *network, uint8 *packet);
+void OsxGuestHostNetSend(void *network, const uint8 *packet, int length);
 
 #endif

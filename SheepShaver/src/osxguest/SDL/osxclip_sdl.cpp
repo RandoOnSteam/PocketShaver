@@ -21,7 +21,7 @@
 #include "my_sdl.h"
 #include "osxhost.h"
 
-char *OsxHostClipboardGet(void)
+char *OsxGuestHostClipboardGet(void)
 {
 #if SDL_VERSION_ATLEAST(2, 0, 0)
 	char *text;
@@ -63,7 +63,7 @@ char *OsxHostClipboardGet(void)
 #endif
 }
 
-void OsxHostClipboardSet(const char *text)
+void OsxGuestHostClipboardSet(const char *text)
 {
 #if !SDL_VERSION_ATLEAST(2, 0, 0) && defined(_WIN32)
 	HGLOBAL handle;

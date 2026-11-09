@@ -279,54 +279,54 @@ struct OsxCpu {
 	OsxTlbEntry tlb[OSXMODES][OSXTLBKINDS][OSXTLBSIZE];
 };
 
-void OsxCpuReset(OsxCpu *cpu, uint32 pvr, uint64 tbfrequency);
-void OsxCpuSetModel(OsxCpu *cpu, uint32 pvr);
-int OsxCpuReadData(OsxCpu *cpu, uint32 address, int size, uint32 *value);
-int OsxCpuWriteData(OsxCpu *cpu, uint32 address, int size, uint32 value);
-int OsxCpuReadQuad(OsxCpu *cpu, uint32 address, uint32 *words);
+void OsxGuestCpuReset(OsxCpu *cpu, uint32 pvr, uint64 tbfrequency);
+void OsxGuestCpuSetModel(OsxCpu *cpu, uint32 pvr);
+int OsxGuestCpuReadData(OsxCpu *cpu, uint32 address, int size, uint32 *value);
+int OsxGuestCpuWriteData(OsxCpu *cpu, uint32 address, int size, uint32 value);
+int OsxGuestCpuReadQuad(OsxCpu *cpu, uint32 address, uint32 *words);
 #if OSXPROFILE
-uint32 OsxCpuTmpFormKey(uint32 instruction);
+uint32 OsxGuestCpuTmpFormKey(uint32 instruction);
 #endif
-OSXJITABI uint64 OsxCpuSingleToDouble(uint32 word);
-OSXJITABI uint32 OsxCpuDoubleToSingle(uint64 bits);
-int OsxCpuWriteQuad(OsxCpu *cpu, uint32 address, const uint32 *words);
-void OsxCpuExecuteVector(OsxCpu *cpu, uint32 instruction);
-int OsxCpuExecuteVectorMemory(OsxCpu *cpu, uint32 instruction, uint32 extended, uint32 address);
-OsxVectorFunction OsxCpuVectorHandler(uint32 instruction);
-void OsxCpuRun(OsxCpu *cpu, int32 count);
-int OsxCpuFetchPage(OsxCpu *cpu);
-void OsxCpuExecuteInstruction(OsxCpu *cpu, uint32 instruction);
-OSXJITABI int OsxCpuExecuteInline(OsxCpu *cpu, uint32 instruction);
-int OsxHostFeature(int feature);
-uint8 *OsxJitAllocate(uint32 size);
-void OsxJitRelease(uint8 *memory, uint32 size);
-void OsxJitFlush(uint8 *memory, uint32 size);
-int OsxJitCreate(OsxCpu *cpu);
-void OsxJitDestroy(OsxCpu *cpu);
-void OsxJitRun(OsxCpu *cpu, int32 count);
-int OsxJitInvalidate(OsxCpu *cpu, uint32 address, uint32 length);
+OSXJITABI uint64 OsxGuestCpuSingleToDouble(uint32 word);
+OSXJITABI uint32 OsxGuestCpuDoubleToSingle(uint64 bits);
+int OsxGuestCpuWriteQuad(OsxCpu *cpu, uint32 address, const uint32 *words);
+void OsxGuestCpuExecuteVector(OsxCpu *cpu, uint32 instruction);
+int OsxGuestCpuExecuteVectorMemory(OsxCpu *cpu, uint32 instruction, uint32 extended, uint32 address);
+OsxVectorFunction OsxGuestCpuVectorHandler(uint32 instruction);
+void OsxGuestCpuRun(OsxCpu *cpu, int32 count);
+int OsxGuestCpuFetchPage(OsxCpu *cpu);
+void OsxGuestCpuExecuteInstruction(OsxCpu *cpu, uint32 instruction);
+OSXJITABI int OsxGuestCpuExecuteInline(OsxCpu *cpu, uint32 instruction);
+int OsxGuestHostFeature(int feature);
+uint8 *OsxGuestJitAllocate(uint32 size);
+void OsxGuestJitRelease(uint8 *memory, uint32 size);
+void OsxGuestJitFlush(uint8 *memory, uint32 size);
+int OsxGuestJitCreate(OsxCpu *cpu);
+void OsxGuestJitDestroy(OsxCpu *cpu);
+void OsxGuestJitRun(OsxCpu *cpu, int32 count);
+int OsxGuestJitInvalidate(OsxCpu *cpu, uint32 address, uint32 length);
 #if OSXPROFILEJIT
-void OsxJitTmpStats(OsxCpu *cpu, FILE *log);
+void OsxGuestJitTmpStats(OsxCpu *cpu, FILE *log);
 #endif
-void OsxCpuCheckInterrupts(OsxCpu *cpu, uint64 now);
-void OsxCpuRaiseException(OsxCpu *cpu, uint32 vector, uint32 srr1bits, uint32 srr0);
-void OsxCpuUpdateModes(OsxCpu *cpu);
-void OsxCpuFlushTlb(OsxCpu *cpu);
-void OsxCpuWatch(OsxCpu *cpu, FILE *file, uint32 rowbytes, uint32 left, uint32 top, uint32 right, uint32 bottom);
-OSXJITABI uint64 OsxCpuTimebase(OsxCpu *cpu);
+void OsxGuestCpuCheckInterrupts(OsxCpu *cpu, uint64 now);
+void OsxGuestCpuRaiseException(OsxCpu *cpu, uint32 vector, uint32 srr1bits, uint32 srr0);
+void OsxGuestCpuUpdateModes(OsxCpu *cpu);
+void OsxGuestCpuFlushTlb(OsxCpu *cpu);
+void OsxGuestCpuWatch(OsxCpu *cpu, FILE *file, uint32 rowbytes, uint32 left, uint32 top, uint32 right, uint32 bottom);
+OSXJITABI uint64 OsxGuestCpuTimebase(OsxCpu *cpu);
 uint64 OsxCpuHostTicks(void);
-void OsxCpuCalibrateTimebase(OsxCpu *cpu);
-uint64 OsxCpuNextDeadline(OsxCpu *cpu);
-uint64 OsxHostNanoseconds(void);
-int OsxCpuAddHook(OsxCpu *cpu, uint32 address, OsxHookFunction function, void *context);
-OSXJITABI int OsxCpuFillTlb(OsxCpu *cpu, uint32 address, int kind);
-int OsxCpuTranslate(OsxCpu *cpu, uint32 address, int kind, int raise, uint32 *physical);
-int OsxCpuReadVirtual(OsxCpu *cpu, uint32 address, uint32 *value);
-int OsxCpuWriteVirtual(OsxCpu *cpu, uint32 address, uint32 value);
-void OsxCpuExecuteFloat(OsxCpu *cpu, uint32 instruction);
-void OsxCpuSetFloatCompare(OsxCpu *cpu, int field, double left, double right, int ordered);
-void OsxCpuDump(OsxCpu *cpu, FILE *output);
-void OsxCpuDumpFaults(OsxCpu *cpu, FILE *output);
+void OsxGuestCpuCalibrateTimebase(OsxCpu *cpu);
+uint64 OsxGuestCpuNextDeadline(OsxCpu *cpu);
+uint64 OsxGuestHostNanoseconds(void);
+int OsxGuestCpuAddHook(OsxCpu *cpu, uint32 address, OsxHookFunction function, void *context);
+OSXJITABI int OsxGuestCpuFillTlb(OsxCpu *cpu, uint32 address, int kind);
+int OsxGuestCpuTranslate(OsxCpu *cpu, uint32 address, int kind, int raise, uint32 *physical);
+int OsxGuestCpuReadVirtual(OsxCpu *cpu, uint32 address, uint32 *value);
+int OsxGuestCpuWriteVirtual(OsxCpu *cpu, uint32 address, uint32 value);
+void OsxGuestCpuExecuteFloat(OsxCpu *cpu, uint32 instruction);
+void OsxGuestCpuSetFloatCompare(OsxCpu *cpu, int field, double left, double right, int ordered);
+void OsxGuestCpuDump(OsxCpu *cpu, FILE *output);
+void OsxGuestCpuDumpFaults(OsxCpu *cpu, FILE *output);
 
 #if OSXG5
 #define OSX970MSRSF 0x8000000000000000ULL
@@ -405,20 +405,20 @@ typedef struct Osx970 {
 	Osx970TlbEntry tlb[OSXMODES][OSXTLBKINDS][OSX970TLBSIZE];
 } Osx970;
 
-void Osx970Reset(Osx970 *core, OsxCpu *cpu, uint32 pvr);
-void Osx970FlushTlb(Osx970 *core);
-void Osx970Raise(Osx970 *core, uint32 vector, uint64 srr1bits);
-int Osx970Translate(Osx970 *core, uint64 address, int kind, int raise, uint64 *physical);
-int Osx970Read(Osx970 *core, uint64 address, int size, uint64 *value);
-int Osx970Write(Osx970 *core, uint64 address, int size, uint64 value);
-void Osx970ExecuteInstruction(Osx970 *core, uint32 instruction);
-void Osx970CheckInterrupts(Osx970 *core, uint64 now);
-void Osx970Run(Osx970 *core, int32 count);
-int Osx970TranslateVirtual(Osx970 *core, uint32 address, int kind, uint32 *physical);
-OSXJITABI int Osx970Step(Osx970 *core, uint32 instruction);
-void Osx970InvalidatePhysical(Osx970 *core, uint64 physical, uint64 length);
-int Osx970JitCreate(Osx970 *core);
-void Osx970JitDestroy(Osx970 *core);
+void OsxGuest970Reset(Osx970 *core, OsxCpu *cpu, uint32 pvr);
+void OsxGuest970FlushTlb(Osx970 *core);
+void OsxGuest970Raise(Osx970 *core, uint32 vector, uint64 srr1bits);
+int OsxGuest970Translate(Osx970 *core, uint64 address, int kind, int raise, uint64 *physical);
+int OsxGuest970Read(Osx970 *core, uint64 address, int size, uint64 *value);
+int OsxGuest970Write(Osx970 *core, uint64 address, int size, uint64 value);
+void OsxGuest970ExecuteInstruction(Osx970 *core, uint32 instruction);
+void OsxGuest970CheckInterrupts(Osx970 *core, uint64 now);
+void OsxGuest970Run(Osx970 *core, int32 count);
+int OsxGuest970TranslateVirtual(Osx970 *core, uint32 address, int kind, uint32 *physical);
+OSXJITABI int OsxGuest970Step(Osx970 *core, uint32 instruction);
+void OsxGuest970InvalidatePhysical(Osx970 *core, uint64 physical, uint64 length);
+int OsxGuest970JitCreate(Osx970 *core);
+void OsxGuest970JitDestroy(Osx970 *core);
 void Osx970JitRun(Osx970 *core, int32 count);
 #endif
 

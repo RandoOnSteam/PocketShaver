@@ -39,9 +39,9 @@
 #define OSXFORCEINLINE inline
 #endif
 
-static void UpdateModes(Osx970 *core);
+static void OsxGuestUpdateModes(Osx970 *core);
 
-static uint64 LoadBig(const uint8 *host, int size)
+static uint64 OsxGuestLoadBig(const uint8 *host, int size)
 {
 	uint32 word;
 	uint32 low;
@@ -61,7 +61,7 @@ static uint64 LoadBig(const uint8 *host, int size)
 	return ((uint64)tswap32(word) << 32) | tswap32(low);
 }
 
-static void StoreBig(uint8 *host, int size, uint64 value)
+static void OsxGuestStoreBig(uint8 *host, int size, uint64 value)
 {
 	uint32 word;
 	uint16 half;
@@ -85,19 +85,19 @@ static void StoreBig(uint8 *host, int size, uint64 value)
 	memcpy(host + 4, &word, 4);
 }
 
-static int SixtyFour(Osx970 *core)
+static int OsxGuestSixtyFour(Osx970 *core)
 {
 	return (core->msr & OSX970MSRSF) != 0;
 }
 
-static uint64 Effective(Osx970 *core, uint64 address)
+static uint64 OsxGuestEffective(Osx970 *core, uint64 address)
 {
-	if (SixtyFour(core))
+	if (OsxGuestSixtyFour(core))
 		return address;
 	return address & 0xffffffffULL;
 }
 
-static uint64 RotateLeft64(uint64 value, uint32 count)
+static uint64 OsxGuestRotateLeft64(uint64 value, uint32 count)
 {
 	count &= 63;
 	if (count == 0)
@@ -105,7 +105,7 @@ static uint64 RotateLeft64(uint64 value, uint32 count)
 	return (value << count) | (value >> (64 - count));
 }
 
-static uint64 Mask64(uint32 begin, uint32 end)
+static uint64 OsxGuestMask64(uint32 begin, uint32 end)
 {
 	uint64 first;
 	uint64 last;
@@ -116,19 +116,19 @@ static uint64 Mask64(uint32 begin, uint32 end)
 	return first | last;
 }
 
-static uint64 Duplicate32(uint64 value)
+static uint64 OsxGuestDuplicate32(uint64 value)
 {
 	uint64 low;
 	low = value & 0xffffffffULL;
 	return (low << 32) | low;
 }
 
-static uint64 SignExtend32(uint64 value)
+static uint64 OsxGuestSignExtend32(uint64 value)
 {
 	return (uint64)(int64)(int32)(uint32)value;
 }
 
-static uint64 MultiplyHigh(uint64 left, uint64 right)
+static uint64 OsxGuestMultiplyHigh(uint64 left, uint64 right)
 {
 	uint64 a;
 	uint64 b;
@@ -146,10 +146,10 @@ static uint64 MultiplyHigh(uint64 left, uint64 right)
 	return a * c + (middle >> 32) + (cross >> 32);
 }
 
-static uint64 MultiplyHighSigned(uint64 left, uint64 right)
+static uint64 OsxGuestMultiplyHighSigned(uint64 left, uint64 right)
 {
 	uint64 high;
-	high = MultiplyHigh(left, right);
+	high = OsxGuestMultiplyHigh(left, right);
 	if ((int64)left < 0)
 		high -= right;
 	if ((int64)right < 0)
@@ -157,7 +157,7 @@ static uint64 MultiplyHighSigned(uint64 left, uint64 right)
 	return high;
 }
 
-static int CountLeadingZeros64(uint64 value)
+static int OsxGuestCountLeadingZeros64(uint64 value)
 {
 	int count;
 	count = 0;
@@ -170,14 +170,14 @@ static int CountLeadingZeros64(uint64 value)
 	return count;
 }
 
-static void SetCrField(OsxCpu *cpu, int field, uint32 value)
+static void OsxGuestSetCrField(OsxCpu *cpu, int field, uint32 value)
 {
 	uint32 shift;
 	shift = (uint32)(7 - field) * 4;
 	cpu->cr = (cpu->cr & ~(0xfu << shift)) | ((value & 0xf) << shift);
 }
 
-static void CompareSigned(Osx970 *core, int field, int64 left, int64 right)
+static void OsxGuestCompareSigned(Osx970 *core, int field, int64 left, int64 right)
 {
 	uint32 value;
 	if (left < right)
@@ -186,10 +186,10 @@ static void CompareSigned(Osx970 *core, int field, int64 left, int64 right)
 		value = 4;
 	else
 		value = 2;
-	SetCrField(core->cpu, field, value | (core->cpu->xer >> 31));
+	OsxGuestSetCrField(core->cpu, field, value | (core->cpu->xer >> 31));
 }
 
-static void CompareUnsigned(Osx970 *core, int field, uint64 left, uint64 right)
+static void OsxGuestCompareUnsigned(Osx970 *core, int field, uint64 left, uint64 right)
 {
 	uint32 value;
 	if (left < right)
@@ -198,18 +198,18 @@ static void CompareUnsigned(Osx970 *core, int field, uint64 left, uint64 right)
 		value = 4;
 	else
 		value = 2;
-	SetCrField(core->cpu, field, value | (core->cpu->xer >> 31));
+	OsxGuestSetCrField(core->cpu, field, value | (core->cpu->xer >> 31));
 }
 
-static void SetCr0(Osx970 *core, uint64 result)
+static void OsxGuestSetCr0(Osx970 *core, uint64 result)
 {
-	if (SixtyFour(core))
-		CompareSigned(core, 0, (int64)result, 0);
+	if (OsxGuestSixtyFour(core))
+		OsxGuestCompareSigned(core, 0, (int64)result, 0);
 	else
-		CompareSigned(core, 0, (int64)(int32)(uint32)result, 0);
+		OsxGuestCompareSigned(core, 0, (int64)(int32)(uint32)result, 0);
 }
 
-static void SetCarry(Osx970 *core, int carry)
+static void OsxGuestSetCarry(Osx970 *core, int carry)
 {
 	if (carry)
 		core->cpu->xer |= OSXXERCA;
@@ -217,7 +217,7 @@ static void SetCarry(Osx970 *core, int carry)
 		core->cpu->xer &= ~OSXXERCA;
 }
 
-static void SetOverflow(Osx970 *core, int overflow)
+static void OsxGuestSetOverflow(Osx970 *core, int overflow)
 {
 	if (overflow)
 		core->cpu->xer |= OSXXEROV | OSXXERSO;
@@ -225,14 +225,14 @@ static void SetOverflow(Osx970 *core, int overflow)
 		core->cpu->xer &= ~OSXXEROV;
 }
 
-static uint64 AddExtended(Osx970 *core, uint64 left, uint64 right, uint64 carryin, int setcarry, int setoverflow)
+static uint64 OsxGuestAddExtended(Osx970 *core, uint64 left, uint64 right, uint64 carryin, int setcarry, int setoverflow)
 {
 	uint64 result;
 	uint64 low;
 	int carry;
 	int overflow;
 	result = left + right + carryin;
-	if (SixtyFour(core)) {
+	if (OsxGuestSixtyFour(core)) {
 		carry = result < left || (carryin && result == left);
 		overflow = (int)((~(left ^ right) & (left ^ result)) >> 63);
 	} else {
@@ -241,25 +241,25 @@ static uint64 AddExtended(Osx970 *core, uint64 left, uint64 right, uint64 carryi
 		overflow = (int)(((~(left ^ right) & (left ^ result)) >> 31) & 1);
 	}
 	if (setcarry)
-		SetCarry(core, carry);
+		OsxGuestSetCarry(core, carry);
 	if (setoverflow)
-		SetOverflow(core, overflow);
+		OsxGuestSetOverflow(core, overflow);
 	return result;
 }
 
-static uint64 LinearSize(OsxCpu *cpu)
+static uint64 OsxGuestLinearSize(OsxCpu *cpu)
 {
 	return (uint64)cpu->ramsize + cpu->highram;
 }
 
-static uint64 Linear(OsxCpu *cpu, uint64 physical)
+static uint64 OsxGuestLinear(OsxCpu *cpu, uint64 physical)
 {
 	if (physical >= OSX970HIGHRAM)
 		return cpu->ramsize + (physical - OSX970HIGHRAM);
 	return physical;
 }
 
-void Osx970FlushTlb(Osx970 *core)
+void OsxGuest970FlushTlb(Osx970 *core)
 {
 	int mode;
 	int kind;
@@ -277,14 +277,14 @@ void Osx970FlushTlb(Osx970 *core)
 	core->fetchpage = OSX970TLBINVALID;
 }
 
-static void FlushSegments(Osx970 *core, uint64 first, uint64 second)
+static void OsxGuestFlushSegments(Osx970 *core, uint64 first, uint64 second)
 {
 	Osx970TlbEntry *entry;
 	uint64 segment;
 	int index;
 	int kept;
 	if (core->fillcount > OSX970FILLS) {
-		Osx970FlushTlb(core);
+		OsxGuest970FlushTlb(core);
 		return;
 	}
 	kept = 0;
@@ -300,13 +300,13 @@ static void FlushSegments(Osx970 *core, uint64 first, uint64 second)
 	core->fetchpage = OSX970TLBINVALID;
 }
 
-static void FlushPageIndex(Osx970 *core, uint64 pageindex)
+static void OsxGuestFlushPageIndex(Osx970 *core, uint64 pageindex)
 {
 	Osx970TlbEntry *entry;
 	int index;
 	int kept;
 	if (core->fillcount > OSX970FILLS) {
-		Osx970FlushTlb(core);
+		OsxGuest970FlushTlb(core);
 		return;
 	}
 	kept = 0;
@@ -321,18 +321,18 @@ static void FlushPageIndex(Osx970 *core, uint64 pageindex)
 	core->fetchpage = OSX970TLBINVALID;
 }
 
-static void WriteSegment(Osx970 *core, int index, uint64 esid, uint64 vsid)
+static void OsxGuestWriteSegment(Osx970 *core, int index, uint64 esid, uint64 vsid)
 {
 	Osx970Slb *slb;
 	slb = &core->slb[index];
 	if (slb->esid == esid && slb->vsid == vsid)
 		return;
-	FlushSegments(core, slb->esid >> 28, esid >> 28);
+	OsxGuestFlushSegments(core, slb->esid >> 28, esid >> 28);
 	slb->esid = esid;
 	slb->vsid = vsid;
 }
 
-void Osx970Reset(Osx970 *core, OsxCpu *cpu, uint32 pvr)
+void OsxGuest970Reset(Osx970 *core, OsxCpu *cpu, uint32 pvr)
 {
 	memset(core, 0, sizeof(Osx970));
 	core->cpu = cpu;
@@ -343,11 +343,11 @@ void Osx970Reset(Osx970 *core, OsxCpu *cpu, uint32 pvr)
 	cpu->pvr = pvr;
 	cpu->altivec = 1;
 	core->fillcount = OSX970FILLS + 1;
-	Osx970FlushTlb(core);
-	UpdateModes(core);
+	OsxGuest970FlushTlb(core);
+	OsxGuestUpdateModes(core);
 }
 
-void Osx970Raise(Osx970 *core, uint32 vector, uint64 srr1bits)
+void OsxGuest970Raise(Osx970 *core, uint32 vector, uint64 srr1bits)
 {
 	core->cpu->exceptions++;
 	core->srr0 = core->pc;
@@ -355,29 +355,29 @@ void Osx970Raise(Osx970 *core, uint32 vector, uint64 srr1bits)
 	core->msr = (core->msr & (OSX970MSRHV | OSXMSRME)) | OSX970MSRSF;
 	core->nextpc = core->hior + vector;
 	core->cpu->halted = 0;
-	UpdateModes(core);
+	OsxGuestUpdateModes(core);
 }
 
-static void RaiseAfter(Osx970 *core, uint32 vector)
+static void OsxGuestRaiseAfter(Osx970 *core, uint32 vector)
 {
 	core->cpu->exceptions++;
 	core->srr0 = core->nextpc;
 	core->srr1 = core->msr & ~OSX970SRR1CLEAR;
 	core->msr = (core->msr & (OSX970MSRHV | OSXMSRME)) | OSX970MSRSF;
 	core->nextpc = core->hior + vector;
-	UpdateModes(core);
+	OsxGuestUpdateModes(core);
 }
 
-static void DataFault(Osx970 *core, uint64 address, int kind, uint32 reason)
+static void OsxGuestDataFault(Osx970 *core, uint64 address, int kind, uint32 reason)
 {
 	core->dar = address;
 	core->dsisr = reason;
 	if (kind == OSXTLBWRITE)
 		core->dsisr |= OSXDSISRSTORE;
-	Osx970Raise(core, OSXVECTORDSI, 0);
+	OsxGuest970Raise(core, OSXVECTORDSI, 0);
 }
 
-static void TranslationFault(Osx970 *core, uint64 address, int kind, uint32 reason)
+static void OsxGuestTranslationFault(Osx970 *core, uint64 address, int kind, uint32 reason)
 {
 	OsxFaultRecord *record;
 	if (!(core->msr & OSXMSRPR)) {
@@ -389,23 +389,23 @@ static void TranslationFault(Osx970 *core, uint64 address, int kind, uint32 reas
 		core->cpu->faultlogs++;
 	}
 	if (kind == OSXTLBFETCH)
-		Osx970Raise(core, OSXVECTORISI, reason);
+		OsxGuest970Raise(core, OSXVECTORISI, reason);
 	else
-		DataFault(core, address, kind, reason);
+		OsxGuestDataFault(core, address, kind, reason);
 }
 
-static void SegmentFault(Osx970 *core, uint64 address, int kind)
+static void OsxGuestSegmentFault(Osx970 *core, uint64 address, int kind)
 {
 	if (kind == OSXTLBFETCH) {
-		Osx970Raise(core, OSX970VECTORISEGMENT, 0);
+		OsxGuest970Raise(core, OSX970VECTORISEGMENT, 0);
 		return;
 	}
 	core->dar = address;
 	core->dsisr = 0;
-	Osx970Raise(core, OSX970VECTORDSEGMENT, 0);
+	OsxGuest970Raise(core, OSX970VECTORDSEGMENT, 0);
 }
 
-static int Protected(int key, uint32 pp, int kind)
+static int OsxGuestProtected(int key, uint32 pp, int kind)
 {
 	if (key == 0) {
 		if (kind == OSXTLBWRITE && pp == 3)
@@ -419,7 +419,7 @@ static int Protected(int key, uint32 pp, int kind)
 	return 0;
 }
 
-static int PhysicalHost(Osx970 *core, uint64 physical, uint8 **host)
+static int OsxGuestPhysicalHost(Osx970 *core, uint64 physical, uint8 **host)
 {
 	OsxCpu *cpu;
 	cpu = core->cpu;
@@ -438,7 +438,7 @@ static int PhysicalHost(Osx970 *core, uint64 physical, uint8 **host)
 	return 0;
 }
 
-int Osx970Translate(Osx970 *core, uint64 address, int kind, int raise, uint64 *physical)
+int OsxGuest970Translate(Osx970 *core, uint64 address, int kind, int raise, uint64 *physical)
 {
 	Osx970Slb *slb;
 	uint64 esid;
@@ -478,12 +478,12 @@ int Osx970Translate(Osx970 *core, uint64 address, int kind, int raise, uint64 *p
 	}
 	if (slb == NULL) {
 		if (raise)
-			SegmentFault(core, address, kind);
+			OsxGuestSegmentFault(core, address, kind);
 		return 0;
 	}
 	if (kind == OSXTLBFETCH && (slb->vsid & OSX970SLBN)) {
 		if (raise)
-			TranslationFault(core, address, kind, OSXISIGUARDED);
+			OsxGuestTranslationFault(core, address, kind, OSXISIGUARDED);
 		return 0;
 	}
 	if (core->msr & OSXMSRPR)
@@ -497,18 +497,18 @@ int Osx970Translate(Osx970 *core, uint64 address, int kind, int raise, uint64 *p
 	for (pass = 0; pass < 2; pass++) {
 		pteg = (core->sdr1 & 0x0ffffffffffc0000ULL) | ((hash & mask) << 7);
 		for (slot = 0; slot < 8; slot++) {
-			if (!PhysicalHost(core, pteg + (uint64)slot * 16, &host))
+			if (!OsxGuestPhysicalHost(core, pteg + (uint64)slot * 16, &host))
 				break;
-			word0 = LoadBig(host, 8);
+			word0 = OsxGuestLoadBig(host, 8);
 			if ((word0 ^ (compare | ((uint64)pass << 1))) & 0xffffffffffffff83ULL)
 				continue;
-			word1 = LoadBig(host + 8, 8);
-			if (Protected(key, (uint32)(word1 & 3), kind) || (kind == OSXTLBFETCH && (word1 & 0x0c))) {
+			word1 = OsxGuestLoadBig(host + 8, 8);
+			if (OsxGuestProtected(key, (uint32)(word1 & 3), kind) || (kind == OSXTLBFETCH && (word1 & 0x0c))) {
 				if (raise) {
 					if (kind == OSXTLBFETCH && (word1 & 0x0c))
-						TranslationFault(core, address, kind, OSXISIGUARDED);
+						OsxGuestTranslationFault(core, address, kind, OSXISIGUARDED);
 					else
-						TranslationFault(core, address, kind, OSXDSISRPROTECTION);
+						OsxGuestTranslationFault(core, address, kind, OSXDSISRPROTECTION);
 				}
 				return 0;
 			}
@@ -516,18 +516,18 @@ int Osx970Translate(Osx970 *core, uint64 address, int kind, int raise, uint64 *p
 			if (kind == OSXTLBWRITE)
 				updated |= 0x80;
 			if (updated != word1)
-				StoreBig(host + 8, 8, updated);
+				OsxGuestStoreBig(host + 8, 8, updated);
 			*physical = (word1 & 0x0ffffffffffff000ULL) | (address & 0xfff);
 			return 1;
 		}
 		hash = ~hash;
 	}
 	if (raise)
-		TranslationFault(core, address, kind, OSXDSISRNOTFOUND);
+		OsxGuestTranslationFault(core, address, kind, OSXDSISRNOTFOUND);
 	return 0;
 }
 
-static int Mode(Osx970 *core, int kind)
+static int OsxGuestMode(Osx970 *core, int kind)
 {
 	uint64 bit;
 	bit = OSXMSRDR;
@@ -540,22 +540,22 @@ static int Mode(Osx970 *core, int kind)
 	return OSXMODESUPERVISOR;
 }
 
-static void UpdateModes(Osx970 *core)
+static void OsxGuestUpdateModes(Osx970 *core)
 {
-	core->modes[OSXTLBREAD] = Mode(core, OSXTLBREAD);
+	core->modes[OSXTLBREAD] = OsxGuestMode(core, OSXTLBREAD);
 	core->modes[OSXTLBWRITE] = core->modes[OSXTLBREAD];
-	core->modes[OSXTLBFETCH] = Mode(core, OSXTLBFETCH);
+	core->modes[OSXTLBFETCH] = OsxGuestMode(core, OSXTLBFETCH);
 	core->fetchpage = OSX970TLBINVALID;
 }
 
-void Osx970InvalidatePhysical(Osx970 *core, uint64 physical, uint64 length)
+void OsxGuest970InvalidatePhysical(Osx970 *core, uint64 physical, uint64 length)
 {
 	uint64 page;
 	uint64 last;
-	if (core->codepages == NULL || length == 0 || physical >= LinearSize(core->cpu))
+	if (core->codepages == NULL || length == 0 || physical >= OsxGuestLinearSize(core->cpu))
 		return;
-	if (length > LinearSize(core->cpu) - physical)
-		length = LinearSize(core->cpu) - physical;
+	if (length > OsxGuestLinearSize(core->cpu) - physical)
+		length = OsxGuestLinearSize(core->cpu) - physical;
 	last = (physical + length - 1) >> 12;
 	for (page = physical >> 12; page <= last; page++) {
 		if (core->codepages[page]) {
@@ -565,14 +565,14 @@ void Osx970InvalidatePhysical(Osx970 *core, uint64 physical, uint64 length)
 	}
 }
 
-static uint8 *HostSlow(Osx970 *core, uint64 address, int kind, int raise, uint64 *physical, int *bus, Osx970TlbEntry *entry)
+static uint8 *OsxGuestHostSlow(Osx970 *core, uint64 address, int kind, int raise, uint64 *physical, int *bus, Osx970TlbEntry *entry)
 {
 	uint8 *host;
-	if (!Osx970Translate(core, address, kind, raise, physical))
+	if (!OsxGuest970Translate(core, address, kind, raise, physical))
 		return NULL;
 	if (kind == OSXTLBWRITE)
-		Osx970InvalidatePhysical(core, Linear(core->cpu, *physical), 1);
-	if (!PhysicalHost(core, *physical, &host)) {
+		OsxGuest970InvalidatePhysical(core, OsxGuestLinear(core->cpu, *physical), 1);
+	if (!OsxGuestPhysicalHost(core, *physical, &host)) {
 		*bus = 1;
 		return NULL;
 	}
@@ -585,17 +585,17 @@ static uint8 *HostSlow(Osx970 *core, uint64 address, int kind, int raise, uint64
 	return host;
 }
 
-static OSXFORCEINLINE uint8 *Host(Osx970 *core, uint64 address, int kind, int raise, uint64 *physical, int *bus)
+static OSXFORCEINLINE uint8 *OsxGuestCpu970Host(Osx970 *core, uint64 address, int kind, int raise, uint64 *physical, int *bus)
 {
 	Osx970TlbEntry *entry;
 	*bus = 0;
 	entry = &core->tlb[core->modes[kind]][kind][(address >> 12) & OSX970TLBMASK];
 	if (entry->page == (address & ~0xfffULL))
 		return (uint8 *)((uintptr_t)entry->host + (uintptr_t)address);
-	return HostSlow(core, address, kind, raise, physical, bus, entry);
+	return OsxGuestHostSlow(core, address, kind, raise, physical, bus, entry);
 }
 
-int Osx970Read(Osx970 *core, uint64 address, int size, uint64 *value)
+int OsxGuest970Read(Osx970 *core, uint64 address, int size, uint64 *value)
 {
 	uint8 *host;
 	uint64 physical;
@@ -603,20 +603,20 @@ int Osx970Read(Osx970 *core, uint64 address, int size, uint64 *value)
 	uint64 byte;
 	int bus;
 	int index;
-	address = Effective(core, address);
+	address = OsxGuestEffective(core, address);
 	if ((address & 0xfff) + (uint64)size > 0x1000) {
 		result = 0;
 		for (index = 0; index < size; index++) {
-			if (!Osx970Read(core, address + (uint64)index, 1, &byte))
+			if (!OsxGuest970Read(core, address + (uint64)index, 1, &byte))
 				return 0;
 			result = (result << 8) | byte;
 		}
 		*value = result;
 		return 1;
 	}
-	host = Host(core, address, OSXTLBREAD, 1, &physical, &bus);
+	host = OsxGuestCpu970Host(core, address, OSXTLBREAD, 1, &physical, &bus);
 	if (host) {
-		*value = LoadBig(host, size);
+		*value = OsxGuestLoadBig(host, size);
 		return 1;
 	}
 	if (!bus)
@@ -634,22 +634,22 @@ int Osx970Read(Osx970 *core, uint64 address, int size, uint64 *value)
 	return 1;
 }
 
-int Osx970Write(Osx970 *core, uint64 address, int size, uint64 value)
+int OsxGuest970Write(Osx970 *core, uint64 address, int size, uint64 value)
 {
 	uint8 *host;
 	uint64 physical;
 	int bus;
 	int index;
-	address = Effective(core, address);
+	address = OsxGuestEffective(core, address);
 	if ((address & 0xfff) + (uint64)size > 0x1000) {
 		for (index = 0; index < size; index++)
-			if (!Osx970Write(core, address + (uint64)index, 1, (value >> ((size - 1 - index) * 8)) & 0xff))
+			if (!OsxGuest970Write(core, address + (uint64)index, 1, (value >> ((size - 1 - index) * 8)) & 0xff))
 				return 0;
 		return 1;
 	}
-	host = Host(core, address, OSXTLBWRITE, 1, &physical, &bus);
+	host = OsxGuestCpu970Host(core, address, OSXTLBWRITE, 1, &physical, &bus);
 	if (host) {
-		StoreBig(host, size, value);
+		OsxGuestStoreBig(host, size, value);
 		return 1;
 	}
 	if (!bus)
@@ -665,42 +665,42 @@ int Osx970Write(Osx970 *core, uint64 address, int size, uint64 value)
 	return 1;
 }
 
-static int Fetch(Osx970 *core, uint32 *instruction)
+static int OsxGuestFetch(Osx970 *core, uint32 *instruction)
 {
 	uint64 physical;
 	uint8 *host;
 	int bus;
 	if ((core->pc & ~0xfffULL) != core->fetchpage) {
-		host = Host(core, core->pc, OSXTLBFETCH, 1, &physical, &bus);
+		host = OsxGuestCpu970Host(core, core->pc, OSXTLBFETCH, 1, &physical, &bus);
 		if (host == NULL) {
 			if (bus)
-				Osx970Raise(core, OSXVECTORMACHINECHECK, 0);
+				OsxGuest970Raise(core, OSXVECTORMACHINECHECK, 0);
 			return 0;
 		}
 		core->fetchhost = host - (core->pc & 0xfff);
 		core->fetchpage = core->pc & ~0xfffULL;
 	}
-	*instruction = (uint32)LoadBig(core->fetchhost + (core->pc & 0xfff), 4);
+	*instruction = (uint32)OsxGuestLoadBig(core->fetchhost + (core->pc & 0xfff), 4);
 	return 1;
 }
 
-static int Supervisor(Osx970 *core)
+static int OsxGuestSupervisor(Osx970 *core)
 {
 	if (!(core->msr & OSXMSRPR))
 		return 1;
-	Osx970Raise(core, OSXVECTORPROGRAM, OSXPROGRAMPRIVILEGED);
+	OsxGuest970Raise(core, OSXVECTORPROGRAM, OSXPROGRAMPRIVILEGED);
 	return 0;
 }
 
-static void Illegal(Osx970 *core)
+static void OsxGuestIllegal(Osx970 *core)
 {
-	Osx970Raise(core, OSXVECTORPROGRAM, OSXPROGRAMILLEGAL);
+	OsxGuest970Raise(core, OSXVECTORPROGRAM, OSXPROGRAMILLEGAL);
 }
 
-static void WriteMsr(Osx970 *core, uint64 value)
+static void OsxGuestWriteMsr(Osx970 *core, uint64 value)
 {
 	core->msr = value;
-	UpdateModes(core);
+	OsxGuestUpdateModes(core);
 	if ((value & OSXMSRPOW) && (core->hid0 & (OSX970HID0DOZE | OSX970HID0NAP | OSX970HID0DEEPNAP))) {
 		core->cpu->halted = 1;
 		core->cpu->slice = 0;
@@ -709,18 +709,18 @@ static void WriteMsr(Osx970 *core, uint64 value)
 		core->cpu->slice = 0;
 }
 
-static uint64 Timebase(Osx970 *core)
+static uint64 OsxGuestTimebase(Osx970 *core)
 {
-	return OsxCpuTimebase(core->cpu);
+	return OsxGuestCpuTimebase(core->cpu);
 }
 
-static void WriteTimebase(Osx970 *core, uint32 number, uint64 value)
+static void OsxGuestWriteTimebase(Osx970 *core, uint32 number, uint64 value)
 {
 	OsxCpu *cpu;
 	uint64 current;
 	uint64 wanted;
 	cpu = core->cpu;
-	current = Timebase(core);
+	current = OsxGuestTimebase(core);
 	if (number == 285)
 		wanted = (value << 32) | (current & 0xffffffffULL);
 	else
@@ -731,19 +731,19 @@ static void WriteTimebase(Osx970 *core, uint32 number, uint64 value)
 	cpu->decstamp += wanted - current;
 }
 
-static void WriteDecrementer(Osx970 *core, uint32 value)
+static void OsxGuestWriteDecrementer(Osx970 *core, uint32 value)
 {
 	OsxCpu *cpu;
 	cpu = core->cpu;
 	cpu->decvalue = value;
-	cpu->decstamp = Timebase(core);
+	cpu->decstamp = OsxGuestTimebase(core);
 	if ((int32)value >= 0)
 		cpu->decdeadline = cpu->decstamp + value + 1;
 	else
 		cpu->decdeadline = OSXNEVER;
 }
 
-static int ReadSpr(Osx970 *core, uint32 number, uint64 *value)
+static int OsxGuestReadSpr(Osx970 *core, uint32 number, uint64 *value)
 {
 	OsxCpu *cpu;
 	cpu = core->cpu;
@@ -753,14 +753,14 @@ static int ReadSpr(Osx970 *core, uint32 number, uint64 *value)
 	case 9: *value = core->ctr; return 1;
 	case 18: *value = core->dsisr; return 1;
 	case 19: *value = core->dar; return 1;
-	case 22: *value = (uint32)(cpu->decvalue - (uint32)(Timebase(core) - cpu->decstamp)); return 1;
+	case 22: *value = (uint32)(cpu->decvalue - (uint32)(OsxGuestTimebase(core) - cpu->decstamp)); return 1;
 	case 25: *value = core->sdr1; return 1;
 	case 26: *value = core->srr0; return 1;
 	case 27: *value = core->srr1; return 1;
 	case 256: *value = cpu->vrsave; return 1;
 	case 259: *value = core->sprg[3]; return 1;
-	case 268: *value = Timebase(core); return 1;
-	case 269: *value = Timebase(core) >> 32; return 1;
+	case 268: *value = OsxGuestTimebase(core); return 1;
+	case 269: *value = OsxGuestTimebase(core) >> 32; return 1;
 	case 272: case 273: case 274: case 275: *value = core->sprg[number - 272]; return 1;
 	case 276: *value = core->scomc; return 1;
 	case 277: *value = core->scomd; return 1;
@@ -784,7 +784,7 @@ static int ReadSpr(Osx970 *core, uint32 number, uint64 *value)
 	return 0;
 }
 
-static int WriteSpr(Osx970 *core, uint32 number, uint64 value)
+static int OsxGuestWriteSpr(Osx970 *core, uint32 number, uint64 value)
 {
 	OsxCpu *cpu;
 	cpu = core->cpu;
@@ -794,15 +794,15 @@ static int WriteSpr(Osx970 *core, uint32 number, uint64 value)
 	case 9: core->ctr = value; return 1;
 	case 18: core->dsisr = (uint32)value; return 1;
 	case 19: core->dar = value; return 1;
-	case 22: WriteDecrementer(core, (uint32)value); return 1;
-	case 25: core->sdr1 = value; Osx970FlushTlb(core); return 1;
+	case 22: OsxGuestWriteDecrementer(core, (uint32)value); return 1;
+	case 25: core->sdr1 = value; OsxGuest970FlushTlb(core); return 1;
 	case 26: core->srr0 = value; return 1;
 	case 27: core->srr1 = value; return 1;
 	case 256: cpu->vrsave = (uint32)value; return 1;
 	case 272: case 273: case 274: case 275: core->sprg[number - 272] = value; return 1;
 	case 276: core->scomc = value; return 1;
 	case 277: core->scomd = value; return 1;
-	case 284: case 285: WriteTimebase(core, number, value); return 1;
+	case 284: case 285: OsxGuestWriteTimebase(core, number, value); return 1;
 	case 304: case 305: core->hsprg[number - 304] = value; return 1;
 	case 311: core->hior = value; return 1;
 	case 314: core->hsrr0 = value; return 1;
@@ -820,19 +820,19 @@ static int WriteSpr(Osx970 *core, uint32 number, uint64 value)
 	return 0;
 }
 
-static uint32 SprNumber(uint32 instruction)
+static uint32 OsxGuestSprNumber(uint32 instruction)
 {
 	return ((instruction >> 16) & 31) | (((instruction >> 11) & 31) << 5);
 }
 
-static void MoveFromSpr(Osx970 *core, uint32 instruction)
+static void OsxGuestMoveFromSpr(Osx970 *core, uint32 instruction)
 {
 	uint32 number;
 	uint64 value;
-	number = SprNumber(instruction);
-	if ((number & 0x10) && !Supervisor(core))
+	number = OsxGuestSprNumber(instruction);
+	if ((number & 0x10) && !OsxGuestSupervisor(core))
 		return;
-	if (!ReadSpr(core, number, &value)) {
+	if (!OsxGuestReadSpr(core, number, &value)) {
 		if (core->cpu->logfile)
 			fprintf(core->cpu->logfile, "970 mfspr %u at %016llx\n", number, (unsigned long long)core->pc);
 		value = 0;
@@ -840,17 +840,17 @@ static void MoveFromSpr(Osx970 *core, uint32 instruction)
 	core->gpr[(instruction >> 21) & 31] = value;
 }
 
-static void MoveToSpr(Osx970 *core, uint32 instruction)
+static void OsxGuestMoveToSpr(Osx970 *core, uint32 instruction)
 {
 	uint32 number;
-	number = SprNumber(instruction);
-	if ((number & 0x10) && !Supervisor(core))
+	number = OsxGuestSprNumber(instruction);
+	if ((number & 0x10) && !OsxGuestSupervisor(core))
 		return;
-	if (!WriteSpr(core, number, core->gpr[(instruction >> 21) & 31]) && core->cpu->logfile)
+	if (!OsxGuestWriteSpr(core, number, core->gpr[(instruction >> 21) & 31]) && core->cpu->logfile)
 		fprintf(core->cpu->logfile, "970 mtspr %u at %016llx\n", number, (unsigned long long)core->pc);
 }
 
-static void Trap(Osx970 *core, uint32 options, uint64 left, uint64 right, int doubleword)
+static void OsxGuestTrap(Osx970 *core, uint32 options, uint64 left, uint64 right, int doubleword)
 {
 	int64 signedleft;
 	int64 signedright;
@@ -876,10 +876,10 @@ static void Trap(Osx970 *core, uint32 options, uint64 left, uint64 right, int do
 	if ((options & 1) && left > right)
 		trap = 1;
 	if (trap)
-		Osx970Raise(core, OSXVECTORPROGRAM, OSXPROGRAMTRAP);
+		OsxGuest970Raise(core, OSXVECTORPROGRAM, OSXPROGRAMTRAP);
 }
 
-static int BranchTaken(Osx970 *core, uint32 options, uint32 bit, int decrement)
+static int OsxGuestBranchTaken(Osx970 *core, uint32 options, uint32 bit, int decrement)
 {
 	uint64 counter;
 	int counterok;
@@ -888,7 +888,7 @@ static int BranchTaken(Osx970 *core, uint32 options, uint32 bit, int decrement)
 	if (decrement && !(options & 4)) {
 		core->ctr--;
 		counter = core->ctr;
-		if (!SixtyFour(core))
+		if (!OsxGuestSixtyFour(core))
 			counter &= 0xffffffffULL;
 		counterok = (counter != 0) != ((options & 2) != 0);
 	}
@@ -898,7 +898,7 @@ static int BranchTaken(Osx970 *core, uint32 options, uint32 bit, int decrement)
 	return counterok && conditionok;
 }
 
-static void SetCrBit(OsxCpu *cpu, uint32 bit, uint32 value)
+static void OsxGuestSetCrBit(OsxCpu *cpu, uint32 bit, uint32 value)
 {
 	if (value)
 		cpu->cr |= 0x80000000u >> bit;
@@ -906,7 +906,7 @@ static void SetCrBit(OsxCpu *cpu, uint32 bit, uint32 value)
 		cpu->cr &= ~(0x80000000u >> bit);
 }
 
-static void ExecuteGroup19(Osx970 *core, uint32 instruction)
+static void OsxGuestExecuteGroup19(Osx970 *core, uint32 instruction)
 {
 	OsxCpu *cpu;
 	uint32 extended;
@@ -918,7 +918,7 @@ static void ExecuteGroup19(Osx970 *core, uint32 instruction)
 	extended = (instruction >> 1) & 0x3ff;
 	switch (extended) {
 	case 0:
-		SetCrField(cpu, (int)((instruction >> 23) & 7), (cpu->cr >> ((7 - ((instruction >> 18) & 7)) * 4)) & 0xf);
+		OsxGuestSetCrField(cpu, (int)((instruction >> 23) & 7), (cpu->cr >> ((7 - ((instruction >> 18) & 7)) * 4)) & 0xf);
 		return;
 	case 16:
 	case 528:
@@ -926,30 +926,30 @@ static void ExecuteGroup19(Osx970 *core, uint32 instruction)
 			target = core->lr & ~3ULL;
 		else
 			target = core->ctr & ~3ULL;
-		if (BranchTaken(core, (instruction >> 21) & 31, (instruction >> 16) & 31, extended == 16))
-			core->nextpc = Effective(core, target);
+		if (OsxGuestBranchTaken(core, (instruction >> 21) & 31, (instruction >> 16) & 31, extended == 16))
+			core->nextpc = OsxGuestEffective(core, target);
 		if (instruction & 1)
-			core->lr = Effective(core, core->pc + 4);
+			core->lr = OsxGuestEffective(core, core->pc + 4);
 		return;
 	case 18:
-		if (!Supervisor(core))
+		if (!OsxGuestSupervisor(core))
 			return;
 		core->nextpc = core->srr0 & ~3ULL;
-		WriteMsr(core, (core->srr1 & ~OSX970MSRHV) | (core->msr & OSX970MSRHV));
-		core->nextpc = Effective(core, core->nextpc);
+		OsxGuestWriteMsr(core, (core->srr1 & ~OSX970MSRHV) | (core->msr & OSX970MSRHV));
+		core->nextpc = OsxGuestEffective(core, core->nextpc);
 		return;
 	case 50:
-		if (!Supervisor(core))
+		if (!OsxGuestSupervisor(core))
 			return;
 		core->nextpc = core->srr0 & 0xfffffffcULL;
-		WriteMsr(core, (core->msr & OSX970MSRHV) | (core->srr1 & 0xffffffffULL));
+		OsxGuestWriteMsr(core, (core->msr & OSX970MSRHV) | (core->srr1 & 0xffffffffULL));
 		return;
 	case 274:
-		if (!Supervisor(core))
+		if (!OsxGuestSupervisor(core))
 			return;
 		core->nextpc = core->hsrr0 & ~3ULL;
-		WriteMsr(core, core->hsrr1);
-		core->nextpc = Effective(core, core->nextpc);
+		OsxGuestWriteMsr(core, core->hsrr1);
+		core->nextpc = OsxGuestEffective(core, core->nextpc);
 		return;
 	case 150:
 		core->fetchpage = OSX970TLBINVALID;
@@ -967,13 +967,13 @@ static void ExecuteGroup19(Osx970 *core, uint32 instruction)
 	case 417: result = a | !b; break;
 	case 449: result = a | b; break;
 	default:
-		Illegal(core);
+		OsxGuestIllegal(core);
 		return;
 	}
-	SetCrBit(cpu, (instruction >> 21) & 31, result);
+	OsxGuestSetCrBit(cpu, (instruction >> 21) & 31, result);
 }
 
-static void ExecuteRotate(Osx970 *core, uint32 instruction)
+static void OsxGuestExecuteRotate(Osx970 *core, uint32 instruction)
 {
 	uint64 source;
 	uint64 rotated;
@@ -989,34 +989,34 @@ static void ExecuteRotate(Osx970 *core, uint32 instruction)
 	bound = ((field & 1) << 5) | (field >> 1);
 	switch ((instruction >> 2) & 7) {
 	case 0:
-		core->gpr[ra] = RotateLeft64(source, shift) & Mask64(bound, 63);
+		core->gpr[ra] = OsxGuestRotateLeft64(source, shift) & OsxGuestMask64(bound, 63);
 		break;
 	case 1:
-		core->gpr[ra] = RotateLeft64(source, shift) & Mask64(0, bound);
+		core->gpr[ra] = OsxGuestRotateLeft64(source, shift) & OsxGuestMask64(0, bound);
 		break;
 	case 2:
-		core->gpr[ra] = RotateLeft64(source, shift) & Mask64(bound, 63 - shift);
+		core->gpr[ra] = OsxGuestRotateLeft64(source, shift) & OsxGuestMask64(bound, 63 - shift);
 		break;
 	case 3:
-		mask = Mask64(bound, 63 - shift);
-		core->gpr[ra] = (RotateLeft64(source, shift) & mask) | (core->gpr[ra] & ~mask);
+		mask = OsxGuestMask64(bound, 63 - shift);
+		core->gpr[ra] = (OsxGuestRotateLeft64(source, shift) & mask) | (core->gpr[ra] & ~mask);
 		break;
 	case 4:
-		rotated = RotateLeft64(source, (uint32)(core->gpr[(instruction >> 11) & 31] & 63));
+		rotated = OsxGuestRotateLeft64(source, (uint32)(core->gpr[(instruction >> 11) & 31] & 63));
 		if ((instruction >> 1) & 1)
-			core->gpr[ra] = rotated & Mask64(0, bound);
+			core->gpr[ra] = rotated & OsxGuestMask64(0, bound);
 		else
-			core->gpr[ra] = rotated & Mask64(bound, 63);
+			core->gpr[ra] = rotated & OsxGuestMask64(bound, 63);
 		break;
 	default:
-		Illegal(core);
+		OsxGuestIllegal(core);
 		return;
 	}
 	if (instruction & 1)
-		SetCr0(core, core->gpr[ra]);
+		OsxGuestSetCr0(core, core->gpr[ra]);
 }
 
-static uint64 IndexedAddress(Osx970 *core, uint32 instruction)
+static uint64 OsxGuestIndexedAddress(Osx970 *core, uint32 instruction)
 {
 	uint32 ra;
 	uint64 base;
@@ -1024,10 +1024,10 @@ static uint64 IndexedAddress(Osx970 *core, uint32 instruction)
 	base = 0;
 	if (ra)
 		base = core->gpr[ra];
-	return Effective(core, base + core->gpr[(instruction >> 11) & 31]);
+	return OsxGuestEffective(core, base + core->gpr[(instruction >> 11) & 31]);
 }
 
-static void UpdateBase(Osx970 *core, uint32 instruction, uint64 address)
+static void OsxGuestUpdateBase(Osx970 *core, uint32 instruction, uint64 address)
 {
 	uint32 ra;
 	ra = (instruction >> 16) & 31;
@@ -1035,35 +1035,35 @@ static void UpdateBase(Osx970 *core, uint32 instruction, uint64 address)
 		core->gpr[ra] = address;
 }
 
-static int VectorEnabled(Osx970 *core)
+static int OsxGuestVectorEnabled(Osx970 *core)
 {
 	if (core->msr & OSXMSRVEC)
 		return 1;
-	Osx970Raise(core, OSXVECTORALTIVEC, 0);
+	OsxGuest970Raise(core, OSXVECTORALTIVEC, 0);
 	return 0;
 }
 
-static int FloatEnabled(Osx970 *core)
+static int OsxGuestFloatEnabled(Osx970 *core)
 {
 	if (core->msr & OSXMSRFP)
 		return 1;
-	Osx970Raise(core, OSXVECTORFPUNAVAILABLE, 0);
+	OsxGuest970Raise(core, OSXVECTORFPUNAVAILABLE, 0);
 	return 0;
 }
 
-static uint32 VectorByte(const uint32 *vector, uint32 index)
+static uint32 OsxGuestVectorByte(const uint32 *vector, uint32 index)
 {
 	return (vector[index >> 2] >> ((3 - (index & 3)) * 8)) & 0xff;
 }
 
-static void SetVectorByte(uint32 *vector, uint32 index, uint32 value)
+static void OsxGuestSetVectorByte(uint32 *vector, uint32 index, uint32 value)
 {
 	uint32 shift;
 	shift = (3 - (index & 3)) * 8;
 	vector[index >> 2] = (vector[index >> 2] & ~(0xffu << shift)) | ((value & 0xff) << shift);
 }
 
-static int ExecuteVectorMemory(Osx970 *core, uint32 instruction, uint32 extended)
+static int OsxGuestExecuteVectorMemory(Osx970 *core, uint32 instruction, uint32 extended)
 {
 	uint32 *vector;
 	uint32 element;
@@ -1079,22 +1079,22 @@ static int ExecuteVectorMemory(Osx970 *core, uint32 instruction, uint32 extended
 	default:
 		return 0;
 	}
-	if (!VectorEnabled(core))
+	if (!OsxGuestVectorEnabled(core))
 		return 1;
 	vector = core->cpu->vr[(instruction >> 21) & 31];
-	address = IndexedAddress(core, instruction);
+	address = OsxGuestIndexedAddress(core, instruction);
 	switch (extended) {
 	case 6: case 38:
 		element = (uint32)(address & 15);
 		if (extended == 38)
 			element = 16 - element;
 		for (index = 0; index < 16; index++)
-			SetVectorByte(vector, index, element + index);
+			OsxGuestSetVectorByte(vector, index, element + index);
 		return 1;
 	case 103: case 359:
 		address &= ~15ULL;
 		for (index = 0; index < 4; index++) {
-			if (!Osx970Read(core, address + index * 4, 4, &value))
+			if (!OsxGuest970Read(core, address + index * 4, 4, &value))
 				return 1;
 			vector[index] = (uint32)value;
 		}
@@ -1102,7 +1102,7 @@ static int ExecuteVectorMemory(Osx970 *core, uint32 instruction, uint32 extended
 	case 231: case 487:
 		address &= ~15ULL;
 		for (index = 0; index < 4; index++)
-			if (!Osx970Write(core, address + index * 4, 4, vector[index]))
+			if (!OsxGuest970Write(core, address + index * 4, 4, vector[index]))
 				return 1;
 		return 1;
 	}
@@ -1114,50 +1114,50 @@ static int ExecuteVectorMemory(Osx970 *core, uint32 instruction, uint32 extended
 	address &= ~(uint64)(size - 1);
 	element = (uint32)(address & 15);
 	if (extended == 7 || extended == 39 || extended == 71) {
-		if (!Osx970Read(core, address, (int)size, &value))
+		if (!OsxGuest970Read(core, address, (int)size, &value))
 			return 1;
 		for (index = 0; index < size; index++)
-			SetVectorByte(vector, element + index, (uint32)(value >> ((size - 1 - index) * 8)));
+			OsxGuestSetVectorByte(vector, element + index, (uint32)(value >> ((size - 1 - index) * 8)));
 		return 1;
 	}
 	value = 0;
 	for (index = 0; index < size; index++)
-		value = (value << 8) | VectorByte(vector, element + index);
-	Osx970Write(core, address, (int)size, value);
+		value = (value << 8) | OsxGuestVectorByte(vector, element + index);
+	OsxGuest970Write(core, address, (int)size, value);
 	return 1;
 }
 
-static int ExecuteFloatMemory(Osx970 *core, uint32 instruction, uint32 extended, uint64 address)
+static int OsxGuestExecuteFloatMemory(Osx970 *core, uint32 instruction, uint32 extended, uint64 address)
 {
 	OsxCpu *cpu;
 	uint64 value;
 	int target;
 	cpu = core->cpu;
 	target = (instruction >> 21) & 31;
-	if (!FloatEnabled(core))
+	if (!OsxGuestFloatEnabled(core))
 		return 0;
 	switch (extended) {
 	case 48:
-		if (!Osx970Read(core, address, 4, &value))
+		if (!OsxGuest970Read(core, address, 4, &value))
 			return 0;
-		cpu->fpr[target].bits = OsxCpuSingleToDouble((uint32)value);
+		cpu->fpr[target].bits = OsxGuestCpuSingleToDouble((uint32)value);
 		return 1;
 	case 50:
-		if (!Osx970Read(core, address, 8, &value))
+		if (!OsxGuest970Read(core, address, 8, &value))
 			return 0;
 		cpu->fpr[target].bits = value;
 		return 1;
 	case 52:
-		return Osx970Write(core, address, 4, OsxCpuDoubleToSingle(cpu->fpr[target].bits));
+		return OsxGuest970Write(core, address, 4, OsxGuestCpuDoubleToSingle(cpu->fpr[target].bits));
 	case 54:
-		return Osx970Write(core, address, 8, cpu->fpr[target].bits);
+		return OsxGuest970Write(core, address, 8, cpu->fpr[target].bits);
 	case 983:
-		return Osx970Write(core, address, 4, (uint32)cpu->fpr[target].bits);
+		return OsxGuest970Write(core, address, 4, (uint32)cpu->fpr[target].bits);
 	}
 	return 0;
 }
 
-static void LoadStoreString(Osx970 *core, uint32 instruction, uint64 address, uint32 count, int store)
+static void OsxGuestLoadStoreString(Osx970 *core, uint32 instruction, uint64 address, uint32 count, int store)
 {
 	uint32 reg;
 	uint32 index;
@@ -1168,28 +1168,28 @@ static void LoadStoreString(Osx970 *core, uint32 instruction, uint64 address, ui
 			reg = (reg + 1) & 31;
 		if (store) {
 			byte = (core->gpr[reg] >> (24 - (index & 3) * 8)) & 0xff;
-			if (!Osx970Write(core, address + index, 1, byte))
+			if (!OsxGuest970Write(core, address + index, 1, byte))
 				return;
 		} else {
 			if (!(index & 3))
 				core->gpr[reg] = 0;
-			if (!Osx970Read(core, address + index, 1, &byte))
+			if (!OsxGuest970Read(core, address + index, 1, &byte))
 				return;
 			core->gpr[reg] |= byte << (24 - (index & 3) * 8);
 		}
 	}
 }
 
-static void ZeroBlock(Osx970 *core, uint64 address, uint32 size)
+static void OsxGuestZeroBlock(Osx970 *core, uint64 address, uint32 size)
 {
 	uint32 index;
 	address &= ~(uint64)(size - 1);
 	for (index = 0; index < size; index += 8)
-		if (!Osx970Write(core, address + index, 8, 0))
+		if (!OsxGuest970Write(core, address + index, 8, 0))
 			return;
 }
 
-static void Arithmetic(Osx970 *core, uint32 instruction, uint32 kind)
+static void OsxGuestArithmetic(Osx970 *core, uint32 instruction, uint32 kind)
 {
 	OsxCpu *cpu;
 	uint64 a;
@@ -1207,31 +1207,31 @@ static void Arithmetic(Osx970 *core, uint32 instruction, uint32 kind)
 	carry = (cpu->xer >> 29) & 1;
 	result = 0;
 	switch (kind) {
-	case 8: result = AddExtended(core, ~a, b, 1, 1, oe); break;
-	case 10: result = AddExtended(core, a, b, 0, 1, oe); break;
-	case 40: result = AddExtended(core, ~a, b, 1, 0, oe); break;
-	case 104: result = AddExtended(core, ~a, 0, 1, 0, oe); break;
-	case 136: result = AddExtended(core, ~a, b, carry, 1, oe); break;
-	case 138: result = AddExtended(core, a, b, carry, 1, oe); break;
-	case 200: result = AddExtended(core, ~a, 0, carry, 1, oe); break;
-	case 202: result = AddExtended(core, a, 0, carry, 1, oe); break;
-	case 232: result = AddExtended(core, ~a, 0xffffffffffffffffULL, carry, 1, oe); break;
-	case 234: result = AddExtended(core, a, 0xffffffffffffffffULL, carry, 1, oe); break;
-	case 266: result = AddExtended(core, a, b, 0, 0, oe); break;
-	case 9: result = MultiplyHigh(a, b); break;
-	case 73: result = MultiplyHighSigned(a, b); break;
+	case 8: result = OsxGuestAddExtended(core, ~a, b, 1, 1, oe); break;
+	case 10: result = OsxGuestAddExtended(core, a, b, 0, 1, oe); break;
+	case 40: result = OsxGuestAddExtended(core, ~a, b, 1, 0, oe); break;
+	case 104: result = OsxGuestAddExtended(core, ~a, 0, 1, 0, oe); break;
+	case 136: result = OsxGuestAddExtended(core, ~a, b, carry, 1, oe); break;
+	case 138: result = OsxGuestAddExtended(core, a, b, carry, 1, oe); break;
+	case 200: result = OsxGuestAddExtended(core, ~a, 0, carry, 1, oe); break;
+	case 202: result = OsxGuestAddExtended(core, a, 0, carry, 1, oe); break;
+	case 232: result = OsxGuestAddExtended(core, ~a, 0xffffffffffffffffULL, carry, 1, oe); break;
+	case 234: result = OsxGuestAddExtended(core, a, 0xffffffffffffffffULL, carry, 1, oe); break;
+	case 266: result = OsxGuestAddExtended(core, a, b, 0, 0, oe); break;
+	case 9: result = OsxGuestMultiplyHigh(a, b); break;
+	case 73: result = OsxGuestMultiplyHighSigned(a, b); break;
 	case 11: result = ((a & 0xffffffffULL) * (b & 0xffffffffULL)) >> 32; break;
 	case 75: result = (uint64)(uint32)((uint64)((int64)(int32)(uint32)a * (int64)(int32)(uint32)b) >> 32); break;
 	case 233:
 		result = a * b;
 		if (oe)
-			SetOverflow(core, MultiplyHighSigned(a, b) != (uint64)((int64)result >> 63));
+			OsxGuestSetOverflow(core, OsxGuestMultiplyHighSigned(a, b) != (uint64)((int64)result >> 63));
 		break;
 	case 235:
 		product = (int64)(int32)(uint32)a * (int64)(int32)(uint32)b;
 		result = (uint64)product;
 		if (oe)
-			SetOverflow(core, product != (int64)(int32)product);
+			OsxGuestSetOverflow(core, product != (int64)(int32)product);
 		break;
 	case 457:
 		if (b == 0)
@@ -1239,7 +1239,7 @@ static void Arithmetic(Osx970 *core, uint32 instruction, uint32 kind)
 		else
 			result = a / b;
 		if (oe)
-			SetOverflow(core, b == 0);
+			OsxGuestSetOverflow(core, b == 0);
 		break;
 	case 459:
 		if ((uint32)b == 0)
@@ -1247,37 +1247,37 @@ static void Arithmetic(Osx970 *core, uint32 instruction, uint32 kind)
 		else
 			result = (uint32)a / (uint32)b;
 		if (oe)
-			SetOverflow(core, (uint32)b == 0);
+			OsxGuestSetOverflow(core, (uint32)b == 0);
 		break;
 	case 489:
 		if (b == 0 || (a == 0x8000000000000000ULL && b == 0xffffffffffffffffULL)) {
 			result = 0;
 			if (oe)
-				SetOverflow(core, 1);
+				OsxGuestSetOverflow(core, 1);
 		} else {
 			result = (uint64)((int64)a / (int64)b);
 			if (oe)
-				SetOverflow(core, 0);
+				OsxGuestSetOverflow(core, 0);
 		}
 		break;
 	case 491:
 		if ((uint32)b == 0 || ((uint32)a == 0x80000000u && (uint32)b == 0xffffffffu)) {
 			result = 0;
 			if (oe)
-				SetOverflow(core, 1);
+				OsxGuestSetOverflow(core, 1);
 		} else {
 			result = (uint32)((int32)(uint32)a / (int32)(uint32)b);
 			if (oe)
-				SetOverflow(core, 0);
+				OsxGuestSetOverflow(core, 0);
 		}
 		break;
 	}
 	core->gpr[rt] = result;
 	if (instruction & 1)
-		SetCr0(core, result);
+		OsxGuestSetCr0(core, result);
 }
 
-static int ArithmeticKind(uint32 kind)
+static int OsxGuestArithmeticKind(uint32 kind)
 {
 	switch (kind) {
 	case 8: case 9: case 10: case 11: case 40: case 73: case 75: case 104: case 136: case 138:
@@ -1287,7 +1287,7 @@ static int ArithmeticKind(uint32 kind)
 	return 0;
 }
 
-static void ShiftRightAlgebraic(Osx970 *core, int ra, uint64 source, uint32 count, int doubleword)
+static void OsxGuestShiftRightAlgebraic(Osx970 *core, int ra, uint64 source, uint32 count, int doubleword)
 {
 	int64 value;
 	uint64 lost;
@@ -1297,17 +1297,17 @@ static void ShiftRightAlgebraic(Osx970 *core, int ra, uint64 source, uint32 coun
 		value = (int64)(int32)(uint32)source;
 	if ((doubleword && (count & 0x40)) || (!doubleword && (count & 0x20))) {
 		core->gpr[ra] = (uint64)(value >> 63);
-		SetCarry(core, value < 0);
+		OsxGuestSetCarry(core, value < 0);
 		return;
 	}
 	lost = 0;
 	if (count)
 		lost = (uint64)value & (((uint64)1 << count) - 1);
 	core->gpr[ra] = (uint64)(value >> count);
-	SetCarry(core, value < 0 && lost != 0);
+	OsxGuestSetCarry(core, value < 0 && lost != 0);
 }
 
-static void ExecuteGroup31(Osx970 *core, uint32 instruction)
+static void OsxGuestExecuteGroup31(Osx970 *core, uint32 instruction)
 {
 	OsxCpu *cpu;
 	uint32 extended;
@@ -1330,30 +1330,30 @@ static void ExecuteGroup31(Osx970 *core, uint32 instruction)
 	rbnum = (instruction >> 11) & 31;
 	rs = core->gpr[rt];
 	rb = core->gpr[rbnum];
-	if (ArithmeticKind(extended & 0x1ff)) {
-		Arithmetic(core, instruction, extended & 0x1ff);
+	if (OsxGuestArithmeticKind(extended & 0x1ff)) {
+		OsxGuestArithmetic(core, instruction, extended & 0x1ff);
 		return;
 	}
-	if (ExecuteVectorMemory(core, instruction, extended))
+	if (OsxGuestExecuteVectorMemory(core, instruction, extended))
 		return;
 	switch (extended) {
 	case 0:
 		if ((instruction >> 21) & 1)
-			CompareSigned(core, (int)((instruction >> 23) & 7), (int64)core->gpr[ra], (int64)rb);
+			OsxGuestCompareSigned(core, (int)((instruction >> 23) & 7), (int64)core->gpr[ra], (int64)rb);
 		else
-			CompareSigned(core, (int)((instruction >> 23) & 7), (int64)(int32)(uint32)core->gpr[ra], (int64)(int32)(uint32)rb);
+			OsxGuestCompareSigned(core, (int)((instruction >> 23) & 7), (int64)(int32)(uint32)core->gpr[ra], (int64)(int32)(uint32)rb);
 		return;
 	case 32:
 		if ((instruction >> 21) & 1)
-			CompareUnsigned(core, (int)((instruction >> 23) & 7), core->gpr[ra], rb);
+			OsxGuestCompareUnsigned(core, (int)((instruction >> 23) & 7), core->gpr[ra], rb);
 		else
-			CompareUnsigned(core, (int)((instruction >> 23) & 7), core->gpr[ra] & 0xffffffffULL, rb & 0xffffffffULL);
+			OsxGuestCompareUnsigned(core, (int)((instruction >> 23) & 7), core->gpr[ra] & 0xffffffffULL, rb & 0xffffffffULL);
 		return;
 	case 4:
-		Trap(core, (uint32)rt, core->gpr[ra], rb, 0);
+		OsxGuestTrap(core, (uint32)rt, core->gpr[ra], rb, 0);
 		return;
 	case 68:
-		Trap(core, (uint32)rt, core->gpr[ra], rb, 1);
+		OsxGuestTrap(core, (uint32)rt, core->gpr[ra], rb, 1);
 		return;
 	case 19:
 		if (instruction & 0x00100000) {
@@ -1375,52 +1375,52 @@ static void ExecuteGroup31(Osx970 *core, uint32 instruction)
 		cpu->cr = (cpu->cr & ~mask) | ((uint32)rs & mask);
 		return;
 	case 512:
-		SetCrField(cpu, (int)((instruction >> 23) & 7), cpu->xer >> 28);
+		OsxGuestSetCrField(cpu, (int)((instruction >> 23) & 7), cpu->xer >> 28);
 		cpu->xer &= 0x0fffffffu;
 		return;
 	case 83:
-		if (Supervisor(core))
+		if (OsxGuestSupervisor(core))
 			core->gpr[rt] = core->msr;
 		return;
 	case 146:
-		if (!Supervisor(core))
+		if (!OsxGuestSupervisor(core))
 			return;
 		if (instruction & 0x00010000)
-			WriteMsr(core, (core->msr & ~(uint64)(OSXMSREE | OSXMSRRI)) | (rs & (OSXMSREE | OSXMSRRI)));
+			OsxGuestWriteMsr(core, (core->msr & ~(uint64)(OSXMSREE | OSXMSRRI)) | (rs & (OSXMSREE | OSXMSRRI)));
 		else
-			WriteMsr(core, (core->msr & 0xffffffff00000000ULL) | (rs & 0xffffffffULL));
+			OsxGuestWriteMsr(core, (core->msr & 0xffffffff00000000ULL) | (rs & 0xffffffffULL));
 		return;
 	case 178:
-		if (!Supervisor(core))
+		if (!OsxGuestSupervisor(core))
 			return;
 		if (instruction & 0x00010000)
-			WriteMsr(core, (core->msr & ~(uint64)(OSXMSREE | OSXMSRRI)) | (rs & (OSXMSREE | OSXMSRRI)));
+			OsxGuestWriteMsr(core, (core->msr & ~(uint64)(OSXMSREE | OSXMSRRI)) | (rs & (OSXMSREE | OSXMSRRI)));
 		else
-			WriteMsr(core, (rs & ~OSX970MSRHV) | (core->msr & OSX970MSRHV));
+			OsxGuestWriteMsr(core, (rs & ~OSX970MSRHV) | (core->msr & OSX970MSRHV));
 		return;
 	case 339:
-		MoveFromSpr(core, instruction);
+		OsxGuestMoveFromSpr(core, instruction);
 		return;
 	case 467:
-		MoveToSpr(core, instruction);
+		OsxGuestMoveToSpr(core, instruction);
 		return;
 	case 371:
-		if (SprNumber(instruction) == 269)
-			core->gpr[rt] = Timebase(core) >> 32;
+		if (OsxGuestSprNumber(instruction) == 269)
+			core->gpr[rt] = OsxGuestTimebase(core) >> 32;
 		else
-			core->gpr[rt] = Timebase(core);
+			core->gpr[rt] = OsxGuestTimebase(core);
 		return;
 	case 210: case 242:
-		if (!Supervisor(core))
+		if (!OsxGuestSupervisor(core))
 			return;
 		if (extended == 210)
 			field = (instruction >> 16) & 15;
 		else
 			field = (uint32)(rb >> 28) & 15;
-		WriteSegment(core, field, ((uint64)field << 28) | OSX970SLBVALID, ((rs & 0x0fffffffULL) << 12) | (((rs >> 27) & 0xf) << 8));
+		OsxGuestWriteSegment(core, field, ((uint64)field << 28) | OSX970SLBVALID, ((rs & 0x0fffffffULL) << 12) | (((rs >> 27) & 0xf) << 8));
 		return;
 	case 595: case 659:
-		if (!Supervisor(core))
+		if (!OsxGuestSupervisor(core))
 			return;
 		if (extended == 595)
 			field = (instruction >> 16) & 15;
@@ -1432,47 +1432,47 @@ static void ExecuteGroup31(Osx970 *core, uint32 instruction)
 				core->gpr[rt] = ((core->slb[index].vsid >> 12) & 0x0fffffffULL) | (((core->slb[index].vsid >> 8) & 0xf) << 27);
 		return;
 	case 402:
-		if (!Supervisor(core))
+		if (!OsxGuestSupervisor(core))
 			return;
-		WriteSegment(core, (int)(rb & (OSX970SLBSIZE - 1)), rb & (0xfffffffff0000000ULL | OSX970SLBVALID), rs & 0x3ffffffffffffff0ULL);
+		OsxGuestWriteSegment(core, (int)(rb & (OSX970SLBSIZE - 1)), rb & (0xfffffffff0000000ULL | OSX970SLBVALID), rs & 0x3ffffffffffffff0ULL);
 		return;
 	case 434:
-		if (!Supervisor(core))
+		if (!OsxGuestSupervisor(core))
 			return;
 		slbvalue = (rb & 0xfffffffff0000000ULL) | OSX970SLBVALID;
 		for (index = 0; index < OSX970SLBSIZE; index++)
 			if (core->slb[index].esid == slbvalue)
 				core->slb[index].esid &= ~OSX970SLBVALID;
-		FlushSegments(core, slbvalue >> 28, slbvalue >> 28);
+		OsxGuestFlushSegments(core, slbvalue >> 28, slbvalue >> 28);
 		return;
 	case 498:
-		if (!Supervisor(core))
+		if (!OsxGuestSupervisor(core))
 			return;
 		for (index = 1; index < OSX970SLBSIZE; index++)
 			core->slb[index].esid &= ~OSX970SLBVALID;
-		Osx970FlushTlb(core);
+		OsxGuest970FlushTlb(core);
 		return;
 	case 915:
-		if (!Supervisor(core))
+		if (!OsxGuestSupervisor(core))
 			return;
 		index = (int)(rb & (OSX970SLBSIZE - 1));
 		core->gpr[rt] = core->slb[index].esid;
 		return;
 	case 851:
-		if (!Supervisor(core))
+		if (!OsxGuestSupervisor(core))
 			return;
 		index = (int)(rb & (OSX970SLBSIZE - 1));
 		core->gpr[rt] = core->slb[index].vsid;
 		return;
 	case 274: case 306:
-		if (!Supervisor(core))
+		if (!OsxGuestSupervisor(core))
 			return;
-		FlushPageIndex(core, (rb >> 12) & 0xffff);
+		OsxGuestFlushPageIndex(core, (rb >> 12) & 0xffff);
 		return;
 	case 370:
-		if (!Supervisor(core))
+		if (!OsxGuestSupervisor(core))
 			return;
-		Osx970FlushTlb(core);
+		OsxGuest970FlushTlb(core);
 		return;
 	case 566: case 598: case 854:
 		return;
@@ -1480,54 +1480,54 @@ static void ExecuteGroup31(Osx970 *core, uint32 instruction)
 		return;
 	case 982:
 		core->fetchpage = OSX970TLBINVALID;
-		if (Osx970Translate(core, IndexedAddress(core, instruction), OSXTLBREAD, 0, &value))
-			Osx970InvalidatePhysical(core, value & ~127ULL, 128);
+		if (OsxGuest970Translate(core, OsxGuestIndexedAddress(core, instruction), OSXTLBREAD, 0, &value))
+			OsxGuest970InvalidatePhysical(core, value & ~127ULL, 128);
 		return;
 	case 1014:
 		if (instruction & 0x00200000)
-			ZeroBlock(core, IndexedAddress(core, instruction), 128);
+			OsxGuestZeroBlock(core, OsxGuestIndexedAddress(core, instruction), 128);
 		else if (((core->hid5 >> 7) & 3) == 1)
-			ZeroBlock(core, IndexedAddress(core, instruction), 32);
+			OsxGuestZeroBlock(core, OsxGuestIndexedAddress(core, instruction), 32);
 		else
-			ZeroBlock(core, IndexedAddress(core, instruction), 128);
+			OsxGuestZeroBlock(core, OsxGuestIndexedAddress(core, instruction), 128);
 		return;
 	case 20: case 84:
-		address = IndexedAddress(core, instruction);
+		address = OsxGuestIndexedAddress(core, instruction);
 		count = 4;
 		if (extended == 84)
 			count = 8;
 		if (address & (count - 1)) {
 			core->dar = address;
 			core->dsisr = 0;
-			Osx970Raise(core, OSXVECTORALIGNMENT, 0);
+			OsxGuest970Raise(core, OSXVECTORALIGNMENT, 0);
 			return;
 		}
-		if (!Osx970Read(core, address, (int)count, &value))
+		if (!OsxGuest970Read(core, address, (int)count, &value))
 			return;
 		core->gpr[rt] = value;
 		core->reservation = address;
 		core->reservationvalid = 1;
 		return;
 	case 150: case 214:
-		address = IndexedAddress(core, instruction);
+		address = OsxGuestIndexedAddress(core, instruction);
 		count = 4;
 		if (extended == 214)
 			count = 8;
 		if (address & (count - 1)) {
 			core->dar = address;
 			core->dsisr = 0;
-			Osx970Raise(core, OSXVECTORALIGNMENT, 0);
+			OsxGuest970Raise(core, OSXVECTORALIGNMENT, 0);
 			return;
 		}
 		if (core->reservationvalid && core->reservation == address) {
-			if (!Osx970Write(core, address, (int)count, rs))
+			if (!OsxGuest970Write(core, address, (int)count, rs))
 				return;
 			core->reservationvalid = 0;
-			SetCrField(cpu, 0, 2 | (cpu->xer >> 31));
+			OsxGuestSetCrField(cpu, 0, 2 | (cpu->xer >> 31));
 			return;
 		}
 		core->reservationvalid = 0;
-		SetCrField(cpu, 0, cpu->xer >> 31);
+		OsxGuestSetCrField(cpu, 0, cpu->xer >> 31);
 		return;
 	case 24:
 		if (rb & 0x20)
@@ -1554,22 +1554,22 @@ static void ExecuteGroup31(Osx970 *core, uint32 instruction)
 			core->gpr[ra] = rs >> (rb & 63);
 		break;
 	case 792:
-		ShiftRightAlgebraic(core, ra, rs, (uint32)(rb & 0x3f), 0);
+		OsxGuestShiftRightAlgebraic(core, ra, rs, (uint32)(rb & 0x3f), 0);
 		break;
 	case 824:
-		ShiftRightAlgebraic(core, ra, rs, (uint32)rbnum, 0);
+		OsxGuestShiftRightAlgebraic(core, ra, rs, (uint32)rbnum, 0);
 		break;
 	case 794:
-		ShiftRightAlgebraic(core, ra, rs, (uint32)(rb & 0x7f), 1);
+		OsxGuestShiftRightAlgebraic(core, ra, rs, (uint32)(rb & 0x7f), 1);
 		break;
 	case 826: case 827:
-		ShiftRightAlgebraic(core, ra, rs, (uint32)rbnum | ((extended & 1) << 5), 1);
+		OsxGuestShiftRightAlgebraic(core, ra, rs, (uint32)rbnum | ((extended & 1) << 5), 1);
 		break;
 	case 26:
-		core->gpr[ra] = (uint64)(CountLeadingZeros64(rs & 0xffffffffULL) - 32);
+		core->gpr[ra] = (uint64)(OsxGuestCountLeadingZeros64(rs & 0xffffffffULL) - 32);
 		break;
 	case 58:
-		core->gpr[ra] = (uint64)CountLeadingZeros64(rs);
+		core->gpr[ra] = (uint64)OsxGuestCountLeadingZeros64(rs);
 		break;
 	case 28: core->gpr[ra] = rs & rb; break;
 	case 60: core->gpr[ra] = rs & ~rb; break;
@@ -1581,29 +1581,29 @@ static void ExecuteGroup31(Osx970 *core, uint32 instruction)
 	case 476: core->gpr[ra] = ~(rs & rb); break;
 	case 922: core->gpr[ra] = (uint64)(int64)(int16)rs; break;
 	case 954: core->gpr[ra] = (uint64)(int64)(int8)rs; break;
-	case 986: core->gpr[ra] = SignExtend32(rs); break;
+	case 986: core->gpr[ra] = OsxGuestSignExtend32(rs); break;
 	case 533: case 597: case 661: case 725:
 		if (extended == 533 || extended == 661) {
-			address = IndexedAddress(core, instruction);
+			address = OsxGuestIndexedAddress(core, instruction);
 			count = cpu->xer & 0x7f;
 		} else {
 			address = 0;
 			if (ra)
 				address = core->gpr[ra];
-			address = Effective(core, address);
+			address = OsxGuestEffective(core, address);
 			count = (uint32)rbnum;
 			if (count == 0)
 				count = 32;
 		}
-		LoadStoreString(core, instruction, address, count, extended == 661 || extended == 725);
+		OsxGuestLoadStoreString(core, instruction, address, count, extended == 661 || extended == 725);
 		return;
 	case 534: case 790: case 662: case 918:
-		address = IndexedAddress(core, instruction);
+		address = OsxGuestIndexedAddress(core, instruction);
 		count = 4;
 		if (extended == 790 || extended == 918)
 			count = 2;
 		if (extended == 534 || extended == 790) {
-			if (!Osx970Read(core, address, (int)count, &value))
+			if (!OsxGuest970Read(core, address, (int)count, &value))
 				return;
 			if (count == 4)
 				core->gpr[rt] = ((value & 0xff) << 24) | ((value & 0xff00) << 8) | ((value >> 8) & 0xff00) | ((value >> 24) & 0xff);
@@ -1615,10 +1615,10 @@ static void ExecuteGroup31(Osx970 *core, uint32 instruction)
 			value = ((rs & 0xff) << 24) | ((rs & 0xff00) << 8) | ((rs >> 8) & 0xff00) | ((rs >> 24) & 0xff);
 		else
 			value = ((rs & 0xff) << 8) | ((rs >> 8) & 0xff);
-		Osx970Write(core, address, (int)count, value);
+		OsxGuest970Write(core, address, (int)count, value);
 		return;
 	case 535: case 567: case 599: case 631: case 663: case 695: case 727: case 759: case 983:
-		address = IndexedAddress(core, instruction);
+		address = OsxGuestIndexedAddress(core, instruction);
 		if (extended == 535 || extended == 567)
 			field = 48;
 		else if (extended == 599 || extended == 631)
@@ -1629,11 +1629,11 @@ static void ExecuteGroup31(Osx970 *core, uint32 instruction)
 			field = 983;
 		else
 			field = 54;
-		if (ExecuteFloatMemory(core, instruction, field, address) && (extended & 32))
-			UpdateBase(core, instruction, address);
+		if (OsxGuestExecuteFloatMemory(core, instruction, field, address) && (extended & 32))
+			OsxGuestUpdateBase(core, instruction, address);
 		return;
 	default:
-		address = IndexedAddress(core, instruction);
+		address = OsxGuestIndexedAddress(core, instruction);
 		switch (extended) {
 		case 21: case 53: count = 8; field = 0; break;
 		case 23: case 55: count = 4; field = 0; break;
@@ -1646,30 +1646,30 @@ static void ExecuteGroup31(Osx970 *core, uint32 instruction)
 		case 215: case 247: count = 1; field = 2; break;
 		case 407: case 439: count = 2; field = 2; break;
 		default:
-			Illegal(core);
+			OsxGuestIllegal(core);
 			return;
 		}
 		if (field == 2) {
-			if (!Osx970Write(core, address, (int)count, rs))
+			if (!OsxGuest970Write(core, address, (int)count, rs))
 				return;
 		} else {
-			if (!Osx970Read(core, address, (int)count, &value))
+			if (!OsxGuest970Read(core, address, (int)count, &value))
 				return;
 			if (field == 1 && count == 2)
 				value = (uint64)(int64)(int16)value;
 			if (field == 1 && count == 4)
-				value = SignExtend32(value);
+				value = OsxGuestSignExtend32(value);
 			core->gpr[rt] = value;
 		}
 		if (extended & 32)
-			UpdateBase(core, instruction, address);
+			OsxGuestUpdateBase(core, instruction, address);
 		return;
 	}
 	if (instruction & 1)
-		SetCr0(core, core->gpr[ra]);
+		OsxGuestSetCr0(core, core->gpr[ra]);
 }
 
-static void ExecuteFloat64(Osx970 *core, uint32 instruction)
+static void OsxGuestExecuteFloat64(Osx970 *core, uint32 instruction)
 {
 	OsxCpu *cpu;
 	uint32 extended;
@@ -1699,9 +1699,9 @@ static void ExecuteFloat64(Osx970 *core, uint32 instruction)
 		cpu->cr = (cpu->cr & 0xf0ffffffu) | ((cpu->fpscr >> 4) & 0x0f000000u);
 }
 
-static void Execute(Osx970 *core, uint32 instruction);
+static void OsxGuestExecute(Osx970 *core, uint32 instruction);
 
-static void Mirror(Osx970 *core)
+static void OsxGuestMirror(Osx970 *core)
 {
 	OsxCpu *cpu;
 	int index;
@@ -1724,7 +1724,7 @@ static void Mirror(Osx970 *core)
 		cpu->sr[index] = (uint32)(core->slb[index].vsid >> 12);
 }
 
-static void Absorb(Osx970 *core)
+static void OsxGuestAbsorb(Osx970 *core)
 {
 	OsxCpu *cpu;
 	int index;
@@ -1740,11 +1740,11 @@ static void Absorb(Osx970 *core)
 		core->ctr = cpu->ctr;
 	if (cpu->msr != (uint32)core->msr) {
 		core->msr = (core->msr & 0xffffffff00000000ULL) | cpu->msr;
-		UpdateModes(core);
+		OsxGuestUpdateModes(core);
 	}
 }
 
-int Osx970TranslateVirtual(Osx970 *core, uint32 address, int kind, uint32 *physical)
+int OsxGuest970TranslateVirtual(Osx970 *core, uint32 address, int kind, uint32 *physical)
 {
 	uint64 result;
 	uint64 msr;
@@ -1754,7 +1754,7 @@ int Osx970TranslateVirtual(Osx970 *core, uint32 address, int kind, uint32 *physi
 	core->msr &= ~(uint64)OSXMSRPR;
 	if (!(msr & OSX970MSRSF))
 		core->msr &= ~OSX970MSRSF;
-	translated = Osx970Translate(core, address, kind, 0, &result);
+	translated = OsxGuest970Translate(core, address, kind, 0, &result);
 	core->msr = msr;
 	if (!translated) {
 		if (address >= core->cpu->ramsize)
@@ -1762,14 +1762,14 @@ int Osx970TranslateVirtual(Osx970 *core, uint32 address, int kind, uint32 *physi
 		result = address;
 	}
 	if (result >= OSX970HIGHRAM && result - OSX970HIGHRAM < core->cpu->highram)
-		result = Linear(core->cpu, result);
+		result = OsxGuestLinear(core->cpu, result);
 	if (result > 0xffffffffULL)
 		return 0;
 	*physical = (uint32)result;
 	return 1;
 }
 
-static void ExecuteHook(Osx970 *core, uint32 instruction)
+static void OsxGuestExecuteHook(Osx970 *core, uint32 instruction)
 {
 	OsxCpu *cpu;
 	OsxHook *hook;
@@ -1777,19 +1777,19 @@ static void ExecuteHook(Osx970 *core, uint32 instruction)
 	cpu = core->cpu;
 	index = instruction & 0x03ffffff;
 	if ((core->msr & OSXMSRPR) || index >= (uint32)cpu->hookcount) {
-		Illegal(core);
+		OsxGuestIllegal(core);
 		return;
 	}
 	hook = &cpu->hooks[index];
-	Mirror(core);
+	OsxGuestMirror(core);
 	cpu->nextpc = cpu->pc + 4;
 	hook->function(cpu, hook->context, hook->address);
-	Absorb(core);
-	if (core->nextpc == Effective(core, core->pc + 4))
-		Execute(core, hook->original);
+	OsxGuestAbsorb(core);
+	if (core->nextpc == OsxGuestEffective(core, core->pc + 4))
+		OsxGuestExecute(core, hook->original);
 }
 
-static void ExecuteShared(Osx970 *core, uint32 instruction, int vector)
+static void OsxGuestExecuteShared(Osx970 *core, uint32 instruction, int vector)
 {
 	OsxCpu *cpu;
 	uint64 exceptions;
@@ -1798,16 +1798,16 @@ static void ExecuteShared(Osx970 *core, uint32 instruction, int vector)
 	cpu->pc = (uint32)core->pc;
 	cpu->msr = (uint32)core->msr;
 	if (vector)
-		OsxCpuExecuteVector(cpu, instruction);
+		OsxGuestCpuExecuteVector(cpu, instruction);
 	else
-		OsxCpuExecuteFloat(cpu, instruction);
+		OsxGuestCpuExecuteFloat(cpu, instruction);
 	if (cpu->exceptions != exceptions) {
 		cpu->exceptions = exceptions;
-		Illegal(core);
+		OsxGuestIllegal(core);
 	}
 }
 
-static void Execute(Osx970 *core, uint32 instruction)
+static void OsxGuestExecute(Osx970 *core, uint32 instruction)
 {
 	uint32 opcode;
 	uint32 immediate;
@@ -1826,37 +1826,37 @@ static void Execute(Osx970 *core, uint32 instruction)
 	simmediate = (uint64)(int64)(int16)immediate;
 	switch (opcode) {
 	case 2:
-		Trap(core, (uint32)rt, core->gpr[ra], simmediate, 1);
+		OsxGuestTrap(core, (uint32)rt, core->gpr[ra], simmediate, 1);
 		return;
 	case 3:
-		Trap(core, (uint32)rt, core->gpr[ra], simmediate, 0);
+		OsxGuestTrap(core, (uint32)rt, core->gpr[ra], simmediate, 0);
 		return;
 	case 4:
-		if (VectorEnabled(core))
-			ExecuteShared(core, instruction, 1);
+		if (OsxGuestVectorEnabled(core))
+			OsxGuestExecuteShared(core, instruction, 1);
 		return;
 	case 7:
 		core->gpr[rt] = (uint64)((int64)core->gpr[ra] * (int64)simmediate);
 		return;
 	case 8:
-		core->gpr[rt] = AddExtended(core, ~core->gpr[ra], simmediate, 1, 1, 0);
+		core->gpr[rt] = OsxGuestAddExtended(core, ~core->gpr[ra], simmediate, 1, 1, 0);
 		return;
 	case 10:
 		if (instruction & 0x00200000)
-			CompareUnsigned(core, rt >> 2, core->gpr[ra], immediate);
+			OsxGuestCompareUnsigned(core, rt >> 2, core->gpr[ra], immediate);
 		else
-			CompareUnsigned(core, rt >> 2, core->gpr[ra] & 0xffffffffULL, immediate);
+			OsxGuestCompareUnsigned(core, rt >> 2, core->gpr[ra] & 0xffffffffULL, immediate);
 		return;
 	case 11:
 		if (instruction & 0x00200000)
-			CompareSigned(core, rt >> 2, (int64)core->gpr[ra], (int64)simmediate);
+			OsxGuestCompareSigned(core, rt >> 2, (int64)core->gpr[ra], (int64)simmediate);
 		else
-			CompareSigned(core, rt >> 2, (int64)(int32)(uint32)core->gpr[ra], (int64)simmediate);
+			OsxGuestCompareSigned(core, rt >> 2, (int64)(int32)(uint32)core->gpr[ra], (int64)simmediate);
 		return;
 	case 12: case 13:
-		core->gpr[rt] = AddExtended(core, core->gpr[ra], simmediate, 0, 1, 0);
+		core->gpr[rt] = OsxGuestAddExtended(core, core->gpr[ra], simmediate, 0, 1, 0);
 		if (opcode == 13)
-			SetCr0(core, core->gpr[rt]);
+			OsxGuestSetCr0(core, core->gpr[rt]);
 		return;
 	case 14: case 15:
 		if (opcode == 15)
@@ -1870,47 +1870,47 @@ static void Execute(Osx970 *core, uint32 instruction)
 		target = (uint64)(int64)(int16)(immediate & 0xfffc);
 		if (!(instruction & 2))
 			target += core->pc;
-		if (BranchTaken(core, (uint32)rt, (uint32)ra, 1))
-			core->nextpc = Effective(core, target);
+		if (OsxGuestBranchTaken(core, (uint32)rt, (uint32)ra, 1))
+			core->nextpc = OsxGuestEffective(core, target);
 		if (instruction & 1)
-			core->lr = Effective(core, core->pc + 4);
+			core->lr = OsxGuestEffective(core, core->pc + 4);
 		return;
 	case 6:
-		ExecuteHook(core, instruction);
+		OsxGuestExecuteHook(core, instruction);
 		return;
 	case 17:
 		if (core->cpu->syscallobserver) {
-			Mirror(core);
+			OsxGuestMirror(core);
 			index = core->cpu->syscallobserver(core->cpu, core->cpu->syscallcontext, instruction);
-			Absorb(core);
+			OsxGuestAbsorb(core);
 			if (index)
 				return;
 		}
-		RaiseAfter(core, OSXVECTORSYSCALL);
+		OsxGuestRaiseAfter(core, OSXVECTORSYSCALL);
 		return;
 	case 18:
 		target = (uint64)(int64)((int32)(instruction << 6) >> 6) & ~3ULL;
 		if (!(instruction & 2))
 			target += core->pc;
-		core->nextpc = Effective(core, target);
+		core->nextpc = OsxGuestEffective(core, target);
 		if (instruction & 1)
-			core->lr = Effective(core, core->pc + 4);
+			core->lr = OsxGuestEffective(core, core->pc + 4);
 		return;
 	case 19:
-		ExecuteGroup19(core, instruction);
+		OsxGuestExecuteGroup19(core, instruction);
 		return;
 	case 20: case 21: case 23:
 		if (opcode == 23)
 			value = core->gpr[(instruction >> 11) & 31] & 31;
 		else
 			value = (instruction >> 11) & 31;
-		target = Mask64(((instruction >> 6) & 31) + 32, ((instruction >> 1) & 31) + 32);
-		address = RotateLeft64(Duplicate32(core->gpr[rt]), (uint32)value) & target;
+		target = OsxGuestMask64(((instruction >> 6) & 31) + 32, ((instruction >> 1) & 31) + 32);
+		address = OsxGuestRotateLeft64(OsxGuestDuplicate32(core->gpr[rt]), (uint32)value) & target;
 		if (opcode == 20)
 			address |= core->gpr[ra] & ~target;
 		core->gpr[ra] = address;
 		if (instruction & 1)
-			SetCr0(core, address);
+			OsxGuestSetCr0(core, address);
 		return;
 	case 24: core->gpr[ra] = core->gpr[rt] | immediate; return;
 	case 25: core->gpr[ra] = core->gpr[rt] | ((uint64)immediate << 16); return;
@@ -1918,26 +1918,26 @@ static void Execute(Osx970 *core, uint32 instruction)
 	case 27: core->gpr[ra] = core->gpr[rt] ^ ((uint64)immediate << 16); return;
 	case 28:
 		core->gpr[ra] = core->gpr[rt] & immediate;
-		SetCr0(core, core->gpr[ra]);
+		OsxGuestSetCr0(core, core->gpr[ra]);
 		return;
 	case 29:
 		core->gpr[ra] = core->gpr[rt] & ((uint64)immediate << 16);
-		SetCr0(core, core->gpr[ra]);
+		OsxGuestSetCr0(core, core->gpr[ra]);
 		return;
 	case 30:
-		ExecuteRotate(core, instruction);
+		OsxGuestExecuteRotate(core, instruction);
 		return;
 	case 31:
-		ExecuteGroup31(core, instruction);
+		OsxGuestExecuteGroup31(core, instruction);
 		return;
 	case 59: case 63:
-		if (!FloatEnabled(core))
+		if (!OsxGuestFloatEnabled(core))
 			return;
 		extended = (instruction >> 1) & 0x3ff;
 		if (opcode == 63 && (extended == 814 || extended == 815 || extended == 846))
-			ExecuteFloat64(core, instruction);
+			OsxGuestExecuteFloat64(core, instruction);
 		else
-			ExecuteShared(core, instruction, 0);
+			OsxGuestExecuteShared(core, instruction, 0);
 		return;
 	}
 	address = simmediate;
@@ -1945,7 +1945,7 @@ static void Execute(Osx970 *core, uint32 instruction)
 		address &= ~3ULL;
 	if (ra)
 		address += core->gpr[ra];
-	address = Effective(core, address);
+	address = OsxGuestEffective(core, address);
 	switch (opcode) {
 	case 32: case 33: case 34: case 35: case 40: case 41: case 42: case 43:
 		if (opcode < 34)
@@ -1954,13 +1954,13 @@ static void Execute(Osx970 *core, uint32 instruction)
 			index = 1;
 		else
 			index = 2;
-		if (!Osx970Read(core, address, index, &value))
+		if (!OsxGuest970Read(core, address, index, &value))
 			return;
 		if (opcode >= 42)
 			value = (uint64)(int64)(int16)value;
 		core->gpr[rt] = value;
 		if (opcode & 1)
-			UpdateBase(core, instruction, address);
+			OsxGuestUpdateBase(core, instruction, address);
 		return;
 	case 36: case 37: case 38: case 39: case 44: case 45:
 		if (opcode < 38)
@@ -1969,95 +1969,95 @@ static void Execute(Osx970 *core, uint32 instruction)
 			index = 1;
 		else
 			index = 2;
-		if (!Osx970Write(core, address, index, core->gpr[rt]))
+		if (!OsxGuest970Write(core, address, index, core->gpr[rt]))
 			return;
 		if (opcode & 1)
-			UpdateBase(core, instruction, address);
+			OsxGuestUpdateBase(core, instruction, address);
 		return;
 	case 46:
 		for (index = rt; index < 32; index++) {
-			if (!Osx970Read(core, address, 4, &value))
+			if (!OsxGuest970Read(core, address, 4, &value))
 				return;
 			core->gpr[index] = value;
-			address = Effective(core, address + 4);
+			address = OsxGuestEffective(core, address + 4);
 		}
 		return;
 	case 47:
 		for (index = rt; index < 32; index++) {
-			if (!Osx970Write(core, address, 4, core->gpr[index]))
+			if (!OsxGuest970Write(core, address, 4, core->gpr[index]))
 				return;
-			address = Effective(core, address + 4);
+			address = OsxGuestEffective(core, address + 4);
 		}
 		return;
 	case 48: case 49: case 50: case 51: case 52: case 53: case 54: case 55:
-		if (ExecuteFloatMemory(core, instruction, opcode & ~1u, address) && (opcode & 1))
-			UpdateBase(core, instruction, address);
+		if (OsxGuestExecuteFloatMemory(core, instruction, opcode & ~1u, address) && (opcode & 1))
+			OsxGuestUpdateBase(core, instruction, address);
 		return;
 	case 58:
 		if ((instruction & 3) == 3) {
-			Illegal(core);
+			OsxGuestIllegal(core);
 			return;
 		}
 		if ((instruction & 3) == 2) {
-			if (!Osx970Read(core, address, 4, &value))
+			if (!OsxGuest970Read(core, address, 4, &value))
 				return;
-			core->gpr[rt] = SignExtend32(value);
+			core->gpr[rt] = OsxGuestSignExtend32(value);
 			return;
 		}
-		if (!Osx970Read(core, address, 8, &value))
+		if (!OsxGuest970Read(core, address, 8, &value))
 			return;
 		core->gpr[rt] = value;
 		if (instruction & 1)
-			UpdateBase(core, instruction, address);
+			OsxGuestUpdateBase(core, instruction, address);
 		return;
 	case 62:
 		if ((instruction & 3) > 1) {
-			Illegal(core);
+			OsxGuestIllegal(core);
 			return;
 		}
-		if (!Osx970Write(core, address, 8, core->gpr[rt]))
+		if (!OsxGuest970Write(core, address, 8, core->gpr[rt]))
 			return;
 		if (instruction & 1)
-			UpdateBase(core, instruction, address);
+			OsxGuestUpdateBase(core, instruction, address);
 		return;
 	}
-	Illegal(core);
+	OsxGuestIllegal(core);
 }
 
-OSXJITABI int Osx970Step(Osx970 *core, uint32 instruction)
+OSXJITABI int OsxGuest970Step(Osx970 *core, uint32 instruction)
 {
 	uint64 msr;
 	uint64 expected;
 	msr = core->msr;
-	expected = Effective(core, core->pc + 4);
+	expected = OsxGuestEffective(core, core->pc + 4);
 	core->nextpc = expected;
 #if OSXPROFILE
-	core->cpu->tmpform[3][OsxCpuTmpFormKey(instruction)]++;
+	core->cpu->tmpform[3][OsxGuestCpuTmpFormKey(instruction)]++;
 #endif
-	Execute(core, instruction);
+	OsxGuestExecute(core, instruction);
 	core->pc = core->nextpc;
 	if (core->nextpc != expected || core->msr != msr || core->cpu->halted)
 		return 1;
 	return 0;
 }
 
-void Osx970ExecuteInstruction(Osx970 *core, uint32 instruction)
+void OsxGuest970ExecuteInstruction(Osx970 *core, uint32 instruction)
 {
 	uint64 exceptions;
 	uint64 msr;
 	exceptions = core->cpu->exceptions;
 	msr = core->msr;
-	core->nextpc = Effective(core, core->pc + 4);
-	Execute(core, instruction);
+	core->nextpc = OsxGuestEffective(core, core->pc + 4);
+	OsxGuestExecute(core, instruction);
 	if ((msr & OSXMSRSE) && core->cpu->exceptions == exceptions) {
 		core->pc = core->nextpc;
-		Osx970Raise(core, OSXVECTORTRACE, 0);
+		OsxGuest970Raise(core, OSXVECTORTRACE, 0);
 	}
 	core->pc = core->nextpc;
 	core->cpu->instructions++;
 }
 
-void Osx970CheckInterrupts(Osx970 *core, uint64 now)
+void OsxGuest970CheckInterrupts(Osx970 *core, uint64 now)
 {
 	OsxCpu *cpu;
 	cpu = core->cpu;
@@ -2073,14 +2073,14 @@ void Osx970CheckInterrupts(Osx970 *core, uint64 now)
 		return;
 	if (cpu->externalline) {
 		cpu->externalcount++;
-		Osx970Raise(core, OSXVECTOREXTERNAL, 0);
+		OsxGuest970Raise(core, OSXVECTOREXTERNAL, 0);
 		core->pc = core->nextpc;
 		return;
 	}
 	if (cpu->decpending) {
 		cpu->decpending = 0;
 		cpu->decrementercount++;
-		Osx970Raise(core, OSXVECTORDECREMENTER, 0);
+		OsxGuest970Raise(core, OSXVECTORDECREMENTER, 0);
 		core->pc = core->nextpc;
 	}
 }
@@ -2170,24 +2170,24 @@ typedef struct Osx970Emitter {
 	int vector;
 } Osx970Emitter;
 
-static void EmitByte(Osx970Emitter *emitter, uint32 value)
+static void OsxGuestEmitByte(Osx970Emitter *emitter, uint32 value)
 {
 	*emitter->cursor++ = (uint8)value;
 }
 
-static void EmitDword(Osx970Emitter *emitter, uint32 value)
+static void OsxGuestEmitDword(Osx970Emitter *emitter, uint32 value)
 {
 	memcpy(emitter->cursor, &value, 4);
 	emitter->cursor += 4;
 }
 
-static void EmitQword(Osx970Emitter *emitter, uint64 value)
+static void OsxGuestEmitQword(Osx970Emitter *emitter, uint64 value)
 {
 	memcpy(emitter->cursor, &value, 8);
 	emitter->cursor += 8;
 }
 
-static void EmitRex(Osx970Emitter *emitter, int wide, int reg, int index, int base)
+static void OsxGuestEmitRex(Osx970Emitter *emitter, int wide, int reg, int index, int base)
 {
 	uint32 value;
 	value = 0x40;
@@ -2200,237 +2200,237 @@ static void EmitRex(Osx970Emitter *emitter, int wide, int reg, int index, int ba
 	if (base & 8)
 		value |= 1;
 	if (value != 0x40)
-		EmitByte(emitter, value);
+		OsxGuestEmitByte(emitter, value);
 }
 
-static void EmitOpcode(Osx970Emitter *emitter, uint32 opcode)
+static void OsxGuestEmitOpcode(Osx970Emitter *emitter, uint32 opcode)
 {
 	if (opcode > 0xff)
-		EmitByte(emitter, opcode >> 8);
-	EmitByte(emitter, opcode & 0xff);
+		OsxGuestEmitByte(emitter, opcode >> 8);
+	OsxGuestEmitByte(emitter, opcode & 0xff);
 }
 
-static void EmitMemory(Osx970Emitter *emitter, int wide, uint32 opcode, int reg, int base, uint32 displacement)
+static void OsxGuestEmitMemory(Osx970Emitter *emitter, int wide, uint32 opcode, int reg, int base, uint32 displacement)
 {
 	int small;
 	small = (int32)displacement >= -128 && (int32)displacement < 128;
-	EmitRex(emitter, wide, reg, 0, base);
-	EmitOpcode(emitter, opcode);
+	OsxGuestEmitRex(emitter, wide, reg, 0, base);
+	OsxGuestEmitOpcode(emitter, opcode);
 	if (small)
-		EmitByte(emitter, 0x40 | ((reg & 7) << 3) | (base & 7));
+		OsxGuestEmitByte(emitter, 0x40 | ((reg & 7) << 3) | (base & 7));
 	else
-		EmitByte(emitter, 0x80 | ((reg & 7) << 3) | (base & 7));
+		OsxGuestEmitByte(emitter, 0x80 | ((reg & 7) << 3) | (base & 7));
 	if ((base & 7) == 4)
-		EmitByte(emitter, 0x24);
+		OsxGuestEmitByte(emitter, 0x24);
 	if (small)
-		EmitByte(emitter, displacement & 0xff);
+		OsxGuestEmitByte(emitter, displacement & 0xff);
 	else
-		EmitDword(emitter, displacement);
+		OsxGuestEmitDword(emitter, displacement);
 }
 
-static void EmitRegister(Osx970Emitter *emitter, int wide, uint32 opcode, int reg, int rm)
+static void OsxGuestEmitRegister(Osx970Emitter *emitter, int wide, uint32 opcode, int reg, int rm)
 {
-	EmitRex(emitter, wide, reg, 0, rm);
-	EmitOpcode(emitter, opcode);
-	EmitByte(emitter, 0xc0 | ((reg & 7) << 3) | (rm & 7));
+	OsxGuestEmitRex(emitter, wide, reg, 0, rm);
+	OsxGuestEmitOpcode(emitter, opcode);
+	OsxGuestEmitByte(emitter, 0xc0 | ((reg & 7) << 3) | (rm & 7));
 }
 
-static void EmitIndexed(Osx970Emitter *emitter, int wide, uint32 opcode, int reg)
+static void OsxGuestEmitIndexed(Osx970Emitter *emitter, int wide, uint32 opcode, int reg)
 {
-	EmitRex(emitter, wide, reg, OSX970RAX, OSX970RDX);
-	EmitOpcode(emitter, opcode);
-	EmitByte(emitter, 0x04 | ((reg & 7) << 3));
-	EmitByte(emitter, (OSX970RAX << 3) | OSX970RDX);
+	OsxGuestEmitRex(emitter, wide, reg, OSX970RAX, OSX970RDX);
+	OsxGuestEmitOpcode(emitter, opcode);
+	OsxGuestEmitByte(emitter, 0x04 | ((reg & 7) << 3));
+	OsxGuestEmitByte(emitter, (OSX970RAX << 3) | OSX970RDX);
 }
 
-static void EmitImmediate(Osx970Emitter *emitter, int reg, uint64 value)
+static void OsxGuestEmitImmediate(Osx970Emitter *emitter, int reg, uint64 value)
 {
 	if ((uint64)(int64)(int32)(uint32)value == value) {
-		EmitRex(emitter, 1, 0, 0, reg);
-		EmitByte(emitter, 0xc7);
-		EmitByte(emitter, 0xc0 | (reg & 7));
-		EmitDword(emitter, (uint32)value);
+		OsxGuestEmitRex(emitter, 1, 0, 0, reg);
+		OsxGuestEmitByte(emitter, 0xc7);
+		OsxGuestEmitByte(emitter, 0xc0 | (reg & 7));
+		OsxGuestEmitDword(emitter, (uint32)value);
 		return;
 	}
-	EmitRex(emitter, 1, 0, 0, reg);
-	EmitByte(emitter, 0xb8 | (reg & 7));
-	EmitQword(emitter, value);
+	OsxGuestEmitRex(emitter, 1, 0, 0, reg);
+	OsxGuestEmitByte(emitter, 0xb8 | (reg & 7));
+	OsxGuestEmitQword(emitter, value);
 }
 
-static void EmitImmediate32(Osx970Emitter *emitter, int reg, uint32 value)
+static void OsxGuestEmitImmediate32(Osx970Emitter *emitter, int reg, uint32 value)
 {
-	EmitRex(emitter, 0, 0, 0, reg);
-	EmitByte(emitter, 0xb8 | (reg & 7));
-	EmitDword(emitter, value);
+	OsxGuestEmitRex(emitter, 0, 0, 0, reg);
+	OsxGuestEmitByte(emitter, 0xb8 | (reg & 7));
+	OsxGuestEmitDword(emitter, value);
 }
 
-static void EmitLoadGpr(Osx970Emitter *emitter, int reg, int gpr)
+static void OsxGuestEmitLoadGpr(Osx970Emitter *emitter, int reg, int gpr)
 {
-	EmitMemory(emitter, 1, 0x8b, reg, OSX970RBX, OSX970GPR(gpr));
+	OsxGuestEmitMemory(emitter, 1, 0x8b, reg, OSX970RBX, OSX970GPR(gpr));
 }
 
-static void EmitStoreGpr(Osx970Emitter *emitter, int reg, int gpr)
+static void OsxGuestEmitStoreGpr(Osx970Emitter *emitter, int reg, int gpr)
 {
-	EmitMemory(emitter, 1, 0x89, reg, OSX970RBX, OSX970GPR(gpr));
+	OsxGuestEmitMemory(emitter, 1, 0x89, reg, OSX970RBX, OSX970GPR(gpr));
 }
 
-static uint8 *EmitJump(Osx970Emitter *emitter, uint32 condition)
+static uint8 *OsxGuestEmitJump(Osx970Emitter *emitter, uint32 condition)
 {
 	if (condition) {
-		EmitByte(emitter, 0x0f);
-		EmitByte(emitter, condition);
+		OsxGuestEmitByte(emitter, 0x0f);
+		OsxGuestEmitByte(emitter, condition);
 	} else
-		EmitByte(emitter, 0xe9);
-	EmitDword(emitter, 0);
+		OsxGuestEmitByte(emitter, 0xe9);
+	OsxGuestEmitDword(emitter, 0);
 	return emitter->cursor - 4;
 }
 
-static void PatchJump(uint8 *field, uint8 *target)
+static void OsxGuestPatchJump(uint8 *field, uint8 *target)
 {
 	int32 distance;
 	distance = (int32)(target - (field + 4));
 	memcpy(field, &distance, 4);
 }
 
-static void EmitAccount(Osx970Emitter *emitter, uint32 count)
+static void OsxGuestEmitAccount(Osx970Emitter *emitter, uint32 count)
 {
-	EmitMemory(emitter, 1, 0x83, 0, OSX970RSI, OSX970CPUFIELD(instructions));
-	EmitByte(emitter, count);
-	EmitMemory(emitter, 0, 0x83, 5, OSX970RSI, OSX970CPUFIELD(slice));
-	EmitByte(emitter, count);
+	OsxGuestEmitMemory(emitter, 1, 0x83, 0, OSX970RSI, OSX970CPUFIELD(instructions));
+	OsxGuestEmitByte(emitter, count);
+	OsxGuestEmitMemory(emitter, 0, 0x83, 5, OSX970RSI, OSX970CPUFIELD(slice));
+	OsxGuestEmitByte(emitter, count);
 }
 
-static void EmitLeave(Osx970Emitter *emitter, uint32 count)
+static void OsxGuestEmitLeave(Osx970Emitter *emitter, uint32 count)
 {
-	EmitImmediate32(emitter, OSX970RCX, count);
-	EmitByte(emitter, 0xe9);
-	EmitDword(emitter, 0);
-	PatchJump(emitter->cursor - 4, emitter->exitthunk);
+	OsxGuestEmitImmediate32(emitter, OSX970RCX, count);
+	OsxGuestEmitByte(emitter, 0xe9);
+	OsxGuestEmitDword(emitter, 0);
+	OsxGuestPatchJump(emitter->cursor - 4, emitter->exitthunk);
 }
 
-static void EmitExit(Osx970Emitter *emitter, uint32 count)
+static void OsxGuestEmitExit(Osx970Emitter *emitter, uint32 count)
 {
 	if (emitter->exitcount >= OSX970JITEXITS) {
-		EmitAccount(emitter, count);
+		OsxGuestEmitAccount(emitter, count);
 		return;
 	}
 	emitter->exits[emitter->exitcount++] = NULL;
-	EmitLeave(emitter, count);
+	OsxGuestEmitLeave(emitter, count);
 }
 
-static void EmitSetPc(Osx970Emitter *emitter, uint64 pc);
+static void OsxGuestEmitSetPc(Osx970Emitter *emitter, uint64 pc);
 
-static void EmitDynamicLookup(Osx970Emitter *emitter)
+static void OsxGuestEmitDynamicLookup(Osx970Emitter *emitter)
 {
 	if (emitter->exitcount >= OSX970JITEXITS - 8)
 		return;
-	EmitImmediate32(emitter, OSX970R9, emitter->key);
-	EmitByte(emitter, 0xe9);
-	EmitDword(emitter, 0);
-	PatchJump(emitter->cursor - 4, emitter->lookups[emitter->fetchmode]);
+	OsxGuestEmitImmediate32(emitter, OSX970R9, emitter->key);
+	OsxGuestEmitByte(emitter, 0xe9);
+	OsxGuestEmitDword(emitter, 0);
+	OsxGuestPatchJump(emitter->cursor - 4, emitter->lookups[emitter->fetchmode]);
 }
 
-static void EmitLookupThunk(Osx970Emitter *emitter)
+static void OsxGuestEmitLookupThunk(Osx970Emitter *emitter)
 {
 	uint32 tlb;
 	tlb = OSX970FIELD(tlb) + (uint32)((emitter->fetchmode * OSXTLBKINDS + OSXTLBFETCH) * OSX970TLBSIZE) * (uint32)sizeof(Osx970TlbEntry);
-	EmitRegister(emitter, 0, 0x89, OSX970RDX, OSX970RAX);
-	EmitByte(emitter, 0xc1);
-	EmitByte(emitter, 0xe8);
-	EmitByte(emitter, 2);
-	EmitByte(emitter, 0x25);
-	EmitDword(emitter, OSX970JITCACHE - 1);
-	EmitByte(emitter, 0xc1);
-	EmitByte(emitter, 0xe0);
-	EmitByte(emitter, 5);
-	EmitMemory(emitter, 1, 0x8b, OSX970RCX, OSX970RBX, OSX970FIELD(jitcache));
-	EmitRegister(emitter, 1, 0x01, OSX970RAX, OSX970RCX);
-	EmitByte(emitter, 0x48);
-	EmitByte(emitter, 0x39);
-	EmitByte(emitter, 0x11);
-	emitter->exits[emitter->exitcount++] = EmitJump(emitter, 0x85);
-	EmitByte(emitter, 0x44);
-	EmitByte(emitter, 0x39);
-	EmitByte(emitter, 0x49);
-	EmitByte(emitter, 0x08);
-	emitter->exits[emitter->exitcount++] = EmitJump(emitter, 0x85);
-	EmitRegister(emitter, 1, 0x89, OSX970RDX, OSX970RAX);
-	EmitByte(emitter, 0x48);
-	EmitByte(emitter, 0xc1);
-	EmitByte(emitter, 0xe8);
-	EmitByte(emitter, 12);
-	EmitByte(emitter, 0x25);
-	EmitDword(emitter, OSX970TLBMASK);
-	EmitByte(emitter, 0xc1);
-	EmitByte(emitter, 0xe0);
-	EmitByte(emitter, 4);
-	EmitRegister(emitter, 1, 0x89, OSX970RDX, OSX970R8);
-	EmitByte(emitter, 0x49);
-	EmitByte(emitter, 0x81);
-	EmitByte(emitter, 0xe0);
-	EmitDword(emitter, 0xfffff000u);
-	EmitByte(emitter, 0x4c);
-	EmitByte(emitter, 0x39);
-	EmitByte(emitter, 0x84);
-	EmitByte(emitter, 0x03);
-	EmitDword(emitter, tlb);
-	emitter->exits[emitter->exitcount++] = EmitJump(emitter, 0x85);
-	EmitByte(emitter, 0x4c);
-	EmitByte(emitter, 0x8b);
-	EmitByte(emitter, 0x84);
-	EmitByte(emitter, 0x03);
-	EmitDword(emitter, tlb + 8);
-	EmitByte(emitter, 0x4c);
-	EmitByte(emitter, 0x3b);
-	EmitByte(emitter, 0x41);
-	EmitByte(emitter, 0x10);
-	emitter->exits[emitter->exitcount++] = EmitJump(emitter, 0x85);
-	EmitByte(emitter, 0xff);
-	EmitByte(emitter, 0x61);
-	EmitByte(emitter, 0x18);
+	OsxGuestEmitRegister(emitter, 0, 0x89, OSX970RDX, OSX970RAX);
+	OsxGuestEmitByte(emitter, 0xc1);
+	OsxGuestEmitByte(emitter, 0xe8);
+	OsxGuestEmitByte(emitter, 2);
+	OsxGuestEmitByte(emitter, 0x25);
+	OsxGuestEmitDword(emitter, OSX970JITCACHE - 1);
+	OsxGuestEmitByte(emitter, 0xc1);
+	OsxGuestEmitByte(emitter, 0xe0);
+	OsxGuestEmitByte(emitter, 5);
+	OsxGuestEmitMemory(emitter, 1, 0x8b, OSX970RCX, OSX970RBX, OSX970FIELD(jitcache));
+	OsxGuestEmitRegister(emitter, 1, 0x01, OSX970RAX, OSX970RCX);
+	OsxGuestEmitByte(emitter, 0x48);
+	OsxGuestEmitByte(emitter, 0x39);
+	OsxGuestEmitByte(emitter, 0x11);
+	emitter->exits[emitter->exitcount++] = OsxGuestEmitJump(emitter, 0x85);
+	OsxGuestEmitByte(emitter, 0x44);
+	OsxGuestEmitByte(emitter, 0x39);
+	OsxGuestEmitByte(emitter, 0x49);
+	OsxGuestEmitByte(emitter, 0x08);
+	emitter->exits[emitter->exitcount++] = OsxGuestEmitJump(emitter, 0x85);
+	OsxGuestEmitRegister(emitter, 1, 0x89, OSX970RDX, OSX970RAX);
+	OsxGuestEmitByte(emitter, 0x48);
+	OsxGuestEmitByte(emitter, 0xc1);
+	OsxGuestEmitByte(emitter, 0xe8);
+	OsxGuestEmitByte(emitter, 12);
+	OsxGuestEmitByte(emitter, 0x25);
+	OsxGuestEmitDword(emitter, OSX970TLBMASK);
+	OsxGuestEmitByte(emitter, 0xc1);
+	OsxGuestEmitByte(emitter, 0xe0);
+	OsxGuestEmitByte(emitter, 4);
+	OsxGuestEmitRegister(emitter, 1, 0x89, OSX970RDX, OSX970R8);
+	OsxGuestEmitByte(emitter, 0x49);
+	OsxGuestEmitByte(emitter, 0x81);
+	OsxGuestEmitByte(emitter, 0xe0);
+	OsxGuestEmitDword(emitter, 0xfffff000u);
+	OsxGuestEmitByte(emitter, 0x4c);
+	OsxGuestEmitByte(emitter, 0x39);
+	OsxGuestEmitByte(emitter, 0x84);
+	OsxGuestEmitByte(emitter, 0x03);
+	OsxGuestEmitDword(emitter, tlb);
+	emitter->exits[emitter->exitcount++] = OsxGuestEmitJump(emitter, 0x85);
+	OsxGuestEmitByte(emitter, 0x4c);
+	OsxGuestEmitByte(emitter, 0x8b);
+	OsxGuestEmitByte(emitter, 0x84);
+	OsxGuestEmitByte(emitter, 0x03);
+	OsxGuestEmitDword(emitter, tlb + 8);
+	OsxGuestEmitByte(emitter, 0x4c);
+	OsxGuestEmitByte(emitter, 0x3b);
+	OsxGuestEmitByte(emitter, 0x41);
+	OsxGuestEmitByte(emitter, 0x10);
+	emitter->exits[emitter->exitcount++] = OsxGuestEmitJump(emitter, 0x85);
+	OsxGuestEmitByte(emitter, 0xff);
+	OsxGuestEmitByte(emitter, 0x61);
+	OsxGuestEmitByte(emitter, 0x18);
 }
 
-static void EmitChain(Osx970Emitter *emitter, uint32 count, uint64 target)
+static void OsxGuestEmitChain(Osx970Emitter *emitter, uint32 count, uint64 target)
 {
-	EmitAccount(emitter, count);
-	EmitSetPc(emitter, target);
+	OsxGuestEmitAccount(emitter, count);
+	OsxGuestEmitSetPc(emitter, target);
 	if (emitter->exitcount >= OSX970JITEXITS - 8 || emitter->linkcount >= OSX970JITEXITS)
 		return;
-	emitter->exits[emitter->exitcount++] = EmitJump(emitter, 0x8e);
+	emitter->exits[emitter->exitcount++] = OsxGuestEmitJump(emitter, 0x8e);
 	if ((target & ~0xfffULL) == emitter->page) {
-		emitter->links[emitter->linkcount++] = EmitJump(emitter, 0);
+		emitter->links[emitter->linkcount++] = OsxGuestEmitJump(emitter, 0);
 		return;
 	}
-	EmitImmediate(emitter, OSX970RDX, target);
-	EmitDynamicLookup(emitter);
-	emitter->exits[emitter->exitcount++] = EmitJump(emitter, 0);
+	OsxGuestEmitImmediate(emitter, OSX970RDX, target);
+	OsxGuestEmitDynamicLookup(emitter);
+	emitter->exits[emitter->exitcount++] = OsxGuestEmitJump(emitter, 0);
 }
 
-static void EmitDynamicExit(Osx970Emitter *emitter, uint32 count)
+static void OsxGuestEmitDynamicExit(Osx970Emitter *emitter, uint32 count)
 {
-	EmitAccount(emitter, count);
+	OsxGuestEmitAccount(emitter, count);
 	if (emitter->exitcount >= OSX970JITEXITS - 8)
 		return;
-	emitter->exits[emitter->exitcount++] = EmitJump(emitter, 0x8e);
-	EmitDynamicLookup(emitter);
-	emitter->exits[emitter->exitcount++] = EmitJump(emitter, 0);
+	emitter->exits[emitter->exitcount++] = OsxGuestEmitJump(emitter, 0x8e);
+	OsxGuestEmitDynamicLookup(emitter);
+	emitter->exits[emitter->exitcount++] = OsxGuestEmitJump(emitter, 0);
 }
 
-static void EmitColdExit(Osx970Emitter *emitter, uint32 condition, uint32 count)
+static void OsxGuestEmitColdExit(Osx970Emitter *emitter, uint32 condition, uint32 count)
 {
 	if (emitter->coldcount >= OSX970JITEXITS)
 		return;
-	emitter->colds[emitter->coldcount].jump = EmitJump(emitter, condition);
+	emitter->colds[emitter->coldcount].jump = OsxGuestEmitJump(emitter, condition);
 	emitter->colds[emitter->coldcount].resume = NULL;
 	emitter->colds[emitter->coldcount].count = count;
 	emitter->coldcount++;
 }
 
-static void EmitColdStep(Osx970Emitter *emitter, uint32 condition, uint64 pc, uint32 instruction, uint32 count)
+static void OsxGuestEmitColdStep(Osx970Emitter *emitter, uint32 condition, uint64 pc, uint32 instruction, uint32 count)
 {
 	if (emitter->coldcount >= OSX970JITEXITS)
 		return;
-	emitter->colds[emitter->coldcount].jump = EmitJump(emitter, condition);
+	emitter->colds[emitter->coldcount].jump = OsxGuestEmitJump(emitter, condition);
 	emitter->colds[emitter->coldcount].resume = NULL;
 	emitter->colds[emitter->coldcount].pc = pc;
 	emitter->colds[emitter->coldcount].instruction = instruction;
@@ -2438,83 +2438,83 @@ static void EmitColdStep(Osx970Emitter *emitter, uint32 condition, uint64 pc, ui
 	emitter->coldcount++;
 }
 
-static void EmitSetPc(Osx970Emitter *emitter, uint64 pc)
+static void OsxGuestEmitSetPc(Osx970Emitter *emitter, uint64 pc)
 {
 	if (pc < 0x80000000ULL) {
-		EmitMemory(emitter, 1, 0xc7, 0, OSX970RBX, OSX970FIELD(pc));
-		EmitDword(emitter, (uint32)pc);
+		OsxGuestEmitMemory(emitter, 1, 0xc7, 0, OSX970RBX, OSX970FIELD(pc));
+		OsxGuestEmitDword(emitter, (uint32)pc);
 		return;
 	}
 	if (pc <= 0xffffffffULL)
-		EmitImmediate32(emitter, OSX970RAX, (uint32)pc);
+		OsxGuestEmitImmediate32(emitter, OSX970RAX, (uint32)pc);
 	else
-		EmitImmediate(emitter, OSX970RAX, pc);
-	EmitMemory(emitter, 1, 0x89, OSX970RAX, OSX970RBX, OSX970FIELD(pc));
+		OsxGuestEmitImmediate(emitter, OSX970RAX, pc);
+	OsxGuestEmitMemory(emitter, 1, 0x89, OSX970RAX, OSX970RBX, OSX970FIELD(pc));
 }
 
-static void EmitCallStep(Osx970Emitter *emitter, uint64 pc, uint32 instruction)
+static void OsxGuestEmitCallStep(Osx970Emitter *emitter, uint64 pc, uint32 instruction)
 {
 	if (pc <= 0xffffffffULL)
-		EmitImmediate32(emitter, OSX970R8, (uint32)pc);
+		OsxGuestEmitImmediate32(emitter, OSX970R8, (uint32)pc);
 	else
-		EmitImmediate(emitter, OSX970R8, pc);
-	EmitImmediate32(emitter, OSX970RDX, instruction);
-	EmitByte(emitter, 0xe8);
-	EmitDword(emitter, 0);
-	PatchJump(emitter->cursor - 4, emitter->stepthunk);
-	EmitRegister(emitter, 0, 0x85, OSX970RAX, OSX970RAX);
+		OsxGuestEmitImmediate(emitter, OSX970R8, pc);
+	OsxGuestEmitImmediate32(emitter, OSX970RDX, instruction);
+	OsxGuestEmitByte(emitter, 0xe8);
+	OsxGuestEmitDword(emitter, 0);
+	OsxGuestPatchJump(emitter->cursor - 4, emitter->stepthunk);
+	OsxGuestEmitRegister(emitter, 0, 0x85, OSX970RAX, OSX970RAX);
 }
 
-static void EmitStep(Osx970Emitter *emitter, uint64 pc, uint32 instruction, uint32 count)
+static void OsxGuestEmitStep(Osx970Emitter *emitter, uint64 pc, uint32 instruction, uint32 count)
 {
-	EmitCallStep(emitter, pc, instruction);
-	EmitColdExit(emitter, 0x85, count);
+	OsxGuestEmitCallStep(emitter, pc, instruction);
+	OsxGuestEmitColdExit(emitter, 0x85, count);
 }
 
-static void EmitCrFromFlags(Osx970Emitter *emitter, int field, int issigned)
+static void OsxGuestEmitCrFromFlags(Osx970Emitter *emitter, int field, int issigned)
 {
 	uint32 shift;
 	shift = (uint32)(7 - field) * 4;
-	EmitImmediate32(emitter, OSX970RDX, 4);
-	EmitImmediate32(emitter, OSX970RCX, 8);
+	OsxGuestEmitImmediate32(emitter, OSX970RDX, 4);
+	OsxGuestEmitImmediate32(emitter, OSX970RCX, 8);
 	if (issigned)
-		EmitRegister(emitter, 0, 0x0f4c, OSX970RDX, OSX970RCX);
+		OsxGuestEmitRegister(emitter, 0, 0x0f4c, OSX970RDX, OSX970RCX);
 	else
-		EmitRegister(emitter, 0, 0x0f42, OSX970RDX, OSX970RCX);
-	EmitImmediate32(emitter, OSX970RCX, 2);
-	EmitRegister(emitter, 0, 0x0f44, OSX970RDX, OSX970RCX);
-	EmitMemory(emitter, 0, 0x8b, OSX970RCX, OSX970RSI, OSX970CPUFIELD(xer));
-	EmitByte(emitter, 0xc1);
-	EmitByte(emitter, 0xe9);
-	EmitByte(emitter, 31);
-	EmitRegister(emitter, 0, 0x09, OSX970RCX, OSX970RDX);
-	EmitMemory(emitter, 0, 0x8b, OSX970RAX, OSX970RSI, OSX970CPUFIELD(cr));
-	EmitByte(emitter, 0x25);
-	EmitDword(emitter, ~(0xfu << shift));
+		OsxGuestEmitRegister(emitter, 0, 0x0f42, OSX970RDX, OSX970RCX);
+	OsxGuestEmitImmediate32(emitter, OSX970RCX, 2);
+	OsxGuestEmitRegister(emitter, 0, 0x0f44, OSX970RDX, OSX970RCX);
+	OsxGuestEmitMemory(emitter, 0, 0x8b, OSX970RCX, OSX970RSI, OSX970CPUFIELD(xer));
+	OsxGuestEmitByte(emitter, 0xc1);
+	OsxGuestEmitByte(emitter, 0xe9);
+	OsxGuestEmitByte(emitter, 31);
+	OsxGuestEmitRegister(emitter, 0, 0x09, OSX970RCX, OSX970RDX);
+	OsxGuestEmitMemory(emitter, 0, 0x8b, OSX970RAX, OSX970RSI, OSX970CPUFIELD(cr));
+	OsxGuestEmitByte(emitter, 0x25);
+	OsxGuestEmitDword(emitter, ~(0xfu << shift));
 	if (shift) {
-		EmitByte(emitter, 0xc1);
-		EmitByte(emitter, 0xe2);
-		EmitByte(emitter, shift);
+		OsxGuestEmitByte(emitter, 0xc1);
+		OsxGuestEmitByte(emitter, 0xe2);
+		OsxGuestEmitByte(emitter, shift);
 	}
-	EmitRegister(emitter, 0, 0x09, OSX970RDX, OSX970RAX);
-	EmitMemory(emitter, 0, 0x89, OSX970RAX, OSX970RSI, OSX970CPUFIELD(cr));
+	OsxGuestEmitRegister(emitter, 0, 0x09, OSX970RDX, OSX970RAX);
+	OsxGuestEmitMemory(emitter, 0, 0x89, OSX970RAX, OSX970RSI, OSX970CPUFIELD(cr));
 }
 
-static void EmitRecord(Osx970Emitter *emitter, int sixtyfour)
+static void OsxGuestEmitRecord(Osx970Emitter *emitter, int sixtyfour)
 {
-	EmitRex(emitter, sixtyfour, 0, 0, OSX970RAX);
-	EmitByte(emitter, 0x83);
-	EmitByte(emitter, 0xf8);
-	EmitByte(emitter, 0);
-	EmitCrFromFlags(emitter, 0, 1);
+	OsxGuestEmitRex(emitter, sixtyfour, 0, 0, OSX970RAX);
+	OsxGuestEmitByte(emitter, 0x83);
+	OsxGuestEmitByte(emitter, 0xf8);
+	OsxGuestEmitByte(emitter, 0);
+	OsxGuestEmitCrFromFlags(emitter, 0, 1);
 }
 
-static void EmitNot(Osx970Emitter *emitter, int reg)
+static void OsxGuestEmitNot(Osx970Emitter *emitter, int reg)
 {
-	EmitRegister(emitter, 1, 0xf7, 2, reg);
+	OsxGuestEmitRegister(emitter, 1, 0xf7, 2, reg);
 }
 
-static int SizeIndex(int size)
+static int OsxGuestSizeIndex(int size)
 {
 	switch (size) {
 	case 1: return 0;
@@ -2526,109 +2526,109 @@ static int SizeIndex(int size)
 	return -1;
 }
 
-static uint32 TlbOffset(int store, int mode)
+static uint32 OsxGuestTlbOffset(int store, int mode)
 {
 	if (store)
 		return OSX970FIELD(tlb) + (uint32)((mode * OSXTLBKINDS + OSXTLBWRITE) * OSX970TLBSIZE) * (uint32)sizeof(Osx970TlbEntry);
 	return OSX970FIELD(tlb) + (uint32)((mode * OSXTLBKINDS + OSXTLBREAD) * OSX970TLBSIZE) * (uint32)sizeof(Osx970TlbEntry);
 }
 
-static void EmitTlbCompare(Osx970Emitter *emitter, int store, int size, int mode);
+static void OsxGuestEmitTlbCompare(Osx970Emitter *emitter, int store, int size, int mode);
 
-static void EmitTlbFetch(Osx970Emitter *emitter, int store, int mode)
+static void OsxGuestEmitTlbFetch(Osx970Emitter *emitter, int store, int mode)
 {
-	EmitByte(emitter, 0x48);
-	EmitByte(emitter, 0x8b);
-	EmitByte(emitter, 0x94);
-	EmitByte(emitter, 0x13);
-	EmitDword(emitter, TlbOffset(store, mode) + 8);
+	OsxGuestEmitByte(emitter, 0x48);
+	OsxGuestEmitByte(emitter, 0x8b);
+	OsxGuestEmitByte(emitter, 0x94);
+	OsxGuestEmitByte(emitter, 0x13);
+	OsxGuestEmitDword(emitter, OsxGuestTlbOffset(store, mode) + 8);
 }
 
-static void EmitTlbLookup(Osx970Emitter *emitter, int store, int size, int mode, uint64 pc, uint32 instruction, uint32 count)
+static void OsxGuestEmitTlbLookup(Osx970Emitter *emitter, int store, int size, int mode, uint64 pc, uint32 instruction, uint32 count)
 {
-	if (SizeIndex(size) < 0) {
-		EmitTlbCompare(emitter, store, size, mode);
-		EmitColdStep(emitter, 0x85, pc, instruction, count);
-		EmitTlbFetch(emitter, store, mode);
+	if (OsxGuestSizeIndex(size) < 0) {
+		OsxGuestEmitTlbCompare(emitter, store, size, mode);
+		OsxGuestEmitColdStep(emitter, 0x85, pc, instruction, count);
+		OsxGuestEmitTlbFetch(emitter, store, mode);
 		return;
 	}
-	EmitByte(emitter, 0xe8);
-	EmitDword(emitter, 0);
-	PatchJump(emitter->cursor - 4, emitter->probes[mode][store][SizeIndex(size)]);
-	EmitColdStep(emitter, 0x85, pc, instruction, count);
+	OsxGuestEmitByte(emitter, 0xe8);
+	OsxGuestEmitDword(emitter, 0);
+	OsxGuestPatchJump(emitter->cursor - 4, emitter->probes[mode][store][OsxGuestSizeIndex(size)]);
+	OsxGuestEmitColdStep(emitter, 0x85, pc, instruction, count);
 }
 
-static void EmitTlbProbe(Osx970Emitter *emitter, int store, int size, int mode)
+static void OsxGuestEmitTlbProbe(Osx970Emitter *emitter, int store, int size, int mode)
 {
-	EmitTlbCompare(emitter, store, size, mode);
-	EmitTlbFetch(emitter, store, mode);
-	EmitByte(emitter, 0xc3);
+	OsxGuestEmitTlbCompare(emitter, store, size, mode);
+	OsxGuestEmitTlbFetch(emitter, store, mode);
+	OsxGuestEmitByte(emitter, 0xc3);
 }
 
-static void EmitTlbCompare(Osx970Emitter *emitter, int store, int size, int mode)
+static void OsxGuestEmitTlbCompare(Osx970Emitter *emitter, int store, int size, int mode)
 {
 	uint32 tlb;
-	EmitRegister(emitter, 0, 0x89, OSX970RAX, OSX970RDX);
-	EmitByte(emitter, 0xc1);
-	EmitByte(emitter, 0xea);
-	EmitByte(emitter, 12);
-	EmitByte(emitter, 0x81);
-	EmitByte(emitter, 0xe2);
-	EmitDword(emitter, OSX970TLBMASK);
-	EmitByte(emitter, 0xc1);
-	EmitByte(emitter, 0xe2);
-	EmitByte(emitter, 4);
-	tlb = TlbOffset(store, mode);
-	EmitByte(emitter, 0x4c);
-	EmitByte(emitter, 0x8d);
-	EmitByte(emitter, 0x40);
-	EmitByte(emitter, (uint32)(size - 1));
-	EmitByte(emitter, 0x49);
-	EmitByte(emitter, 0x81);
-	EmitByte(emitter, 0xe0);
-	EmitDword(emitter, 0xfffff000u);
-	EmitByte(emitter, 0x4c);
-	EmitByte(emitter, 0x39);
-	EmitByte(emitter, 0x84);
-	EmitByte(emitter, 0x13);
-	EmitDword(emitter, tlb);
+	OsxGuestEmitRegister(emitter, 0, 0x89, OSX970RAX, OSX970RDX);
+	OsxGuestEmitByte(emitter, 0xc1);
+	OsxGuestEmitByte(emitter, 0xea);
+	OsxGuestEmitByte(emitter, 12);
+	OsxGuestEmitByte(emitter, 0x81);
+	OsxGuestEmitByte(emitter, 0xe2);
+	OsxGuestEmitDword(emitter, OSX970TLBMASK);
+	OsxGuestEmitByte(emitter, 0xc1);
+	OsxGuestEmitByte(emitter, 0xe2);
+	OsxGuestEmitByte(emitter, 4);
+	tlb = OsxGuestTlbOffset(store, mode);
+	OsxGuestEmitByte(emitter, 0x4c);
+	OsxGuestEmitByte(emitter, 0x8d);
+	OsxGuestEmitByte(emitter, 0x40);
+	OsxGuestEmitByte(emitter, (uint32)(size - 1));
+	OsxGuestEmitByte(emitter, 0x49);
+	OsxGuestEmitByte(emitter, 0x81);
+	OsxGuestEmitByte(emitter, 0xe0);
+	OsxGuestEmitDword(emitter, 0xfffff000u);
+	OsxGuestEmitByte(emitter, 0x4c);
+	OsxGuestEmitByte(emitter, 0x39);
+	OsxGuestEmitByte(emitter, 0x84);
+	OsxGuestEmitByte(emitter, 0x13);
+	OsxGuestEmitDword(emitter, tlb);
 }
 
-static void EmitHostOffset(Osx970Emitter *emitter, uint32 opcode, int reg, uint32 displacement)
+static void OsxGuestEmitHostOffset(Osx970Emitter *emitter, uint32 opcode, int reg, uint32 displacement)
 {
-	EmitRex(emitter, 0, reg, OSX970RAX, OSX970RDX);
-	EmitOpcode(emitter, opcode);
-	EmitByte(emitter, 0x44 | ((reg & 7) << 3));
-	EmitByte(emitter, (OSX970RAX << 3) | OSX970RDX);
-	EmitByte(emitter, displacement);
+	OsxGuestEmitRex(emitter, 0, reg, OSX970RAX, OSX970RDX);
+	OsxGuestEmitOpcode(emitter, opcode);
+	OsxGuestEmitByte(emitter, 0x44 | ((reg & 7) << 3));
+	OsxGuestEmitByte(emitter, (OSX970RAX << 3) | OSX970RDX);
+	OsxGuestEmitByte(emitter, displacement);
 }
 
-static void EmitResume(Osx970Emitter *emitter, int first)
+static void OsxGuestEmitResume(Osx970Emitter *emitter, int first)
 {
 	int index;
 	for (index = first; index < emitter->coldcount; index++)
 		emitter->colds[index].resume = emitter->cursor;
 }
 
-static void EmitAlignmentCheck(Osx970Emitter *emitter, uint32 mask, uint64 pc, uint32 instruction, uint32 count)
+static void OsxGuestEmitAlignmentCheck(Osx970Emitter *emitter, uint32 mask, uint64 pc, uint32 instruction, uint32 count)
 {
-	EmitByte(emitter, 0xa8);
-	EmitByte(emitter, mask);
-	EmitColdStep(emitter, 0x85, pc, instruction, count);
+	OsxGuestEmitByte(emitter, 0xa8);
+	OsxGuestEmitByte(emitter, mask);
+	OsxGuestEmitColdStep(emitter, 0x85, pc, instruction, count);
 }
 
-static void EmitIndexedAddress(Osx970Emitter *emitter, uint32 instruction, int sixtyfour)
+static void OsxGuestEmitIndexedAddress(Osx970Emitter *emitter, uint32 instruction, int sixtyfour)
 {
 	int ra;
 	ra = (instruction >> 16) & 31;
-	EmitLoadGpr(emitter, OSX970RAX, (instruction >> 11) & 31);
+	OsxGuestEmitLoadGpr(emitter, OSX970RAX, (instruction >> 11) & 31);
 	if (ra)
-		EmitMemory(emitter, 1, 0x03, OSX970RAX, OSX970RBX, OSX970GPR(ra));
+		OsxGuestEmitMemory(emitter, 1, 0x03, OSX970RAX, OSX970RBX, OSX970GPR(ra));
 	if (!sixtyfour)
-		EmitRegister(emitter, 0, 0x89, OSX970RAX, OSX970RAX);
+		OsxGuestEmitRegister(emitter, 0, 0x89, OSX970RAX, OSX970RAX);
 }
 
-static int EmitSpecialMemory(Osx970Emitter *emitter, uint32 instruction, uint64 pc, uint32 count, int sixtyfour, int mode)
+static int OsxGuestEmitSpecialMemory(Osx970Emitter *emitter, uint32 instruction, uint64 pc, uint32 count, int sixtyfour, int mode)
 {
 	uint32 opcode;
 	uint32 extended;
@@ -2652,114 +2652,114 @@ static int EmitSpecialMemory(Osx970Emitter *emitter, uint32 instruction, uint64 
 		if (opcode == 46 && ra >= rt)
 			return 0;
 		if (ra) {
-			EmitLoadGpr(emitter, OSX970RAX, ra);
-			EmitByte(emitter, 0x48);
-			EmitByte(emitter, 0x05);
-			EmitDword(emitter, (uint32)(int32)(int16)(instruction & 0xffff));
+			OsxGuestEmitLoadGpr(emitter, OSX970RAX, ra);
+			OsxGuestEmitByte(emitter, 0x48);
+			OsxGuestEmitByte(emitter, 0x05);
+			OsxGuestEmitDword(emitter, (uint32)(int32)(int16)(instruction & 0xffff));
 		} else
-			EmitImmediate(emitter, OSX970RAX, (uint64)(int64)(int16)(instruction & 0xffff));
+			OsxGuestEmitImmediate(emitter, OSX970RAX, (uint64)(int64)(int16)(instruction & 0xffff));
 		if (!sixtyfour)
-			EmitRegister(emitter, 0, 0x89, OSX970RAX, OSX970RAX);
-		EmitAlignmentCheck(emitter, 3, pc, instruction, count);
-		EmitTlbLookup(emitter, opcode == 47, (int)total, mode, pc, instruction, count);
+			OsxGuestEmitRegister(emitter, 0, 0x89, OSX970RAX, OSX970RAX);
+		OsxGuestEmitAlignmentCheck(emitter, 3, pc, instruction, count);
+		OsxGuestEmitTlbLookup(emitter, opcode == 47, (int)total, mode, pc, instruction, count);
 		for (index = 0; index < 32 - (uint32)rt; index++) {
 			if (opcode == 46) {
-				EmitHostOffset(emitter, 0x8b, OSX970RCX, index * 4);
-				EmitByte(emitter, 0x0f);
-				EmitByte(emitter, 0xc9);
-				EmitStoreGpr(emitter, OSX970RCX, rt + (int)index);
+				OsxGuestEmitHostOffset(emitter, 0x8b, OSX970RCX, index * 4);
+				OsxGuestEmitByte(emitter, 0x0f);
+				OsxGuestEmitByte(emitter, 0xc9);
+				OsxGuestEmitStoreGpr(emitter, OSX970RCX, rt + (int)index);
 			} else {
-				EmitMemory(emitter, 0, 0x8b, OSX970RCX, OSX970RBX, OSX970GPR(rt + (int)index));
-				EmitByte(emitter, 0x0f);
-				EmitByte(emitter, 0xc9);
-				EmitHostOffset(emitter, 0x89, OSX970RCX, index * 4);
+				OsxGuestEmitMemory(emitter, 0, 0x8b, OSX970RCX, OSX970RBX, OSX970GPR(rt + (int)index));
+				OsxGuestEmitByte(emitter, 0x0f);
+				OsxGuestEmitByte(emitter, 0xc9);
+				OsxGuestEmitHostOffset(emitter, 0x89, OSX970RCX, index * 4);
 			}
 		}
-		EmitResume(emitter, first);
+		OsxGuestEmitResume(emitter, first);
 		return 1;
 	}
 	if (opcode != 31)
 		return 0;
 	if (extended == 20) {
-		EmitIndexedAddress(emitter, instruction, sixtyfour);
-		EmitAlignmentCheck(emitter, 3, pc, instruction, count);
-		EmitTlbLookup(emitter, 0, 4, mode, pc, instruction, count);
-		EmitHostOffset(emitter, 0x8b, OSX970RCX, 0);
-		EmitByte(emitter, 0x0f);
-		EmitByte(emitter, 0xc9);
-		EmitStoreGpr(emitter, OSX970RCX, rt);
-		EmitMemory(emitter, 1, 0x89, OSX970RAX, OSX970RBX, OSX970FIELD(reservation));
-		EmitMemory(emitter, 0, 0xc7, 0, OSX970RBX, OSX970FIELD(reservationvalid));
-		EmitDword(emitter, 1);
-		EmitResume(emitter, first);
+		OsxGuestEmitIndexedAddress(emitter, instruction, sixtyfour);
+		OsxGuestEmitAlignmentCheck(emitter, 3, pc, instruction, count);
+		OsxGuestEmitTlbLookup(emitter, 0, 4, mode, pc, instruction, count);
+		OsxGuestEmitHostOffset(emitter, 0x8b, OSX970RCX, 0);
+		OsxGuestEmitByte(emitter, 0x0f);
+		OsxGuestEmitByte(emitter, 0xc9);
+		OsxGuestEmitStoreGpr(emitter, OSX970RCX, rt);
+		OsxGuestEmitMemory(emitter, 1, 0x89, OSX970RAX, OSX970RBX, OSX970FIELD(reservation));
+		OsxGuestEmitMemory(emitter, 0, 0xc7, 0, OSX970RBX, OSX970FIELD(reservationvalid));
+		OsxGuestEmitDword(emitter, 1);
+		OsxGuestEmitResume(emitter, first);
 		return 1;
 	}
 	if (extended == 150 && (instruction & 1)) {
-		EmitIndexedAddress(emitter, instruction, sixtyfour);
-		EmitAlignmentCheck(emitter, 3, pc, instruction, count);
-		EmitMemory(emitter, 0, 0x83, 7, OSX970RBX, OSX970FIELD(reservationvalid));
-		EmitByte(emitter, 0);
-		fail = EmitJump(emitter, 0x84);
-		EmitMemory(emitter, 1, 0x39, OSX970RAX, OSX970RBX, OSX970FIELD(reservation));
-		done = EmitJump(emitter, 0x85);
-		EmitTlbLookup(emitter, 1, 4, mode, pc, instruction, count);
-		EmitMemory(emitter, 0, 0x8b, OSX970RCX, OSX970RBX, OSX970GPR(rt));
-		EmitByte(emitter, 0x0f);
-		EmitByte(emitter, 0xc9);
-		EmitHostOffset(emitter, 0x89, OSX970RCX, 0);
-		EmitMemory(emitter, 0, 0xc7, 0, OSX970RBX, OSX970FIELD(reservationvalid));
-		EmitDword(emitter, 0);
-		EmitImmediate32(emitter, OSX970RDX, 2);
-		skip = EmitJump(emitter, 0);
-		PatchJump(fail, emitter->cursor);
-		PatchJump(done, emitter->cursor);
-		EmitMemory(emitter, 0, 0xc7, 0, OSX970RBX, OSX970FIELD(reservationvalid));
-		EmitDword(emitter, 0);
-		EmitRegister(emitter, 0, 0x31, OSX970RDX, OSX970RDX);
-		PatchJump(skip, emitter->cursor);
-		EmitMemory(emitter, 0, 0x8b, OSX970RCX, OSX970RSI, OSX970CPUFIELD(xer));
-		EmitByte(emitter, 0xc1);
-		EmitByte(emitter, 0xe9);
-		EmitByte(emitter, 31);
-		EmitRegister(emitter, 0, 0x09, OSX970RCX, OSX970RDX);
-		EmitMemory(emitter, 0, 0x8b, OSX970RAX, OSX970RSI, OSX970CPUFIELD(cr));
-		EmitByte(emitter, 0x25);
-		EmitDword(emitter, 0x0fffffffu);
-		EmitByte(emitter, 0xc1);
-		EmitByte(emitter, 0xe2);
-		EmitByte(emitter, 28);
-		EmitRegister(emitter, 0, 0x09, OSX970RDX, OSX970RAX);
-		EmitMemory(emitter, 0, 0x89, OSX970RAX, OSX970RSI, OSX970CPUFIELD(cr));
-		EmitResume(emitter, first);
+		OsxGuestEmitIndexedAddress(emitter, instruction, sixtyfour);
+		OsxGuestEmitAlignmentCheck(emitter, 3, pc, instruction, count);
+		OsxGuestEmitMemory(emitter, 0, 0x83, 7, OSX970RBX, OSX970FIELD(reservationvalid));
+		OsxGuestEmitByte(emitter, 0);
+		fail = OsxGuestEmitJump(emitter, 0x84);
+		OsxGuestEmitMemory(emitter, 1, 0x39, OSX970RAX, OSX970RBX, OSX970FIELD(reservation));
+		done = OsxGuestEmitJump(emitter, 0x85);
+		OsxGuestEmitTlbLookup(emitter, 1, 4, mode, pc, instruction, count);
+		OsxGuestEmitMemory(emitter, 0, 0x8b, OSX970RCX, OSX970RBX, OSX970GPR(rt));
+		OsxGuestEmitByte(emitter, 0x0f);
+		OsxGuestEmitByte(emitter, 0xc9);
+		OsxGuestEmitHostOffset(emitter, 0x89, OSX970RCX, 0);
+		OsxGuestEmitMemory(emitter, 0, 0xc7, 0, OSX970RBX, OSX970FIELD(reservationvalid));
+		OsxGuestEmitDword(emitter, 0);
+		OsxGuestEmitImmediate32(emitter, OSX970RDX, 2);
+		skip = OsxGuestEmitJump(emitter, 0);
+		OsxGuestPatchJump(fail, emitter->cursor);
+		OsxGuestPatchJump(done, emitter->cursor);
+		OsxGuestEmitMemory(emitter, 0, 0xc7, 0, OSX970RBX, OSX970FIELD(reservationvalid));
+		OsxGuestEmitDword(emitter, 0);
+		OsxGuestEmitRegister(emitter, 0, 0x31, OSX970RDX, OSX970RDX);
+		OsxGuestPatchJump(skip, emitter->cursor);
+		OsxGuestEmitMemory(emitter, 0, 0x8b, OSX970RCX, OSX970RSI, OSX970CPUFIELD(xer));
+		OsxGuestEmitByte(emitter, 0xc1);
+		OsxGuestEmitByte(emitter, 0xe9);
+		OsxGuestEmitByte(emitter, 31);
+		OsxGuestEmitRegister(emitter, 0, 0x09, OSX970RCX, OSX970RDX);
+		OsxGuestEmitMemory(emitter, 0, 0x8b, OSX970RAX, OSX970RSI, OSX970CPUFIELD(cr));
+		OsxGuestEmitByte(emitter, 0x25);
+		OsxGuestEmitDword(emitter, 0x0fffffffu);
+		OsxGuestEmitByte(emitter, 0xc1);
+		OsxGuestEmitByte(emitter, 0xe2);
+		OsxGuestEmitByte(emitter, 28);
+		OsxGuestEmitRegister(emitter, 0, 0x09, OSX970RDX, OSX970RAX);
+		OsxGuestEmitMemory(emitter, 0, 0x89, OSX970RAX, OSX970RSI, OSX970CPUFIELD(cr));
+		OsxGuestEmitResume(emitter, first);
 		return 1;
 	}
 	if ((extended == 103 || extended == 359 || extended == 231 || extended == 487) && emitter->vector) {
-		EmitIndexedAddress(emitter, instruction, sixtyfour);
-		EmitByte(emitter, 0x48);
-		EmitByte(emitter, 0x83);
-		EmitByte(emitter, 0xe0);
-		EmitByte(emitter, 0xf0);
-		EmitTlbLookup(emitter, extended == 231 || extended == 487, 16, mode, pc, instruction, count);
+		OsxGuestEmitIndexedAddress(emitter, instruction, sixtyfour);
+		OsxGuestEmitByte(emitter, 0x48);
+		OsxGuestEmitByte(emitter, 0x83);
+		OsxGuestEmitByte(emitter, 0xe0);
+		OsxGuestEmitByte(emitter, 0xf0);
+		OsxGuestEmitTlbLookup(emitter, extended == 231 || extended == 487, 16, mode, pc, instruction, count);
 		for (index = 0; index < 4; index++) {
 			if (extended == 103 || extended == 359) {
-				EmitHostOffset(emitter, 0x8b, OSX970RCX, index * 4);
-				EmitByte(emitter, 0x0f);
-				EmitByte(emitter, 0xc9);
-				EmitMemory(emitter, 0, 0x89, OSX970RCX, OSX970RSI, OSX970CPUFIELD(vr) + (uint32)rt * 16 + index * 4);
+				OsxGuestEmitHostOffset(emitter, 0x8b, OSX970RCX, index * 4);
+				OsxGuestEmitByte(emitter, 0x0f);
+				OsxGuestEmitByte(emitter, 0xc9);
+				OsxGuestEmitMemory(emitter, 0, 0x89, OSX970RCX, OSX970RSI, OSX970CPUFIELD(vr) + (uint32)rt * 16 + index * 4);
 			} else {
-				EmitMemory(emitter, 0, 0x8b, OSX970RCX, OSX970RSI, OSX970CPUFIELD(vr) + (uint32)rt * 16 + index * 4);
-				EmitByte(emitter, 0x0f);
-				EmitByte(emitter, 0xc9);
-				EmitHostOffset(emitter, 0x89, OSX970RCX, index * 4);
+				OsxGuestEmitMemory(emitter, 0, 0x8b, OSX970RCX, OSX970RSI, OSX970CPUFIELD(vr) + (uint32)rt * 16 + index * 4);
+				OsxGuestEmitByte(emitter, 0x0f);
+				OsxGuestEmitByte(emitter, 0xc9);
+				OsxGuestEmitHostOffset(emitter, 0x89, OSX970RCX, index * 4);
 			}
 		}
-		EmitResume(emitter, first);
+		OsxGuestEmitResume(emitter, first);
 		return 1;
 	}
 	return 0;
 }
 
-static int EmitMemoryAccess(Osx970Emitter *emitter, uint32 instruction, uint64 pc, uint32 count, int sixtyfour, int mode)
+static int OsxGuestEmitMemoryAccess(Osx970Emitter *emitter, uint32 instruction, uint64 pc, uint32 count, int sixtyfour, int mode)
 {
 	uint32 opcode;
 	uint32 extended;
@@ -2831,83 +2831,83 @@ static int EmitMemoryAccess(Osx970Emitter *emitter, uint32 instruction, uint64 p
 	if (update && ra == 0)
 		return 0;
 	if (indexed) {
-		EmitLoadGpr(emitter, OSX970RAX, (instruction >> 11) & 31);
+		OsxGuestEmitLoadGpr(emitter, OSX970RAX, (instruction >> 11) & 31);
 		if (ra)
-			EmitMemory(emitter, 1, 0x03, OSX970RAX, OSX970RBX, OSX970GPR(ra));
+			OsxGuestEmitMemory(emitter, 1, 0x03, OSX970RAX, OSX970RBX, OSX970GPR(ra));
 	} else {
 		displacement = (uint32)(int32)(int16)(instruction & 0xffff);
 		if (opcode == 58 || opcode == 62)
 			displacement &= ~3u;
 		if (ra) {
-			EmitLoadGpr(emitter, OSX970RAX, ra);
+			OsxGuestEmitLoadGpr(emitter, OSX970RAX, ra);
 			if (displacement) {
-				EmitByte(emitter, 0x48);
-				EmitByte(emitter, 0x05);
-				EmitDword(emitter, displacement);
+				OsxGuestEmitByte(emitter, 0x48);
+				OsxGuestEmitByte(emitter, 0x05);
+				OsxGuestEmitDword(emitter, displacement);
 			}
 		} else
-			EmitImmediate(emitter, OSX970RAX, (uint64)(int64)(int32)displacement);
+			OsxGuestEmitImmediate(emitter, OSX970RAX, (uint64)(int64)(int32)displacement);
 	}
 	if (!sixtyfour)
-		EmitRegister(emitter, 0, 0x89, OSX970RAX, OSX970RAX);
+		OsxGuestEmitRegister(emitter, 0, 0x89, OSX970RAX, OSX970RAX);
 	if (update)
-		EmitRegister(emitter, 1, 0x89, OSX970RAX, OSX970R10);
-	EmitTlbLookup(emitter, store, size, mode, pc, instruction, count);
+		OsxGuestEmitRegister(emitter, 1, 0x89, OSX970RAX, OSX970R10);
+	OsxGuestEmitTlbLookup(emitter, store, size, mode, pc, instruction, count);
 	if (store) {
-		EmitMemory(emitter, size == 8, 0x8b, OSX970R9, OSX970RBX, OSX970GPR(rt));
+		OsxGuestEmitMemory(emitter, size == 8, 0x8b, OSX970R9, OSX970RBX, OSX970GPR(rt));
 		if (size == 8) {
-			EmitByte(emitter, 0x49);
-			EmitByte(emitter, 0x0f);
-			EmitByte(emitter, 0xc9);
-			EmitIndexed(emitter, 1, 0x89, OSX970R9);
+			OsxGuestEmitByte(emitter, 0x49);
+			OsxGuestEmitByte(emitter, 0x0f);
+			OsxGuestEmitByte(emitter, 0xc9);
+			OsxGuestEmitIndexed(emitter, 1, 0x89, OSX970R9);
 		} else if (size == 4) {
-			EmitByte(emitter, 0x41);
-			EmitByte(emitter, 0x0f);
-			EmitByte(emitter, 0xc9);
-			EmitIndexed(emitter, 0, 0x89, OSX970R9);
+			OsxGuestEmitByte(emitter, 0x41);
+			OsxGuestEmitByte(emitter, 0x0f);
+			OsxGuestEmitByte(emitter, 0xc9);
+			OsxGuestEmitIndexed(emitter, 0, 0x89, OSX970R9);
 		} else if (size == 2) {
-			EmitByte(emitter, 0x66);
-			EmitByte(emitter, 0x41);
-			EmitByte(emitter, 0xc1);
-			EmitByte(emitter, 0xc1);
-			EmitByte(emitter, 8);
-			EmitByte(emitter, 0x66);
-			EmitIndexed(emitter, 0, 0x89, OSX970R9);
+			OsxGuestEmitByte(emitter, 0x66);
+			OsxGuestEmitByte(emitter, 0x41);
+			OsxGuestEmitByte(emitter, 0xc1);
+			OsxGuestEmitByte(emitter, 0xc1);
+			OsxGuestEmitByte(emitter, 8);
+			OsxGuestEmitByte(emitter, 0x66);
+			OsxGuestEmitIndexed(emitter, 0, 0x89, OSX970R9);
 		} else
-			EmitIndexed(emitter, 0, 0x88, OSX970R9);
+			OsxGuestEmitIndexed(emitter, 0, 0x88, OSX970R9);
 	} else {
 		if (size == 8) {
-			EmitIndexed(emitter, 1, 0x8b, OSX970RAX);
-			EmitByte(emitter, 0x48);
-			EmitByte(emitter, 0x0f);
-			EmitByte(emitter, 0xc8);
+			OsxGuestEmitIndexed(emitter, 1, 0x8b, OSX970RAX);
+			OsxGuestEmitByte(emitter, 0x48);
+			OsxGuestEmitByte(emitter, 0x0f);
+			OsxGuestEmitByte(emitter, 0xc8);
 		} else if (size == 4) {
-			EmitIndexed(emitter, 0, 0x8b, OSX970RAX);
-			EmitByte(emitter, 0x0f);
-			EmitByte(emitter, 0xc8);
+			OsxGuestEmitIndexed(emitter, 0, 0x8b, OSX970RAX);
+			OsxGuestEmitByte(emitter, 0x0f);
+			OsxGuestEmitByte(emitter, 0xc8);
 			if (kind == 2)
-				EmitRegister(emitter, 1, 0x63, OSX970RAX, OSX970RAX);
+				OsxGuestEmitRegister(emitter, 1, 0x63, OSX970RAX, OSX970RAX);
 		} else if (size == 2) {
-			EmitIndexed(emitter, 0, 0x0fb7, OSX970RAX);
-			EmitByte(emitter, 0x66);
-			EmitByte(emitter, 0xc1);
-			EmitByte(emitter, 0xc0);
-			EmitByte(emitter, 8);
+			OsxGuestEmitIndexed(emitter, 0, 0x0fb7, OSX970RAX);
+			OsxGuestEmitByte(emitter, 0x66);
+			OsxGuestEmitByte(emitter, 0xc1);
+			OsxGuestEmitByte(emitter, 0xc0);
+			OsxGuestEmitByte(emitter, 8);
 			if (kind == 1)
-				EmitRegister(emitter, 1, 0x0fbf, OSX970RAX, OSX970RAX);
+				OsxGuestEmitRegister(emitter, 1, 0x0fbf, OSX970RAX, OSX970RAX);
 			else
-				EmitRegister(emitter, 0, 0x0fb7, OSX970RAX, OSX970RAX);
+				OsxGuestEmitRegister(emitter, 0, 0x0fb7, OSX970RAX, OSX970RAX);
 		} else
-			EmitIndexed(emitter, 0, 0x0fb6, OSX970RAX);
-		EmitStoreGpr(emitter, OSX970RAX, rt);
+			OsxGuestEmitIndexed(emitter, 0, 0x0fb6, OSX970RAX);
+		OsxGuestEmitStoreGpr(emitter, OSX970RAX, rt);
 	}
 	if (update)
-		EmitMemory(emitter, 1, 0x89, OSX970R10, OSX970RBX, OSX970GPR(ra));
+		OsxGuestEmitMemory(emitter, 1, 0x89, OSX970R10, OSX970RBX, OSX970GPR(ra));
 	emitter->colds[emitter->coldcount - 1].resume = emitter->cursor;
 	return 1;
 }
 
-static int EmitBranch(Osx970Emitter *emitter, Osx970 *core, uint32 instruction, uint64 pc, uint32 count, int sixtyfour)
+static int OsxGuestEmitBranch(Osx970Emitter *emitter, Osx970 *core, uint32 instruction, uint64 pc, uint32 count, int sixtyfour)
 {
 	uint32 opcode;
 	uint32 extended;
@@ -2943,78 +2943,78 @@ static int EmitBranch(Osx970Emitter *emitter, Osx970 *core, uint32 instruction, 
 			return 0;
 	} else
 		return 0;
-	target = Effective(core, target);
+	target = OsxGuestEffective(core, target);
 	decrement = (opcode == 16 || extended == 16) && !(options & 4);
 	if (registertarget) {
 		if (extended == 16)
-			EmitMemory(emitter, 1, 0x8b, OSX970RDX, OSX970RBX, OSX970FIELD(lr));
+			OsxGuestEmitMemory(emitter, 1, 0x8b, OSX970RDX, OSX970RBX, OSX970FIELD(lr));
 		else
-			EmitMemory(emitter, 1, 0x8b, OSX970RDX, OSX970RBX, OSX970FIELD(ctr));
-		EmitByte(emitter, 0x48);
-		EmitByte(emitter, 0x83);
-		EmitByte(emitter, 0xe2);
-		EmitByte(emitter, 0xfc);
+			OsxGuestEmitMemory(emitter, 1, 0x8b, OSX970RDX, OSX970RBX, OSX970FIELD(ctr));
+		OsxGuestEmitByte(emitter, 0x48);
+		OsxGuestEmitByte(emitter, 0x83);
+		OsxGuestEmitByte(emitter, 0xe2);
+		OsxGuestEmitByte(emitter, 0xfc);
 		if (!sixtyfour)
-			EmitRegister(emitter, 0, 0x89, OSX970RDX, OSX970RDX);
+			OsxGuestEmitRegister(emitter, 0, 0x89, OSX970RDX, OSX970RDX);
 	}
 	if (instruction & 1) {
-		EmitImmediate(emitter, OSX970RAX, Effective(core, pc + 4));
-		EmitMemory(emitter, 1, 0x89, OSX970RAX, OSX970RBX, OSX970FIELD(lr));
+		OsxGuestEmitImmediate(emitter, OSX970RAX, OsxGuestEffective(core, pc + 4));
+		OsxGuestEmitMemory(emitter, 1, 0x89, OSX970RAX, OSX970RBX, OSX970FIELD(lr));
 	}
 	skipcount = 0;
 	if (decrement) {
-		EmitMemory(emitter, 1, 0xff, 1, OSX970RBX, OSX970FIELD(ctr));
-		EmitMemory(emitter, sixtyfour, 0x83, 7, OSX970RBX, OSX970FIELD(ctr));
-		EmitByte(emitter, 0);
+		OsxGuestEmitMemory(emitter, 1, 0xff, 1, OSX970RBX, OSX970FIELD(ctr));
+		OsxGuestEmitMemory(emitter, sixtyfour, 0x83, 7, OSX970RBX, OSX970FIELD(ctr));
+		OsxGuestEmitByte(emitter, 0);
 		if (options & 2)
-			skips[skipcount++] = EmitJump(emitter, 0x85);
+			skips[skipcount++] = OsxGuestEmitJump(emitter, 0x85);
 		else
-			skips[skipcount++] = EmitJump(emitter, 0x84);
+			skips[skipcount++] = OsxGuestEmitJump(emitter, 0x84);
 	}
 	if (!(options & 16)) {
-		EmitMemory(emitter, 0, 0x8b, OSX970RAX, OSX970RSI, OSX970CPUFIELD(cr));
-		EmitByte(emitter, 0x0f);
-		EmitByte(emitter, 0xba);
-		EmitByte(emitter, 0xe0);
-		EmitByte(emitter, 31 - bit);
+		OsxGuestEmitMemory(emitter, 0, 0x8b, OSX970RAX, OSX970RSI, OSX970CPUFIELD(cr));
+		OsxGuestEmitByte(emitter, 0x0f);
+		OsxGuestEmitByte(emitter, 0xba);
+		OsxGuestEmitByte(emitter, 0xe0);
+		OsxGuestEmitByte(emitter, 31 - bit);
 		if (options & 8)
-			skips[skipcount++] = EmitJump(emitter, 0x83);
+			skips[skipcount++] = OsxGuestEmitJump(emitter, 0x83);
 		else
-			skips[skipcount++] = EmitJump(emitter, 0x82);
+			skips[skipcount++] = OsxGuestEmitJump(emitter, 0x82);
 	}
 	if (registertarget) {
-		EmitMemory(emitter, 1, 0x89, OSX970RDX, OSX970RBX, OSX970FIELD(pc));
-		EmitDynamicExit(emitter, count);
+		OsxGuestEmitMemory(emitter, 1, 0x89, OSX970RDX, OSX970RBX, OSX970FIELD(pc));
+		OsxGuestEmitDynamicExit(emitter, count);
 	} else
-		EmitChain(emitter, count, target);
+		OsxGuestEmitChain(emitter, count, target);
 	for (index = 0; index < skipcount; index++)
-		PatchJump(skips[index], emitter->cursor);
+		OsxGuestPatchJump(skips[index], emitter->cursor);
 	return 1;
 }
 
-static void EmitCarryFromCl(Osx970Emitter *emitter)
+static void OsxGuestEmitCarryFromCl(Osx970Emitter *emitter)
 {
-	EmitByte(emitter, 0x0f);
-	EmitByte(emitter, 0xb6);
-	EmitByte(emitter, 0xc9);
-	EmitByte(emitter, 0xc1);
-	EmitByte(emitter, 0xe1);
-	EmitByte(emitter, 29);
-	EmitMemory(emitter, 0, 0x8b, OSX970RDX, OSX970RSI, OSX970CPUFIELD(xer));
-	EmitByte(emitter, 0x81);
-	EmitByte(emitter, 0xe2);
-	EmitDword(emitter, ~(uint32)OSXXERCA);
-	EmitRegister(emitter, 0, 0x09, OSX970RCX, OSX970RDX);
-	EmitMemory(emitter, 0, 0x89, OSX970RDX, OSX970RSI, OSX970CPUFIELD(xer));
+	OsxGuestEmitByte(emitter, 0x0f);
+	OsxGuestEmitByte(emitter, 0xb6);
+	OsxGuestEmitByte(emitter, 0xc9);
+	OsxGuestEmitByte(emitter, 0xc1);
+	OsxGuestEmitByte(emitter, 0xe1);
+	OsxGuestEmitByte(emitter, 29);
+	OsxGuestEmitMemory(emitter, 0, 0x8b, OSX970RDX, OSX970RSI, OSX970CPUFIELD(xer));
+	OsxGuestEmitByte(emitter, 0x81);
+	OsxGuestEmitByte(emitter, 0xe2);
+	OsxGuestEmitDword(emitter, ~(uint32)OSXXERCA);
+	OsxGuestEmitRegister(emitter, 0, 0x09, OSX970RCX, OSX970RDX);
+	OsxGuestEmitMemory(emitter, 0, 0x89, OSX970RDX, OSX970RSI, OSX970CPUFIELD(xer));
 }
 
-static void EmitCarryIn(Osx970Emitter *emitter)
+static void OsxGuestEmitCarryIn(Osx970Emitter *emitter)
 {
-	EmitMemory(emitter, 0, 0x0fba, 4, OSX970RSI, OSX970CPUFIELD(xer));
-	EmitByte(emitter, 29);
+	OsxGuestEmitMemory(emitter, 0, 0x0fba, 4, OSX970RSI, OSX970CPUFIELD(xer));
+	OsxGuestEmitByte(emitter, 29);
 }
 
-static int EmitCarry(Osx970Emitter *emitter, uint32 instruction, int sixtyfour)
+static int OsxGuestEmitCarry(Osx970Emitter *emitter, uint32 instruction, int sixtyfour)
 {
 	uint32 opcode;
 	uint32 extended;
@@ -3029,107 +3029,107 @@ static int EmitCarry(Osx970Emitter *emitter, uint32 instruction, int sixtyfour)
 	rb = (instruction >> 11) & 31;
 	immediate = (uint32)(int32)(int16)(instruction & 0xffff);
 	if (opcode == 12 || opcode == 13 || (opcode == 31 && extended == 10)) {
-		EmitLoadGpr(emitter, OSX970RAX, ra);
+		OsxGuestEmitLoadGpr(emitter, OSX970RAX, ra);
 		if (sixtyfour) {
 			if (opcode == 31)
-				EmitMemory(emitter, 1, 0x03, OSX970RAX, OSX970RBX, OSX970GPR(rb));
+				OsxGuestEmitMemory(emitter, 1, 0x03, OSX970RAX, OSX970RBX, OSX970GPR(rb));
 			else {
-				EmitByte(emitter, 0x48);
-				EmitByte(emitter, 0x05);
-				EmitDword(emitter, immediate);
+				OsxGuestEmitByte(emitter, 0x48);
+				OsxGuestEmitByte(emitter, 0x05);
+				OsxGuestEmitDword(emitter, immediate);
 			}
-			EmitByte(emitter, 0x0f);
-			EmitByte(emitter, 0x92);
-			EmitByte(emitter, 0xc1);
+			OsxGuestEmitByte(emitter, 0x0f);
+			OsxGuestEmitByte(emitter, 0x92);
+			OsxGuestEmitByte(emitter, 0xc1);
 		} else {
-			EmitRegister(emitter, 0, 0x89, OSX970RAX, OSX970RCX);
+			OsxGuestEmitRegister(emitter, 0, 0x89, OSX970RAX, OSX970RCX);
 			if (opcode == 31)
-				EmitMemory(emitter, 0, 0x03, OSX970RCX, OSX970RBX, OSX970GPR(rb));
+				OsxGuestEmitMemory(emitter, 0, 0x03, OSX970RCX, OSX970RBX, OSX970GPR(rb));
 			else {
-				EmitByte(emitter, 0x81);
-				EmitByte(emitter, 0xc1);
-				EmitDword(emitter, immediate);
+				OsxGuestEmitByte(emitter, 0x81);
+				OsxGuestEmitByte(emitter, 0xc1);
+				OsxGuestEmitDword(emitter, immediate);
 			}
-			EmitByte(emitter, 0x0f);
-			EmitByte(emitter, 0x92);
-			EmitByte(emitter, 0xc1);
+			OsxGuestEmitByte(emitter, 0x0f);
+			OsxGuestEmitByte(emitter, 0x92);
+			OsxGuestEmitByte(emitter, 0xc1);
 			if (opcode == 31)
-				EmitMemory(emitter, 1, 0x03, OSX970RAX, OSX970RBX, OSX970GPR(rb));
+				OsxGuestEmitMemory(emitter, 1, 0x03, OSX970RAX, OSX970RBX, OSX970GPR(rb));
 			else {
-				EmitByte(emitter, 0x48);
-				EmitByte(emitter, 0x05);
-				EmitDword(emitter, immediate);
+				OsxGuestEmitByte(emitter, 0x48);
+				OsxGuestEmitByte(emitter, 0x05);
+				OsxGuestEmitDword(emitter, immediate);
 			}
 		}
-		EmitStoreGpr(emitter, OSX970RAX, rt);
-		EmitCarryFromCl(emitter);
+		OsxGuestEmitStoreGpr(emitter, OSX970RAX, rt);
+		OsxGuestEmitCarryFromCl(emitter);
 		if (opcode == 13 || (opcode == 31 && (instruction & 1)))
-			EmitRecord(emitter, sixtyfour);
+			OsxGuestEmitRecord(emitter, sixtyfour);
 		return 1;
 	}
 	if (opcode == 8 || (opcode == 31 && extended == 8)) {
 		if (opcode == 8)
-			EmitImmediate(emitter, OSX970RAX, (uint64)(int64)(int32)immediate);
+			OsxGuestEmitImmediate(emitter, OSX970RAX, (uint64)(int64)(int32)immediate);
 		else
-			EmitLoadGpr(emitter, OSX970RAX, rb);
+			OsxGuestEmitLoadGpr(emitter, OSX970RAX, rb);
 		if (sixtyfour)
-			EmitMemory(emitter, 1, 0x2b, OSX970RAX, OSX970RBX, OSX970GPR(ra));
+			OsxGuestEmitMemory(emitter, 1, 0x2b, OSX970RAX, OSX970RBX, OSX970GPR(ra));
 		else {
-			EmitRegister(emitter, 0, 0x89, OSX970RAX, OSX970RCX);
-			EmitMemory(emitter, 0, 0x2b, OSX970RCX, OSX970RBX, OSX970GPR(ra));
+			OsxGuestEmitRegister(emitter, 0, 0x89, OSX970RAX, OSX970RCX);
+			OsxGuestEmitMemory(emitter, 0, 0x2b, OSX970RCX, OSX970RBX, OSX970GPR(ra));
 		}
-		EmitByte(emitter, 0x0f);
-		EmitByte(emitter, 0x93);
-		EmitByte(emitter, 0xc1);
+		OsxGuestEmitByte(emitter, 0x0f);
+		OsxGuestEmitByte(emitter, 0x93);
+		OsxGuestEmitByte(emitter, 0xc1);
 		if (!sixtyfour)
-			EmitMemory(emitter, 1, 0x2b, OSX970RAX, OSX970RBX, OSX970GPR(ra));
-		EmitStoreGpr(emitter, OSX970RAX, rt);
-		EmitCarryFromCl(emitter);
+			OsxGuestEmitMemory(emitter, 1, 0x2b, OSX970RAX, OSX970RBX, OSX970GPR(ra));
+		OsxGuestEmitStoreGpr(emitter, OSX970RAX, rt);
+		OsxGuestEmitCarryFromCl(emitter);
 		if (opcode == 31 && (instruction & 1))
-			EmitRecord(emitter, sixtyfour);
+			OsxGuestEmitRecord(emitter, sixtyfour);
 		return 1;
 	}
 	if (opcode == 31 && (extended == 138 || extended == 202)) {
-		EmitLoadGpr(emitter, OSX970RAX, ra);
+		OsxGuestEmitLoadGpr(emitter, OSX970RAX, ra);
 		if (!sixtyfour) {
-			EmitRegister(emitter, 0, 0x89, OSX970RAX, OSX970RCX);
-			EmitCarryIn(emitter);
+			OsxGuestEmitRegister(emitter, 0, 0x89, OSX970RAX, OSX970RCX);
+			OsxGuestEmitCarryIn(emitter);
 			if (extended == 138)
-				EmitMemory(emitter, 0, 0x13, OSX970RCX, OSX970RBX, OSX970GPR(rb));
+				OsxGuestEmitMemory(emitter, 0, 0x13, OSX970RCX, OSX970RBX, OSX970GPR(rb));
 			else {
-				EmitByte(emitter, 0x83);
-				EmitByte(emitter, 0xd1);
-				EmitByte(emitter, 0);
+				OsxGuestEmitByte(emitter, 0x83);
+				OsxGuestEmitByte(emitter, 0xd1);
+				OsxGuestEmitByte(emitter, 0);
 			}
-			EmitByte(emitter, 0x0f);
-			EmitByte(emitter, 0x92);
-			EmitByte(emitter, 0xc2);
+			OsxGuestEmitByte(emitter, 0x0f);
+			OsxGuestEmitByte(emitter, 0x92);
+			OsxGuestEmitByte(emitter, 0xc2);
 		}
-		EmitCarryIn(emitter);
+		OsxGuestEmitCarryIn(emitter);
 		if (extended == 138)
-			EmitMemory(emitter, 1, 0x13, OSX970RAX, OSX970RBX, OSX970GPR(rb));
+			OsxGuestEmitMemory(emitter, 1, 0x13, OSX970RAX, OSX970RBX, OSX970GPR(rb));
 		else {
-			EmitByte(emitter, 0x48);
-			EmitByte(emitter, 0x83);
-			EmitByte(emitter, 0xd0);
-			EmitByte(emitter, 0);
+			OsxGuestEmitByte(emitter, 0x48);
+			OsxGuestEmitByte(emitter, 0x83);
+			OsxGuestEmitByte(emitter, 0xd0);
+			OsxGuestEmitByte(emitter, 0);
 		}
 		if (sixtyfour) {
-			EmitByte(emitter, 0x0f);
-			EmitByte(emitter, 0x92);
-			EmitByte(emitter, 0xc1);
+			OsxGuestEmitByte(emitter, 0x0f);
+			OsxGuestEmitByte(emitter, 0x92);
+			OsxGuestEmitByte(emitter, 0xc1);
 		} else
-			EmitRegister(emitter, 0, 0x89, OSX970RDX, OSX970RCX);
-		EmitStoreGpr(emitter, OSX970RAX, rt);
-		EmitCarryFromCl(emitter);
+			OsxGuestEmitRegister(emitter, 0, 0x89, OSX970RDX, OSX970RCX);
+		OsxGuestEmitStoreGpr(emitter, OSX970RAX, rt);
+		OsxGuestEmitCarryFromCl(emitter);
 		if (instruction & 1)
-			EmitRecord(emitter, sixtyfour);
+			OsxGuestEmitRecord(emitter, sixtyfour);
 		return 1;
 	}
 	return 0;
 }
 
-static int EmitShiftCount(Osx970Emitter *emitter, uint32 instruction, int sixtyfour)
+static int OsxGuestEmitShiftCount(Osx970Emitter *emitter, uint32 instruction, int sixtyfour)
 {
 	uint32 extended;
 	uint32 shift;
@@ -3142,69 +3142,69 @@ static int EmitShiftCount(Osx970Emitter *emitter, uint32 instruction, int sixtyf
 	rb = (instruction >> 11) & 31;
 	switch (extended) {
 	case 24: case 536:
-		EmitMemory(emitter, 0, 0x8b, OSX970RCX, OSX970RBX, OSX970GPR(rb));
-		EmitMemory(emitter, 0, 0x8b, OSX970RAX, OSX970RBX, OSX970GPR(rs));
-		EmitByte(emitter, 0xd3);
+		OsxGuestEmitMemory(emitter, 0, 0x8b, OSX970RCX, OSX970RBX, OSX970GPR(rb));
+		OsxGuestEmitMemory(emitter, 0, 0x8b, OSX970RAX, OSX970RBX, OSX970GPR(rs));
+		OsxGuestEmitByte(emitter, 0xd3);
 		if (extended == 24)
-			EmitByte(emitter, 0xe0);
+			OsxGuestEmitByte(emitter, 0xe0);
 		else
-			EmitByte(emitter, 0xe8);
-		EmitRegister(emitter, 0, 0x31, OSX970RDX, OSX970RDX);
-		EmitByte(emitter, 0xf6);
-		EmitByte(emitter, 0xc1);
-		EmitByte(emitter, 0x20);
-		EmitRegister(emitter, 0, 0x0f45, OSX970RAX, OSX970RDX);
+			OsxGuestEmitByte(emitter, 0xe8);
+		OsxGuestEmitRegister(emitter, 0, 0x31, OSX970RDX, OSX970RDX);
+		OsxGuestEmitByte(emitter, 0xf6);
+		OsxGuestEmitByte(emitter, 0xc1);
+		OsxGuestEmitByte(emitter, 0x20);
+		OsxGuestEmitRegister(emitter, 0, 0x0f45, OSX970RAX, OSX970RDX);
 		break;
 	case 824:
 		shift = (uint32)rb;
-		EmitMemory(emitter, 0, 0x8b, OSX970RAX, OSX970RBX, OSX970GPR(rs));
+		OsxGuestEmitMemory(emitter, 0, 0x8b, OSX970RAX, OSX970RBX, OSX970GPR(rs));
 		if (shift == 0) {
-			EmitRegister(emitter, 1, 0x63, OSX970RAX, OSX970RAX);
-			EmitRegister(emitter, 0, 0x31, OSX970RCX, OSX970RCX);
+			OsxGuestEmitRegister(emitter, 1, 0x63, OSX970RAX, OSX970RAX);
+			OsxGuestEmitRegister(emitter, 0, 0x31, OSX970RCX, OSX970RCX);
 		} else {
-			EmitRegister(emitter, 0, 0x89, OSX970RAX, OSX970RCX);
-			EmitByte(emitter, 0x81);
-			EmitByte(emitter, 0xe1);
-			EmitDword(emitter, (1u << shift) - 1);
-			EmitRegister(emitter, 0, 0x89, OSX970RAX, OSX970RDX);
-			EmitByte(emitter, 0xc1);
-			EmitByte(emitter, 0xea);
-			EmitByte(emitter, 31);
-			EmitRegister(emitter, 0, 0x85, OSX970RCX, OSX970RCX);
-			EmitByte(emitter, 0x0f);
-			EmitByte(emitter, 0x95);
-			EmitByte(emitter, 0xc1);
-			EmitByte(emitter, 0x20);
-			EmitByte(emitter, 0xd1);
-			EmitByte(emitter, 0xc1);
-			EmitByte(emitter, 0xf8);
-			EmitByte(emitter, shift);
-			EmitRegister(emitter, 1, 0x63, OSX970RAX, OSX970RAX);
+			OsxGuestEmitRegister(emitter, 0, 0x89, OSX970RAX, OSX970RCX);
+			OsxGuestEmitByte(emitter, 0x81);
+			OsxGuestEmitByte(emitter, 0xe1);
+			OsxGuestEmitDword(emitter, (1u << shift) - 1);
+			OsxGuestEmitRegister(emitter, 0, 0x89, OSX970RAX, OSX970RDX);
+			OsxGuestEmitByte(emitter, 0xc1);
+			OsxGuestEmitByte(emitter, 0xea);
+			OsxGuestEmitByte(emitter, 31);
+			OsxGuestEmitRegister(emitter, 0, 0x85, OSX970RCX, OSX970RCX);
+			OsxGuestEmitByte(emitter, 0x0f);
+			OsxGuestEmitByte(emitter, 0x95);
+			OsxGuestEmitByte(emitter, 0xc1);
+			OsxGuestEmitByte(emitter, 0x20);
+			OsxGuestEmitByte(emitter, 0xd1);
+			OsxGuestEmitByte(emitter, 0xc1);
+			OsxGuestEmitByte(emitter, 0xf8);
+			OsxGuestEmitByte(emitter, shift);
+			OsxGuestEmitRegister(emitter, 1, 0x63, OSX970RAX, OSX970RAX);
 		}
-		EmitStoreGpr(emitter, OSX970RAX, ra);
-		EmitCarryFromCl(emitter);
+		OsxGuestEmitStoreGpr(emitter, OSX970RAX, ra);
+		OsxGuestEmitCarryFromCl(emitter);
 		if (instruction & 1)
-			EmitRecord(emitter, sixtyfour);
+			OsxGuestEmitRecord(emitter, sixtyfour);
 		return 1;
 	case 26:
-		EmitMemory(emitter, 0, 0x8b, OSX970RCX, OSX970RBX, OSX970GPR(rs));
-		EmitRegister(emitter, 0, 0x0fbd, OSX970RAX, OSX970RCX);
-		EmitImmediate32(emitter, OSX970RDX, 0xffffffffu);
-		EmitRegister(emitter, 0, 0x0f44, OSX970RAX, OSX970RDX);
-		EmitImmediate32(emitter, OSX970RDX, 31);
-		EmitRegister(emitter, 0, 0x29, OSX970RAX, OSX970RDX);
-		EmitRegister(emitter, 0, 0x89, OSX970RDX, OSX970RAX);
+		OsxGuestEmitMemory(emitter, 0, 0x8b, OSX970RCX, OSX970RBX, OSX970GPR(rs));
+		OsxGuestEmitRegister(emitter, 0, 0x0fbd, OSX970RAX, OSX970RCX);
+		OsxGuestEmitImmediate32(emitter, OSX970RDX, 0xffffffffu);
+		OsxGuestEmitRegister(emitter, 0, 0x0f44, OSX970RAX, OSX970RDX);
+		OsxGuestEmitImmediate32(emitter, OSX970RDX, 31);
+		OsxGuestEmitRegister(emitter, 0, 0x29, OSX970RAX, OSX970RDX);
+		OsxGuestEmitRegister(emitter, 0, 0x89, OSX970RDX, OSX970RAX);
 		break;
 	default:
 		return 0;
 	}
-	EmitStoreGpr(emitter, OSX970RAX, ra);
+	OsxGuestEmitStoreGpr(emitter, OSX970RAX, ra);
 	if (instruction & 1)
-		EmitRecord(emitter, sixtyfour);
+		OsxGuestEmitRecord(emitter, sixtyfour);
 	return 1;
 }
 
-static int EmitConditionLogic(Osx970Emitter *emitter, uint32 instruction)
+static int OsxGuestEmitConditionLogic(Osx970Emitter *emitter, uint32 instruction)
 {
 	uint32 extended;
 	uint32 target;
@@ -3220,49 +3220,49 @@ static int EmitConditionLogic(Osx970Emitter *emitter, uint32 instruction)
 	target = 31 - ((instruction >> 21) & 31);
 	first = 31 - ((instruction >> 16) & 31);
 	second = 31 - ((instruction >> 11) & 31);
-	EmitMemory(emitter, 0, 0x8b, OSX970RAX, OSX970RSI, OSX970CPUFIELD(cr));
-	EmitRegister(emitter, 0, 0x89, OSX970RAX, OSX970RCX);
+	OsxGuestEmitMemory(emitter, 0, 0x8b, OSX970RAX, OSX970RSI, OSX970CPUFIELD(cr));
+	OsxGuestEmitRegister(emitter, 0, 0x89, OSX970RAX, OSX970RCX);
 	if (first) {
-		EmitByte(emitter, 0xc1);
-		EmitByte(emitter, 0xe9);
-		EmitByte(emitter, first);
+		OsxGuestEmitByte(emitter, 0xc1);
+		OsxGuestEmitByte(emitter, 0xe9);
+		OsxGuestEmitByte(emitter, first);
 	}
-	EmitRegister(emitter, 0, 0x89, OSX970RAX, OSX970RDX);
+	OsxGuestEmitRegister(emitter, 0, 0x89, OSX970RAX, OSX970RDX);
 	if (second) {
-		EmitByte(emitter, 0xc1);
-		EmitByte(emitter, 0xea);
-		EmitByte(emitter, second);
+		OsxGuestEmitByte(emitter, 0xc1);
+		OsxGuestEmitByte(emitter, 0xea);
+		OsxGuestEmitByte(emitter, second);
 	}
 	if (extended == 129 || extended == 417) {
-		EmitByte(emitter, 0xf7);
-		EmitByte(emitter, 0xd2);
+		OsxGuestEmitByte(emitter, 0xf7);
+		OsxGuestEmitByte(emitter, 0xd2);
 	}
 	if (extended == 129 || extended == 225 || extended == 257)
-		EmitRegister(emitter, 0, 0x21, OSX970RDX, OSX970RCX);
+		OsxGuestEmitRegister(emitter, 0, 0x21, OSX970RDX, OSX970RCX);
 	else if (extended == 193 || extended == 289)
-		EmitRegister(emitter, 0, 0x31, OSX970RDX, OSX970RCX);
+		OsxGuestEmitRegister(emitter, 0, 0x31, OSX970RDX, OSX970RCX);
 	else
-		EmitRegister(emitter, 0, 0x09, OSX970RDX, OSX970RCX);
+		OsxGuestEmitRegister(emitter, 0, 0x09, OSX970RDX, OSX970RCX);
 	if (extended == 33 || extended == 225 || extended == 289) {
-		EmitByte(emitter, 0xf7);
-		EmitByte(emitter, 0xd1);
+		OsxGuestEmitByte(emitter, 0xf7);
+		OsxGuestEmitByte(emitter, 0xd1);
 	}
-	EmitByte(emitter, 0x83);
-	EmitByte(emitter, 0xe1);
-	EmitByte(emitter, 1);
+	OsxGuestEmitByte(emitter, 0x83);
+	OsxGuestEmitByte(emitter, 0xe1);
+	OsxGuestEmitByte(emitter, 1);
 	if (target) {
-		EmitByte(emitter, 0xc1);
-		EmitByte(emitter, 0xe1);
-		EmitByte(emitter, target);
+		OsxGuestEmitByte(emitter, 0xc1);
+		OsxGuestEmitByte(emitter, 0xe1);
+		OsxGuestEmitByte(emitter, target);
 	}
-	EmitByte(emitter, 0x25);
-	EmitDword(emitter, ~(1u << target));
-	EmitRegister(emitter, 0, 0x09, OSX970RCX, OSX970RAX);
-	EmitMemory(emitter, 0, 0x89, OSX970RAX, OSX970RSI, OSX970CPUFIELD(cr));
+	OsxGuestEmitByte(emitter, 0x25);
+	OsxGuestEmitDword(emitter, ~(1u << target));
+	OsxGuestEmitRegister(emitter, 0, 0x09, OSX970RCX, OSX970RAX);
+	OsxGuestEmitMemory(emitter, 0, 0x89, OSX970RAX, OSX970RSI, OSX970CPUFIELD(cr));
 	return 1;
 }
 
-static int EmitRotate64(Osx970Emitter *emitter, uint32 instruction, int sixtyfour)
+static int OsxGuestEmitRotate64(Osx970Emitter *emitter, uint32 instruction, int sixtyfour)
 {
 	uint32 shift;
 	uint32 field;
@@ -3274,30 +3274,30 @@ static int EmitRotate64(Osx970Emitter *emitter, uint32 instruction, int sixtyfou
 	field = (instruction >> 5) & 0x3f;
 	bound = ((field & 1) << 5) | (field >> 1);
 	if (((instruction >> 2) & 7) == 0)
-		mask = Mask64(bound, 63);
+		mask = OsxGuestMask64(bound, 63);
 	else
-		mask = Mask64(0, bound);
-	EmitLoadGpr(emitter, OSX970RAX, (instruction >> 21) & 31);
+		mask = OsxGuestMask64(0, bound);
+	OsxGuestEmitLoadGpr(emitter, OSX970RAX, (instruction >> 21) & 31);
 	if (shift) {
-		EmitByte(emitter, 0x48);
-		EmitByte(emitter, 0xc1);
-		EmitByte(emitter, 0xc0);
-		EmitByte(emitter, shift);
+		OsxGuestEmitByte(emitter, 0x48);
+		OsxGuestEmitByte(emitter, 0xc1);
+		OsxGuestEmitByte(emitter, 0xc0);
+		OsxGuestEmitByte(emitter, shift);
 	}
-	EmitImmediate(emitter, OSX970RCX, mask);
-	EmitRegister(emitter, 1, 0x21, OSX970RCX, OSX970RAX);
-	EmitStoreGpr(emitter, OSX970RAX, (instruction >> 16) & 31);
+	OsxGuestEmitImmediate(emitter, OSX970RCX, mask);
+	OsxGuestEmitRegister(emitter, 1, 0x21, OSX970RCX, OSX970RAX);
+	OsxGuestEmitStoreGpr(emitter, OSX970RAX, (instruction >> 16) & 31);
 	if (instruction & 1)
-		EmitRecord(emitter, sixtyfour);
+		OsxGuestEmitRecord(emitter, sixtyfour);
 	return 1;
 }
 
-static uint32 RotateMask32(uint32 begin, uint32 end)
+static uint32 OsxGuestRotateMask32(uint32 begin, uint32 end)
 {
 	return (0xffffffffu >> begin) & (0xffffffffu << (31 - end));
 }
 
-static int EmitNative(Osx970Emitter *emitter, uint32 instruction, uint64 pc, uint32 count, int sixtyfour, int mode)
+static int OsxGuestEmitNative(Osx970Emitter *emitter, uint32 instruction, uint64 pc, uint32 count, int sixtyfour, int mode)
 {
 	uint32 opcode;
 	uint32 extended;
@@ -3321,173 +3321,173 @@ static int EmitNative(Osx970Emitter *emitter, uint32 instruction, uint64 pc, uin
 		else
 			immediate <<= 16;
 		if (ra) {
-			EmitLoadGpr(emitter, OSX970RAX, ra);
-			EmitByte(emitter, 0x48);
-			EmitByte(emitter, 0x05);
-			EmitDword(emitter, immediate);
+			OsxGuestEmitLoadGpr(emitter, OSX970RAX, ra);
+			OsxGuestEmitByte(emitter, 0x48);
+			OsxGuestEmitByte(emitter, 0x05);
+			OsxGuestEmitDword(emitter, immediate);
 		} else
-			EmitImmediate(emitter, OSX970RAX, (uint64)(int64)(int32)immediate);
-		EmitStoreGpr(emitter, OSX970RAX, rt);
+			OsxGuestEmitImmediate(emitter, OSX970RAX, (uint64)(int64)(int32)immediate);
+		OsxGuestEmitStoreGpr(emitter, OSX970RAX, rt);
 		return 1;
 	case 24: case 25: case 26: case 27: case 28: case 29:
 		if (opcode & 1)
 			immediate <<= 16;
-		EmitLoadGpr(emitter, OSX970RAX, rt);
-		EmitImmediate32(emitter, OSX970RCX, immediate);
+		OsxGuestEmitLoadGpr(emitter, OSX970RAX, rt);
+		OsxGuestEmitImmediate32(emitter, OSX970RCX, immediate);
 		if (opcode <= 25)
-			EmitRegister(emitter, 1, 0x09, OSX970RCX, OSX970RAX);
+			OsxGuestEmitRegister(emitter, 1, 0x09, OSX970RCX, OSX970RAX);
 		else if (opcode <= 27)
-			EmitRegister(emitter, 1, 0x31, OSX970RCX, OSX970RAX);
+			OsxGuestEmitRegister(emitter, 1, 0x31, OSX970RCX, OSX970RAX);
 		else
-			EmitRegister(emitter, 1, 0x21, OSX970RCX, OSX970RAX);
-		EmitStoreGpr(emitter, OSX970RAX, ra);
+			OsxGuestEmitRegister(emitter, 1, 0x21, OSX970RCX, OSX970RAX);
+		OsxGuestEmitStoreGpr(emitter, OSX970RAX, ra);
 		if (opcode >= 28)
-			EmitRecord(emitter, sixtyfour);
+			OsxGuestEmitRecord(emitter, sixtyfour);
 		return 1;
 	case 10: case 11:
 		wide = (instruction >> 21) & 1;
-		EmitMemory(emitter, wide, 0x8b, OSX970RAX, OSX970RBX, OSX970GPR(ra));
+		OsxGuestEmitMemory(emitter, wide, 0x8b, OSX970RAX, OSX970RBX, OSX970GPR(ra));
 		if (opcode == 11)
 			immediate = (uint32)(int32)(int16)immediate;
-		EmitRex(emitter, wide, 0, 0, OSX970RAX);
-		EmitByte(emitter, 0x3d);
-		EmitDword(emitter, immediate);
-		EmitCrFromFlags(emitter, (int)((instruction >> 23) & 7), opcode == 11);
+		OsxGuestEmitRex(emitter, wide, 0, 0, OSX970RAX);
+		OsxGuestEmitByte(emitter, 0x3d);
+		OsxGuestEmitDword(emitter, immediate);
+		OsxGuestEmitCrFromFlags(emitter, (int)((instruction >> 23) & 7), opcode == 11);
 		return 1;
 	case 20: case 21:
 		shift = (instruction >> 11) & 31;
 		if (((instruction >> 6) & 31) > ((instruction >> 1) & 31))
 			return 0;
-		mask = RotateMask32((instruction >> 6) & 31, (instruction >> 1) & 31);
-		EmitMemory(emitter, 0, 0x8b, OSX970RAX, OSX970RBX, OSX970GPR(rt));
+		mask = OsxGuestRotateMask32((instruction >> 6) & 31, (instruction >> 1) & 31);
+		OsxGuestEmitMemory(emitter, 0, 0x8b, OSX970RAX, OSX970RBX, OSX970GPR(rt));
 		if (shift) {
-			EmitByte(emitter, 0xc1);
-			EmitByte(emitter, 0xc0);
-			EmitByte(emitter, shift);
+			OsxGuestEmitByte(emitter, 0xc1);
+			OsxGuestEmitByte(emitter, 0xc0);
+			OsxGuestEmitByte(emitter, shift);
 		}
-		EmitByte(emitter, 0x25);
-		EmitDword(emitter, mask);
+		OsxGuestEmitByte(emitter, 0x25);
+		OsxGuestEmitDword(emitter, mask);
 		if (opcode == 20) {
-			EmitLoadGpr(emitter, OSX970RCX, ra);
-			EmitImmediate(emitter, OSX970RDX, ~(uint64)mask);
-			EmitRegister(emitter, 1, 0x21, OSX970RDX, OSX970RCX);
-			EmitRegister(emitter, 1, 0x09, OSX970RCX, OSX970RAX);
+			OsxGuestEmitLoadGpr(emitter, OSX970RCX, ra);
+			OsxGuestEmitImmediate(emitter, OSX970RDX, ~(uint64)mask);
+			OsxGuestEmitRegister(emitter, 1, 0x21, OSX970RDX, OSX970RCX);
+			OsxGuestEmitRegister(emitter, 1, 0x09, OSX970RCX, OSX970RAX);
 		}
-		EmitStoreGpr(emitter, OSX970RAX, ra);
+		OsxGuestEmitStoreGpr(emitter, OSX970RAX, ra);
 		if (instruction & 1)
-			EmitRecord(emitter, sixtyfour);
+			OsxGuestEmitRecord(emitter, sixtyfour);
 		return 1;
 	case 8: case 12: case 13:
-		return EmitCarry(emitter, instruction, sixtyfour);
+		return OsxGuestEmitCarry(emitter, instruction, sixtyfour);
 	case 7:
-		EmitLoadGpr(emitter, OSX970RAX, ra);
-		EmitByte(emitter, 0x48);
-		EmitByte(emitter, 0x69);
-		EmitByte(emitter, 0xc0);
-		EmitDword(emitter, (uint32)(int32)(int16)immediate);
-		EmitStoreGpr(emitter, OSX970RAX, rt);
+		OsxGuestEmitLoadGpr(emitter, OSX970RAX, ra);
+		OsxGuestEmitByte(emitter, 0x48);
+		OsxGuestEmitByte(emitter, 0x69);
+		OsxGuestEmitByte(emitter, 0xc0);
+		OsxGuestEmitDword(emitter, (uint32)(int32)(int16)immediate);
+		OsxGuestEmitStoreGpr(emitter, OSX970RAX, rt);
 		return 1;
 	case 46: case 47:
-		return EmitSpecialMemory(emitter, instruction, pc, count, sixtyfour, mode);
+		return OsxGuestEmitSpecialMemory(emitter, instruction, pc, count, sixtyfour, mode);
 	case 30:
-		return EmitRotate64(emitter, instruction, sixtyfour);
+		return OsxGuestEmitRotate64(emitter, instruction, sixtyfour);
 	case 19:
 		if (((instruction >> 1) & 0x3ff) == 150)
 			return 1;
-		return EmitConditionLogic(emitter, instruction);
+		return OsxGuestEmitConditionLogic(emitter, instruction);
 	case 31:
 		break;
 	default:
-		return EmitMemoryAccess(emitter, instruction, pc, count, sixtyfour, mode);
+		return OsxGuestEmitMemoryAccess(emitter, instruction, pc, count, sixtyfour, mode);
 	}
 	extended = (instruction >> 1) & 0x3ff;
-	if (EmitCarry(emitter, instruction, sixtyfour) || EmitShiftCount(emitter, instruction, sixtyfour) || EmitSpecialMemory(emitter, instruction, pc, count, sixtyfour, mode))
+	if (OsxGuestEmitCarry(emitter, instruction, sixtyfour) || OsxGuestEmitShiftCount(emitter, instruction, sixtyfour) || OsxGuestEmitSpecialMemory(emitter, instruction, pc, count, sixtyfour, mode))
 		return 1;
 	if (extended == 83) {
 		if (mode == OSXMODEUSER)
 			return 0;
-		EmitMemory(emitter, 1, 0x8b, OSX970RAX, OSX970RBX, OSX970FIELD(msr));
-		EmitStoreGpr(emitter, OSX970RAX, rt);
+		OsxGuestEmitMemory(emitter, 1, 0x8b, OSX970RAX, OSX970RBX, OSX970FIELD(msr));
+		OsxGuestEmitStoreGpr(emitter, OSX970RAX, rt);
 		return 1;
 	}
 	switch (extended) {
 	case 266: case 40: case 104:
 		if (extended == 266) {
-			EmitLoadGpr(emitter, OSX970RAX, ra);
-			EmitMemory(emitter, 1, 0x03, OSX970RAX, OSX970RBX, OSX970GPR(rb));
+			OsxGuestEmitLoadGpr(emitter, OSX970RAX, ra);
+			OsxGuestEmitMemory(emitter, 1, 0x03, OSX970RAX, OSX970RBX, OSX970GPR(rb));
 		} else if (extended == 40) {
-			EmitLoadGpr(emitter, OSX970RAX, rb);
-			EmitMemory(emitter, 1, 0x2b, OSX970RAX, OSX970RBX, OSX970GPR(ra));
+			OsxGuestEmitLoadGpr(emitter, OSX970RAX, rb);
+			OsxGuestEmitMemory(emitter, 1, 0x2b, OSX970RAX, OSX970RBX, OSX970GPR(ra));
 		} else {
-			EmitLoadGpr(emitter, OSX970RAX, ra);
-			EmitRegister(emitter, 1, 0xf7, 3, OSX970RAX);
+			OsxGuestEmitLoadGpr(emitter, OSX970RAX, ra);
+			OsxGuestEmitRegister(emitter, 1, 0xf7, 3, OSX970RAX);
 		}
-		EmitStoreGpr(emitter, OSX970RAX, rt);
+		OsxGuestEmitStoreGpr(emitter, OSX970RAX, rt);
 		if (instruction & 1)
-			EmitRecord(emitter, sixtyfour);
+			OsxGuestEmitRecord(emitter, sixtyfour);
 		return 1;
 	case 235:
-		EmitMemory(emitter, 1, 0x63, OSX970RAX, OSX970RBX, OSX970GPR(ra));
-		EmitMemory(emitter, 1, 0x63, OSX970RCX, OSX970RBX, OSX970GPR(rb));
-		EmitRegister(emitter, 1, 0x0faf, OSX970RAX, OSX970RCX);
-		EmitStoreGpr(emitter, OSX970RAX, rt);
+		OsxGuestEmitMemory(emitter, 1, 0x63, OSX970RAX, OSX970RBX, OSX970GPR(ra));
+		OsxGuestEmitMemory(emitter, 1, 0x63, OSX970RCX, OSX970RBX, OSX970GPR(rb));
+		OsxGuestEmitRegister(emitter, 1, 0x0faf, OSX970RAX, OSX970RCX);
+		OsxGuestEmitStoreGpr(emitter, OSX970RAX, rt);
 		if (instruction & 1)
-			EmitRecord(emitter, sixtyfour);
+			OsxGuestEmitRecord(emitter, sixtyfour);
 		return 1;
 	case 28: case 60: case 124: case 284: case 316: case 412: case 444: case 476:
-		EmitLoadGpr(emitter, OSX970RAX, rt);
-		EmitLoadGpr(emitter, OSX970RCX, rb);
+		OsxGuestEmitLoadGpr(emitter, OSX970RAX, rt);
+		OsxGuestEmitLoadGpr(emitter, OSX970RCX, rb);
 		if (extended == 60 || extended == 412)
-			EmitNot(emitter, OSX970RCX);
+			OsxGuestEmitNot(emitter, OSX970RCX);
 		if (extended == 28 || extended == 60 || extended == 476)
-			EmitRegister(emitter, 1, 0x21, OSX970RCX, OSX970RAX);
+			OsxGuestEmitRegister(emitter, 1, 0x21, OSX970RCX, OSX970RAX);
 		else if (extended == 284 || extended == 316)
-			EmitRegister(emitter, 1, 0x31, OSX970RCX, OSX970RAX);
+			OsxGuestEmitRegister(emitter, 1, 0x31, OSX970RCX, OSX970RAX);
 		else
-			EmitRegister(emitter, 1, 0x09, OSX970RCX, OSX970RAX);
+			OsxGuestEmitRegister(emitter, 1, 0x09, OSX970RCX, OSX970RAX);
 		if (extended == 124 || extended == 284 || extended == 476)
-			EmitNot(emitter, OSX970RAX);
-		EmitStoreGpr(emitter, OSX970RAX, ra);
+			OsxGuestEmitNot(emitter, OSX970RAX);
+		OsxGuestEmitStoreGpr(emitter, OSX970RAX, ra);
 		if (instruction & 1)
-			EmitRecord(emitter, sixtyfour);
+			OsxGuestEmitRecord(emitter, sixtyfour);
 		return 1;
 	case 922: case 954: case 986:
 		if (extended == 922)
-			EmitMemory(emitter, 1, 0x0fbf, OSX970RAX, OSX970RBX, OSX970GPR(rt));
+			OsxGuestEmitMemory(emitter, 1, 0x0fbf, OSX970RAX, OSX970RBX, OSX970GPR(rt));
 		else if (extended == 954)
-			EmitMemory(emitter, 1, 0x0fbe, OSX970RAX, OSX970RBX, OSX970GPR(rt));
+			OsxGuestEmitMemory(emitter, 1, 0x0fbe, OSX970RAX, OSX970RBX, OSX970GPR(rt));
 		else
-			EmitMemory(emitter, 1, 0x63, OSX970RAX, OSX970RBX, OSX970GPR(rt));
-		EmitStoreGpr(emitter, OSX970RAX, ra);
+			OsxGuestEmitMemory(emitter, 1, 0x63, OSX970RAX, OSX970RBX, OSX970GPR(rt));
+		OsxGuestEmitStoreGpr(emitter, OSX970RAX, ra);
 		if (instruction & 1)
-			EmitRecord(emitter, sixtyfour);
+			OsxGuestEmitRecord(emitter, sixtyfour);
 		return 1;
 	case 0: case 32:
 		wide = (instruction >> 21) & 1;
-		EmitMemory(emitter, wide, 0x8b, OSX970RAX, OSX970RBX, OSX970GPR(ra));
-		EmitMemory(emitter, wide, 0x3b, OSX970RAX, OSX970RBX, OSX970GPR(rb));
-		EmitCrFromFlags(emitter, (int)((instruction >> 23) & 7), extended == 0);
+		OsxGuestEmitMemory(emitter, wide, 0x8b, OSX970RAX, OSX970RBX, OSX970GPR(ra));
+		OsxGuestEmitMemory(emitter, wide, 0x3b, OSX970RAX, OSX970RBX, OSX970GPR(rb));
+		OsxGuestEmitCrFromFlags(emitter, (int)((instruction >> 23) & 7), extended == 0);
 		return 1;
 	case 19:
 		if (instruction & 0x00100000)
 			return 0;
-		EmitMemory(emitter, 0, 0x8b, OSX970RAX, OSX970RSI, OSX970CPUFIELD(cr));
-		EmitStoreGpr(emitter, OSX970RAX, rt);
+		OsxGuestEmitMemory(emitter, 0, 0x8b, OSX970RAX, OSX970RSI, OSX970CPUFIELD(cr));
+		OsxGuestEmitStoreGpr(emitter, OSX970RAX, rt);
 		return 1;
 	case 144:
 		mask = 0;
 		for (number = 0; number < 8; number++)
 			if ((instruction >> 12) & (0x80u >> number))
 				mask |= 0xf0000000u >> (number * 4);
-		EmitMemory(emitter, 0, 0x8b, OSX970RAX, OSX970RBX, OSX970GPR(rt));
-		EmitByte(emitter, 0x25);
-		EmitDword(emitter, mask);
-		EmitMemory(emitter, 0, 0x8b, OSX970RCX, OSX970RSI, OSX970CPUFIELD(cr));
-		EmitByte(emitter, 0x81);
-		EmitByte(emitter, 0xe1);
-		EmitDword(emitter, ~mask);
-		EmitRegister(emitter, 0, 0x09, OSX970RCX, OSX970RAX);
-		EmitMemory(emitter, 0, 0x89, OSX970RAX, OSX970RSI, OSX970CPUFIELD(cr));
+		OsxGuestEmitMemory(emitter, 0, 0x8b, OSX970RAX, OSX970RBX, OSX970GPR(rt));
+		OsxGuestEmitByte(emitter, 0x25);
+		OsxGuestEmitDword(emitter, mask);
+		OsxGuestEmitMemory(emitter, 0, 0x8b, OSX970RCX, OSX970RSI, OSX970CPUFIELD(cr));
+		OsxGuestEmitByte(emitter, 0x81);
+		OsxGuestEmitByte(emitter, 0xe1);
+		OsxGuestEmitDword(emitter, ~mask);
+		OsxGuestEmitRegister(emitter, 0, 0x09, OSX970RCX, OSX970RAX);
+		OsxGuestEmitMemory(emitter, 0, 0x89, OSX970RAX, OSX970RSI, OSX970CPUFIELD(cr));
 		return 1;
 	case 339: case 467:
 		number = ((instruction >> 16) & 31) | (((instruction >> 11) & 31) << 5);
@@ -3496,33 +3496,33 @@ static int EmitNative(Osx970Emitter *emitter, uint32 instruction, uint64 pc, uin
 				return 0;
 			if (number == 259)
 				number = 275;
-			EmitMemory(emitter, 1, 0x8b, OSX970RAX, OSX970RBX, OSX970FIELD(sprg) + (number - 272) * 8);
-			EmitStoreGpr(emitter, OSX970RAX, rt);
+			OsxGuestEmitMemory(emitter, 1, 0x8b, OSX970RAX, OSX970RBX, OSX970FIELD(sprg) + (number - 272) * 8);
+			OsxGuestEmitStoreGpr(emitter, OSX970RAX, rt);
 			return 1;
 		}
 		if (number != 8 && number != 9)
 			return 0;
 		if (extended == 339) {
 			if (number == 8)
-				EmitMemory(emitter, 1, 0x8b, OSX970RAX, OSX970RBX, OSX970FIELD(lr));
+				OsxGuestEmitMemory(emitter, 1, 0x8b, OSX970RAX, OSX970RBX, OSX970FIELD(lr));
 			else
-				EmitMemory(emitter, 1, 0x8b, OSX970RAX, OSX970RBX, OSX970FIELD(ctr));
-			EmitStoreGpr(emitter, OSX970RAX, rt);
+				OsxGuestEmitMemory(emitter, 1, 0x8b, OSX970RAX, OSX970RBX, OSX970FIELD(ctr));
+			OsxGuestEmitStoreGpr(emitter, OSX970RAX, rt);
 		} else {
-			EmitLoadGpr(emitter, OSX970RAX, rt);
+			OsxGuestEmitLoadGpr(emitter, OSX970RAX, rt);
 			if (number == 8)
-				EmitMemory(emitter, 1, 0x89, OSX970RAX, OSX970RBX, OSX970FIELD(lr));
+				OsxGuestEmitMemory(emitter, 1, 0x89, OSX970RAX, OSX970RBX, OSX970FIELD(lr));
 			else
-				EmitMemory(emitter, 1, 0x89, OSX970RAX, OSX970RBX, OSX970FIELD(ctr));
+				OsxGuestEmitMemory(emitter, 1, 0x89, OSX970RAX, OSX970RBX, OSX970FIELD(ctr));
 		}
 		return 1;
 	}
 	if (instruction & 1)
 		return 0;
-	return EmitMemoryAccess(emitter, instruction, pc, count, sixtyfour, mode);
+	return OsxGuestEmitMemoryAccess(emitter, instruction, pc, count, sixtyfour, mode);
 }
 
-static int EndsBlock(uint32 instruction)
+static int OsxGuestEndsBlock(uint32 instruction)
 {
 	uint32 opcode;
 	uint32 extended;
@@ -3543,7 +3543,7 @@ static int EndsBlock(uint32 instruction)
 	return 0;
 }
 
-static void Compile(Osx970 *core, Osx970Jit *jit, Osx970Block *block, uint64 pc, uint32 physical, uint32 key)
+static void OsxGuestCompile(Osx970 *core, Osx970Jit *jit, Osx970Block *block, uint64 pc, uint32 physical, uint32 key)
 {
 	Osx970Emitter emitter;
 	uint8 *start;
@@ -3592,67 +3592,67 @@ static void Compile(Osx970 *core, Osx970Jit *jit, Osx970Block *block, uint64 pc,
 					entry->page = OSX970TLBINVALID;
 			}
 	}
-	EmitByte(&emitter, 0x53);
-	EmitByte(&emitter, 0x56);
-	EmitByte(&emitter, 0x57);
-	EmitByte(&emitter, 0x48);
-	EmitByte(&emitter, 0x83);
-	EmitByte(&emitter, 0xec);
-	EmitByte(&emitter, 0x20);
-	EmitMemory(&emitter, 1, 0x8d, OSX970RBX, OSX970RCX, OSX970BASE);
-	EmitMemory(&emitter, 1, 0x8b, OSX970RSI, OSX970RBX, OSX970FIELD(cpu));
+	OsxGuestEmitByte(&emitter, 0x53);
+	OsxGuestEmitByte(&emitter, 0x56);
+	OsxGuestEmitByte(&emitter, 0x57);
+	OsxGuestEmitByte(&emitter, 0x48);
+	OsxGuestEmitByte(&emitter, 0x83);
+	OsxGuestEmitByte(&emitter, 0xec);
+	OsxGuestEmitByte(&emitter, 0x20);
+	OsxGuestEmitMemory(&emitter, 1, 0x8d, OSX970RBX, OSX970RCX, OSX970BASE);
+	OsxGuestEmitMemory(&emitter, 1, 0x8b, OSX970RSI, OSX970RBX, OSX970FIELD(cpu));
 	body = emitter.cursor;
-	EmitMemory(&emitter, 1, 0x8b, OSX970RAX, OSX970RBX, OSX970FIELD(versions));
-	EmitMemory(&emitter, 0, 0x81, 7, OSX970RAX, page * 4);
-	EmitDword(&emitter, core->versions[page]);
-	stale = EmitJump(&emitter, 0x85);
+	OsxGuestEmitMemory(&emitter, 1, 0x8b, OSX970RAX, OSX970RBX, OSX970FIELD(versions));
+	OsxGuestEmitMemory(&emitter, 0, 0x81, 7, OSX970RAX, page * 4);
+	OsxGuestEmitDword(&emitter, core->versions[page]);
+	stale = OsxGuestEmitJump(&emitter, 0x85);
 	count = 0;
 	while (count < OSX970JITLIMIT) {
-		instruction = (uint32)LoadBig(core->cpu->ram + physical + count * 4, 4);
-		if (!EmitBranch(&emitter, core, instruction, pc + count * 4, count + 1, sixtyfour) && !EmitNative(&emitter, instruction, pc + count * 4, count + 1, sixtyfour, mode))
-			EmitStep(&emitter, pc + count * 4, instruction, count + 1);
+		instruction = (uint32)OsxGuestLoadBig(core->cpu->ram + physical + count * 4, 4);
+		if (!OsxGuestEmitBranch(&emitter, core, instruction, pc + count * 4, count + 1, sixtyfour) && !OsxGuestEmitNative(&emitter, instruction, pc + count * 4, count + 1, sixtyfour, mode))
+			OsxGuestEmitStep(&emitter, pc + count * 4, instruction, count + 1);
 		count++;
-		if (EndsBlock(instruction) || ((physical + count * 4) & 0xfff) == 0 || emitter.exitcount >= OSX970JITEXITS - 4 || emitter.coldcount >= OSX970JITEXITS - 4)
+		if (OsxGuestEndsBlock(instruction) || ((physical + count * 4) & 0xfff) == 0 || emitter.exitcount >= OSX970JITEXITS - 4 || emitter.coldcount >= OSX970JITEXITS - 4)
 			break;
 	}
-	EmitChain(&emitter, count, Effective(core, pc + count * 4));
+	OsxGuestEmitChain(&emitter, count, OsxGuestEffective(core, pc + count * 4));
 	finish = emitter.cursor;
-	EmitRegister(&emitter, 0, 0x31, OSX970RAX, OSX970RAX);
+	OsxGuestEmitRegister(&emitter, 0, 0x31, OSX970RAX, OSX970RAX);
 	epilogue = emitter.cursor;
-	EmitByte(&emitter, 0x48);
-	EmitByte(&emitter, 0x83);
-	EmitByte(&emitter, 0xc4);
-	EmitByte(&emitter, 0x20);
-	EmitByte(&emitter, 0x5f);
-	EmitByte(&emitter, 0x5e);
-	EmitByte(&emitter, 0x5b);
-	EmitByte(&emitter, 0xc3);
+	OsxGuestEmitByte(&emitter, 0x48);
+	OsxGuestEmitByte(&emitter, 0x83);
+	OsxGuestEmitByte(&emitter, 0xc4);
+	OsxGuestEmitByte(&emitter, 0x20);
+	OsxGuestEmitByte(&emitter, 0x5f);
+	OsxGuestEmitByte(&emitter, 0x5e);
+	OsxGuestEmitByte(&emitter, 0x5b);
+	OsxGuestEmitByte(&emitter, 0xc3);
 	for (index = 0; index < emitter.coldcount; index++) {
-		PatchJump(emitter.colds[index].jump, emitter.cursor);
+		OsxGuestPatchJump(emitter.colds[index].jump, emitter.cursor);
 		if (emitter.colds[index].resume) {
-			EmitCallStep(&emitter, emitter.colds[index].pc, emitter.colds[index].instruction);
-			EmitByte(&emitter, 0x0f);
-			EmitByte(&emitter, 0x84);
-			EmitDword(&emitter, 0);
-			PatchJump(emitter.cursor - 4, emitter.colds[index].resume);
+			OsxGuestEmitCallStep(&emitter, emitter.colds[index].pc, emitter.colds[index].instruction);
+			OsxGuestEmitByte(&emitter, 0x0f);
+			OsxGuestEmitByte(&emitter, 0x84);
+			OsxGuestEmitDword(&emitter, 0);
+			OsxGuestPatchJump(emitter.cursor - 4, emitter.colds[index].resume);
 		}
-		EmitLeave(&emitter, emitter.colds[index].count);
+		OsxGuestEmitLeave(&emitter, emitter.colds[index].count);
 	}
 	for (index = 0; index < emitter.linkcount; index++) {
-		PatchJump(emitter.links[index], emitter.cursor);
-		EmitByte(&emitter, 0x48);
-		EmitByte(&emitter, 0x8d);
-		EmitByte(&emitter, 0x05);
-		EmitDword(&emitter, (uint32)(int32)(emitter.links[index] - (emitter.cursor + 4)));
-		EmitMemory(&emitter, 1, 0x89, OSX970RAX, OSX970RBX, OSX970FIELD(jitlinksite));
-		EmitByte(&emitter, 0xe9);
-		EmitDword(&emitter, 0);
-		PatchJump(emitter.cursor - 4, finish);
+		OsxGuestPatchJump(emitter.links[index], emitter.cursor);
+		OsxGuestEmitByte(&emitter, 0x48);
+		OsxGuestEmitByte(&emitter, 0x8d);
+		OsxGuestEmitByte(&emitter, 0x05);
+		OsxGuestEmitDword(&emitter, (uint32)(int32)(emitter.links[index] - (emitter.cursor + 4)));
+		OsxGuestEmitMemory(&emitter, 1, 0x89, OSX970RAX, OSX970RBX, OSX970FIELD(jitlinksite));
+		OsxGuestEmitByte(&emitter, 0xe9);
+		OsxGuestEmitDword(&emitter, 0);
+		OsxGuestPatchJump(emitter.cursor - 4, finish);
 	}
-	PatchJump(stale, finish);
+	OsxGuestPatchJump(stale, finish);
 	for (index = 0; index < emitter.exitcount; index++)
 		if (emitter.exits[index])
-			PatchJump(emitter.exits[index], finish);
+			OsxGuestPatchJump(emitter.exits[index], finish);
 	jit->used += ((uint32)(emitter.cursor - start) + 15) & ~15u;
 	jit->compiled++;
 	jit->guestcompiled += count;
@@ -3667,7 +3667,7 @@ static void Compile(Osx970 *core, Osx970Jit *jit, Osx970Block *block, uint64 pc,
 	block->body = body;
 }
 
-int Osx970JitCreate(Osx970 *core)
+int OsxGuest970JitCreate(Osx970 *core)
 {
 	Osx970Jit *jit;
 	Osx970Emitter thunk;
@@ -3678,13 +3678,13 @@ int Osx970JitCreate(Osx970 *core)
 	jit = (Osx970Jit *)calloc(1, sizeof(Osx970Jit));
 	if (jit == NULL)
 		return 0;
-	jit->arena = OsxJitAllocate(OSX970JITBYTES);
-	pages = (uint32)(LinearSize(core->cpu) >> 12);
+	jit->arena = OsxGuestJitAllocate(OSX970JITBYTES);
+	pages = (uint32)(OsxGuestLinearSize(core->cpu) >> 12);
 	core->codepages = (uint8 *)calloc(pages, 1);
 	core->versions = (uint32 *)calloc(pages, sizeof(uint32));
 	if (jit->arena == NULL || core->codepages == NULL || core->versions == NULL) {
 		if (jit->arena)
-			OsxJitRelease(jit->arena, OSX970JITBYTES);
+			OsxGuestJitRelease(jit->arena, OSX970JITBYTES);
 		free(core->codepages);
 		free(core->versions);
 		core->codepages = NULL;
@@ -3694,54 +3694,54 @@ int Osx970JitCreate(Osx970 *core)
 	}
 	jit->stepthunk = jit->arena;
 	thunk.cursor = jit->arena;
-	EmitMemory(&thunk, 1, 0x89, OSX970R8, OSX970RBX, OSX970FIELD(pc));
-	EmitMemory(&thunk, 1, 0x8d, OSX970RCX, OSX970RBX, (uint32)0 - OSX970BASE);
-	EmitImmediate(&thunk, OSX970RAX, (uint64)(uintptr_t)Osx970Step);
-	EmitByte(&thunk, 0xff);
-	EmitByte(&thunk, 0xe0);
+	OsxGuestEmitMemory(&thunk, 1, 0x89, OSX970R8, OSX970RBX, OSX970FIELD(pc));
+	OsxGuestEmitMemory(&thunk, 1, 0x8d, OSX970RCX, OSX970RBX, (uint32)0 - OSX970BASE);
+	OsxGuestEmitImmediate(&thunk, OSX970RAX, (uint64)(uintptr_t)OsxGuest970Step);
+	OsxGuestEmitByte(&thunk, 0xff);
+	OsxGuestEmitByte(&thunk, 0xe0);
 	for (mode = 0; mode < OSXMODES; mode++)
 		for (store = 0; store < 2; store++)
 			for (size = 0; size < 5; size++) {
 				thunk.cursor = jit->arena + ((uint32)(thunk.cursor - jit->arena) + 15 & ~15u);
 				jit->probes[mode][store][size] = thunk.cursor;
-				EmitTlbProbe(&thunk, store, 1 << size, mode);
+				OsxGuestEmitTlbProbe(&thunk, store, 1 << size, mode);
 			}
 	for (mode = 0; mode < OSXMODES; mode++) {
 		thunk.cursor = jit->arena + ((uint32)(thunk.cursor - jit->arena) + 15 & ~15u);
 		jit->lookups[mode] = thunk.cursor;
 		thunk.fetchmode = mode;
 		thunk.exitcount = 0;
-		EmitLookupThunk(&thunk);
+		OsxGuestEmitLookupThunk(&thunk);
 		for (size = 0; size < thunk.exitcount; size++)
-			PatchJump(thunk.exits[size], thunk.cursor);
-		EmitRegister(&thunk, 0, 0x31, OSX970RAX, OSX970RAX);
-		EmitByte(&thunk, 0x48);
-		EmitByte(&thunk, 0x83);
-		EmitByte(&thunk, 0xc4);
-		EmitByte(&thunk, 0x20);
-		EmitByte(&thunk, 0x5f);
-		EmitByte(&thunk, 0x5e);
-		EmitByte(&thunk, 0x5b);
-		EmitByte(&thunk, 0xc3);
+			OsxGuestPatchJump(thunk.exits[size], thunk.cursor);
+		OsxGuestEmitRegister(&thunk, 0, 0x31, OSX970RAX, OSX970RAX);
+		OsxGuestEmitByte(&thunk, 0x48);
+		OsxGuestEmitByte(&thunk, 0x83);
+		OsxGuestEmitByte(&thunk, 0xc4);
+		OsxGuestEmitByte(&thunk, 0x20);
+		OsxGuestEmitByte(&thunk, 0x5f);
+		OsxGuestEmitByte(&thunk, 0x5e);
+		OsxGuestEmitByte(&thunk, 0x5b);
+		OsxGuestEmitByte(&thunk, 0xc3);
 	}
 	thunk.cursor = jit->arena + ((uint32)(thunk.cursor - jit->arena) + 15 & ~15u);
 	jit->exitthunk = thunk.cursor;
-	EmitByte(&thunk, 0x48);
-	EmitByte(&thunk, 0x01);
-	EmitByte(&thunk, 0x8e);
-	EmitDword(&thunk, OSX970CPUFIELD(instructions));
-	EmitByte(&thunk, 0x29);
-	EmitByte(&thunk, 0x8e);
-	EmitDword(&thunk, OSX970CPUFIELD(slice));
-	EmitRegister(&thunk, 0, 0x31, OSX970RAX, OSX970RAX);
-	EmitByte(&thunk, 0x48);
-	EmitByte(&thunk, 0x83);
-	EmitByte(&thunk, 0xc4);
-	EmitByte(&thunk, 0x20);
-	EmitByte(&thunk, 0x5f);
-	EmitByte(&thunk, 0x5e);
-	EmitByte(&thunk, 0x5b);
-	EmitByte(&thunk, 0xc3);
+	OsxGuestEmitByte(&thunk, 0x48);
+	OsxGuestEmitByte(&thunk, 0x01);
+	OsxGuestEmitByte(&thunk, 0x8e);
+	OsxGuestEmitDword(&thunk, OSX970CPUFIELD(instructions));
+	OsxGuestEmitByte(&thunk, 0x29);
+	OsxGuestEmitByte(&thunk, 0x8e);
+	OsxGuestEmitDword(&thunk, OSX970CPUFIELD(slice));
+	OsxGuestEmitRegister(&thunk, 0, 0x31, OSX970RAX, OSX970RAX);
+	OsxGuestEmitByte(&thunk, 0x48);
+	OsxGuestEmitByte(&thunk, 0x83);
+	OsxGuestEmitByte(&thunk, 0xc4);
+	OsxGuestEmitByte(&thunk, 0x20);
+	OsxGuestEmitByte(&thunk, 0x5f);
+	OsxGuestEmitByte(&thunk, 0x5e);
+	OsxGuestEmitByte(&thunk, 0x5b);
+	OsxGuestEmitByte(&thunk, 0xc3);
 	jit->codestart = ((uint32)(thunk.cursor - jit->arena) + 63) & ~63u;
 	jit->used = jit->codestart;
 	core->jit = jit;
@@ -3749,7 +3749,7 @@ int Osx970JitCreate(Osx970 *core)
 	return 1;
 }
 
-void Osx970JitDestroy(Osx970 *core)
+void OsxGuest970JitDestroy(Osx970 *core)
 {
 	Osx970Jit *jit;
 	jit = (Osx970Jit *)core->jit;
@@ -3757,7 +3757,7 @@ void Osx970JitDestroy(Osx970 *core)
 		return;
 	if (core->cpu->logfile)
 		fprintf(core->cpu->logfile, "970 jit compiled %llu resets %llu instructions %llu guest %llu bytes %llu cold %llu\n", (unsigned long long)jit->compiled, (unsigned long long)jit->resets, (unsigned long long)core->cpu->instructions, (unsigned long long)jit->guestcompiled, (unsigned long long)jit->bytes, (unsigned long long)jit->coldbytes);
-	OsxJitRelease(jit->arena, OSX970JITBYTES);
+	OsxGuestJitRelease(jit->arena, OSX970JITBYTES);
 	free(jit);
 	free(core->codepages);
 	free(core->versions);
@@ -3766,7 +3766,7 @@ void Osx970JitDestroy(Osx970 *core)
 	core->jit = NULL;
 }
 
-static void InterpretBlock(Osx970 *core)
+static void OsxGuestInterpretBlock(Osx970 *core)
 {
 	OsxCpu *cpu;
 	uint32 instruction;
@@ -3775,18 +3775,18 @@ static void InterpretBlock(Osx970 *core)
 	cpu = core->cpu;
 	executed = 0;
 	do {
-		instruction = (uint32)LoadBig(core->fetchhost + (core->pc & 0xfff), 4);
-		expected = Effective(core, core->pc + 4);
+		instruction = (uint32)OsxGuestLoadBig(core->fetchhost + (core->pc & 0xfff), 4);
+		expected = OsxGuestEffective(core, core->pc + 4);
 		cpu->slice--;
 #if OSXPROFILE
-		cpu->tmpform[0][OsxCpuTmpFormKey(instruction)]++;
+		cpu->tmpform[0][OsxGuestCpuTmpFormKey(instruction)]++;
 #endif
-		Osx970ExecuteInstruction(core, instruction);
+		OsxGuest970ExecuteInstruction(core, instruction);
 		executed++;
 	} while (core->pc == expected && executed < OSX970JITLIMIT && cpu->slice > 0 && (core->pc & 0xfff) != 0 && !cpu->halted);
 }
 
-static void JitRun(Osx970 *core, Osx970Jit *jit)
+static void OsxGuestCpu970JitRun(Osx970 *core, Osx970Jit *jit)
 {
 	OsxCpu *cpu;
 	Osx970Block *block;
@@ -3807,15 +3807,15 @@ static void JitRun(Osx970 *core, Osx970Jit *jit)
 	if (core->jithot)
 		hot = (uint32)core->jithot;
 	while (cpu->slice > 0 && !cpu->halted) {
-		if (!Fetch(core, &instruction)) {
+		if (!OsxGuestFetch(core, &instruction)) {
 			core->pc = core->nextpc;
 			cpu->slice--;
 			link = NULL;
 			continue;
 		}
-		if ((core->msr & OSXMSRSE) || core->fetchhost < cpu->ram || (uint64)(core->fetchhost - cpu->ram) >= LinearSize(cpu) || (core->pc & 3)) {
+		if ((core->msr & OSXMSRSE) || core->fetchhost < cpu->ram || (uint64)(core->fetchhost - cpu->ram) >= OsxGuestLinearSize(cpu) || (core->pc & 3)) {
 			cpu->slice--;
-			Osx970ExecuteInstruction(core, instruction);
+			OsxGuest970ExecuteInstruction(core, instruction);
 			link = NULL;
 			continue;
 		}
@@ -3851,15 +3851,15 @@ static void JitRun(Osx970 *core, Osx970Jit *jit)
 		if (block->code == NULL) {
 			block->count++;
 			if (block->count < hot) {
-				InterpretBlock(core);
+				OsxGuestInterpretBlock(core);
 				link = NULL;
 				continue;
 			}
-			Compile(core, jit, block, core->pc, physical, key);
+			OsxGuestCompile(core, jit, block, core->pc, physical, key);
 			link = NULL;
 		}
 		if (link)
-			PatchJump(link, block->body);
+			OsxGuestPatchJump(link, block->body);
 		cache = &jit->cache[(core->pc >> 2) & (OSX970JITCACHE - 1)];
 		entry = &core->tlb[core->modes[OSXTLBFETCH]][OSXTLBFETCH][(core->pc >> 12) & OSX970TLBMASK];
 		if (entry->page == (core->pc & ~0xfffULL)) {
@@ -3874,55 +3874,55 @@ static void JitRun(Osx970 *core, Osx970Jit *jit)
 	}
 }
 
-void Osx970Run(Osx970 *core, int32 count)
+void OsxGuest970Run(Osx970 *core, int32 count)
 {
 	OsxCpu *cpu;
 	uint32 instruction;
 	cpu = core->cpu;
 	if (cpu->halted)
 		return;
-	UpdateModes(core);
+	OsxGuestUpdateModes(core);
 	cpu->slice = count;
 	if (core->jit)
-		JitRun(core, (Osx970Jit *)core->jit);
+		OsxGuestCpu970JitRun(core, (Osx970Jit *)core->jit);
 	while (cpu->slice > 0 && !cpu->halted) {
 		cpu->slice--;
-		if (!Fetch(core, &instruction)) {
+		if (!OsxGuestFetch(core, &instruction)) {
 			core->pc = core->nextpc;
 			continue;
 		}
-		Osx970ExecuteInstruction(core, instruction);
+		OsxGuest970ExecuteInstruction(core, instruction);
 	}
-	Mirror(core);
+	OsxGuestMirror(core);
 }
 #else
-int Osx970JitCreate(Osx970 *core)
+int OsxGuest970JitCreate(Osx970 *core)
 {
 	return 0;
 }
 
-void Osx970JitDestroy(Osx970 *core)
+void OsxGuest970JitDestroy(Osx970 *core)
 {
 }
 
-void Osx970Run(Osx970 *core, int32 count)
+void OsxGuest970Run(Osx970 *core, int32 count)
 {
 	OsxCpu *cpu;
 	uint32 instruction;
 	cpu = core->cpu;
 	if (cpu->halted)
 		return;
-	UpdateModes(core);
+	OsxGuestUpdateModes(core);
 	cpu->slice = count;
 	while (cpu->slice > 0 && !cpu->halted) {
 		cpu->slice--;
-		if (!Fetch(core, &instruction)) {
+		if (!OsxGuestFetch(core, &instruction)) {
 			core->pc = core->nextpc;
 			continue;
 		}
-		Osx970ExecuteInstruction(core, instruction);
+		OsxGuest970ExecuteInstruction(core, instruction);
 	}
-	Mirror(core);
+	OsxGuestMirror(core);
 }
 #endif
 #endif

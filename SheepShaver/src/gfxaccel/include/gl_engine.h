@@ -794,6 +794,10 @@ struct GLTextureObject {
      * RGB-requested texture (which Quake 3 does) leaked the source buffer's
      * alpha bytes into a texture that must be fully opaque. */
     bool     internal_format_opaque;
+#if defined(OSXGLGUEST)
+    uint32_t hosttexturetarget;
+    bool     guestintensityformat;
+#endif
     uint32_t min_filter;     // GLenum: GL_NEAREST, GL_LINEAR, etc.
     uint32_t mag_filter;     // GLenum
 	    uint32_t wrap_s;         // GLenum: GL_REPEAT, GL_CLAMP, etc.
@@ -848,6 +852,14 @@ struct GLDisplayList {
 typedef std::map<uint32_t, GLTextureObject> GLTextureObjectMap;
 typedef std::map<uint32_t, GLDisplayList>   GLDisplayListMap;
 
+#if defined(OSXGLGUEST)
+struct GLGuestTextures {
+    GLTextureObjectMap texturemap;
+    int referencecount;
+    uint32_t nexttexturename;
+};
+#endif
+
 
 /*
  *  GLLight -- per-light state (GL supports 8 lights)
@@ -887,6 +899,12 @@ struct GLTextureUnit {
     uint32_t bound_texture_2d;   // name of bound GL_TEXTURE_2D
     GLTextureObject *bound_object_2d; // bound_texture_2d texture_objects entry
     uint32_t bound_texture_3d;   // name of bound GL_TEXTURE_3D_EXT
+#if defined(OSXGLGUEST)
+    uint32_t boundrectangletexture;
+    bool     rectangletextureenabled;
+    bool     guesttexture2denabled;
+    bool     rectangleshadowactive;
+#endif
     bool     enabled_1d;
     bool     enabled_2d;
     bool     enabled_3d;
@@ -1259,7 +1277,20 @@ struct GLContext {
 
 #if defined(OSXGLGUEST)
     void    *guestcpu;
+    bool     isosxguestcontext;
+    bool     guestfaultraised;
+    uint32_t guestrectangleenabledunits;
+    GLTextureObject guestrectangleshadowtexture;
+    int guestproxywidth;
+    int guestproxyheight;
+    uint32_t guestproxyinternalformat;
     void    *guesttarget;
+    GLGuestTextures *guesttextures;
+    int guestmaxviewportdimensions[2];
+    int guestmaxrectangletexturesize;
+    int guestmaxtexturecoordinates;
+    int guestmaxtextureimageunits;
+    int guestprogramerrorposition;
     uint8_t  guestscratch[1024];
     uint32_t guestscratchused;
     int32_t  guestunpackrowbytes;

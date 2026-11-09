@@ -834,6 +834,71 @@ static inline void gl_invalidate_prepared_texcoord_array_for_draw(GLContext *ctx
 	ctx->prepared_texcoord_array[unit].pointer = 0;
 }
 
+#if defined(OSXGLGUEST)
+static void OsxGuestSyncRectangleShadow(GLContext *ctx, int unit)
+{
+	GLTextureUnit &textureunit = ctx->tex_units[unit];
+	if (textureunit.boundrectangletexture) {
+		GLTextureObjectMap::iterator guesttexture = ctx->texture_objects.find(textureunit.bound_texture_2d);
+		if (!textureunit.rectangleshadowactive) {
+			textureunit.guesttexture2denabled = textureunit.enabled_2d;
+			textureunit.rectangleshadowactive = true;
+		}
+		textureunit.enabled_2d = true;
+		textureunit.bound_object_2d = &ctx->guestrectangleshadowtexture;
+		if (textureunit.guesttexture2denabled && guesttexture != ctx->texture_objects.end() && guesttexture->second.metal_texture)
+			textureunit.bound_object_2d = &guesttexture->second;
+		return;
+	}
+	if (!textureunit.rectangleshadowactive)
+		return;
+	textureunit.rectangleshadowactive = false;
+	textureunit.enabled_2d = textureunit.guesttexture2denabled;
+	if (textureunit.bound_object_2d == &ctx->guestrectangleshadowtexture) {
+		GLTextureObjectMap::iterator textureentry = ctx->texture_objects.find(textureunit.bound_texture_2d);
+		textureunit.bound_object_2d = NULL;
+		if (textureentry != ctx->texture_objects.end())
+			textureunit.bound_object_2d = &textureentry->second;
+	}
+}
+
+static void OsxGuestRecordTextureEnable(GLContext *ctx, uint32_t cap, bool enabled)
+{
+	int unit;
+	if (!ctx->isosxguestcontext || (cap != GL_TEXTURE_2D && cap != 0x84f5))
+		return;
+	unit = gl_clamp_texture_unit(ctx->active_texture);
+	if (cap == GL_TEXTURE_2D && ctx->tex_units[unit].rectangleshadowactive)
+		ctx->tex_units[unit].guesttexture2denabled = enabled;
+	else if (cap == 0x84f5)
+		OsxGuestEnableRectangleTexture(ctx, enabled);
+	OsxGuestSyncRectangleShadow(ctx, unit);
+}
+
+static void OsxGuestApplyIntensityAlpha(const GLTextureObject &textureobject, uint8_t *bgrapixels, int bytecount)
+{
+	int byteindex;
+	if (!textureobject.guestintensityformat)
+		return;
+	for (byteindex = 0; byteindex + 3 < bytecount; byteindex += 4)
+		bgrapixels[byteindex + 3] = bgrapixels[byteindex + 2];
+}
+
+static int OsxGuestProxyParameter(GLContext *ctx, uint32_t target, uint32_t pname, uint32_t *value)
+{
+	if (target != 0x8064 && target != 0x84f7)
+		return 0;
+	*value = 0;
+	if (pname == GL_TEXTURE_WIDTH)
+		*value = (uint32_t)ctx->guestproxywidth;
+	else if (pname == GL_TEXTURE_HEIGHT)
+		*value = (uint32_t)ctx->guestproxyheight;
+	else if (pname == GL_TEXTURE_INTERNAL_FORMAT)
+		*value = ctx->guestproxyinternalformat;
+	return 1;
+}
+#endif
+
 static void gl_set_cap(GLContext *ctx, uint32_t cap, bool value)
 {
 	switch (cap) {
@@ -848,6 +913,9 @@ static void gl_set_cap(GLContext *ctx, uint32_t cap, bool value)
 	case GL_NORMALIZE:            ctx->normalize = value; break;
 	case GL_COLOR_MATERIAL:       ctx->color_material_enabled = value; break;
 	case GL_STENCIL_TEST:         ctx->stencil_test = value; break;
+#if defined(OSXGLGUEST)
+	case 0x84f5:                  ctx->tex_units[ctx->active_texture].rectangletextureenabled = value; break;
+#endif
 	case GL_TEXTURE_1D:           ctx->tex_units[ctx->active_texture].enabled_1d = value; break;
 	case GL_TEXTURE_2D: {
 		const int unit = gl_clamp_texture_unit(ctx->active_texture);
@@ -946,11 +1014,17 @@ static void gl_set_cap(GLContext *ctx, uint32_t cap, bool value)
 void NativeGLEnable(GLContext *ctx, uint32_t cap)
 {
 	gl_set_cap(ctx, cap, true);
+#if defined(OSXGLGUEST)
+	OsxGuestRecordTextureEnable(ctx, cap, true);
+#endif
 }
 
 void NativeGLDisable(GLContext *ctx, uint32_t cap)
 {
 	gl_set_cap(ctx, cap, false);
+#if defined(OSXGLGUEST)
+	OsxGuestRecordTextureEnable(ctx, cap, false);
+#endif
 }
 
 uint32_t NativeGLIsEnabled(GLContext *ctx, uint32_t cap)
@@ -968,7 +1042,16 @@ uint32_t NativeGLIsEnabled(GLContext *ctx, uint32_t cap)
 	case GL_NORMALIZE:            result = ctx->normalize; break;
 	case GL_COLOR_MATERIAL:       result = ctx->color_material_enabled; break;
 	case GL_STENCIL_TEST:         result = ctx->stencil_test; break;
-	case GL_TEXTURE_2D:           result = ctx->tex_units[ctx->active_texture].enabled_2d; break;
+#if defined(OSXGLGUEST)
+	case 0x84f5:                  result = ctx->tex_units[ctx->active_texture].rectangletextureenabled; break;
+#endif
+	case GL_TEXTURE_2D:
+		result = ctx->tex_units[ctx->active_texture].enabled_2d;
+#if defined(OSXGLGUEST)
+		if (ctx->tex_units[ctx->active_texture].rectangleshadowactive)
+			result = ctx->tex_units[ctx->active_texture].guesttexture2denabled;
+#endif
+		break;
 	default:
 		if (cap >= GL_LIGHT0 && cap < GL_LIGHT0 + 8)
 			result = ctx->lights[cap - GL_LIGHT0].enabled;
@@ -1668,6 +1751,42 @@ void NativeGLGetIntegerv(GLContext *ctx, uint32_t pname, uint32_t mac_ptr)
 		WriteMacInt32(mac_ptr, ctx->tex_units[ctx->active_texture].bound_texture_2d); break;
 	case GL_RENDER:
 		WriteMacInt32(mac_ptr, ctx->render_mode); break;
+#if defined(OSXGLGUEST)
+	case 0x0ba0:
+		WriteMacInt32(mac_ptr, ctx->matrix_mode); break;
+	case 0x0c01:
+		WriteMacInt32(mac_ptr, ctx->draw_buffer); break;
+	case 0x8009:
+		WriteMacInt32(mac_ptr, ctx->blend_equation); break;
+	case 0x0be2:
+		WriteMacInt32(mac_ptr, (uint32_t)ctx->blend); break;
+	case 0x0c02:
+		WriteMacInt32(mac_ptr, ctx->read_buffer); break;
+	case GL_PACK_ALIGNMENT:
+		WriteMacInt32(mac_ptr, (uint32_t)ctx->pixel_store.pack_alignment); break;
+	case GL_PACK_ROW_LENGTH:
+		WriteMacInt32(mac_ptr, (uint32_t)ctx->pixel_store.pack_row_length); break;
+	case GL_UNPACK_ALIGNMENT:
+		WriteMacInt32(mac_ptr, (uint32_t)ctx->pixel_store.unpack_alignment); break;
+	case GL_UNPACK_ROW_LENGTH:
+		WriteMacInt32(mac_ptr, (uint32_t)ctx->pixel_store.unpack_row_length); break;
+	case 0x8a16:
+		WriteMacInt32(mac_ptr, (uint32_t)ctx->guestunpackrowbytes); break;
+	case 0x84f6:
+		WriteMacInt32(mac_ptr, ctx->tex_units[ctx->active_texture].boundrectangletexture); break;
+	case 0x84f8:
+		WriteMacInt32(mac_ptr, (uint32_t)ctx->guestmaxrectangletexturesize); break;
+	case 0x0d3a:
+		WriteMacInt32(mac_ptr, (uint32_t)ctx->guestmaxviewportdimensions[0]);
+		WriteMacInt32(mac_ptr + 4, (uint32_t)ctx->guestmaxviewportdimensions[1]);
+		break;
+	case 0x8871:
+		WriteMacInt32(mac_ptr, (uint32_t)ctx->guestmaxtexturecoordinates); break;
+	case 0x8872:
+		WriteMacInt32(mac_ptr, (uint32_t)ctx->guestmaxtextureimageunits); break;
+	case 0x864b:
+		WriteMacInt32(mac_ptr, (uint32_t)ctx->guestprogramerrorposition); break;
+#endif
 	default:
 		// Return 0 for unknown queries (better than crashing)
 		WriteMacInt32(mac_ptr, 0);
@@ -1730,6 +1849,18 @@ void NativeGLGetFloatv(GLContext *ctx, uint32_t pname, uint32_t mac_ptr)
 		WriteMacFloat(mac_ptr, ctx->polygon_offset_factor); break;
 	case GL_POLYGON_OFFSET_UNITS_QUERY:
 		WriteMacFloat(mac_ptr, ctx->polygon_offset_units); break;
+#if defined(OSXGLGUEST)
+	case 0x84f8:
+		WriteMacFloat(mac_ptr, (float)ctx->guestmaxrectangletexturesize); break;
+	case 0x0d3a:
+		WriteMacFloat(mac_ptr, (float)ctx->guestmaxviewportdimensions[0]);
+		WriteMacFloat(mac_ptr + 4, (float)ctx->guestmaxviewportdimensions[1]);
+		break;
+	case 0x8871:
+		WriteMacFloat(mac_ptr, (float)ctx->guestmaxtexturecoordinates); break;
+	case 0x8872:
+		WriteMacFloat(mac_ptr, (float)ctx->guestmaxtextureimageunits); break;
+#endif
 	default:
 		WriteMacFloat(mac_ptr, 0.0f);
 		break;
@@ -2317,7 +2448,11 @@ void NativeGLGenTextures(GLContext *ctx, uint32_t n, uint32_t mac_ptr)
 	if (!ctx || n == 0 || mac_ptr == 0) return;
 
 	for (uint32_t i = 0; i < n; i++) {
+#if defined(OSXGLGUEST)
+		uint32_t name = ctx->guesttextures->nexttexturename++;
+#else
 		uint32_t name = ctx->next_texture_name++;
+#endif
 		WriteMacInt32(mac_ptr + i * 4, name);
 	}
 }
@@ -2365,6 +2500,18 @@ void NativeGLDeleteTextures(GLContext *ctx, uint32_t n, uint32_t mac_ptr)
 /*
  *  glBindTexture -- bind a texture object to the active texture unit
  */
+#if defined(OSXGLGUEST)
+#define GLGUESTTEXTURERECTANGLE 0x84f5u
+static uint32_t OsxGuestBoundTextureName(GLContext *ctx, uint32_t texturetarget, uint32_t texturename)
+{
+	if (texturetarget == GLGUESTTEXTURERECTANGLE)
+		return ctx->tex_units[ctx->active_texture].boundrectangletexture;
+	return texturename;
+}
+#else
+#define OsxGuestBoundTextureName(ctx, target, name) (name)
+#endif
+
 void NativeGLBindTexture(GLContext *ctx, uint32_t target, uint32_t texture)
 {
 	if (!ctx) return;
@@ -2379,6 +2526,13 @@ void NativeGLBindTexture(GLContext *ctx, uint32_t target, uint32_t texture)
 		} else if (target == GL_TEXTURE_1D) {
 			ctx->tex_units[ctx->active_texture].bound_texture_1d = 0;
 		}
+#if defined(OSXGLGUEST)
+		if (target == GLGUESTTEXTURERECTANGLE) {
+			ctx->tex_units[ctx->active_texture].boundrectangletexture = 0;
+			OsxGuestBindRectangleTexture(ctx);
+		}
+		OsxGuestSyncRectangleShadow(ctx, ctx->active_texture);
+#endif
 		return;
 	}
 
@@ -2393,6 +2547,20 @@ void NativeGLBindTexture(GLContext *ctx, uint32_t target, uint32_t texture)
 		obj.env_mode = GL_MODULATE;
 	}
 
+#if defined(OSXGLGUEST)
+	if (target == GLGUESTTEXTURERECTANGLE) {
+		if (!obj.hosttexturetarget) {
+			obj.hosttexturetarget = GLGUESTTEXTURERECTANGLE;
+			obj.min_filter = GL_LINEAR;
+			obj.wrap_s = 0x812f;
+			obj.wrap_t = 0x812f;
+		}
+		ctx->tex_units[ctx->active_texture].boundrectangletexture = texture;
+		OsxGuestBindRectangleTexture(ctx);
+		OsxGuestSyncRectangleShadow(ctx, ctx->active_texture);
+		return;
+	}
+#endif
 	if (target == GL_TEXTURE_2D) {
 		if (ctx->tex_units[ctx->active_texture].bound_texture_2d != texture) {
 			gl_clear_prepared_texture_2d_for_draw(ctx, ctx->active_texture);
@@ -2407,6 +2575,9 @@ void NativeGLBindTexture(GLContext *ctx, uint32_t target, uint32_t texture)
 	} else if (target == GL_TEXTURE_1D) {
 		ctx->tex_units[ctx->active_texture].bound_texture_1d = texture;
 	}
+#if defined(OSXGLGUEST)
+	OsxGuestSyncRectangleShadow(ctx, ctx->active_texture);
+#endif
 }
 
 
@@ -2424,6 +2595,7 @@ void NativeGLTexParameteri(GLContext *ctx, uint32_t target, uint32_t pname, int3
 	else if (target == GL_TEXTURE_1D)
 		texName = ctx->tex_units[ctx->active_texture].bound_texture_1d;
 
+	texName = OsxGuestBoundTextureName(ctx, target, texName);
 	if (texName == 0) return;
 
 	GLTextureObjectMap::iterator it = ctx->texture_objects.find(texName);
@@ -2459,6 +2631,10 @@ void NativeGLTexParameteri(GLContext *ctx, uint32_t target, uint32_t pname, int3
 	 * this the upload-time values would stick and the guest's later
 	 * NEAREST/CLAMP request would never reach the host. */
 	tex.sampler_applied = false;
+#if defined(OSXGLGUEST)
+	if (tex.hosttexturetarget)
+		OsxGuestApplyRectangleSampler(ctx, &tex);
+#endif
 }
 
 void NativeGLTexParameterf(GLContext *ctx, uint32_t target, uint32_t pname, float param)
@@ -3324,6 +3500,24 @@ void NativeGLTexImage2D(GLContext *ctx, uint32_t target, int32_t level,
 		   ctx, target, level, width, height, format, type, mac_pixels);
 
 	if (!ctx) { GL_LOG("NativeGLTexImage2D: ctx is NULL, returning"); return; }
+#if defined(OSXGLGUEST)
+	if (target == 0x8064 || target == 0x84f7) {
+		int proxylimit = 1024;
+		if (target == 0x84f7)
+			proxylimit = ctx->guestmaxrectangletexturesize;
+		if (level == 0) {
+			ctx->guestproxywidth = 0;
+			ctx->guestproxyheight = 0;
+			ctx->guestproxyinternalformat = 0;
+			if (width <= proxylimit && height <= proxylimit) {
+				ctx->guestproxywidth = width;
+				ctx->guestproxyheight = height;
+				ctx->guestproxyinternalformat = (uint32_t)internalformat;
+			}
+		}
+		return;
+	}
+#endif
 
 	// Get currently bound texture
 	uint32_t texName = 0;
@@ -3334,6 +3528,7 @@ void NativeGLTexImage2D(GLContext *ctx, uint32_t target, int32_t level,
 
 	GL_VLOG("  -> active_texture=%d texName=%u", ctx->active_texture, texName);
 
+	texName = OsxGuestBoundTextureName(ctx, target, texName);
 	if (texName == 0) return;
 
 	GLTextureObjectMap::iterator it = ctx->texture_objects.find(texName);
@@ -3347,6 +3542,11 @@ void NativeGLTexImage2D(GLContext *ctx, uint32_t target, int32_t level,
 		tex.source_type = type;
 		tex.internal_format_opaque =
 			GLInternalFormatLacksAlpha(internalformat);
+#if defined(OSXGLGUEST)
+		tex.guestintensityformat = format == 0x1909 && internalformat >= 0x8049 && internalformat <= 0x804d;
+		if (tex.guestintensityformat)
+			tex.internal_format_opaque = false;
+#endif
 	}
 	const bool ignoreLegacyFallbackClientMip =
 		GLPixelLegacyUnsignedShortShouldIgnoreClientMipForFallback(
@@ -3370,6 +3570,11 @@ void NativeGLTexImage2D(GLContext *ctx, uint32_t target, int32_t level,
 		int emptyLen = width * height * 4;
 		uint8_t *emptyData = (uint8_t *)calloc(1, emptyLen);
 		if (emptyData) {
+#if defined(OSXGLGUEST)
+			if (tex.hosttexturetarget)
+				OsxGuestUploadRectangleTexture(ctx, &tex, level, 0, 0, width, height, emptyData, 1);
+			else
+#endif
 			GLMetalUploadTexture(ctx, &tex, level, width, height, emptyData, emptyLen);
 			free(emptyData);
 		}
@@ -3396,9 +3601,17 @@ void NativeGLTexImage2D(GLContext *ctx, uint32_t target, int32_t level,
 	// GLColorTable.data[256][4] ceiling BEFORE any LUT read.
 	GLApplyColorTableLUT(ctx, converted, width, height, dataLen);
 	GLForceOpaqueIfInternalFormatLacksAlpha(tex, converted, dataLen);
+#if defined(OSXGLGUEST)
+	OsxGuestApplyIntensityAlpha(tex, converted, dataLen);
+#endif
 	GLLogUploadedTextureAlphaHistogram(tex, level, width, height,
 									   internalformat, converted, dataLen);
 
+#if defined(OSXGLGUEST)
+	if (tex.hosttexturetarget)
+		OsxGuestUploadRectangleTexture(ctx, &tex, level, 0, 0, width, height, converted, 1);
+	else
+#endif
 	GLMetalUploadTexture(ctx, &tex, level, width, height, converted, dataLen);
 	free(converted);
 }
@@ -3417,6 +3630,7 @@ void NativeGLTexSubImage2D(GLContext *ctx, uint32_t target, int32_t level,
 	uint32_t texName = 0;
 	if (target == GL_TEXTURE_2D)
 		texName = ctx->tex_units[ctx->active_texture].bound_texture_2d;
+	texName = OsxGuestBoundTextureName(ctx, target, texName);
 	if (texName == 0) return;
 
 	GLTextureObjectMap::iterator it = ctx->texture_objects.find(texName);
@@ -3435,7 +3649,12 @@ void NativeGLTexSubImage2D(GLContext *ctx, uint32_t target, int32_t level,
 	// upload too (OpenGL 1.2.1 ?3.6.3). Index clamped before any LUT read.
 	GLApplyColorTableLUT(ctx, converted, width, height, dataLen);
 	GLForceOpaqueIfInternalFormatLacksAlpha(tex, converted, dataLen);
-
+#if defined(OSXGLGUEST)
+	OsxGuestApplyIntensityAlpha(tex, converted, dataLen);
+	if (tex.hosttexturetarget)
+		OsxGuestUploadRectangleTexture(ctx, &tex, level, xoffset, yoffset, width, height, converted, 0);
+	else
+#endif
 	GLMetalUploadSubTexture(ctx, &tex, level, xoffset, yoffset, width, height,
 							 converted, width * 4);
 	free(converted);
@@ -3474,6 +3693,13 @@ void NativeGLCopyTexImage2D(GLContext *ctx, uint32_t target, int32_t level,
 							 int32_t width, int32_t height, int32_t border)
 {
 	if (!ctx || width <= 0 || height <= 0) return;
+#if defined(OSXGLGUEST)
+	if (target == GLGUESTTEXTURERECTANGLE) {
+		GLMetalBeginFrame(ctx);
+		OsxGuestCopyFramebufferToRectangleTexture(ctx, level, internalformat, x, y, width, height, 0, 0, 1);
+		return;
+	}
+#endif
 
 	int bufLen = 0;
 	uint8_t *bgra = GLMetalReadFramebufferRect(ctx, x, y, width, height, &bufLen);
@@ -3506,6 +3732,13 @@ void NativeGLCopyTexSubImage2D(GLContext *ctx, uint32_t target, int32_t level,
 								int32_t x, int32_t y, int32_t width, int32_t height)
 {
 	if (!ctx || width <= 0 || height <= 0) return;
+#if defined(OSXGLGUEST)
+	if (target == GLGUESTTEXTURERECTANGLE) {
+		GLMetalBeginFrame(ctx);
+		OsxGuestCopyFramebufferToRectangleTexture(ctx, level, 0, x, y, width, height, xoffset, yoffset, 0);
+		return;
+	}
+#endif
 
 	int bufLen = 0;
 	uint8_t *bgra = GLMetalReadFramebufferRect(ctx, x, y, width, height, &bufLen);
@@ -4723,7 +4956,15 @@ void NativeGLGetTexImage(GLContext *ctx, uint32_t target, int32_t level, uint32_
 }
 void NativeGLGetTexLevelParameterfv(GLContext *ctx, uint32_t target, int32_t level, uint32_t pname, uint32_t p)
 {
+#if defined(OSXGLGUEST)
+	uint32_t proxyvalue;
+	if (OsxGuestProxyParameter(ctx, target, pname, &proxyvalue)) {
+		WriteMacFloat(p, (float)proxyvalue);
+		return;
+	}
+#endif
 	uint32_t tex = ctx->tex_units[ctx->active_texture].bound_texture_2d;
+	tex = OsxGuestBoundTextureName(ctx, target, tex);
 	GLTextureObjectMap::iterator it = ctx->texture_objects.find(tex);
 	if (it == ctx->texture_objects.end()) { WriteMacFloat(p, 0.0f); return; }
 	GLTextureObject &obj = it->second;
@@ -4737,7 +4978,15 @@ void NativeGLGetTexLevelParameterfv(GLContext *ctx, uint32_t target, int32_t lev
 }
 void NativeGLGetTexLevelParameteriv(GLContext *ctx, uint32_t target, int32_t level, uint32_t pname, uint32_t p)
 {
+#if defined(OSXGLGUEST)
+	uint32_t proxyvalue;
+	if (OsxGuestProxyParameter(ctx, target, pname, &proxyvalue)) {
+		WriteMacInt32(p, proxyvalue);
+		return;
+	}
+#endif
 	uint32_t tex = ctx->tex_units[ctx->active_texture].bound_texture_2d;
+	tex = OsxGuestBoundTextureName(ctx, target, tex);
 	GLTextureObjectMap::iterator it = ctx->texture_objects.find(tex);
 	if (it == ctx->texture_objects.end()) { WriteMacInt32(p, 0); return; }
 	GLTextureObject &obj = it->second;
@@ -4754,6 +5003,7 @@ void NativeGLGetTexParameterfv(GLContext *ctx, uint32_t target, uint32_t pname, 
 {
 	(void)target;
 	uint32_t tex = ctx->tex_units[ctx->active_texture].bound_texture_2d;
+	tex = OsxGuestBoundTextureName(ctx, target, tex);
 	GLTextureObjectMap::iterator it = ctx->texture_objects.find(tex);
 	if (it == ctx->texture_objects.end()) { WriteMacFloat(mac_ptr, 0.0f); return; }
 	GLTextureObject &obj = it->second;
@@ -4770,6 +5020,7 @@ void NativeGLGetTexParameteriv(GLContext *ctx, uint32_t target, uint32_t pname, 
 {
 	(void)target;
 	uint32_t tex = ctx->tex_units[ctx->active_texture].bound_texture_2d;
+	tex = OsxGuestBoundTextureName(ctx, target, tex);
 	GLTextureObjectMap::iterator it = ctx->texture_objects.find(tex);
 	if (it == ctx->texture_objects.end()) { WriteMacInt32(mac_ptr, 0); return; }
 	GLTextureObject &obj = it->second;

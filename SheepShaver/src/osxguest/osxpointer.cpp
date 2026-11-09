@@ -20,7 +20,7 @@
 #include "sysdeps.h"
 #include "osxmachine.h"
 
-static void CallGuest(OsxCpu *cpu, OsxPointer *pointer, uint32 stack, uint32 target)
+static void OsxGuestCallGuest(OsxCpu *cpu, OsxPointer *pointer, uint32 stack, uint32 target)
 {
 	memcpy(pointer->registers, cpu->gpr, sizeof(pointer->registers));
 	pointer->lr = cpu->lr;
@@ -33,7 +33,7 @@ static void CallGuest(OsxCpu *cpu, OsxPointer *pointer, uint32 stack, uint32 tar
 	cpu->nextpc = target;
 }
 
-static void ScrollWheel(OsxCpu *cpu, OsxPointer *pointer, int delta)
+static void OsxGuestScrollWheel(OsxCpu *cpu, OsxPointer *pointer, int delta)
 {
 	uint32 stack;
 	uint32 timehigh;
@@ -44,22 +44,22 @@ static void ScrollWheel(OsxCpu *cpu, OsxPointer *pointer, int delta)
 	timehigh = cpu->gpr[7];
 	timelow = cpu->gpr[8];
 	sender = cpu->gpr[9];
-	if (pointer->wheeladdress == 0 || !OsxCpuWriteVirtual(cpu, stack, cpu->gpr[1]))
+	if (pointer->wheeladdress == 0 || !OsxGuestCpuWriteVirtual(cpu, stack, cpu->gpr[1]))
 		return;
 	if (pointer->sender && pointer->compactwheel) {
-		if (!OsxCpuWriteVirtual(cpu, stack + 0x38, timelow) ||
-			!OsxCpuWriteVirtual(cpu, stack + 0x3c, sender))
+		if (!OsxGuestCpuWriteVirtual(cpu, stack + 0x38, timelow) ||
+			!OsxGuestCpuWriteVirtual(cpu, stack + 0x3c, sender))
 			return;
 	} else if (pointer->sender) {
 		for (offset = 0x38; offset < 0x44; offset += 4)
-			if (!OsxCpuWriteVirtual(cpu, stack + offset, 0))
+			if (!OsxGuestCpuWriteVirtual(cpu, stack + offset, 0))
 				return;
-		if (!OsxCpuWriteVirtual(cpu, stack + 0x44, timehigh) ||
-			!OsxCpuWriteVirtual(cpu, stack + 0x48, timelow) ||
-			!OsxCpuWriteVirtual(cpu, stack + 0x4c, sender))
+		if (!OsxGuestCpuWriteVirtual(cpu, stack + 0x44, timehigh) ||
+			!OsxGuestCpuWriteVirtual(cpu, stack + 0x48, timelow) ||
+			!OsxGuestCpuWriteVirtual(cpu, stack + 0x4c, sender))
 			return;
 	}
-	CallGuest(cpu, pointer, stack, pointer->wheeladdress);
+	OsxGuestCallGuest(cpu, pointer, stack, pointer->wheeladdress);
 	cpu->gpr[4] = (uint32)(int32)(int16)delta;
 	cpu->gpr[5] = 0;
 	cpu->gpr[6] = 0;
@@ -75,7 +75,7 @@ static void ScrollWheel(OsxCpu *cpu, OsxPointer *pointer, int delta)
 	}
 }
 
-void OsxPointerHook(OsxCpu *cpu, void *context, uint32 address)
+void OsxGuestPointerHook(OsxCpu *cpu, void *context, uint32 address)
 {
 	OsxPointer *pointer;
 	OsxCuda *cuda;
@@ -113,7 +113,7 @@ void OsxPointerHook(OsxCpu *cpu, void *context, uint32 address)
 		cuda->pointerread = (cuda->pointerread + 1) % OSXMOUSEQUEUE;
 	}
 	if (delta) {
-		ScrollWheel(cpu, pointer, delta);
+		OsxGuestScrollWheel(cpu, pointer, delta);
 		return;
 	}
 	pressed = cpu->gpr[4] != 0;
@@ -136,12 +136,12 @@ void OsxPointerHook(OsxCpu *cpu, void *context, uint32 address)
 	timehigh = cpu->gpr[7];
 	timelow = cpu->gpr[8];
 	sender = cpu->gpr[9];
-	if (!OsxCpuWriteVirtual(cpu, stack, cpu->gpr[1]) ||
-		!OsxCpuWriteVirtual(cpu, stack + 0x38, timelow) ||
-		!OsxCpuWriteVirtual(cpu, stack + 0x3c, sender) ||
-		!OsxCpuWriteVirtual(cpu, stack + 0x40, location) ||
-		!OsxCpuWriteVirtual(cpu, stack + 0x44, pointer->machine->width) ||
-		!OsxCpuWriteVirtual(cpu, stack + 0x48, pointer->machine->height))
+	if (!OsxGuestCpuWriteVirtual(cpu, stack, cpu->gpr[1]) ||
+		!OsxGuestCpuWriteVirtual(cpu, stack + 0x38, timelow) ||
+		!OsxGuestCpuWriteVirtual(cpu, stack + 0x3c, sender) ||
+		!OsxGuestCpuWriteVirtual(cpu, stack + 0x40, location) ||
+		!OsxGuestCpuWriteVirtual(cpu, stack + 0x44, pointer->machine->width) ||
+		!OsxGuestCpuWriteVirtual(cpu, stack + 0x48, pointer->machine->height))
 		return;
 	buttons = 0;
 	if (pressed)
@@ -150,7 +150,7 @@ void OsxPointerHook(OsxCpu *cpu, void *context, uint32 address)
 		buttons |= 1;
 	if (pointer->pointerbuttons & 4)
 		buttons |= 2;
-	CallGuest(cpu, pointer, stack, pointer->absoluteaddress);
+	OsxGuestCallGuest(cpu, pointer, stack, pointer->absoluteaddress);
 	cpu->gpr[4] = buttons;
 	cpu->gpr[5] = stack + 0x40;
 	cpu->gpr[6] = stack + 0x44;

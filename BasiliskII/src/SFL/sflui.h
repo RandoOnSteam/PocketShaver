@@ -41,6 +41,7 @@ void SflUiPumpEvents(void);
 #define SFLUIINPUTBUTTON 2
 #define SFLUIINPUTKEY 3
 #define SFLUIINPUTQUIT 4
+#define SFLUIINPUTWHEEL 5
 typedef void (*SFLUIINPUT)(void *context, int operation, int first, int second);
 void SflUiSetInput(SFLUIINPUT input, void *context);
 int SflUiQueueInput(int operation, int first, int second);
@@ -77,6 +78,7 @@ void SflEmulatorKey(int code, int down);
 void SflEmulatorMouse(int x, int y);
 void SflEmulatorButton(int down);
 void SflEmulatorMouseButton(int button, int down);
+void SflEmulatorWheel(int notches);
 const char *SflEmulatorExtFSName(void);
 const char *SflEmulatorPrefString(const char *name, int index);
 int SflEmulatorPrefBool(const char *name);

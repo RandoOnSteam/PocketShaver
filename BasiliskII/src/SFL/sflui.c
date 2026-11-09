@@ -743,6 +743,22 @@ WSMOUSEEVENT_CALLBACK(SflUiOnMouseDown)
 	return WSMOUSEEVENT_UNHANDLED;
 }
 
+WSMOUSEWHEELEVENT_CALLBACK(SflUiOnMouseWheel)
+{
+	WSMOUSEWHEELEVENT ev;
+	int delta;
+	int notches;
+	WSMouseWheelEvent_Construct(&ev);
+	delta = (int)WSMouseWheelEvent_GetDelta(&ev);
+	notches = delta / 120;
+	if (!notches && delta > 0)
+		notches = 1;
+	else if (!notches && delta < 0)
+		notches = -1;
+	SflEmulatorWheel(notches);
+	return WSMOUSEWHEELEVENT_UNHANDLED;
+}
+
 WSMOUSEEVENT_CALLBACK(SflUiOnMouseUp)
 {
 	WSMOUSEEVENT ev;
@@ -808,6 +824,7 @@ BEGIN_WINDOW_MESSAGES(SflUiWindowMessages)
 	IMPLEMENT_MOUSEMOVE_MESSAGE(SflUiOnMouseMove)
 	IMPLEMENT_MOUSEDOWN_MESSAGE(SflUiOnMouseDown)
 	IMPLEMENT_MOUSEUP_MESSAGE(SflUiOnMouseUp)
+	IMPLEMENT_MOUSEWHEEL_MESSAGE(SflUiOnMouseWheel)
 	IMPLEMENT_CLOSE_MESSAGE(SflUiOnClose)
 	IMPLEMENT_SETCURSOR_MESSAGE(SflUiOnSetCursor)
 END_WINDOW_MESSAGES(SflUiWindowMessages)

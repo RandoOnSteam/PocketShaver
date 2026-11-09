@@ -38,7 +38,7 @@
 	"GL_ARB_texture_env_add GL_ARB_texture_env_crossbar GL_ARB_texture_env_dot3 GL_ARB_texture_border_clamp " \
 	"GL_EXT_texture_edge_clamp GL_SGIS_texture_edge_clamp GL_ARB_texture_mirrored_repeat GL_EXT_texture_lod_bias " \
 	"GL_SGIS_generate_mipmap GL_EXT_texture_filter_anisotropic GL_ARB_texture_float GL_APPLE_float_pixels " \
-	"GL_ARB_fragment_program GL_APPLE_flush_render"
+	"GL_ARB_fragment_program GL_APPLE_flush_render GL_APPLE_pixel_buffer"
 
 #ifndef OSXGLBRIDGE
 #define OSXGLBRIDGE 0
@@ -47,15 +47,15 @@
 
 typedef struct OsxGlBridge OsxGlBridge;
 typedef struct OsxQuartzBridge OsxQuartzBridge;
-OsxQuartzBridge *CreateQuartzBridge(uint32 width, uint32 height, uint32 library, uint32 strings, int extensions,
+OsxQuartzBridge *OsxGuestCreateQuartzBridge(uint32 width, uint32 height, uint32 library, uint32 strings, int extensions, int allocatedextensions,
 	uint32 allocate, uint32 clear, uint8 *vram, uint32 rowbytes, struct OsxHostVideo *video, uint8 **present, const uint32 *windowcalls);
-void GlCompose(OsxQuartzBridge *bridge, const uint8 *vram, uint8 *present, uint32 size);
-void DestroyQuartzBridge(OsxQuartzBridge *bridge);
-int QuartzBridgeCall(OsxQuartzBridge *bridge, OsxCpu *cpu, const uint32 *tails, uint32 call, FILE *log);
-OsxGlBridge *CreateGlBridge(OsxCpu *cpu, uint32 width, uint32 height, uint8 *vram, uint32 rowbytes, struct OsxHostVideo *video, uint8 **present);
-void GlShutdownHost(void);
-void DestroyGlBridge(OsxGlBridge *bridge);
-int GlBridgeCall(OsxGlBridge *bridge, OsxCpu *cpu, uint32 call);
+void OsxGuestQuartzComposeWindows(OsxQuartzBridge *bridge, const uint8 *vram, uint8 *present, uint32 size);
+void OsxGuestDestroyQuartzBridge(OsxQuartzBridge *bridge);
+int OsxGuestQuartzBridgeCall(OsxQuartzBridge *bridge, OsxCpu *cpu, const uint32 *tails, uint32 call, FILE *log);
+OsxGlBridge *OsxGuestCreateGlBridge(OsxCpu *cpu, uint32 width, uint32 height, uint8 *vram, uint32 rowbytes, struct OsxHostVideo *video, uint8 **present);
+void OsxGuestGlShutdownHost(void);
+void OsxGuestDestroyGlBridge(OsxGlBridge *bridge);
+int OsxGuestGlBridgeCall(OsxGlBridge *bridge, OsxCpu *cpu, uint32 call);
 
 #endif
 #endif
