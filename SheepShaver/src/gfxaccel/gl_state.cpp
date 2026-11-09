@@ -1576,6 +1576,9 @@ void NativeGLPixelStorei(GLContext *ctx, uint32_t pname, int32_t param)
 	case GL_UNPACK_ROW_LENGTH: ctx->pixel_store.unpack_row_length = param; break;
 	case GL_UNPACK_SKIP_ROWS:  ctx->pixel_store.unpack_skip_rows  = param; break;
 	case GL_UNPACK_SKIP_PIXELS:ctx->pixel_store.unpack_skip_pixels= param; break;
+#if defined(OSXGLGUEST)
+	case 0x8a16: ctx->guestunpackrowbytes = param; break;
+#endif
 	default: break;
 	}
 }
@@ -2886,6 +2889,10 @@ static uint8_t *ConvertPixelsToBGRA8(uint32_t mac_pixels, int width, int height,
 	}
 
 	int rowStride = ComputeRowStride(width, srcBpp, ps.unpack_alignment, ps.unpack_row_length);
+#if defined(OSXGLGUEST)
+	if (ctx != NULL && ctx->guestunpackrowbytes > 0)
+		rowStride = ctx->guestunpackrowbytes;
+#endif
 	uint32_t srcBase = mac_pixels + ps.unpack_skip_rows * rowStride + ps.unpack_skip_pixels * srcBpp;
 	const bool hasExplicitColorIndexPalette =
 		ctx != NULL &&
@@ -5501,7 +5508,7 @@ void NativeGLCompressedTexImage2DARB(GLContext *ctx, uint32_t target, int32_t le
 	GLTextureObject &tex = it->second;
 
 	// Read compressed data from Mac memory
-	const uint8_t *mac_data = (const uint8_t *)Mac2HostAddr(data_ptr);
+	const uint8_t *mac_data = (const uint8_t *)GLGUESTBYTES(data_ptr, imageSize);
 
 	int outLen = 0;
 	uint8_t *decompressed = dxt_decompress_image(mac_data, w, h, ifmt, &outLen);
@@ -5546,7 +5553,7 @@ void NativeGLCompressedTexSubImage2DARB(GLContext *ctx, uint32_t target, int32_t
 	if (it == ctx->texture_objects.end()) return;
 	GLTextureObject &tex = it->second;
 
-	const uint8_t *mac_data = (const uint8_t *)Mac2HostAddr(data_ptr);
+	const uint8_t *mac_data = (const uint8_t *)GLGUESTBYTES(data_ptr, imageSize);
 	int outLen = 0;
 	uint8_t *decompressed = dxt_decompress_image(mac_data, w, h, fmt, &outLen);
 	if (!decompressed) return;

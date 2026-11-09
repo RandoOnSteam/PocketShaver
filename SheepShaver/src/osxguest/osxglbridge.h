@@ -29,7 +29,9 @@
 #define OSXQUARTZSTRINGS 0x400u
 #define OSXQUARTZRENDERERSTRING 0x800u
 #define OSXQUARTZVENDORSTRING 0x880u
-#define OSXQUARTZSTRINGEND 0x900u
+#define OSXQUARTZVERSIONSTRING 0x900u
+#define OSXQUARTZSTRINGEND 0x920u
+#define OSXQUARTZVERSION "1.3 APPLE-bridge"
 #define OSXQUARTZEXTENSIONS "GL_ARB_multitexture GL_ARB_texture_rectangle GL_EXT_texture_rectangle " \
 	"GL_ARB_texture_non_power_of_two GL_APPLE_client_storage GL_APPLE_packed_pixels GL_EXT_bgra GL_EXT_abgr " \
 	"GL_EXT_blend_func_separate GL_EXT_blend_minmax GL_EXT_blend_subtract GL_ARB_texture_env_combine " \
@@ -45,17 +47,15 @@
 
 typedef struct OsxGlBridge OsxGlBridge;
 typedef struct OsxQuartzBridge OsxQuartzBridge;
-OsxQuartzBridge *CreateQuartzBridge(uint32 width, uint32 height, uint32 library, uint32 strings, int extensions);
+OsxQuartzBridge *CreateQuartzBridge(uint32 width, uint32 height, uint32 library, uint32 strings, int extensions,
+	uint32 allocate, uint32 clear, uint8 *vram, uint32 rowbytes, struct OsxHostVideo *video, uint8 **present, const uint32 *windowcalls);
+void GlCompose(OsxQuartzBridge *bridge, const uint8 *vram, uint8 *present, uint32 size);
 void DestroyQuartzBridge(OsxQuartzBridge *bridge);
 int QuartzBridgeCall(OsxQuartzBridge *bridge, OsxCpu *cpu, const uint32 *tails, uint32 call, FILE *log);
-const uint8 *QuartzBridgeFrame(OsxQuartzBridge *bridge, const uint8 *vram, uint32 size);
-int QuartzHostStrings(char *renderer, char *vendor, uint32 size);
-int QuartzBridgeFresh(OsxQuartzBridge *bridge);
-OsxGlBridge *CreateGlBridge(uint32 width, uint32 height);
+OsxGlBridge *CreateGlBridge(OsxCpu *cpu, uint32 width, uint32 height, uint8 *vram, uint32 rowbytes, struct OsxHostVideo *video, uint8 **present);
+void GlShutdownHost(void);
 void DestroyGlBridge(OsxGlBridge *bridge);
 int GlBridgeCall(OsxGlBridge *bridge, OsxCpu *cpu, uint32 call);
-const uint8 *GlBridgeFrame(OsxGlBridge *bridge);
-void GlBridgePresented(OsxGlBridge *bridge, FILE *log);
 
 #endif
 #endif

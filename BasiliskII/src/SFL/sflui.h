@@ -31,6 +31,7 @@ int SflUiOpen(const char *title, int width, int height, int fullscreen, int fram
 void SflUiQuitFullScreen(void);
 void SflUiGetDesktopSize(int *width, int *height);
 void SflUiClose(void);
+void *SflUiGetWindowHandle(void);
 void SflUiSetFrame(unsigned char *buffer, int width, int height, int rowbytes, int bits);
 void SflUiSetPalette(const unsigned char *rgb, int count);
 void SflUiAlert(const char *title, const char *text);

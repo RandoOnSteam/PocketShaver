@@ -31,6 +31,12 @@
 #include "sflmem.h"
 #include "sflmain.h"
 #include "sflui.h"
+#if defined(ENABLE_GFXACCEL)
+#include "metal_compositor.h"
+#include "display_mode_controller.h"
+#include "gfxaccel_resources.h"
+#include "nqd_accel.h"
+#endif
 
 #define SFLVIDEOSIZES 6
 #define SFLVIDEOPOWERKEY 0x7f
@@ -126,11 +132,87 @@ static bool SflVideoMapBuffer(void)
 static void SflVideoOpenMode(int index)
 {
 	VideoInfo *mode;
+	uint8 *frame;
 	mode = &VModes[index];
 	memset(SflVideo.buffer, 0, mode->viRowBytes * mode->viYsize);
 	cur_mode = index;
 	screen_base = SFLMAINVIDEOBASE;
-	SflUiSetFrame(SflVideo.buffer, mode->viXsize, mode->viYsize, mode->viRowBytes, SflVideoBits(mode->viAppleMode));
+	frame = SflVideo.buffer;
+#if defined(ENABLE_GFXACCEL)
+	if (MetalCompositorIsInitialized())
+		frame = NULL;
+#endif
+	SflUiSetFrame(frame, mode->viXsize, mode->viYsize, mode->viRowBytes, SflVideoBits(mode->viAppleMode));
+}
+
+#if defined(ENABLE_GFXACCEL)
+static void SflVideoModeDesc(int index, DMCModeDesc *description)
+{
+	description->width = (uint32_t)VModes[index].viXsize;
+	description->height = (uint32_t)VModes[index].viYsize;
+	description->depth = (uint32_t)SflVideoBits(VModes[index].viAppleMode);
+	description->row_bytes = (uint32_t)VModes[index].viRowBytes;
+	description->pitch = description->row_bytes;
+	description->vbl_usec = 0;
+	description->screen_base_mac = 0;
+	description->screen_base_host = NULL;
+}
+
+static void SflVideoBoundMode(int index, DMCModeDesc *description)
+{
+	SflVideoModeDesc(index, description);
+	description->screen_base_mac = screen_base;
+	description->screen_base_host = Mac2HostAddr(screen_base);
+}
+
+static void SflVideoInitGfxAccel(void)
+{
+	static const uint8 blackandwhite[6] = {255, 255, 255, 0, 0, 0};
+	DMCModeDesc initial;
+	VideoInfo *mode;
+	int pitch;
+	mode = &VModes[cur_mode];
+	pitch = mode->viXsize;
+	if (mode->viAppleMode == APPLE_16_BIT)
+		pitch <<= 1;
+	else if (mode->viAppleMode == APPLE_32_BIT)
+		pitch <<= 2;
+	SflVideoBoundMode(cur_mode, &initial);
+	if (dmc_create(&initial) != kDMCNoErr)
+		return;
+	if (MetalCompositorInit(mode->viXsize, mode->viYsize, mode->viAppleMode, mode->viRowBytes, pitch,
+		SflVideo.buffer, SflVideo.buffersize) != 0) {
+		MetalCompositorShutdown();
+		return;
+	}
+	gfxaccel_resources_init();
+	SflUiSetFrame(NULL, mode->viXsize, mode->viYsize, mode->viRowBytes, SflVideoBits(mode->viAppleMode));
+	MetalCompositorUpdatePalette(blackandwhite, 2);
+	dmc_record_palette_change();
+}
+#endif
+
+static bool SflVideoSwitchMode(int index)
+{
+#if defined(ENABLE_GFXACCEL)
+	DMCModeDesc requested;
+	DMCModeDesc bound;
+	int previous;
+	previous = cur_mode;
+	SflVideoModeDesc(index, &requested);
+	if (dmc_prepare_mode_switch(&requested) != kDMCNoErr)
+		return false;
+	SflVideoOpenMode(index);
+	SflVideoBoundMode(cur_mode, &bound);
+	if (dmc_request_mode_switch(&bound) != kDMCNoErr) {
+		SflVideoOpenMode(previous);
+		return false;
+	}
+	return true;
+#else
+	SflVideoOpenMode(index);
+	return true;
+#endif
 }
 
 bool VideoInit(void)
@@ -196,11 +278,21 @@ bool VideoInit(void)
 	}
 	ADBSetRelMouseMode(false);
 	SflVideoOpenMode(APPLE_32_BIT - APPLE_1_BIT);
+#if defined(ENABLE_GFXACCEL)
+	SflVideoInitGfxAccel();
+#endif
 	return true;
 }
 
 void VideoExit(void)
 {
+#if defined(ENABLE_GFXACCEL)
+	if (nqd_metal_available)
+		NQDMetalCleanup();
+	gfxaccel_resources_shutdown();
+	MetalCompositorShutdown();
+	dmc_shutdown();
+#endif
 	SflUiSetFrame(NULL, 0, 0, 0, 32);
 }
 
@@ -211,6 +303,12 @@ void VideoQuitFullScreen(void)
 
 void VideoVBL(void)
 {
+#if defined(ENABLE_GFXACCEL)
+	if (nqd_metal_available)
+		NQDMetalFlush();
+	if (MetalCompositorIsInitialized())
+		MetalCompositorPresent();
+#endif
 	if (private_data != NULL && private_data->interruptsEnabled)
 		VSLDoInterruptService(private_data->vslServiceID);
 }
@@ -220,6 +318,7 @@ int16 video_mode_change(VidLocals *csSave, uint32 ParamPtr)
 	uint16 requested;
 	uint32 absolute;
 	int index;
+	bool switched;
 	requested = ReadMacInt16(ParamPtr + csMode);
 	absolute = video_abs_depth_from_rel(requested);
 	if (absolute != 0)
@@ -232,9 +331,11 @@ int16 video_mode_change(VidLocals *csSave, uint32 ParamPtr)
 		if (index != cur_mode) {
 			video_screen_publish_cm_suspend();
 			DisableInterrupt();
-			SflVideoOpenMode(index);
+			switched = SflVideoSwitchMode(index);
 			EnableInterrupt();
 			video_screen_publish_cm_resume();
+			if (!switched)
+				return paramErr;
 		}
 		WriteMacInt32(ParamPtr + csBaseAddr, screen_base);
 		csSave->saveBaseAddr = screen_base;
@@ -256,6 +357,10 @@ void video_set_palette(void)
 		palette[index * 3 + 2] = mac_pal[index].blue;
 	}
 	SflUiSetPalette(palette, 256);
+#if defined(ENABLE_GFXACCEL)
+	MetalCompositorUpdatePalette(palette, 256);
+	dmc_record_palette_change();
+#endif
 }
 
 void video_set_gamma(int n_colors)
@@ -273,6 +378,8 @@ void video_set_cursor(void)
 
 bool video_get_framebuffer_drawable_rect(int *outx, int *outy, int *outwidth, int *outheight)
 {
+	if (VModes[cur_mode].viXsize == 0)
+		return false;
 	*outx = 0;
 	*outy = 0;
 	*outwidth = VModes[cur_mode].viXsize;
@@ -283,6 +390,23 @@ bool video_get_framebuffer_drawable_rect(int *outx, int *outy, int *outwidth, in
 void video_set_dirty_area(int x, int y, int w, int h)
 {
 }
+
+#if defined(ENABLE_GFXACCEL)
+void *video_get_native_window(void)
+{
+	return SflUiGetWindowHandle();
+}
+
+void video_get_host_window_size(int *width, int *height)
+{
+	int framewidth;
+	int frameheight;
+	int framedepth;
+	*width = 0;
+	*height = 0;
+	SflUiGetStatus(&framewidth, &frameheight, &framedepth, width, height);
+}
+#endif
 
 void SflEmulatorClose(void)
 {

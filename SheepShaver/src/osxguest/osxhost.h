@@ -33,6 +33,7 @@ typedef void (*OsxHostInput)(void *context, int operation, int first, int second
 
 OsxHostVideo *OsxHostOpen(int width, int height, OsxHostInput input, void *context);
 void OsxHostClose(OsxHostVideo *video);
+void OsxHostSuspendFrame(OsxHostVideo *video);
 uint8 *OsxHostLock(OsxHostVideo *video, int *pitch, int *raw);
 int OsxHostPresent(OsxHostVideo *video, const uint32 *runstart, const uint32 *runend, int runs);
 void OsxHostEvents(OsxHostVideo *video, const uint8 *vram);

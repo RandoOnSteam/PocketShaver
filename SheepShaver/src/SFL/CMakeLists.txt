@@ -85,6 +85,10 @@ set(SFLINCLUDES
 	"${SFLLIBS}"
 )
 
+if(NOT APPLE AND NOT CMAKE_SYSTEM_NAME MATCHES RetroCarbon)
+	list(REMOVE_ITEM SFLCORE "${SSSRC}/gfxaccel.cpp")
+endif()
+
 add_library(SheepShaverSFL_sflcore OBJECT ${SFLCORE} ${SFLPLATFORM}
 	"${CMAKE_CURRENT_SOURCE_DIR}/sflmem.cpp"
 	"${CMAKE_CURRENT_SOURCE_DIR}/video_sfl.cpp"
@@ -100,15 +104,65 @@ else()
 	if(WIN32)
 		set_source_files_properties("${SSSRC}/CrossPlatform/sigsegv.cpp" PROPERTIES COMPILE_DEFINITIONS HAVE_WIN32_VM=1)
 	endif()
-	if(WIN32)
-		target_compile_definitions(SheepShaverSFL_sflcore PRIVATE WIN32_LEAN_AND_MEAN OSXGLBRIDGE=1)
+	if(NOT APPLE)
+		set(SFLGFX "${SSSRC}/gfxaccel")
+		add_library(SheepShaverSFL_gfxaccel OBJECT
+			"${SSSRC}/gfxaccel.cpp"
+			"${SFLGFX}/display_mode_controller.cpp"
+			"${SFLGFX}/dsp_alt_buffer.cpp"
+			"${SFLGFX}/dsp_clut_gamma.cpp"
+			"${SFLGFX}/dsp_dispatch.cpp"
+			"${SFLGFX}/dsp_draw_context.cpp"
+			"${SFLGFX}/dsp_engine.cpp"
+			"${SFLGFX}/dsp_flatten_restore.cpp"
+			"${SFLGFX}/dsp_install_hooks.cpp"
+			"${SFLGFX}/dsp_mode_enumerate.cpp"
+			"${SFLGFX}/dsp_thunks.cpp"
+			"${SFLGFX}/gfxaccel_resources.cpp"
+			"${SFLGFX}/gfxaccel_resources_heap.cpp"
+			"${SFLGFX}/gl_defer.cpp"
+			"${SFLGFX}/gl_dispatch.cpp"
+			"${SFLGFX}/gl_engine.cpp"
+			"${SFLGFX}/gl_state.cpp"
+			"${SFLGFX}/gl_thunks.cpp"
+			"${SFLGFX}/rave_dispatch.cpp"
+			"${SFLGFX}/rave_draw_context.cpp"
+			"${SFLGFX}/rave_engine.cpp"
+			"${SFLGFX}/rave_thunks.cpp"
+			"${SFLGFX}/glide_dispatch.cpp"
+			"${SFLGFX}/glide_engine.cpp"
+			"${SFLGFX}/glide_state.cpp"
+			"${SFLGFX}/glide_pef_register.cpp"
+			"${SFLGFX}/gl/gl_compositor.cpp"
+			"${SFLGFX}/gl/vbl_source_sdl.cpp"
+			"${SFLGFX}/gl/gfxaccel_resources_gl.cpp"
+			"${SFLGFX}/gl/gfxaccel_resources_heap_gl.cpp"
+			"${SFLGFX}/gl/gfxaccel_arc_shim.cpp"
+			"${SFLGFX}/gl/pso_archive_gl.cpp"
+			"${SFLGFX}/gl/nqd_gl_renderer.cpp"
+			"${SFLGFX}/gl/rave_gl_renderer.cpp"
+			"${SFLGFX}/gl/gl_ffp_renderer.cpp"
+			"${SFLGFX}/gl/dsp_gl_renderer.cpp"
+			"${SFLGFX}/gl/glide_gl_renderer.cpp"
+			"${SSSRC}/osxguest/osxglengine.cpp")
+		set_target_properties(SheepShaverSFL_gfxaccel PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+		target_include_directories(SheepShaverSFL_gfxaccel PRIVATE
+			"${SFLGFX}" "${SFLGFX}/gl" ${SFLINCLUDES} "${SSROOT}/../thirdparty/SDL-1.2.15/include")
+		target_compile_definitions(SheepShaverSFL_gfxaccel PRIVATE
+			SHEEPSHAVER=1 ENABLE_GFXACCEL=1 GFXACCEL_USE_OPENGL=1 USE_SDL1=1)
+		sfl_configure_core(SheepShaverSFL_gfxaccel)
+		target_compile_definitions(SheepShaverSFL_sflcore PRIVATE OSXGLBRIDGE=1 ENABLE_GFXACCEL=1 GFXACCEL_USE_OPENGL=1)
+		target_include_directories(SheepShaverSFL_sflcore PRIVATE "${SFLGFX}")
 		target_sources(SheepShaverSFL_sflcore PRIVATE "${SSSRC}/gfxaccel/gl/glcontext.c")
-	elseif(NOT APPLE)
-		find_package(PkgConfig REQUIRED)
-		pkg_check_modules(GDK3 REQUIRED gdk-3.0)
-		target_include_directories(SheepShaverSFL_sflcore PRIVATE ${GDK3_INCLUDE_DIRS})
-		target_compile_definitions(SheepShaverSFL_sflcore PRIVATE OSXGLBRIDGE=1)
-		target_sources(SheepShaverSFL_sflcore PRIVATE "${SSSRC}/gfxaccel/gl/glcontext.c")
+		if(WIN32)
+			target_compile_definitions(SheepShaverSFL_sflcore PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+			target_compile_definitions(SheepShaverSFL_gfxaccel PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _USE_MATH_DEFINES=1 __WIN32__)
+		else()
+			find_package(PkgConfig REQUIRED)
+			pkg_check_modules(GDK3 REQUIRED gdk-3.0)
+			target_include_directories(SheepShaverSFL_sflcore PRIVATE ${GDK3_INCLUDE_DIRS})
+			target_include_directories(SheepShaverSFL_gfxaccel PRIVATE ${GDK3_INCLUDE_DIRS})
+		endif()
 	endif()
 endif()
 if(NOT MSVC)
@@ -118,6 +172,9 @@ target_include_directories(SheepShaverSFL_sflcore PRIVATE ${SFLINCLUDES})
 target_compile_definitions(SheepShaverSFL_sflcore PRIVATE SHEEPSHAVER=1)
 sfl_configure_core(SheepShaverSFL_sflcore)
 sfl_add_application(SheepShaverSFL SHEP)
+if(TARGET SheepShaverSFL_gfxaccel)
+	target_sources(SheepShaverSFL PRIVATE $<TARGET_OBJECTS:SheepShaverSFL_gfxaccel>)
+endif()
 
 if(WIN32)
 	target_link_libraries(SheepShaverSFL PRIVATE opengl32)

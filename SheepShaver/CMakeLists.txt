@@ -517,7 +517,7 @@ if(ENABLE_GFXACCEL)
 		"${SS_GFXACCEL_DIR}/gl/glide_gl_renderer.cpp"
 	)
 	if(NOT WIN32 AND NOT APPLE)
-		list(APPEND SS_GFXACCEL "${SS_GFXACCEL_DIR}/gl/glcontext.c")
+		list(APPEND SS_GFXACCEL "${SS_GFXACCEL_DIR}/gl/glcontext.c" "${SS_SRC}/osxguest/osxglengine.cpp")
 		list(APPEND SS_GFXACCEL_DEFS OSXGLBRIDGE=1)
 	endif()
 	if(WIN32)

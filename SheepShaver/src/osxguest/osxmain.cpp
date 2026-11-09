@@ -19,12 +19,17 @@
  */
 #include "sysdeps.h"
 #include "osxhost.h"
+#include "main.h"
 #include "sys.h"
 #include "prefs.h"
 #include "osxmachine.h"
 #include "xpram.h"
 #include "osxguest.h"
 #include "osxglbridge.h"
+#if OSXGLBRIDGE
+#include "metal_compositor.h"
+#include "osxglengine.h"
+#endif
 #if OSXHOSTX64
 #include <tmmintrin.h>
 #endif
@@ -47,6 +52,7 @@ typedef struct OsxSession {
 #if OSXGLBRIDGE
 	OsxGlBridge *gl;
 	OsxQuartzBridge *quartz;
+	uint8 *glpresent;
 	uint32 glbase;
 	uint32 glsegment;
 #endif
@@ -672,20 +678,14 @@ static void PresentFrame(OsxSession *session)
 	int open;
 	uint32 openrow;
 	int presented;
-#if OSXGLBRIDGE
-	const uint8 *glpixels;
-#endif
 	machine = session->machine;
 	rowbytes = machine->rowbytes;
 #if OSXGLBRIDGE
-	glpixels = NULL;
-	if (session->gl)
-		glpixels = GlBridgeFrame(session->gl);
-	if (session->quartz) {
-		const uint8 *quartzpixels;
-		quartzpixels = QuartzBridgeFrame(session->quartz, machine->vram, rowbytes * machine->height);
-		if (quartzpixels)
-			glpixels = quartzpixels;
+	if (MetalCompositorIsInitialized()) {
+		GlCompose(session->quartz, machine->vram, session->glpresent, rowbytes * machine->height);
+		MetalCompositorPresentWithoutVBL();
+		OsxGl::EngineAfterPresent();
+		return;
 	}
 #endif
 	runs = 0;
@@ -696,10 +696,6 @@ static void PresentFrame(OsxSession *session)
 		return;
 	for (row = 0; row < machine->height; row++) {
 		source = machine->vram + row * rowbytes;
-#if OSXGLBRIDGE
-		if (glpixels)
-			source = glpixels + (machine->height - row - 1) * machine->width * 4;
-#endif
 		shadowrow = session->shadow + row * rowbytes;
 		if (memcmp(source, shadowrow, machine->width * 4) == 0) {
 			if (open) {
@@ -738,10 +734,6 @@ static void PresentFrame(OsxSession *session)
 	presented = OsxHostPresent(session->video, runstart, runend, runs);
 #if OSXPROFILE
 	session->tmpframes += presented;
-#endif
-#if OSXGLBRIDGE
-	if (presented && glpixels && session->gl && !session->quartz)
-		GlBridgePresented(session->gl, machine->log);
 #endif
 }
 
@@ -813,7 +805,9 @@ static int SyscallObserver(OsxCpu *cpu, void *context, uint32 instruction)
 		(instruction & 0xfffc00ffu) == OSXQUARTZTRAP) {
 		if (!session->quartz)
 			session->quartz = CreateQuartzBridge(session->machine->width, session->machine->height,
-				session->machine->quartzbase, session->machine->quartzstrings, session->machine->quartzextensions);
+				session->machine->quartzbase, session->machine->quartzstrings, session->machine->quartzextensions,
+				session->machine->clip.functions[OSXCLIPMALLOC],
+				session->machine->clip.functions[OSXCLIPBZERO], session->machine->vram, session->machine->rowbytes, session->video, &session->glpresent, session->machine->quartzwindow);
 		if (session->quartz && QuartzBridgeCall(session->quartz, cpu,
 			session->machine->quartztails, (instruction >> 8) & 1023, session->machine->log))
 			return 1;
@@ -838,7 +832,7 @@ static int SyscallObserver(OsxCpu *cpu, void *context, uint32 instruction)
 				if (width == session->machine->width && height == session->machine->height) {
 					if (session->gl)
 						DestroyGlBridge(session->gl);
-					session->gl = CreateGlBridge(session->machine->width, session->machine->height);
+					session->gl = CreateGlBridge(cpu, session->machine->width, session->machine->height, session->machine->vram, session->machine->rowbytes, session->video, &session->glpresent);
 					session->glbase = base;
 					session->glsegment = segment;
 				}
@@ -1401,10 +1395,6 @@ static void RunMachine(OsxSession *session)
 			OsxHostEvents(session->video, machine->vram);
 		}
 		presentnow = now >= nextframe;
-#if OSXGLBRIDGE
-		if (session->quartz && QuartzBridgeFresh(session->quartz))
-			presentnow = 1;
-#endif
 		if (presentnow) {
 			if (now >= nextframe)
 				nextframe = now + frameticks - (now - nextframe) % frameticks;
@@ -1501,6 +1491,8 @@ static void DestroySession(OsxSession *session)
 		DestroyGlBridge(session->gl);
 	if (session->quartz)
 		DestroyQuartzBridge(session->quartz);
+	GlShutdownHost();
+	free(session->glpresent);
 #endif
 	if (session->video)
 		OsxHostClose(session->video);
@@ -1546,7 +1538,7 @@ static int RunSession(OsxSession *session)
 #endif
 	machine->vram = (uint8 *)calloc(1, OSXVRAMSIZE);
 	if (machine->ram == NULL || machine->vram == NULL) {
-		fprintf(stderr, "osx: cannot allocate guest memory\n");
+		ErrorAlert("Not enough memory for the Mac OS X guest.");
 		return 1;
 	}
 	ParseScreen(machine);
@@ -1598,16 +1590,21 @@ static int RunSession(OsxSession *session)
 #endif
 #endif
 	if (bootimage == NULL) {
-		fprintf(stderr, "osx: no cdrom or disk image configured\n");
+		ErrorAlert("No Mac OS X boot disc or disk image is configured.");
 		return 1;
 	}
 	if (!OsxNvramPrepareBoot(machine, bootbus, bootunit, machine->bootpartition)) {
-		fprintf(stderr, "osx: cannot store Startup Disk selection\n");
+		ErrorAlert("The Startup Disk selection could not be stored.");
+		return 1;
+	}
+	session->video = OsxHostOpen((int)machine->width, (int)machine->height, HostInput, session);
+	if (!session->video) {
+		ErrorAlert("The host video output could not be opened.");
 		return 1;
 	}
 	bootargs = PrefsFindString("osxbootargs");
 	if (bootargs == NULL)
-		bootargs = "-v";
+		bootargs = "";
 	if (!OsxBootLoad(machine, bootimage, bootbus, bootunit, bootargs))
 		return 1;
 	AllowStalledClassLookup(machine);
@@ -1691,11 +1688,6 @@ static int RunSession(OsxSession *session)
 #if OSXHOSTX64
 	session->pixelshuffle = OsxHostFeature(OSXFEATURESSSE3);
 #endif
-	session->video = OsxHostOpen((int)machine->width, (int)machine->height, HostInput, session);
-	if (!session->video) {
-		fprintf(stderr, "osx: cannot open host video\n");
-		return 1;
-	}
 	session->shadow = (uint8 *)malloc(machine->rowbytes * machine->height);
 	if (session->shadow == NULL)
 		return 1;

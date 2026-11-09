@@ -18,6 +18,7 @@
  *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 #include "sysdeps.h"
+#include "main.h"
 #include "sys.h"
 #include "prefs.h"
 #include "osxmachine.h"
@@ -40,6 +41,7 @@
 #define BOOTARGSSIZE 0x200
 #define CLIPTOOLBOX "/System/Library/Frameworks/Carbon.framework/Versions/A/Frameworks/HIToolbox.framework/Versions/A/HIToolbox"
 #define CLIPSYSTEM "/usr/lib/libSystem.B.dylib"
+#define QUARTZCOREGRAPHICS "/System/Library/Frameworks/ApplicationServices.framework/Versions/A/Frameworks/CoreGraphics.framework/Versions/A/CoreGraphics"
 #define CLIPDOCK "/System/Library/CoreServices/Dock.app/Contents/MacOS/Dock"
 #define CLIPCACHE "/private/var/db/dyld/dyld_shared_cache_ppc"
 #define CLIPCACHEIMAGES 4096
@@ -852,10 +854,59 @@ static int AddGuestFileBytes(OsxHfsVolume *volume, const OsxHfsFork *fork, OsxAt
 	return 1;
 }
 
-static int PatchSaverFile(OsxHfsVolume *volume, OsxAtaBus *bus, const OsxAtaDrive *drive,
-	const char *path, uint32 expectedsize, uint64 expectedhash, const uint32 patches[][2], int count)
+static uint32 FindPrivateFolder(OsxHfsVolume *volume)
 {
-	uint8 record[248];
+	static const char privatename[] = "HFS+ Private Data";
+	uint32 records;
+	uint32 index;
+	uint32 offset;
+	uint32 position;
+	uint8 *data;
+	uint8 *key;
+	uint8 *body;
+	if (!DescendCatalog(volume, HFSROOTFOLDER, NULL, 0))
+		return 0;
+	for (;;) {
+		data = volume->node;
+		records = Big16(data + 10);
+		for (index = 0; index < records; index++) {
+			offset = Big16(data + volume->catalognodesize - 2 * (index + 1));
+			key = data + offset;
+			if (Big32(key + 2) < HFSROOTFOLDER)
+				continue;
+			if (Big32(key + 2) > HFSROOTFOLDER)
+				return 0;
+			body = key + 2 + Big16(key);
+			if (Big16(body) != HFSFOLDERRECORD || Big16(key + 6) != 21 || Big16(key + 8) != 0)
+				continue;
+			position = 0;
+			while (position < 17 && Big16(key + 16 + position * 2) == (uint8)privatename[position])
+				position++;
+			if (position == 17)
+				return Big32(body + 8);
+		}
+		offset = Big32(data);
+		if (offset == 0 || !ReadFork(volume, &volume->catalog, (uint64)offset * volume->catalognodesize, volume->node, volume->catalognodesize))
+			return 0;
+	}
+}
+
+static int ResolveHardLink(OsxHfsVolume *volume, uint8 *record)
+{
+	char name[32];
+	uint32 folder;
+	if (memcmp(record + 48, "hlnk", 4) != 0)
+		return 1;
+	folder = FindPrivateFolder(volume);
+	if (!folder)
+		return 0;
+	sprintf(name, "iNode%u", Big32(record + 44));
+	return FindCatalogRecord(volume, folder, name, record);
+}
+
+static int PatchGuestRecord(OsxHfsVolume *volume, OsxAtaBus *bus, const OsxAtaDrive *drive,
+	const uint8 *record, uint32 expectedsize, uint64 expectedhash, const uint32 patches[][2], int count)
+{
 	uint8 replacement[4];
 	uint8 *image;
 	uint32 size;
@@ -863,8 +914,7 @@ static int PatchSaverFile(OsxHfsVolume *volume, OsxAtaBus *bus, const OsxAtaDriv
 	int index;
 	int originalcount;
 	OsxHfsFork *fork;
-	if (!LookupPath(volume, path, record) || Big16(record) != HFSFILERECORD ||
-		Big32(record + 88) != 0 || Big32(record + 92) != expectedsize)
+	if (Big32(record + 88) != 0 || Big32(record + 92) != expectedsize)
 		return 0;
 	image = ReadRecord(volume, record, &size);
 	if (!image)
@@ -888,6 +938,37 @@ static int PatchSaverFile(OsxHfsVolume *volume, OsxAtaBus *bus, const OsxAtaDriv
 		bus->patchcount = originalcount;
 	free(fork);
 	return index == count;
+}
+
+static int PatchSaverFile(OsxHfsVolume *volume, OsxAtaBus *bus, const OsxAtaDrive *drive,
+	const char *path, uint32 expectedsize, uint64 expectedhash, const uint32 patches[][2], int count)
+{
+	uint8 record[248];
+	if (!LookupPath(volume, path, record) || Big16(record) != HFSFILERECORD)
+		return 0;
+	return PatchGuestRecord(volume, bus, drive, record, expectedsize, expectedhash, patches, count);
+}
+
+static void PrepareJaguarLogin(OsxHfsVolume *volume, OsxAtaBus *bus, const OsxAtaDrive *drive)
+{
+	/*
+		This fixes an issue in 10.2 where the menu bar never gets 
+		installed properly if a LSUIElement calls SetFrontProcess()
+		before Finder's startup event flush.
+		
+		This happens in stock 10.2 by Internet Reminder where on run 3+
+		it calls SetFrontProcess() then sits in its event loop forever.
+		Doing this causes the menubar gets partially rendered, or 
+		namely only the parts where the LSUIElements are, and
+		stays that way because SetProcessInternal() deactivates Finder
+		and the menu bar is never installed.
+	*/
+	const uint32 loginwindowpatches[][2] = { { 0xa4d8, 0x48000018 } };
+	uint8 record[248];
+	if (!LookupPath(volume, "/System/Library/CoreServices/loginwindow.app/Contents/MacOS/loginwindow", record) ||
+		Big16(record) != HFSFILERECORD || !ResolveHardLink(volume, record) || Big16(record) != HFSFILERECORD)
+		return;
+	PatchGuestRecord(volume, bus, drive, record, 581716, 0x1aaa075266432b21ULL, loginwindowpatches, 1);
 }
 
 static void PrepareSaverSoftware(OsxHfsVolume *volume, OsxAtaBus *bus, const OsxAtaDrive *drive)
@@ -1376,8 +1457,9 @@ static int QuartzLibraryPatches(OsxMachine *machine, OsxQuartzImage *image, uint
 
 static int QuartzFrameworkPatches(OsxQuartzImage *image)
 {
-	static const char *const hooks[5] = { "_CGLGetParameter", "_CGLSetPBuffer", "_CGLTexImagePBuffer", "_CGLFlushDrawable", "_CGLDescribeRenderer" };
-	static const uint32 calls[5] = { 1023, 1019, 1020, 1018, 1017 };
+	static const char *const hooks[9] = { "_CGLGetParameter", "_CGLSetPBuffer", "_CGLTexImagePBuffer", "_CGLFlushDrawable", "_CGLDescribeRenderer",
+		"_CGLChoosePixelFormat", "_CGLDestroyContext", "_CGLSetOffScreen", "_CGLSetSurface" };
+	static const uint32 calls[9] = { 1023, 1019, 1020, 1018, 1017, 1016, 1015, 1014, 1013 };
 	uint32 entry;
 	uint32 position;
 	uint32 word;
@@ -1385,7 +1467,7 @@ static int QuartzFrameworkPatches(OsxQuartzImage *image)
 	int index;
 	int result;
 	result = 1;
-	for (index = 0; index < 5; index++) {
+	for (index = 0; index < 9; index++) {
 		entry = QuartzLinkWord(image, QuartzSymbol(image, hooks[index]));
 		if (entry)
 			result &= QuartzAddPatch(image, entry, OSXQUARTZTRAP | (calls[index] << 8));
@@ -1522,11 +1604,8 @@ static int PrepareQuartz(OsxMachine *machine, OsxHfsVolume *volume, OsxAtaBus *b
 	int result;
 	memset(strings, 0, sizeof(strings));
 	memcpy(strings, extensions, sizeof(extensions));
-#if OSXGLBRIDGE
-	QuartzHostStrings((char *)strings + OSXQUARTZRENDERERSTRING - OSXQUARTZSTRINGS,
-		(char *)strings + OSXQUARTZVENDORSTRING - OSXQUARTZSTRINGS, OSXQUARTZVENDORSTRING - OSXQUARTZRENDERERSTRING);
-#endif
-	library = (OsxQuartzImage *)calloc(1, sizeof(OsxQuartzImage));
+	memcpy(strings + OSXQUARTZVERSIONSTRING - OSXQUARTZSTRINGS, OSXQUARTZVERSION, sizeof(OSXQUARTZVERSION));
+	library =(OsxQuartzImage *)calloc(1, sizeof(OsxQuartzImage));
 	framework = (OsxQuartzImage *)calloc(1, sizeof(OsxQuartzImage));
 	originalcount = bus->patchcount;
 	memset(machine->quartztails, 0, sizeof(machine->quartztails));
@@ -1584,6 +1663,7 @@ static int PrepareQuartz(OsxMachine *machine, OsxHfsVolume *volume, OsxAtaBus *b
 static void FindClipboardFunctions(OsxMachine *machine, OsxHfsVolume *volume)
 {
 	static const char *const systemnames[3] = { "_malloc", "_free", "_bzero" };
+	static const char *const windownames[OSXQUARTZWINDOWCALLS] = { "_CGSGetScreenRectForWindow", "_CGSGetSurfaceBounds", "_CGSGetOnScreenWindowList", "_CGSGetWindowOpacity" };
 	static const char *const toolboxnames[5] = {
 		"_GetCurrentScrap", "_ClearCurrentScrap", "_PutScrapFlavor", "_GetScrapFlavorSize", "_GetScrapFlavorData"
 	};
@@ -1607,6 +1687,11 @@ static void FindClipboardFunctions(OsxMachine *machine, OsxHfsVolume *volume)
 		clip->functions[OSXCLIPDOCK] = Big32(image + TextCommand(image, size) + 24);
 		clip->functions[OSXCLIPDOCKCOMMANDS] = Big32(image + 20);
 	}
+	free(image);
+	memset(machine->quartzwindow, 0, sizeof(machine->quartzwindow));
+	image = ReadFile(volume, QUARTZCOREGRAPHICS, &size);
+	if (image && ThinPowerPC(image, &size))
+		FindSymbols(image, size, CacheBase(volume, QUARTZCOREGRAPHICS), windownames, OSXQUARTZWINDOWCALLS, machine->quartzwindow, NULL, NULL);
 	free(image);
 	clip->ready = clip->texthigh > clip->textlow;
 	for (index = 0; index < OSXCLIPFUNCTIONS; index++)
@@ -3013,18 +3098,17 @@ static int NeedsVectorCpu(OsxHfsVolume *volume)
 	return !compatible;
 }
 
-static uint8 *AddDisplayDrivers(OsxHfsVolume *volume, uint8 *mkext, uint32 *size)
+static uint8 *AddVolumeBundles(OsxHfsVolume *volume, uint8 *mkext, uint32 *size, const char *const *bundles, int count)
 {
-	static const char *const bundles[2] = { "com.apple.iokit.IOGraphicsFamily", "com.apple.iokit.IONDRVSupport" };
 	uint8 *donor;
 	uint8 *merged;
 	uint32 donorsize;
-	if (OsxMkextHasBundle(mkext, *size, bundles[1]))
+	if (OsxMkextHasBundle(mkext, *size, bundles[count - 1]))
 		return mkext;
-	donor = BuildDriverPackage(volume, 0, bundles, 2, &donorsize);
+	donor = BuildDriverPackage(volume, 0, bundles, count, &donorsize);
 	merged = NULL;
 	if (donor)
-		merged = OsxMkextAddBundles(mkext, *size, donor, donorsize, bundles, 2, NULL, 0, size);
+		merged = OsxMkextAddBundles(mkext, *size, donor, donorsize, bundles, count, NULL, 0, size);
 	free(donor);
 	if (merged == NULL)
 		return mkext;
@@ -3032,8 +3116,15 @@ static uint8 *AddDisplayDrivers(OsxHfsVolume *volume, uint8 *mkext, uint32 *size
 	return merged;
 }
 
-static uint8 *AddOldWorldDrivers(uint8 *mkext, uint32 *size, const char *bootpath)
+static uint8 *AddDisplayDrivers(OsxHfsVolume *volume, uint8 *mkext, uint32 *size)
 {
+	static const char *const bundles[2] = { "com.apple.iokit.IOGraphicsFamily", "com.apple.iokit.IONDRVSupport" };
+	return AddVolumeBundles(volume, mkext, size, bundles, 2);
+}
+
+static uint8 *AddOldWorldDrivers(OsxHfsVolume *volume, uint8 *mkext, uint32 *size, const char *bootpath)
+{
+	static const char *const network[1] = { "com.apple.iokit.IONetworkingFamily" };
 	static const char *const bundles[] = {
 		"com.apple.driver.AppleGossamerPE",
 		"com.apple.driver.AppleGracklePCI",
@@ -3076,7 +3167,7 @@ static uint8 *AddOldWorldDrivers(uint8 *mkext, uint32 *size, const char *bootpat
 	if (merged == NULL)
 		return mkext;
 	free(mkext);
-	return merged;
+	return AddVolumeBundles(volume, merged, size, network, 1);
 }
 
 int OsxBootLoad(OsxMachine *machine, const char *imagepath, int bootbus, int bootunit, const char *commandline)
@@ -3101,7 +3192,7 @@ int OsxBootLoad(OsxMachine *machine, const char *imagepath, int bootbus, int boo
 	state.machine = machine;
 	file = machine->ata[bootbus].drives[bootunit].file;
 	if (!OpenVolume(&volume, file, machine->bootpartition)) {
-		fprintf(stderr, "osx: no HFS+ volume in %s\n", imagepath);
+		ErrorAlert("The Mac OS X boot image has no HFS+ volume.");
 		CloseVolume(&volume);
 		return 0;
 	}
@@ -3118,7 +3209,7 @@ int OsxBootLoad(OsxMachine *machine, const char *imagepath, int bootbus, int boo
 	OsxCpuSetModel(machine->cpu, machine->pvr);
 	kernel = ReadFile(&volume, "/mach_kernel", &kernelsize);
 	if (kernel == NULL || !ThinPowerPC(kernel, &kernelsize) || !LoadKernel(&state, kernel, kernelsize)) {
-		fprintf(stderr, "osx: cannot load /mach_kernel\n");
+		ErrorAlert("The Mac OS X kernel (/mach_kernel) could not be loaded.");
 		free(kernel);
 		CloseVolume(&volume);
 		return 0;
@@ -3136,13 +3227,13 @@ int OsxBootLoad(OsxMachine *machine, const char *imagepath, int bootbus, int boo
 	else if (!state.ignorendrv)
 		mkext = AddDisplayDrivers(&volume, mkext, &mkextsize);
 	if (mkext)
-		mkext = AddOldWorldDrivers(mkext, &mkextsize, imagepath);
+		mkext = AddOldWorldDrivers(&volume, mkext, &mkextsize, imagepath);
 #if OSXG5
 	if (!machine->g5)
 #endif
 	if (ContainsBytes(kernel, kernelsize, "Darwin Kernel Version 9.") &&
 	    (!mkext || !OsxMkextHasBundle(mkext, mkextsize, "com.apple.driver.AppleGossamerPE"))) {
-		fprintf(stderr, "osx: Leopard needs the Old World platform drivers; attach a Mac OS X 10.4 installation disc as a CD-ROM.\n");
+		ErrorAlert("On non-G5 machine types, Mac OS X 10.5 needs the Old World platform drivers. Attach a Mac OS X 10.4 disc or disk image.");
 		free(mkext);
 		free(kernel);
 		CloseVolume(&volume);
@@ -3160,6 +3251,7 @@ int OsxBootLoad(OsxMachine *machine, const char *imagepath, int bootbus, int boo
 	}
 	FindClipboardFunctions(machine, &volume);
 	PrepareSaverSoftware(&volume, &machine->ata[bootbus], &machine->ata[bootbus].drives[bootunit]);
+	PrepareJaguarLogin(&volume, &machine->ata[bootbus], &machine->ata[bootbus].drives[bootunit]);
 	if (machine->flurry)
 		machine->flurry = PrepareFlurry(machine, &volume, bootbus, bootunit);
 	if (machine->quartz)

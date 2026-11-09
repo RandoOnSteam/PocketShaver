@@ -12,6 +12,10 @@
 #ifndef GL_ENGINE_H
 #define GL_ENGINE_H
 
+#ifndef GLGUESTBYTES
+#define GLGUESTBYTES(address, size) Mac2HostAddr(address)
+#endif
+
 #include <cstdint>
 #include <vector>
 #include <map>
@@ -1252,6 +1256,20 @@ struct GLContext {
 
     // ---- Renderer backend state ----
     void    *metal;                    // opaque Metal or desktop-GL context state
+
+#if defined(OSXGLGUEST)
+    void    *guestcpu;
+    void    *guesttarget;
+    uint8_t  guestscratch[1024];
+    uint32_t guestscratchused;
+    int32_t  guestunpackrowbytes;
+    uint32_t guestreadpage;
+    uint8_t *guestreadhost;
+    bool     guestblendseparate;
+    uint32_t guestblendsrcalpha;
+    uint32_t guestblenddstalpha;
+    std::vector<uint8_t> guestbytes;
+#endif
 
     // ---- Pixel store ----
     GLPixelStore pixel_store;

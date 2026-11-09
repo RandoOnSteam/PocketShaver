@@ -89,6 +89,12 @@ static inline void StoreHostSized(uint8 *host, int size, uint32 value)
 		host[0] = (uint8)value;
 }
 
+#if (OSXHOSTX64 || OSXHOSTX86) && defined(__GNUC__) && !defined(_WIN32)
+#define OSXHOSTTSC 1
+#else
+#define OSXHOSTTSC 0
+#endif
+
 static uint64 HostTicks(void)
 {
 #if defined(_WIN32)
@@ -103,6 +109,8 @@ static uint64 HostTicks(void)
 	QueryPerformanceCounter(&counter);
 	return (uint64)counter.QuadPart;
 #endif
+#elif OSXHOSTTSC
+	return __builtin_ia32_rdtsc();
 #else
 	struct timespec now;
 	clock_gettime(CLOCK_MONOTONIC, &now);
@@ -115,6 +123,8 @@ static uint64 MultiplyDivide(uint64 value, uint64 multiplier, uint64 divisor)
 	return (value / divisor) * multiplier + ((value % divisor) * multiplier) / divisor;
 }
 
+static uint64 HostCounter(void);
+
 static uint64 HostFrequency(uint64 ticks, uint64 counter)
 {
 #ifdef _WIN32
@@ -123,6 +133,8 @@ static uint64 HostFrequency(uint64 ticks, uint64 counter)
 	QueryPerformanceCounter(&now);
 	QueryPerformanceFrequency(&frequency);
 	return MultiplyDivide(HostTicks() - ticks, (uint64)frequency.QuadPart, (uint64)now.QuadPart - counter);
+#elif OSXHOSTTSC
+	return MultiplyDivide(HostTicks() - ticks, 1000000000ULL, HostCounter() - counter);
 #else
 	return 1000000000ULL;
 #endif
@@ -134,6 +146,10 @@ static uint64 HostCounter(void)
 	LARGE_INTEGER counter;
 	QueryPerformanceCounter(&counter);
 	return (uint64)counter.QuadPart;
+#elif OSXHOSTTSC
+	struct timespec now;
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	return (uint64)now.tv_sec * 1000000000ULL + (uint64)now.tv_nsec;
 #else
 	return 0;
 #endif
@@ -149,6 +165,10 @@ static uint64 CalibrateHostFrequency(OsxCpu *cpu)
 	length = sizeof(megahertz);
 	if (RegGetValueA(HKEY_LOCAL_MACHINE, "HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0", "~MHz", RRF_RT_REG_DWORD, NULL, &megahertz, &length) == ERROR_SUCCESS && megahertz != 0)
 		return (uint64)megahertz * 1000000ULL;
+	return 3000000000ULL;
+#elif OSXHOSTTSC
+	cpu->calibrationticks = HostTicks();
+	cpu->calibrationcounter = HostCounter();
 	return 3000000000ULL;
 #else
 	return 1000000000ULL;

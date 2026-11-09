@@ -183,6 +183,11 @@ typedef struct OsxAtaDrive {
 
 #define OSXDISKPATCHES 2048
 #define OSXQUARTZSLOTS 760
+#define OSXQUARTZSCREENRECT 0
+#define OSXQUARTZSURFACEBOUNDS 1
+#define OSXQUARTZWINDOWLIST 2
+#define OSXQUARTZOPACITY 3
+#define OSXQUARTZWINDOWCALLS 4
 
 typedef struct OsxDiskPatch {
 	uint64 offset;
@@ -538,6 +543,7 @@ struct OsxMachine {
 	int quartz;
 	uint32 quartztails[OSXQUARTZSLOTS];
 	uint32 quartzbase;
+	uint32 quartzwindow[OSXQUARTZWINDOWCALLS];
 	uint32 quartzstrings;
 	int quartzextensions;
 	uint32 flurrystubs[86];

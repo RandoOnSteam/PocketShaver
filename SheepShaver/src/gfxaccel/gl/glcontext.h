@@ -1528,6 +1528,7 @@ int GLContext_CreateClone(GLCONTEXT* pThis, GLCONTEXTHANDLE clone,
 	if(drawable)
 	{ /* just clean up the wndclass */
 		pThis->mhDC = drawable;
+		pThis->mhWnd = NULL;
 		UnregisterClassA((LPCSTR)MAKEINTATOM(pThis->mAtom), hInstance);
 		pThis->mAtom = 0;
 	}

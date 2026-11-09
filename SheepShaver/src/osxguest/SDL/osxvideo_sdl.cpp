@@ -19,6 +19,14 @@
  */
 #include "sysdeps.h"
 #include "my_sdl.h"
+#if defined(_WIN32)
+#include <windows.h>
+#endif
+#if SDL_VERSION_ATLEAST(2, 0, 0) && !SDL_VERSION_ATLEAST(3, 0, 0)
+#include <SDL2/SDL_syswm.h>
+#elif !SDL_VERSION_ATLEAST(2, 0, 0)
+#include "SDL_syswm.h"
+#endif
 #include "osxhost.h"
 #ifdef ENABLE_EMULATOR_MONITOR
 #include "emulator_monitor.h"
@@ -216,6 +224,10 @@ OsxHostVideo *OsxHostOpen(int width, int height, OsxHostInput input, void *conte
 	}
 #endif
 	return video;
+}
+
+void OsxHostSuspendFrame(OsxHostVideo *video)
+{
 }
 
 void OsxHostClose(OsxHostVideo *video)

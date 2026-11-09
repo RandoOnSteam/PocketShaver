@@ -1158,8 +1158,7 @@ int MetalCompositorInit(int width, int height, int depth, int row_bytes,
 	vbl_source_init(NULL, NULL, NULL);
 
 	s_init = true;
-	COMPOSITOR_LOG("Init tick=%u %dx%d depth=%d rb=%d pitch=%d bpp=%d",
-				   ReadMacInt32(0x016a),
+	COMPOSITOR_LOG("Init %dx%d depth=%d rb=%d pitch=%d bpp=%d",
 				   width, height, depth, row_bytes, pitch, compositor_bits_per_pixel);
 	return 0;
 }
@@ -1334,7 +1333,7 @@ void MetalCompositorShutdown(void)
 		dmc_unsubscribe("compositor");
 		s_init = false;
 		compositor_buffer = NULL;
-		COMPOSITOR_LOG("Shutdown tick=%u", ReadMacInt32(0x016a));
+		COMPOSITOR_LOG("Shutdown");
 	}
 
 	/* The shared SDL_GLContext is tied to the current SDL window.  It must be

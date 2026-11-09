@@ -70,6 +70,17 @@ OsxHostVideo *OsxHostOpen(int width, int height, OsxHostInput input, void *conte
 	return video;
 }
 
+void OsxHostSuspendFrame(OsxHostVideo *video)
+{
+	int width;
+	int height;
+	int depth;
+	int hostwidth;
+	int hostheight;
+	SflUiGetStatus(&width, &height, &depth, &hostwidth, &hostheight);
+	SflUiSetFrame(NULL, width, height, video->pitch, 32);
+}
+
 void OsxHostClose(OsxHostVideo *video)
 {
 	WSTimerEndPeriod(1);

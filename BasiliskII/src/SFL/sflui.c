@@ -876,6 +876,11 @@ static void SflUiToggleFullScreen(SFLUIAPP *pThis)
 		SflUiEnterFullScreen(pThis);
 }
 
+void *SflUiGetWindowHandle(void)
+{
+	return WSWindow_GetHandle(&SflUiApp->window);
+}
+
 int SflUiOpen(const char *title, int width, int height, int fullscreen, int frameskip)
 {
 	WSRECT bounds;
