@@ -148,7 +148,7 @@ set(SS_CORE
 	"${SS_SRC}/macio_escc.cpp"
 	"${SS_SRC}/mmio.cpp"
 	"${SS_SRC}/pcibridge.cpp"
-	${OSXGUEST_SOURCES}
+	${OSXGUESTSOURCES}
 	"${SS_SRC}/osxguest/SDL/osxvideo_sdl.cpp"
 	"${SS_SRC}/osxguest/SDL/osxaudio_sdl.cpp"
 	"${SS_SRC}/osxguest/SDL/osxclip_sdl.cpp"

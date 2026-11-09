@@ -39,6 +39,18 @@
 #define BOOTPAGE 4096
 #define BOOTMAXRANGES 64
 #define BOOTARGSSIZE 0x200
+#define BOOTSCREENGRAY 0xbf
+#define BOOTSPINNERSCAN 0x800
+#define BOOTLOADDELAY 0x38800005u
+#define BOOTLOADNODELAY 0x38800000u
+#define BOOTBRANCHLINK 0x48000001u
+#define BOOTBRANCHMASK 0xfc000003u
+#define BOOTSPINNERFLAGS 4
+#define BOOTSPINNERWIDTH 0x10
+#define BOOTSPINNERX 0x18
+#define BOOTSPINNERY 0x1c
+#define BOOTSPINNERCORNER 15
+#define BOOTSPINNERBELOW 200
 #define CLIPTOOLBOX "/System/Library/Frameworks/Carbon.framework/Versions/A/Frameworks/HIToolbox.framework/Versions/A/HIToolbox"
 #define CLIPSYSTEM "/usr/lib/libSystem.B.dylib"
 #define QUARTZCOREGRAPHICS "/System/Library/Frameworks/ApplicationServices.framework/Versions/A/Frameworks/CoreGraphics.framework/Versions/A/CoreGraphics"
@@ -3075,6 +3087,58 @@ static void InstallBootArgs(OsxBootState *state, const char *commandline, uint32
 	StoreBig32(args + 0x1f8, state->nextfree);
 }
 
+static void PaintBootScreen(OsxMachine *machine, const char *commandline)
+{
+	uint32 row;
+	uint32 column;
+	uint8 *pixel;
+	if (strstr(commandline, "-v") != NULL || machine->depth != 32)
+		return;
+	for (row = 0; row < machine->height; row++) {
+		pixel = machine->vram + row * machine->rowbytes;
+		for (column = 0; column < machine->width; column++, pixel += 4) {
+			pixel[0] = 0;
+			pixel[1] = BOOTSCREENGRAY;
+			pixel[2] = BOOTSCREENGRAY;
+			pixel[3] = BOOTSCREENGRAY;
+		}
+	}
+}
+
+static void CenterCornerSpinner(OsxMachine *machine)
+{
+	uint32 progress;
+	uint32 width;
+	uint8 *fields;
+	progress = OsxFindKernelSymbol(machine, "_default_progress");
+	if (!progress)
+		return;
+	fields = machine->ram + progress;
+	if (Big32(fields + BOOTSPINNERFLAGS) != 0 || Big32(fields + BOOTSPINNERX) != BOOTSPINNERCORNER ||
+		Big32(fields + BOOTSPINNERY) != BOOTSPINNERCORNER)
+		return;
+	width = Big32(fields + BOOTSPINNERWIDTH);
+	StoreBig32(fields + BOOTSPINNERX, (machine->width - width) / 2);
+	StoreBig32(fields + BOOTSPINNERY, machine->height / 2 + BOOTSPINNERBELOW - width / 2);
+}
+
+static void StartSpinnerImmediately(OsxMachine *machine)
+{
+	uint32 function;
+	uint32 position;
+	function = OsxFindKernelSymbol(machine, "_initialize_screen");
+	if (!function)
+		return;
+	for (position = function; position < function + BOOTSPINNERSCAN; position += 4) {
+		if (Big32(machine->ram + position) == BOOTLOADDELAY &&
+			((Big32(machine->ram + position + 4) & BOOTBRANCHMASK) == BOOTBRANCHLINK ||
+			(Big32(machine->ram + position + 8) & BOOTBRANCHMASK) == BOOTBRANCHLINK)) {
+			StoreBig32(machine->ram + position, BOOTLOADNODELAY);
+			return;
+		}
+	}
+}
+
 static int NeedsVectorCpu(OsxHfsVolume *volume)
 {
 	uint8 *dyld;
@@ -3287,6 +3351,9 @@ int OsxBootLoad(OsxMachine *machine, const char *imagepath, int bootbus, int boo
 	DestroyTree(root);
 	machine->kernelend = state.nextfree;
 	InstallBootArgs(&state, commandline, treeaddress, treesize);
+	PaintBootScreen(machine, commandline);
+	StartSpinnerImmediately(machine);
+	/*CenterCornerSpinner(machine);*/ /* if desired */
 	machine->scratch = state.nextfree + 0x10000;
 	if (machine->log) {
 		fprintf(machine->log, "kernel entry %08x bootargs %08x tree %08x+%x top %08x\n", machine->kernelentry, machine->bootargs, treeaddress, treesize, state.nextfree);

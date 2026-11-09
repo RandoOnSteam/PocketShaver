@@ -1,125 +1,126 @@
-set(SFLDIR "${B2SRC}/SFL")
+set(SFLDIRECTORY "${BASILISKIISOURCE}/SFL")
 if(APPLE)
 	enable_language(OBJC)
 endif()
-set(SFLLIBS "${B2SRC}/../../thirdparty/sfl")
+set(SFLLIBRARIES "${BASILISKIISOURCE}/../../thirdparty/sfl")
 
-set(SFLPLATFORM
-	"${SFLDIR}/user_strings_sfl.cpp"
-	"${SFLDIR}/main_sfl.cpp"
-	"${SFLDIR}/audio_sfl.cpp"
-	"${SFLDIR}/joy_sfl.cpp"
-	"${SFLDIR}/timer_sfl.cpp"
-	"${SFLDIR}/sys_sfl.cpp"
-	"${SFLDIR}/prefs_sfl.cpp"
-	"${SFLDIR}/xpram_sfl.cpp"
-	"${SFLDIR}/clip_sfl.cpp"
-	"${SFLDIR}/extfs_sfl.cpp"
-	"${SFLDIR}/posix_sfl.cpp"
-	"${SFLDIR}/sflroman.cpp"
-	"${SFLDIR}/input_sfl.cpp"
-	"${SFLDIR}/ether_sfl.cpp"
-	"${B2SRC}/dummy/serial_dummy.cpp"
-	"${B2SRC}/dummy/scsi_dummy.cpp"
-	"${SFLDIR}/sflbootprefs.cpp"
+set(SFLPLATFORMSOURCES
+	"${SFLDIRECTORY}/user_strings_sfl.cpp"
+	"${SFLDIRECTORY}/main_sfl.cpp"
+	"${SFLDIRECTORY}/audio_sfl.cpp"
+	"${SFLDIRECTORY}/joy_sfl.cpp"
+	"${SFLDIRECTORY}/timer_sfl.cpp"
+	"${SFLDIRECTORY}/sys_sfl.cpp"
+	"${SFLDIRECTORY}/prefs_sfl.cpp"
+	"${SFLDIRECTORY}/xpram_sfl.cpp"
+	"${SFLDIRECTORY}/clip_sfl.cpp"
+	"${SFLDIRECTORY}/extfs_sfl.cpp"
+	"${SFLDIRECTORY}/posix_sfl.cpp"
+	"${SFLDIRECTORY}/sflroman.cpp"
+	"${SFLDIRECTORY}/input_sfl.cpp"
+	"${SFLDIRECTORY}/ether_sfl.cpp"
+	"${BASILISKIISOURCE}/dummy/serial_dummy.cpp"
+	"${BASILISKIISOURCE}/dummy/scsi_dummy.cpp"
+	"${SFLDIRECTORY}/sflbootprefs.cpp"
 )
 
-function(sfl_configure_core target)
-	target_compile_definitions(${target} PRIVATE HAVE_CONFIG_H)
+function(sfl_configure_core APPLICATIONTARGET)
+	target_compile_definitions(${APPLICATIONTARGET} PRIVATE HAVE_CONFIG_H)
 	if(MSVC)
-		target_compile_options(${target} PRIVATE /W0 "/FI${SFLDIR}/sysdeps.h")
+		target_compile_options(${APPLICATIONTARGET} PRIVATE /W0 "/FI${SFLDIRECTORY}/sysdeps.h")
 	else()
-		target_compile_options(${target} PRIVATE -w -fno-strict-aliasing -include "${SFLDIR}/sysdeps.h")
+		target_compile_options(${APPLICATIONTARGET} PRIVATE -w -fno-strict-aliasing -include "${SFLDIRECTORY}/sysdeps.h")
 	endif()
 endfunction()
 
-function(sfl_add_application target creator)
-	set(SFLLIBSOURCES
-		"${SFLDIR}/sflimpl.c"
-		"${SFLDIR}/sflui.c"
-		"${SFLDIR}/sflbootgui.c"
-		"${SFLDIR}/sflaudio.c"
-		"${SFLDIR}/sflnet.c"
-		"${SFLDIR}/sflsocket.c"
+function(sfl_add_application APPLICATIONTARGET APPLICATIONCREATOR APPLICATIONCORE)
+	string(TOUPPER "${APPLICATIONTARGET}" APPLICATIONUPPER)
+	set(SFLLIBRARYSOURCES
+		"${SFLDIRECTORY}/sflimpl.c"
+		"${SFLDIRECTORY}/sflui.c"
+		"${SFLDIRECTORY}/sflbootgui.c"
+		"${SFLDIRECTORY}/sflaudio.c"
+		"${SFLDIRECTORY}/sflnet.c"
+		"${SFLDIRECTORY}/sflsocket.c"
 	)
-	if(SFL_MONITOR)
-		list(APPEND SFLLIBSOURCES "${SFLDIR}/sflmonitor.c")
+	if(SFLMONITOR)
+		list(APPEND SFLLIBRARYSOURCES "${SFLDIRECTORY}/sflmonitor.c")
 	endif()
 
 	if(APPLE)
-		set_source_files_properties(${SFLLIBSOURCES} PROPERTIES LANGUAGE OBJC)
+		set_source_files_properties(${SFLLIBRARYSOURCES} PROPERTIES LANGUAGE OBJC)
 	endif()
-	add_library(${target}_sfllibs OBJECT ${SFLLIBSOURCES})
-	target_compile_definitions(${target}_sfllibs PRIVATE SFL_APP_NAME="${target}")
-	target_include_directories(${target}_sfllibs PRIVATE "${SFLLIBS}" "${SFLDIR}")
+	add_library(${APPLICATIONUPPER}SFLLIBRARIES OBJECT ${SFLLIBRARYSOURCES})
+	target_compile_definitions(${APPLICATIONUPPER}SFLLIBRARIES PRIVATE SFL_APP_NAME="${APPLICATIONTARGET}")
+	target_include_directories(${APPLICATIONUPPER}SFLLIBRARIES PRIVATE "${SFLLIBRARIES}" "${SFLDIRECTORY}")
 	if(WIN32)
-		target_compile_definitions(${target}_sfllibs PRIVATE _CONSOLE)
+		target_compile_definitions(${APPLICATIONUPPER}SFLLIBRARIES PRIVATE _CONSOLE)
 	endif()
 	if(APPLE)
-		target_compile_definitions(${target}_sfllibs PRIVATE OBJC_OLD_DISPATCH_PROTOTYPES=1)
+		target_compile_definitions(${APPLICATIONUPPER}SFLLIBRARIES PRIVATE OBJC_OLD_DISPATCH_PROTOTYPES=1)
 	endif()
-	if(SFL_MONITOR)
-		target_compile_definitions(${target}_sfllibs PRIVATE SFLMONITORENABLED)
+	if(SFLMONITOR)
+		target_compile_definitions(${APPLICATIONUPPER}SFLLIBRARIES PRIVATE SFLMONITORENABLED)
 	endif()
 	if(MSVC)
-		target_compile_options(${target}_sfllibs PRIVATE /W0)
+		target_compile_options(${APPLICATIONUPPER}SFLLIBRARIES PRIVATE /W0)
 	else()
-		target_compile_options(${target}_sfllibs PRIVATE -w)
+		target_compile_options(${APPLICATIONUPPER}SFLLIBRARIES PRIVATE -w)
 	endif()
 	if(UNIX AND NOT APPLE)
 		find_package(PkgConfig REQUIRED)
 		pkg_check_modules(SFLGTK REQUIRED gtk+-3.0 x11 xfixes xrandr xinerama xxf86vm wayland-client wayland-cursor fontconfig)
-		target_include_directories(${target}_sfllibs PRIVATE ${SFLGTK_INCLUDE_DIRS})
-		target_compile_options(${target}_sfllibs PRIVATE ${SFLGTK_CFLAGS_OTHER})
+		target_include_directories(${APPLICATIONUPPER}SFLLIBRARIES PRIVATE ${SFLGTK_INCLUDE_DIRS})
+		target_compile_options(${APPLICATIONUPPER}SFLLIBRARIES PRIVATE ${SFLGTK_CFLAGS_OTHER})
 	endif()
 
 	set(SFLSLIRPSOURCES
-		"${B2SRC}/slirp/bootp.c"
-		"${B2SRC}/slirp/cksum.c"
-		"${B2SRC}/slirp/debug.c"
-		"${B2SRC}/slirp/if.c"
-		"${B2SRC}/slirp/ip_icmp.c"
-		"${B2SRC}/slirp/ip_input.c"
-		"${B2SRC}/slirp/ip_output.c"
-		"${B2SRC}/slirp/mbuf.c"
-		"${B2SRC}/slirp/misc.c"
-		"${B2SRC}/slirp/sbuf.c"
-		"${B2SRC}/slirp/slirp.c"
-		"${B2SRC}/slirp/socket.c"
-		"${B2SRC}/slirp/tcp_input.c"
-		"${B2SRC}/slirp/tcp_output.c"
-		"${B2SRC}/slirp/tcp_subr.c"
-		"${B2SRC}/slirp/tcp_timer.c"
-		"${B2SRC}/slirp/udp.c"
-		"${SFLDIR}/sflslirp.c"
+		"${BASILISKIISOURCE}/slirp/bootp.c"
+		"${BASILISKIISOURCE}/slirp/cksum.c"
+		"${BASILISKIISOURCE}/slirp/debug.c"
+		"${BASILISKIISOURCE}/slirp/if.c"
+		"${BASILISKIISOURCE}/slirp/ip_icmp.c"
+		"${BASILISKIISOURCE}/slirp/ip_input.c"
+		"${BASILISKIISOURCE}/slirp/ip_output.c"
+		"${BASILISKIISOURCE}/slirp/mbuf.c"
+		"${BASILISKIISOURCE}/slirp/misc.c"
+		"${BASILISKIISOURCE}/slirp/sbuf.c"
+		"${BASILISKIISOURCE}/slirp/slirp.c"
+		"${BASILISKIISOURCE}/slirp/socket.c"
+		"${BASILISKIISOURCE}/slirp/tcp_input.c"
+		"${BASILISKIISOURCE}/slirp/tcp_output.c"
+		"${BASILISKIISOURCE}/slirp/tcp_subr.c"
+		"${BASILISKIISOURCE}/slirp/tcp_timer.c"
+		"${BASILISKIISOURCE}/slirp/udp.c"
+		"${SFLDIRECTORY}/sflslirp.c"
 	)
 
-	add_library(${target}_sflslirp OBJECT ${SFLSLIRPSOURCES})
-	target_include_directories(${target}_sflslirp PRIVATE "${SFLDIR}" "${B2SRC}/slirp")
+	add_library(${APPLICATIONUPPER}SFLSLIRP OBJECT ${SFLSLIRPSOURCES})
+	target_include_directories(${APPLICATIONUPPER}SFLSLIRP PRIVATE "${SFLDIRECTORY}" "${BASILISKIISOURCE}/slirp")
 	if(MSVC)
-		target_compile_options(${target}_sflslirp PRIVATE /W0)
+		target_compile_options(${APPLICATIONUPPER}SFLSLIRP PRIVATE /W0)
 	else()
-		target_compile_options(${target}_sflslirp PRIVATE -w)
+		target_compile_options(${APPLICATIONUPPER}SFLSLIRP PRIVATE -w)
 	endif()
 
 	if(CMAKE_SYSTEM_NAME MATCHES RetroCarbon)
-		add_application(${target} "${SFLDIR}/sflcarbon.r" CREATOR "${creator}")
-		target_sources(${target} PRIVATE $<TARGET_OBJECTS:${target}_sflcore> $<TARGET_OBJECTS:${target}_sfllibs> $<TARGET_OBJECTS:${target}_sflslirp>)
-		set_target_properties(${target} PROPERTIES LINKER_LANGUAGE CXX)
+		add_application(${APPLICATIONTARGET} "${SFLDIRECTORY}/sflcarbon.r" CREATOR "${APPLICATIONCREATOR}")
+		target_sources(${APPLICATIONTARGET} PRIVATE $<TARGET_OBJECTS:${APPLICATIONCORE}> $<TARGET_OBJECTS:${APPLICATIONUPPER}SFLLIBRARIES> $<TARGET_OBJECTS:${APPLICATIONUPPER}SFLSLIRP>)
+		set_target_properties(${APPLICATIONTARGET} PROPERTIES LINKER_LANGUAGE CXX)
 	else()
-		add_executable(${target} $<TARGET_OBJECTS:${target}_sflcore> $<TARGET_OBJECTS:${target}_sfllibs> $<TARGET_OBJECTS:${target}_sflslirp>)
+		add_executable(${APPLICATIONTARGET} $<TARGET_OBJECTS:${APPLICATIONCORE}> $<TARGET_OBJECTS:${APPLICATIONUPPER}SFLLIBRARIES> $<TARGET_OBJECTS:${APPLICATIONUPPER}SFLSLIRP>)
 	endif()
 	if(WIN32)
-		target_link_libraries(${target} PRIVATE user32 gdi32 winmm ole32 shell32 advapi32 comdlg32 comctl32 uuid ws2_32)
+		target_link_libraries(${APPLICATIONTARGET} PRIVATE user32 gdi32 winmm ole32 shell32 advapi32 comdlg32 comctl32 uuid ws2_32)
 	endif()
 	if(UNIX AND NOT APPLE)
-		target_link_libraries(${target} PRIVATE ${SFLGTK_LIBRARIES} dl pthread m)
+		target_link_libraries(${APPLICATIONTARGET} PRIVATE ${SFLGTK_LIBRARIES} dl pthread m)
 	endif()
 	if(APPLE)
-		target_link_libraries(${target} PRIVATE "-framework Cocoa" "-framework AudioToolbox" "-framework AudioUnit" "-framework CoreAudio" "-framework AVFoundation" "-framework IOKit" "-framework ForceFeedback")
+		target_link_libraries(${APPLICATIONTARGET} PRIVATE "-framework Cocoa" "-framework AudioToolbox" "-framework AudioUnit" "-framework CoreAudio" "-framework AVFoundation" "-framework IOKit" "-framework ForceFeedback")
 		find_library(SFLMEDIAPLAYER MediaPlayer)
 		if(SFLMEDIAPLAYER)
-			target_link_libraries(${target} PRIVATE "-weak_framework MediaPlayer")
+			target_link_libraries(${APPLICATIONTARGET} PRIVATE "-weak_framework MediaPlayer")
 		endif()
 	endif()
 endfunction()
