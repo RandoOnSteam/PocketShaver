@@ -124,6 +124,7 @@ else()
 			"${GRAPHICSACCELERATIONSOURCE}/gl_dispatch.cpp"
 			"${GRAPHICSACCELERATIONSOURCE}/gl_engine.cpp"
 			"${GRAPHICSACCELERATIONSOURCE}/gl_state.cpp"
+			"${GRAPHICSACCELERATIONSOURCE}/gfxaccelhost.cpp"
 			"${GRAPHICSACCELERATIONSOURCE}/gl_thunks.cpp"
 			"${GRAPHICSACCELERATIONSOURCE}/rave_dispatch.cpp"
 			"${GRAPHICSACCELERATIONSOURCE}/rave_draw_context.cpp"

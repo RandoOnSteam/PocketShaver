@@ -321,6 +321,7 @@ uint64 OsxGuestHostNanoseconds(void);
 int OsxGuestCpuAddHook(OsxCpu *cpu, uint32 address, OsxHookFunction function, void *context);
 OSXJITABI int OsxGuestCpuFillTlb(OsxCpu *cpu, uint32 address, int kind);
 int OsxGuestCpuTranslate(OsxCpu *cpu, uint32 address, int kind, int raise, uint32 *physical);
+uint8 *OsxGuestCpuVirtualHost(OsxCpu *cpu, uint32 address, int kind);
 int OsxGuestCpuReadVirtual(OsxCpu *cpu, uint32 address, uint32 *value);
 int OsxGuestCpuWriteVirtual(OsxCpu *cpu, uint32 address, uint32 value);
 void OsxGuestCpuExecuteFloat(OsxCpu *cpu, uint32 instruction);

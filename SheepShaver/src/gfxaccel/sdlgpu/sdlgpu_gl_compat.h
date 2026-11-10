@@ -57,6 +57,7 @@ extern "C" {
 #endif
 
 SDL_GLContext SDLGPUCreateContext(SDL_Window *window);
+bool SDLGPUInitializeWindowless(void);
 void SDLGPUDestroyContext(SDL_GLContext context);
 SDL_GLContext SDLGPUGetCurrentContext(void);
 bool SDLGPUMakeCurrent(SDL_Window *window, SDL_GLContext context);
@@ -91,6 +92,8 @@ void SDLGPUglColor4f(GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha);
 void SDLGPUglColor4fv(const GLfloat *v);
 void SDLGPUglColorMask(GLboolean red, GLboolean green, GLboolean blue, GLboolean alpha);
 void SDLGPUglColorMaterial(GLenum face, GLenum mode);
+void *SDLGPUGetProgramEntry(int index);
+void SDLGPUglCopyTexImage2D(GLenum target, GLint level, GLenum internal_format, GLint x, GLint y, GLsizei width, GLsizei height, GLint border);
 void SDLGPUglCopyTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset,
                                 GLint x, GLint y, GLsizei width, GLsizei height);
 void SDLGPUglCullFace(GLenum mode);
@@ -301,6 +304,7 @@ void *GfxGLGetProcAddress(const char *name);
 #define glColor4fv SDLGPUglColor4fv
 #define glColorMask SDLGPUglColorMask
 #define glColorMaterial SDLGPUglColorMaterial
+#define glCopyTexImage2D SDLGPUglCopyTexImage2D
 #define glCopyTexSubImage2D SDLGPUglCopyTexSubImage2D
 #define glCullFace SDLGPUglCullFace
 #define glDeleteFramebuffers SDLGPUglDeleteFramebuffers

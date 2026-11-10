@@ -230,6 +230,19 @@ void OsxGuestHostSuspendFrame(OsxHostVideo *video)
 {
 }
 
+void OsxGuestHostResize(OsxHostVideo *video, int width, int height)
+{
+	video->width = width;
+	video->height = height;
+#if SDL_VERSION_ATLEAST(3, 0, 0)
+	if (video->staging)
+		SDL_DestroySurface(video->staging);
+	video->staging = NULL;
+#else
+	video->screen = SDLSetVideoModeQuietly(width, height, 32, OSXVIDEOFLAGS);
+#endif
+}
+
 void OsxGuestHostClose(OsxHostVideo *video)
 {
 #ifdef ENABLE_EMULATOR_MONITOR

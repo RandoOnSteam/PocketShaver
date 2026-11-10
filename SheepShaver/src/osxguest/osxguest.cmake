@@ -19,4 +19,5 @@ set(OSXGUESTSOURCES
 	"${OSXGUESTDIRECTORY}/osxnet.cpp"
 	"${OSXGUESTDIRECTORY}/osxaudio.cpp"
 	"${OSXGUESTDIRECTORY}/osxflash.cpp"
+	"${OSXGUESTDIRECTORY}/osxdisplay.cpp"
 )

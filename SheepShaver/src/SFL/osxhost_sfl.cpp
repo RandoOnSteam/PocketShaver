@@ -84,6 +84,11 @@ void OsxGuestHostSuspendFrame(OsxHostVideo *video)
 	SflUiSetFrame(NULL, width, height, video->pitch, 32);
 }
 
+void OsxGuestHostResize(OsxHostVideo *video, int width, int height)
+{
+	SflUiSetFrame(video->pixels, width, height, video->pitch, 32);
+}
+
 void OsxGuestHostClose(OsxHostVideo *video)
 {
 	WSTimerEndPeriod(1);

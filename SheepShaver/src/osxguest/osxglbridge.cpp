@@ -46,6 +46,17 @@ struct OsxGlBridge {
 	uint8 *pixels;
 };
 
+static void OsxGuestGlModeDescription(DMCModeDesc *mode, uint32 width, uint32 height, uint32 rowbytes, uint8 *present)
+{
+	memset(mode, 0, sizeof(*mode));
+	mode->width = width;
+	mode->height = height;
+	mode->depth = 32;
+	mode->row_bytes = rowbytes;
+	mode->pitch = rowbytes;
+	mode->screen_base_host = present;
+}
+
 static int OsxGuestGlStartHost(uint32 width, uint32 height, uint8 *vram, uint32 rowbytes, OsxHostVideo *video, uint8 **present)
 {
 	DMCModeDesc mode;
@@ -55,13 +66,7 @@ static int OsxGuestGlStartHost(uint32 width, uint32 height, uint8 *vram, uint32 
 	if (!*present)
 		return 0;
 	memcpy(*present, vram, rowbytes * height);
-	memset(&mode, 0, sizeof(mode));
-	mode.width = width;
-	mode.height = height;
-	mode.depth = 32;
-	mode.row_bytes = rowbytes;
-	mode.pitch = rowbytes;
-	mode.screen_base_host = *present;
+	OsxGuestGlModeDescription(&mode, width, height, rowbytes, *present);
 	if (dmc_create(&mode) != kDMCNoErr)
 		return 0;
 	if (MetalCompositorInit(width, height, GLBRIDGEDEPTH32, rowbytes, rowbytes, *present, rowbytes * height) != 0) {
@@ -334,7 +339,7 @@ static void OsxGuestQuartzRelaxPixelFormat(OsxQuartzBridge *bridge, OsxCpu *cpu,
 	for (source = 0; source < QUARTZATTRIBUTES; source++) {
 		if (!OsxGuestCpuReadVirtual(cpu, address + source * 4, &attribute))
 			return;
-		if (attribute == 73 || attribute == 90 || attribute == 91)
+		if (attribute == 54 || attribute == 73 || attribute == 90 || attribute == 91)
 			continue;
 		if (attribute == 58)
 			bridge->floatsegment = cpu->sr[0];
@@ -377,6 +382,21 @@ OsxQuartzBridge *OsxGuestCreateQuartzBridge(uint32 width, uint32 height, uint32 
 		bridge->windowcalls = windowcalls;
 	}
 	return bridge;
+}
+
+void OsxGuestQuartzResize(OsxQuartzBridge *bridge, uint32 width, uint32 height)
+{
+	DMCModeDesc mode;
+	bridge->width = width;
+	bridge->height = height;
+	if (!MetalCompositorIsInitialized())
+		return;
+	OsxGuestGlModeDescription(&mode, width, height, bridge->rowbytes, *bridge->present);
+	if (dmc_prepare_mode_switch(&mode) != kDMCNoErr)
+		return;
+	MetalCompositorResize(width, height, GLBRIDGEDEPTH32, bridge->rowbytes, bridge->rowbytes, *bridge->present, bridge->rowbytes * height);
+	dmc_request_mode_switch(&mode);
+	OsxGuestHostSuspendFrame(bridge->video);
 }
 
 static void OsxGuestQuartzFreeContext(OsxQuartzContext *context)
@@ -1134,10 +1154,15 @@ int OsxGuestQuartzBridgeCall(OsxQuartzBridge *bridge, OsxCpu *cpu, const uint32 
 		}
 		return 1;
 	}
-	if (call == 1017) {
+	if (call == 1011) {
+		cpu->gpr[3] = 0;
+		cpu->nextpc = cpu->lr & ~3u;
+		return 1;
+	}
+	if (call == 1017 || call == 1012) {
 		cpu->gpr[0] = cpu->lr;
 		value = 0;
-		if (cpu->gpr[5] == 73)
+		if (cpu->gpr[5] == 73 || cpu->gpr[5] == 54)
 			value = 1;
 		else if (cpu->gpr[5] == 120 || cpu->gpr[5] == 121)
 			value = 0x8000000;

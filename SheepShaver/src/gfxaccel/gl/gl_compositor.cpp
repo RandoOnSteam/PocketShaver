@@ -29,6 +29,7 @@
 #include "video_blit.h"
 #include "metal_device_shared.h"
 #include "metal_compositor.h"
+#include "gfxaccelhost.h"
 #include "display_mode_controller.h"
 #include "gfxaccel_resources.h"
 #include "vbl_source.h"
@@ -1158,7 +1159,8 @@ int MetalCompositorInit(int width, int height, int depth, int row_bytes,
 	vbl_source_init(NULL, NULL, NULL);
 
 	s_init = true;
-	COMPOSITOR_LOG("Init %dx%d depth=%d rb=%d pitch=%d bpp=%d",
+	COMPOSITOR_LOG("Init tick=%u %dx%d depth=%d rb=%d pitch=%d bpp=%d",
+				   GuestTickCount(),
 				   width, height, depth, row_bytes, pitch, compositor_bits_per_pixel);
 	return 0;
 }
@@ -1333,7 +1335,7 @@ void MetalCompositorShutdown(void)
 		dmc_unsubscribe("compositor");
 		s_init = false;
 		compositor_buffer = NULL;
-		COMPOSITOR_LOG("Shutdown");
+		COMPOSITOR_LOG("Shutdown tick=%u", GuestTickCount());
 	}
 
 	/* The shared SDL_GLContext is tied to the current SDL window.  It must be

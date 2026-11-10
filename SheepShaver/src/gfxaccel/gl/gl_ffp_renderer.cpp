@@ -50,11 +50,6 @@ static int32_t s_dl=0,s_dt=0,s_dw=0,s_dh=0;
 static GLuint s_fbo=0,s_depth=0;
 static bool s_frame_active=false;
 static bool s_frame_committed=false;
-#if defined(OSXGLGUEST)
-static bool s_guest_loaded=false;
-static float s_guest_matrices[6][16];
-static int32_t s_guest_viewport[4];
-#endif
 
 /* Latest offscreen readback cache for the NQD/GL bridge.  It follows the
  * lifetime of the single compositor-facing GL drawable, not an AGL context. */
@@ -182,9 +177,6 @@ static void GLMetalInvalidateStateCache(GLContext *ctx)
 {
 	GLMetalStateCache *cache = GLMetalGetStateCache(ctx);
 	if(cache) cache->valid = false;
-#if defined(OSXGLGUEST)
-	s_guest_loaded = false;
-#endif
 }
 
 static void GLMetalSelectStateOwner(GLContext *ctx)
@@ -320,8 +312,30 @@ static GLint GLMetalMapTextureEnvMode(int env_mode)
 	case 0x2100: return GL_MODULATE;
 	case 0x2101: return GL_DECAL;
 	case 0x0BE2: return GL_BLEND;
+	case 0x0104: return GL_ADD;
+	case 0x8570: return GL_COMBINE;
 	default:     return GL_MODULATE;
 	}
+}
+
+static void GLMetalApplyTextureCombine(const GLTextureUnit &TU)
+{
+	static const GLenum source[6] = {
+		GL_SOURCE0_RGB,GL_SOURCE1_RGB,GL_SOURCE2_RGB,
+		GL_SOURCE0_ALPHA,GL_SOURCE1_ALPHA,GL_SOURCE2_ALPHA
+	};
+	static const GLenum operand[6] = {
+		GL_OPERAND0_RGB,GL_OPERAND1_RGB,GL_OPERAND2_RGB,
+		GL_OPERAND0_ALPHA,GL_OPERAND1_ALPHA,GL_OPERAND2_ALPHA
+	};
+	glTexEnvi(GL_TEXTURE_ENV,GL_COMBINE_RGB,(GLint)TU.combine_rgb);
+	glTexEnvi(GL_TEXTURE_ENV,GL_COMBINE_ALPHA,(GLint)TU.combine_alpha);
+	for(int i = 0; i < 6; ++i) {
+		glTexEnvi(GL_TEXTURE_ENV,source[i],(GLint)TU.combine_source[i]);
+		glTexEnvi(GL_TEXTURE_ENV,operand[i],(GLint)TU.combine_operand[i]);
+	}
+	glTexEnvf(GL_TEXTURE_ENV,GL_RGB_SCALE,TU.combine_rgb_scale);
+	glTexEnvf(GL_TEXTURE_ENV,GL_ALPHA_SCALE,TU.combine_alpha_scale);
 }
 
 /* Install one emulated texture unit into the shared host context.  The old
@@ -414,6 +428,8 @@ static bool GLMetalApplyTextureUnit(GLContext *ctx,int unit,
 
 		if(!cache_ok || C.tex_env[unit] != env)
 			glTexEnvi(GL_TEXTURE_ENV,GL_TEXTURE_ENV_MODE,env);
+		if(env == GL_COMBINE)
+			GLMetalApplyTextureCombine(TU);
 		if(!cache_ok || memcmp(C.tex_env_color[unit],TU.env_color,
 			sizeof(C.tex_env_color[unit])) != 0)
 			glTexEnvfv(GL_TEXTURE_ENV,GL_TEXTURE_ENV_COLOR,TU.env_color);
@@ -609,22 +625,6 @@ static void GLMetalLoadMatrices(GLContext *ctx)
 	const float *mv = ctx->modelview_stack[ctx->modelview_depth];
 	const float *proj = ctx->projection_stack[ctx->projection_depth];
 	GfxGLExt &ext = gfx_gl_ext();
-#if defined(OSXGLGUEST)
-	{
-		const int units = GLMetalGetTextureUnitCount(ctx);
-		bool same = s_guest_loaded && memcmp(s_guest_matrices[0],mv,sizeof(s_guest_matrices[0]))==0 &&
-			memcmp(s_guest_matrices[1],proj,sizeof(s_guest_matrices[1]))==0;
-		for(int unit=0;same&&unit<units&&unit<4;++unit)
-			same = memcmp(s_guest_matrices[2+unit],ctx->texture_stack[unit][ctx->texture_depth[unit]],sizeof(s_guest_matrices[0]))==0;
-		if(same)return;
-		memcpy(s_guest_matrices[0],mv,sizeof(s_guest_matrices[0]));
-		memcpy(s_guest_matrices[1],proj,sizeof(s_guest_matrices[1]));
-		for(int unit=0;unit<units&&unit<4;++unit)
-			memcpy(s_guest_matrices[2+unit],ctx->texture_stack[unit][ctx->texture_depth[unit]],sizeof(s_guest_matrices[0]));
-		s_guest_viewport[2] = -1;
-		s_guest_loaded = true;
-	}
-#endif
 	if(ext.multitex && ext.ActiveTexture) {
 		for(int unit = 0; unit < GLMetalGetTextureUnitCount(ctx); ++unit) {
 			ext.ActiveTexture(GL_TEXTURE0 + unit);
@@ -665,10 +665,6 @@ void GLMetalBeginFrame(GLContext*ctx){
 		GLMetalInvalidateStateCache(ctx);
 	}
 	GLMetalLoadMatrices(ctx);
-#if defined(OSXGLGUEST)
-	if(memcmp(s_guest_viewport,ctx->viewport,sizeof(s_guest_viewport))==0)return;
-	memcpy(s_guest_viewport,ctx->viewport,sizeof(s_guest_viewport));
-#endif
 	if(ctx->viewport[2]>0&&ctx->viewport[3]>0)
 		glViewport(ctx->viewport[0],ctx->viewport[1],ctx->viewport[2],ctx->viewport[3]);
 }
@@ -1046,17 +1042,9 @@ static unsigned GLMetalApplyState(GLContext *ctx)
 		const GLenum bs = (GLenum)ctx->blend_src;
 		const GLenum bd = (GLenum)ctx->blend_dst;
 		if(!cache_ok || !C.blend) glEnable(GL_BLEND);
-#if defined(OSXGLGUEST)
-		if(ctx->guestblendseparate && ext.BlendFuncSeparate) {
-			ext.BlendFuncSeparate(bs,bd,ctx->guestblendsrcalpha,ctx->guestblenddstalpha);
-			C.blend = true; C.blend_src = (GLenum)-1; C.blend_dst = (GLenum)-1;
-		} else
-#endif
-		{
 		if(!cache_ok || C.blend_src != bs || C.blend_dst != bd)
 			glBlendFunc(bs,bd);
 		C.blend = true; C.blend_src = bs; C.blend_dst = bd;
-		}
 	}
 	else {
 		if(!cache_ok || C.blend) glDisable(GL_BLEND);
@@ -1319,62 +1307,6 @@ static unsigned GLMetalApplyState(GLContext *ctx)
 	return texture_unit_mask;
 }
 
-#if defined(OSXGLGUEST)
-static void GuestDrawVertices(GLContext *ctx,GLenum mode,unsigned texture_unit_mask)
-{
-	GLVertex *vertices;
-	GfxGLExt &ext=gfx_gl_ext();
-	size_t index;
-	int unit;
-	bool uniform;
-	bool lit;
-	vertices=vec_data(ctx->im_vertices);
-	glEnableClientState(GL_VERTEX_ARRAY);
-	glVertexPointer(4,GL_FLOAT,sizeof(GLVertex),vertices->position);
-	uniform=true;
-	for(index=1;uniform&&index<ctx->im_vertices.size();index++)
-		uniform=memcmp(vertices[index].color,vertices[0].color,sizeof(vertices[0].color))==0;
-	if(uniform)
-		glColor4fv(vertices->color);
-	else{
-		glEnableClientState(GL_COLOR_ARRAY);
-		glColorPointer(4,GL_FLOAT,sizeof(GLVertex),vertices->color);
-	}
-	lit=ctx->lighting_enabled;
-	if(lit){
-		glEnableClientState(GL_NORMAL_ARRAY);
-		glNormalPointer(GL_FLOAT,sizeof(GLVertex),vertices->normal);
-	}
-	else
-		glNormal3fv(vertices->normal);
-	for(unit=0;unit<4;unit++){
-		if((texture_unit_mask&(1u<<unit))==0)continue;
-		for(index=0;index<ctx->im_vertices.size();index++){
-			if(vertices[index].texcoord[unit][3]==0.f)
-				vertices[index].texcoord[unit][3]=1.f;
-		}
-		if(ext.ClientActiveTexture)
-			ext.ClientActiveTexture(GL_TEXTURE0+unit);
-		glEnableClientState(GL_TEXTURE_COORD_ARRAY);
-		glTexCoordPointer(4,GL_FLOAT,sizeof(GLVertex),vertices->texcoord[unit]);
-	}
-	glDrawArrays(mode,0,(GLsizei)ctx->im_vertices.size());
-	for(unit=0;unit<4;unit++){
-		if((texture_unit_mask&(1u<<unit))==0)continue;
-		if(ext.ClientActiveTexture)
-			ext.ClientActiveTexture(GL_TEXTURE0+unit);
-		glDisableClientState(GL_TEXTURE_COORD_ARRAY);
-	}
-	if(ext.ClientActiveTexture)
-		ext.ClientActiveTexture(GL_TEXTURE0);
-	if(lit)
-		glDisableClientState(GL_NORMAL_ARRAY);
-	if(!uniform)
-		glDisableClientState(GL_COLOR_ARRAY);
-	glDisableClientState(GL_VERTEX_ARRAY);
-}
-#endif
-
 void GLMetalFlushImmediateMode(GLContext*ctx){
 	if(!ctx||!SharedMetalDevice()||ctx->im_vertices.empty())return;
 	GLMetalBeginFrame(ctx);
@@ -1397,11 +1329,6 @@ void GLMetalFlushImmediateMode(GLContext*ctx){
 	if(ctx->tex_units[0].enabled_2d)
 		GLMetalDumpDrawState(ctx,"flush",mode,in.size(),force_opaque,unit1_live);
 
-#if defined(OSXGLGUEST)
-	GuestDrawVertices(ctx,(GLenum)mode,texture_unit_mask);
-	ctx->im_vertices.clear();
-	return;
-#endif
 	switch(mode){
 	case GL_QUADS:
 		GLMetalFlushQuads(in,force_opaque,texture_unit_mask);

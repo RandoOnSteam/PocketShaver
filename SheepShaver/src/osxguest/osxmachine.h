@@ -33,6 +33,7 @@
 #define OSXHEATHROWSIZE 0x00080000
 #define OSXVRAMBASE 0x81000000
 #define OSXVRAMSIZE 0x01000000
+#define OSXDISPLAYTRAP 0x44d00002u
 #define OSXCONFIGADDRESSBASE 0xfec00000
 #define OSXCONFIGDATABASE 0xfee00000
 #define OSXMACHINEIDADDRESS 0xff000004
@@ -514,6 +515,11 @@ struct OsxMachine {
 	uint32 height;
 	uint32 depth;
 	uint32 rowbytes;
+	uint32 maxwidth;
+	uint32 maxheight;
+	uint32 displaymode;
+	uint32 displaypreferred;
+	int displaycustom;
 	uint32 configaddress;
 	OsxPciFunction pci[OSXPCIDEVICES];
 	uint32 heathrowfcr[2];
@@ -632,6 +638,10 @@ void OsxGuestNvramRestoreOldWorld(uint8 *nvram, const uint8 *classic);
 int OsxGuestNvramPrepareBoot(OsxMachine *machine, int bus, int unit, int partition);
 void OsxGuestNvramFinishBoot(OsxMachine *machine, const uint8 *startup);
 void OsxGuestFlashSave(OsxMachine *machine);
+
+uint8 *OsxGuestDisplayDriver(uint32 *length);
+void OsxGuestDisplayReset(OsxMachine *machine);
+int OsxGuestDisplayDriverCall(OsxMachine *machine, OsxCpu *cpu);
 
 void OsxGuestCudaReset(OsxMachine *machine);
 uint32 OsxGuestCudaRead(OsxMachine *machine, uint32 offset);

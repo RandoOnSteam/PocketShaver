@@ -51,6 +51,7 @@ OsxQuartzBridge *OsxGuestCreateQuartzBridge(uint32 width, uint32 height, uint32 
 	uint32 allocate, uint32 clear, uint8 *vram, uint32 rowbytes, struct OsxHostVideo *video, uint8 **present, const uint32 *windowcalls);
 void OsxGuestQuartzComposeWindows(OsxQuartzBridge *bridge, const uint8 *vram, uint8 *present, uint32 size);
 void OsxGuestDestroyQuartzBridge(OsxQuartzBridge *bridge);
+void OsxGuestQuartzResize(OsxQuartzBridge *bridge, uint32 width, uint32 height);
 int OsxGuestQuartzBridgeCall(OsxQuartzBridge *bridge, OsxCpu *cpu, const uint32 *tails, uint32 call, FILE *log);
 OsxGlBridge *OsxGuestCreateGlBridge(OsxCpu *cpu, uint32 width, uint32 height, uint8 *vram, uint32 rowbytes, struct OsxHostVideo *video, uint8 **present);
 void OsxGuestGlShutdownHost(void);

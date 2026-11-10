@@ -366,6 +366,7 @@ if(ENABLE_GFXACCEL)
 	"${SS_GFXACCEL_DIR}/gl_dispatch.cpp"
 	"${SS_GFXACCEL_DIR}/gl_engine.cpp"
 	"${SS_GFXACCEL_DIR}/gl_state.cpp"
+	"${SS_GFXACCEL_DIR}/gfxaccelhost.cpp"
 	"${SS_GFXACCEL_DIR}/gl_thunks.cpp"
 	"${SS_GFXACCEL_DIR}/rave_dispatch.cpp"
 	"${SS_GFXACCEL_DIR}/rave_draw_context.cpp"
@@ -423,11 +424,15 @@ if(ENABLE_GFXACCEL)
 		"${SS_GFXACCEL_DIR}/gfxaccel_arc_shim.mm"
 		"${SS_GFXACCEL_DIR}/vbl_source.mm"
 		"${SS_GFXACCEL_DIR}/pso_archive.mm"
-		"${SS_GFXACCEL_DIR}/compositor_shaders.metal"
-		"${SS_GFXACCEL_DIR}/nqd_shaders.metal"
-		"${SS_GFXACCEL_DIR}/gl_shaders.metal"
-		"${SS_GFXACCEL_DIR}/rave_shaders.metal"
 	)
+	if(CMAKE_GENERATOR STREQUAL "Xcode")
+		list(APPEND SS_GFXACCEL
+			"${SS_GFXACCEL_DIR}/compositor_shaders.metal"
+			"${SS_GFXACCEL_DIR}/nqd_shaders.metal"
+			"${SS_GFXACCEL_DIR}/gl_shaders.metal"
+			"${SS_GFXACCEL_DIR}/rave_shaders.metal"
+		)
+	endif()
 	set_source_files_properties(
 		"${SS_GFXACCEL_DIR}/compositor_shaders.metal"
 		"${SS_GFXACCEL_DIR}/nqd_shaders.metal"
@@ -441,6 +446,18 @@ if(ENABLE_GFXACCEL)
 	# Catalyst (Foundation/NSURLHandle.h).
 	list(APPEND SS_GFXACCEL_LIBS
 		"-framework Metal" "-framework QuartzCore" "-framework Foundation")
+	if(NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
+		list(APPEND SS_GFXACCEL
+			"${SS_GFXACCEL_DIR}/sdlgpu/sdlgpu_gl_compat.cpp"
+			"${SS_GFXACCEL_DIR}/gfxaccelhostarb.cpp"
+			"${SS_SRC}/osxguest/osxglengine.cpp")
+		list(APPEND SS_GFXACCEL_INC "${SS_GFXACCEL_DIR}/sdlgpu" "${SS_GFXACCEL_DIR}/gl")
+		list(APPEND SS_GFXACCEL_DEFS OSXGLBRIDGE=1)
+		set_source_files_properties(
+			"${SS_GFXACCEL_DIR}/sdlgpu/sdlgpu_gl_compat.cpp"
+			"${SS_SRC}/osxguest/osxglengine.cpp"
+			PROPERTIES COMPILE_DEFINITIONS "GFXACCEL_USE_SDLGPU=1;GFXACCEL_USE_OPENGL=1" COMPILE_OPTIONS "-UGFXACCEL_USE_METAL")
+	endif()
 	elseif(GFXACCEL_BACKEND STREQUAL "sdlgpu")
 	if(NOT USE_SDL3)
 		message(FATAL_ERROR "SDL-GPU requires SDL3")
@@ -477,6 +494,8 @@ if(ENABLE_GFXACCEL)
 	endif()
 	list(APPEND SS_GFXACCEL
 		"${SS_GFXACCEL_DIR}/sdlgpu/sdlgpu_gl_compat.cpp"
+		"${SS_GFXACCEL_DIR}/gfxaccelhostarb.cpp"
+		"${SS_SRC}/osxguest/osxglengine.cpp"
 		"${SS_GFXACCEL_DIR}/sdlgpu/dsp_dispatch_sdlgpu.cpp"
 		"${SS_GFXACCEL_DIR}/sdlgpu/dsp_draw_context_sdlgpu.cpp"
 		"${SS_GFXACCEL_DIR}/sdlgpu/gl_dispatch_sdlgpu.cpp"

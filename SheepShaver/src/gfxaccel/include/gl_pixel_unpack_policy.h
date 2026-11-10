@@ -562,11 +562,7 @@ static inline void GLPixelUnpackRGBA5551ToBGRA(uint16_t packed,
                                                uint8_t out_bgra[4])
 {
 	const uint8_t normalBits[4] = {5, 5, 5, 1};
-#if defined(OSXGLGUEST)
-	const uint8_t reversedBits[4] = {5, 5, 5, 1};
-#else
 	const uint8_t reversedBits[4] = {1, 5, 5, 5};
-#endif
 	GLPixelUnpackPackedToBGRA(packed,
 	                          reversed ? reversedBits : normalBits,
 	                          4, reversed, format, out_bgra);

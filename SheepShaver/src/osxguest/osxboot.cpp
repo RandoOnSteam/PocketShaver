@@ -800,6 +800,7 @@ static int OsxGuestPrepareFlurry(OsxMachine *machine, OsxHfsVolume *volume, int 
 		symboltable = 58156;
 		symbolbias = 0;
 		break;
+	case 0x8110edabd1489199ULL:
 	case 0x6d58e084d36befc7ULL:
 		initoffset = 0x1560;
 		symboltable = 58180;
@@ -1476,11 +1477,13 @@ static int OsxGuestQuartzLibraryPatches(OsxMachine *machine, OsxQuartzImage *ima
 	return result && OsxGuestQuartzAddPatch(image, machine->quartztails[0], OSXQUARTZTRAP);
 }
 
+#define QUARTZHOOKS 11
+
 static int OsxGuestQuartzFrameworkPatches(OsxQuartzImage *image)
 {
-	static const char *const hooks[9] = { "_CGLGetParameter", "_CGLSetPBuffer", "_CGLTexImagePBuffer", "_CGLFlushDrawable", "_CGLDescribeRenderer",
-		"_CGLChoosePixelFormat", "_CGLDestroyContext", "_CGLSetOffScreen", "_CGLSetSurface" };
-	static const uint32 calls[9] = { 1023, 1019, 1020, 1018, 1017, 1016, 1015, 1014, 1013 };
+	static const char *const hooks[QUARTZHOOKS] = { "_CGLGetParameter", "_CGLSetPBuffer", "_CGLTexImagePBuffer", "_CGLFlushDrawable", "_CGLDescribeRenderer",
+		"_CGLChoosePixelFormat", "_CGLDestroyContext", "_CGLSetOffScreen", "_CGLSetSurface", "_CGLDescribePixelFormat", "_CGLSetFullScreen" };
+	static const uint32 calls[QUARTZHOOKS] = { 1023, 1019, 1020, 1018, 1017, 1016, 1015, 1014, 1013, 1012, 1011 };
 	uint32 entry;
 	uint32 position;
 	uint32 word;
@@ -1488,7 +1491,7 @@ static int OsxGuestQuartzFrameworkPatches(OsxQuartzImage *image)
 	int index;
 	int result;
 	result = 1;
-	for (index = 0; index < 9; index++) {
+	for (index = 0; index < QUARTZHOOKS; index++) {
 		entry = OsxGuestQuartzLinkWord(image, OsxGuestQuartzSymbol(image, hooks[index]));
 		if (entry)
 			result &= OsxGuestQuartzAddPatch(image, entry, OSXQUARTZTRAP | (calls[index] << 8));
@@ -2172,6 +2175,32 @@ static void OsxGuestAddCell(OsxTreeNode *node, const char *name, uint32 value)
 	OsxGuestAddCells(node, name, &value, 1);
 }
 
+static OsxTreeNode *OsxGuestAddDisplayNode(OsxTreeNode *parent, OsxMachine *machine, int ignorendrv)
+{
+	OsxTreeNode *node;
+	uint8 *driver;
+	uint32 length;
+	node = OsxGuestNewNode(parent, "SSHV,display");
+	OsxGuestAddString(node, "device_type", "display");
+	OsxGuestAddString(node, "compatible", "display");
+	OsxGuestAddString(node, "model", "SheepShaver,Framebuffer");
+	OsxGuestAddCell(node, "address", OSXVRAMBASE);
+	OsxGuestAddCell(node, "width", machine->width);
+	OsxGuestAddCell(node, "height", machine->height);
+	OsxGuestAddCell(node, "linebytes", machine->rowbytes);
+	OsxGuestAddCell(node, "depth", machine->depth);
+	OsxGuestAddProperty(node, "AAPL,boot-display", "", 0);
+	if (ignorendrv) {
+		OsxGuestAddProperty(node, "AAPL,iokit-ignore-ndrv", "", 0);
+		return node;
+	}
+	driver = OsxGuestDisplayDriver(&length);
+	if (driver)
+		OsxGuestAddProperty(node, "driver,AAPL,MacOS,PowerPC", driver, length);
+	free(driver);
+	return node;
+}
+
 static OsxTreeProperty *OsxGuestFindProperty(OsxTreeNode *node, const char *name)
 {
 	OsxTreeProperty *property;
@@ -2786,18 +2815,9 @@ static OsxTreeNode *OsxGuestBuildTreeG5(OsxBootState *state, OsxTreeNode **memor
 	OsxGuestAddProperty(node, "local-mac-address", address, sizeof(address));
 	interrupting[5] = node;
 
-	node = OsxGuestNewNode(ht, "SSHV,display");
-	OsxGuestAddString(node, "device_type", "display");
-	OsxGuestAddString(node, "compatible", "display");
-	OsxGuestAddString(node, "model", "SheepShaver,Framebuffer");
+	node = OsxGuestAddDisplayNode(ht, machine, 0);
 	OsxGuestAddPciRegister(node, OSXG5DEVICEDISPLAY, OSXVRAMBASE, OSXVRAMSIZE, 0);
 	OsxGuestAddPciIdentity(node, 0x1234, 0x1111, 0x030000);
-	OsxGuestAddCell(node, "address", OSXVRAMBASE);
-	OsxGuestAddCell(node, "width", machine->width);
-	OsxGuestAddCell(node, "height", machine->height);
-	OsxGuestAddCell(node, "linebytes", machine->rowbytes);
-	OsxGuestAddCell(node, "depth", machine->depth);
-	OsxGuestAddProperty(node, "AAPL,boot-display", "", 0);
 
 	OsxGuestAddPhandles(root, &state->phandle);
 	property = OsxGuestFindProperty(mpic, "AAPL,phandle");
@@ -3025,10 +3045,7 @@ static OsxTreeNode *OsxGuestBuildTree(OsxBootState *state, OsxTreeNode **memorym
 	OsxGuestAddBmacNode(macio);
 	OsxGuestAddAudioNode(macio);
 
-	node = OsxGuestNewNode(pci, "SSHV,display");
-	OsxGuestAddString(node, "device_type", "display");
-	OsxGuestAddString(node, "compatible", "display");
-	OsxGuestAddString(node, "model", "SheepShaver,Framebuffer");
+	node = OsxGuestAddDisplayNode(pci, machine, state->ignorendrv);
 	cells[0] = OSXPCIDEVICEDISPLAY << 11;
 	cells[1] = 0;
 	cells[2] = 0;
@@ -3050,14 +3067,6 @@ static OsxTreeNode *OsxGuestBuildTree(OsxBootState *state, OsxTreeNode **memorym
 	OsxGuestAddCell(node, "device-id", 0x1111);
 	OsxGuestAddCell(node, "revision-id", 2);
 	OsxGuestAddCell(node, "class-code", 0x030000);
-	OsxGuestAddCell(node, "address", OSXVRAMBASE);
-	OsxGuestAddCell(node, "width", machine->width);
-	OsxGuestAddCell(node, "height", machine->height);
-	OsxGuestAddCell(node, "linebytes", machine->rowbytes);
-	OsxGuestAddCell(node, "depth", machine->depth);
-	OsxGuestAddProperty(node, "AAPL,boot-display", "", 0);
-	if (state->ignorendrv)
-		OsxGuestAddProperty(node, "AAPL,iokit-ignore-ndrv", "", 0);
 	OsxGuestAddString(node, "AAPL,unit-string", "12");
 	return root;
 }

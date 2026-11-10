@@ -682,7 +682,7 @@ static void OsxGuestPresentFrame(OsxSession *session)
 	int presented;
 	machine = session->machine;
 	rowbytes = machine->rowbytes;
-#if OSXGLBRIDGE
+#if OSXGLBRIDGE && defined(GFXACCEL_USE_OPENGL)
 	if (MetalCompositorIsInitialized()) {
 		OsxGuestQuartzComposeWindows(session->quartz, machine->vram, session->glpresent, rowbytes * machine->height);
 		OsxGl::OsxGuestEngineBeforePresent();
@@ -754,6 +754,7 @@ static void OsxGuestParseScreen(OsxMachine *machine)
 	}
 	machine->depth = 32;
 	machine->rowbytes = machine->width * 4;
+	OsxGuestDisplayReset(machine);
 }
 
 static void OsxGuestAttachDisks(OsxMachine *machine, const char **bootimage, int *bootbus, int *bootunit)
@@ -803,6 +804,17 @@ static int OsxGuestSyscallObserver(OsxCpu *cpu, void *context, uint32 instructio
 	uint32 header[6];
 #endif
 	session = (OsxSession *)context;
+	if (instruction == OSXDISPLAYTRAP) {
+		if (OsxGuestDisplayDriverCall(session->machine, cpu)) {
+			OsxGuestHostResize(session->video, (int)session->machine->width, (int)session->machine->height);
+			memset(session->shadow, 0xff, session->machine->rowbytes * session->machine->maxheight);
+#if OSXGLBRIDGE
+			if (session->quartz)
+				OsxGuestQuartzResize(session->quartz, session->machine->width, session->machine->height);
+#endif
+		}
+		return 1;
+	}
 #if OSXGLBRIDGE
 	if (session->machine->quartz && (cpu->msr & OSXMSRPR) &&
 		(instruction & 0xfffc00ffu) == OSXQUARTZTRAP) {
@@ -1145,8 +1157,8 @@ static int OsxGuestNextScriptLine(OsxSession *session)
 		session->scriptcommand = session->scriptline + consumed;
 		return 1;
 	}
-	fclose(session->script);
-	session->script = NULL;
+	clearerr(session->script);
+	session->scriptcommand = NULL;
 	return 0;
 }
 
@@ -1213,9 +1225,9 @@ static void OsxGuestExecuteScriptCommand(OsxSession *session, const char *comman
 
 static void OsxGuestRunScript(OsxSession *session, uint64 now)
 {
-	while (session->script && now >= session->scriptticks) {
+	while (session->script && (session->scriptcommand || OsxGuestNextScriptLine(session)) && now >= session->scriptticks) {
 		OsxGuestExecuteScriptCommand(session, session->scriptcommand);
-		OsxGuestNextScriptLine(session);
+		session->scriptcommand = NULL;
 	}
 }
 
@@ -1561,11 +1573,8 @@ static int OsxGuestRunSession(OsxSession *session)
 		cpu->deterministic = (uint32)PrefsFindInt32("osxdeterministic");
 		session->slicelog = fopen("osxslices.log", "w");
 	}
-	if (PrefsFindString("osxinputscript")) {
+	if (PrefsFindString("osxinputscript"))
 		session->script = fopen(PrefsFindString("osxinputscript"), "r");
-		if (session->script)
-			OsxGuestNextScriptLine(session);
-	}
 	cpu->ram = machine->ram;
 	cpu->ramsize = machine->ramsize;
 #if OSXG5

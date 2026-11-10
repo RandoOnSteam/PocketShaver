@@ -82,6 +82,10 @@ typedef void (APIENTRY *PFNGLFOGCOORDFPROC)(GLfloat);
 #define GL_CONSTANT 0x8576
 #define GL_RGB_SCALE 0x8573
 #endif
+#ifndef GL_SOURCE2_ALPHA
+#define GL_SOURCE2_ALPHA 0x858A
+#define GL_OPERAND2_ALPHA 0x859A
+#endif
 #ifndef GL_TEXTURE_MAX_LEVEL
 #define GL_TEXTURE_MAX_LEVEL 0x813D
 #endif

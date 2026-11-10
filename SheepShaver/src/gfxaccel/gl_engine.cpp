@@ -24,6 +24,7 @@
 #include "macos_util.h"
 #include "rom_patches.h"
 #include "gl_engine.h"
+#include "gfxaccelhost.h"
 #include "gl_agl_renderer_policy.h"
 #include "rave_metal_renderer.h"
 #include "metal_compositor.h"
@@ -114,6 +115,9 @@
 
 // GL tex env mode
 #define GL_MODULATE           0x2100
+#define GL_SRC_COLOR          0x0300
+#define GL_CONSTANT           0x8576
+#define GL_PREVIOUS           0x8578
 
 // GL stencil ops
 #define GL_KEEP               0x1E00
@@ -553,11 +557,6 @@ static void setIdentity(float m[16])
 static GLContext *GLContextNew(int width, int height)
 {
 	GLContext *ctx = new GLContext();
-#if defined(OSXGLGUEST)
-	ctx->guesttextures = new GLGuestTextures();
-	ctx->guesttextures->referencecount = 1;
-	ctx->guesttextures->nexttexturename = 1;
-#endif
 	// Note: Do NOT memset here. GLContext contains std::map and
 	// std::vector members whose internal state would be destroyed by memset.
 	// Value-initialization via new GLContext() already zero-inits POD members,
@@ -657,6 +656,15 @@ static GLContext *GLContextNew(int width, int height)
 		T.enabled_2d = false;
 		T.env_mode = GL_MODULATE;
 		T.env_color[0] = T.env_color[1] = T.env_color[2] = T.env_color[3] = 0.0f;
+		T.combine_rgb = GL_MODULATE;
+		T.combine_alpha = GL_MODULATE;
+		T.combine_source[0] = T.combine_source[3] = GL_TEXTURE;
+		T.combine_source[1] = T.combine_source[4] = GL_PREVIOUS;
+		T.combine_source[2] = T.combine_source[5] = GL_CONSTANT;
+		T.combine_operand[0] = T.combine_operand[1] = GL_SRC_COLOR;
+		T.combine_operand[2] = T.combine_operand[3] = T.combine_operand[4] = T.combine_operand[5] = GL_SRC_ALPHA;
+		T.combine_rgb_scale = 1.0f;
+		T.combine_alpha_scale = 1.0f;
 		T.current_texcoord[0] = 0.0f;
 		T.current_texcoord[1] = 0.0f;
 		T.current_texcoord[2] = 0.0f;
@@ -1231,7 +1239,7 @@ uint32_t NativeAGLSetDrawable(uint32_t ctx, uint32_t drawable)
 
 	// Initialize Metal resources for this context if not yet done
 	if (!context->metal) {
-		GLMetalInit(context);
+		GfxAccelHostInit(context);
 	}
 
 	GL_LOG("aglSetDrawable: Metal overlay connected to context %d (%dx%d)", idx + 1, width, height);
@@ -1273,11 +1281,11 @@ uint32_t NativeAGLSwapBuffers(uint32_t ctx)
 
 	// Initialize Metal if not yet done (lazy init on first swap)
 	if (!context->metal) {
-		GLMetalInit(context);
+		GfxAccelHostInit(context);
 	}
 
 	// End current frame and present
-	GLMetalEndFrame(context);
+	GfxAccelHostEndFrame(context);
 
 	// gl_overlay_present emits a single kLayerSlotOverlay CompositeLayer via
 	// MetalCompositorSubmitFrame - the layer's presence IS the "active"
@@ -1328,7 +1336,7 @@ uint32_t NativeAGLDestroyContext(uint32_t ctx)
 	}
 
 	// Release backend resources for this context (textures and host-state caches)
-	GLMetalRelease(context);
+	GfxAccelHostRelease(context);
 
 	// The Metal backend empties texture_objects in there, so a unit's resolved
 	// GLTextureObject pointer must not outlive it. Kept on this side of the
@@ -1770,7 +1778,7 @@ uint32_t NativeAGLSetOffScreen(uint32_t ctx, uint32_t width, uint32_t height,
 	}
 
 	if (!context->metal) {
-		GLMetalInit(context);
+		GfxAccelHostInit(context);
 	}
 
 	context->viewport[0] = 0;
@@ -3797,7 +3805,7 @@ void NativeGLTexImage2D_Direct(GLContext *ctx, uint32_t target, int32_t level,
 		}
 	}
 
-	GLMetalUploadTexture(ctx, &tex, level, width, height, bgra, dstBytes);
+	GfxAccelHostUploadTexture(ctx, &tex, level, width, height, bgra, dstBytes);
 	free(bgra);
 }
 
@@ -3838,7 +3846,7 @@ uint32_t NativeGLUBuild2DMipmaps(GLContext *ctx,
 	std::vector<uint8_t> current(baseBGRA, baseBGRA + expectedBaseBGRABytes);
 	free(baseBGRA);
 
-	GLMetalUploadTexture(ctx, &tex, 0, width, height,
+	GfxAccelHostUploadTexture(ctx, &tex, 0, width, height,
 						 vec_data(current), (int)current.size());
 
 	// Generate mipmap chain by box filtering canonical BGRA8 upload pixels.
@@ -3869,7 +3877,7 @@ uint32_t NativeGLUBuild2DMipmaps(GLContext *ctx,
 			}
 		}
 
-		GLMetalUploadTexture(ctx, &tex, level, nw, nh,
+		GfxAccelHostUploadTexture(ctx, &tex, level, nw, nh,
 							 vec_data(next), (int)next.size());
 
 		current.swap(next);

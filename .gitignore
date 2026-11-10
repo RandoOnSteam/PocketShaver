@@ -44,3 +44,5 @@ project.xcworkspace/
 /build
 /PocketShaver-master
 /thirdparty/SDL*
+/ROMs
+/guibootplans

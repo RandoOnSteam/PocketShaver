@@ -923,13 +923,20 @@ static int OsxGuestWrite64(OsxCpu *cpu, uint32 address, uint64 value)
 	return OsxGuestWriteSlow(cpu, address + 4, 4, (uint32)value);
 }
 
-int OsxGuestCpuReadVirtual(OsxCpu *cpu, uint32 address, uint32 *value)
+uint8 *OsxGuestCpuVirtualHost(OsxCpu *cpu, uint32 address, int kind)
 {
 	uint32 physical;
 	uint8 *host;
-	if (!OsxGuestCpuTranslate(cpu, address, OSXTLBREAD, 0, &physical))
-		return 0;
-	if (!OsxGuestPhysicalHost(cpu, physical, &host))
+	if (!OsxGuestCpuTranslate(cpu, address, kind, 0, &physical) || !OsxGuestPhysicalHost(cpu, physical, &host))
+		return NULL;
+	return host;
+}
+
+int OsxGuestCpuReadVirtual(OsxCpu *cpu, uint32 address, uint32 *value)
+{
+	uint8 *host;
+	host = OsxGuestCpuVirtualHost(cpu, address, OSXTLBREAD);
+	if (!host)
 		return 0;
 	*value = OsxGuestLoadHost32(host);
 	return 1;
@@ -937,11 +944,9 @@ int OsxGuestCpuReadVirtual(OsxCpu *cpu, uint32 address, uint32 *value)
 
 int OsxGuestCpuWriteVirtual(OsxCpu *cpu, uint32 address, uint32 value)
 {
-	uint32 physical;
 	uint8 *host;
-	if (!OsxGuestCpuTranslate(cpu, address, OSXTLBWRITE, 0, &physical))
-		return 0;
-	if (!OsxGuestPhysicalHost(cpu, physical, &host))
+	host = OsxGuestCpuVirtualHost(cpu, address, OSXTLBWRITE);
+	if (!host)
 		return 0;
 	OsxGuestStoreHost32(host, value);
 	return 1;

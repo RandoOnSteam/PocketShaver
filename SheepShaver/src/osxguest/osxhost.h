@@ -34,6 +34,7 @@ typedef void (*OsxHostInput)(void *context, int operation, int first, int second
 OsxHostVideo *OsxGuestHostOpen(int width, int height, OsxHostInput input, void *context);
 void OsxGuestHostClose(OsxHostVideo *video);
 void OsxGuestHostSuspendFrame(OsxHostVideo *video);
+void OsxGuestHostResize(OsxHostVideo *video, int width, int height);
 uint8 *OsxGuestHostLock(OsxHostVideo *video, int *pitch, int *raw);
 int OsxGuestHostPresent(OsxHostVideo *video, const uint32 *runstart, const uint32 *runend, int runs);
 void OsxGuestHostEvents(OsxHostVideo *video, const uint8 *vram);
