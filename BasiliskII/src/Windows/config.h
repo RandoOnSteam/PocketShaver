@@ -80,6 +80,10 @@
 /* #undef HAVE_SIGCONTEXT_SUBTERFUGE */
 /* #undef HAVE_MMAP_VM */
 /* #undef HAVE_MPROTECT */
+/* #undef HAVE_MACH_VM */
+/* #undef HAVE_MACH_TASK_SELF */
+/* #undef HAVE_MACH_EXCEPTIONS */
+/* #undef HAVE_STRLCPY */
 
 #define USE_SDL 1
 #define USE_SDL_VIDEO 1

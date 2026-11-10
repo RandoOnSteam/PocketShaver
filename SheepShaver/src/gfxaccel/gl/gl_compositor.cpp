@@ -353,7 +353,10 @@ void GLCompositorDeviceGetDrawableSize(int *out_w, int *out_h)
 	assert(out_h != NULL);
 	HostGLDrawableSize(out_w, out_h);
 }
-#if defined(__APPLE__) && defined(TARGET_OS_IPHONE)
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
+#if defined(__APPLE__) && TARGET_OS_IPHONE
 extern bool objc_getIsLinearGammaEnabled(void);
 static inline bool GLCompositorIsLinearGamma(void) {
 	return objc_getIsLinearGammaEnabled();

@@ -117,3 +117,7 @@ target_include_directories(BASILISKIISFLCORE PRIVATE "${SFLDIRECTORY}" "${BASILI
 	"${BASILISKIISOURCE}/CrossPlatform" "${UAEDIRECTORY}" "${BASILISKIIGENERATED}" "${SFLLIBRARIES}")
 sfl_configure_core(BASILISKIISFLCORE)
 sfl_add_application(BASILISKIISFL B2EM BASILISKIISFLCORE)
+
+if(APPLE)
+	set_source_files_properties("${BASILISKIISOURCE}/pdfgen.c" PROPERTIES COMPILE_OPTIONS -fno-builtin-strrchr)
+endif()
