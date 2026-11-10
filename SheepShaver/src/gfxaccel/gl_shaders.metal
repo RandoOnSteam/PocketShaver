@@ -83,7 +83,67 @@ struct GLFragmentUniforms {
     int    has_texture_unit1;   // ARB_multitexture: unit 1 has a bound+enabled 2D texture (sample tex1 with texcoord1)
     int    texenv1_mode;        // unit-1 texenv mode (0=modulate,1=decal,2=blend,3=replace,4=add)
     int    force_opaque_output; // window overlay, GL blending disabled: store coverage alpha
+    int    _pad6;
+    int    _pad7;
+    float4 texenv1_color;       // unit-1 GL_TEXTURE_ENV_COLOR
+    int    combine[32];         // per unit: rgb function, alpha function, 6 sources, 6 operands, 2 unused
+    float4 combine_scale[2];    // per unit: rgb scale, alpha scale
 };
+
+static float4 gl_combine_source(int source, float4 texture, float4 constantcolor, float4 primary, float4 previous, float4 texture0, float4 texture1)
+{
+    if (source == 1) return constantcolor;
+    if (source == 2) return primary;
+    if (source == 3) return previous;
+    if (source == 4) return texture0;
+    if (source == 5) return texture1;
+    return texture;
+}
+
+static float3 gl_combine_rgb_operand(int operand, float4 value)
+{
+    if (operand == 1) return 1.0 - value.rgb;
+    if (operand == 2) return float3(value.a);
+    if (operand == 3) return float3(1.0 - value.a);
+    return value.rgb;
+}
+
+static float gl_combine_alpha_operand(int operand, float4 value)
+{
+    if (operand == 1 || operand == 3) return 1.0 - value.a;
+    return value.a;
+}
+
+static float4 gl_texture_combine(constant GLFragmentUniforms &uniforms, int unit, float4 texture, float4 constantcolor, float4 primary, float4 previous, float4 texture0, float4 texture1)
+{
+    int base = unit * 16;
+    float3 rgb[3];
+    float alpha[3];
+    for (int index = 0; index < 3; index++) {
+        rgb[index] = gl_combine_rgb_operand(uniforms.combine[base + 8 + index],
+            gl_combine_source(uniforms.combine[base + 2 + index], texture, constantcolor, primary, previous, texture0, texture1));
+        alpha[index] = gl_combine_alpha_operand(uniforms.combine[base + 11 + index],
+            gl_combine_source(uniforms.combine[base + 5 + index], texture, constantcolor, primary, previous, texture0, texture1));
+    }
+    float3 resultrgb = rgb[0];
+    int rgbfunction = uniforms.combine[base];
+    if (rgbfunction == 1) resultrgb = rgb[0] * rgb[1];
+    else if (rgbfunction == 2) resultrgb = rgb[0] + rgb[1];
+    else if (rgbfunction == 3) resultrgb = rgb[0] + rgb[1] - 0.5;
+    else if (rgbfunction == 4) resultrgb = rgb[0] * rgb[2] + rgb[1] * (1.0 - rgb[2]);
+    else if (rgbfunction == 5) resultrgb = rgb[0] - rgb[1];
+    else if (rgbfunction == 6 || rgbfunction == 7) resultrgb = float3(4.0 * dot(rgb[0] - 0.5, rgb[1] - 0.5));
+    float resultalpha = alpha[0];
+    int alphafunction = uniforms.combine[base + 1];
+    if (alphafunction == 1) resultalpha = alpha[0] * alpha[1];
+    else if (alphafunction == 2) resultalpha = alpha[0] + alpha[1];
+    else if (alphafunction == 3) resultalpha = alpha[0] + alpha[1] - 0.5;
+    else if (alphafunction == 4) resultalpha = alpha[0] * alpha[2] + alpha[1] * (1.0 - alpha[2]);
+    else if (alphafunction == 5) resultalpha = alpha[0] - alpha[1];
+    if (rgbfunction == 7) resultalpha = resultrgb.r;
+    float2 scale = uniforms.combine_scale[unit].xy;
+    return saturate(float4(resultrgb * scale.x, resultalpha * scale.y));
+}
 
 struct GLLight {
     float4 ambient;
@@ -282,20 +342,28 @@ fragment float4 gl_fragment_main(
     if (in.num_clip_planes > 5 && in.clip_dist5 < 0.0) discard_fragment();
 
     float4 color = in.color;
-
-    // Texture application
+    float4 tex_color = float4(1.0);
+    float4 t1 = float4(1.0);
     if (uniforms.has_texture) {
         // Projective texturing: divide s,t by q for perspective-correct mapping
         float2 uv = (in.texcoord.z != 0.0) ? in.texcoord.xy / in.texcoord.z : in.texcoord.xy;
-        float4 tex_color;
         if (uniforms.has_texture_3d) {
             float3 uvw = float3(uv, in.texcoord1.x);  // use unit 1's s as the r (depth) coordinate
             tex_color = tex3d.sample(samp, uvw);
         } else {
             tex_color = tex.sample(samp, uv);
         }
+    }
+    if (uniforms.has_texture_unit1) {
+        float2 uv1 = (in.texcoord1.z != 0.0) ? in.texcoord1.xy / in.texcoord1.z : in.texcoord1.xy;
+        t1 = tex1.sample(samp1, uv1);
+    }
 
-        if (uniforms.texenv_mode == 0) {
+    // Texture application
+    if (uniforms.has_texture) {
+        if (uniforms.texenv_mode == 5) {
+            color = gl_texture_combine(uniforms, 0, tex_color, uniforms.texenv_color, in.color, in.color, tex_color, t1);
+        } else if (uniforms.texenv_mode == 0) {
             // GL_MODULATE: Cf = Ct * Cf
             color = float4(color.rgb * tex_color.rgb, color.a * tex_color.a);
         } else if (uniforms.texenv_mode == 1) {
@@ -315,16 +383,12 @@ fragment float4 gl_fragment_main(
         }
     }
 
-    // ARB_multitexture unit 1 (glMultiTexCoord*ARB): sample the second 2D
-    // texture with texcoord1 and combine it onto the running color per unit 1's texenv
-    // mode (same modes 0-4 template as unit 0). Scope: 2-unit modulate/add (the standard
-    // texenv modes). The GL_COMBINE crossbar is store-only and
-    // GL_EXT_texture_env_combine is de-advertised - texenv1_mode is one of 0-4 only.
+    // ARB_multitexture unit 1: combine the second texture onto the running color
+    // per unit 1's texenv mode, including the GL_COMBINE crossbar.
     if (uniforms.has_texture_unit1) {
-        float2 uv1 = (in.texcoord1.z != 0.0) ? in.texcoord1.xy / in.texcoord1.z : in.texcoord1.xy;
-        float4 t1 = tex1.sample(samp1, uv1);
-
-        if (uniforms.texenv1_mode == 0) {
+        if (uniforms.texenv1_mode == 5) {
+            color = gl_texture_combine(uniforms, 1, t1, uniforms.texenv1_color, in.color, color, tex_color, t1);
+        } else if (uniforms.texenv1_mode == 0) {
             // GL_MODULATE: Cf = Ct1 * Cf
             color = float4(color.rgb * t1.rgb, color.a * t1.a);
         } else if (uniforms.texenv1_mode == 1) {
@@ -332,7 +396,7 @@ fragment float4 gl_fragment_main(
             color.rgb = mix(color.rgb, t1.rgb, t1.a);
         } else if (uniforms.texenv1_mode == 2) {
             // GL_BLEND: Cf.rgb = mix(Cf.rgb, Cc.rgb, Ct1.rgb), Cf.a = Cf.a * Ct1.a
-            color.rgb = mix(color.rgb, uniforms.texenv_color.rgb, t1.rgb);
+            color.rgb = mix(color.rgb, uniforms.texenv1_color.rgb, t1.rgb);
             color.a *= t1.a;
         } else if (uniforms.texenv1_mode == 3) {
             // GL_REPLACE: Cf = Ct1

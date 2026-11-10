@@ -3,8 +3,6 @@ set(OSXGUESTSOURCES
 	"${OSXGUESTDIRECTORY}/osxcpu.cpp"
 	"${OSXGUESTDIRECTORY}/osxcpu970.cpp"
 	"${OSXGUESTDIRECTORY}/osxjit.cpp"
-	"${OSXGUESTDIRECTORY}/osxfpu.cpp"
-	"${OSXGUESTDIRECTORY}/osxvec.cpp"
 	"${OSXGUESTDIRECTORY}/osxtest.cpp"
 	"${OSXGUESTDIRECTORY}/osxbus.cpp"
 	"${OSXGUESTDIRECTORY}/osxg5.cpp"
@@ -15,9 +13,4 @@ set(OSXGUESTSOURCES
 	"${OSXGUESTDIRECTORY}/osxboot.cpp"
 	"${OSXGUESTDIRECTORY}/osxmain.cpp"
 	"${OSXGUESTDIRECTORY}/osxglbridge.cpp"
-	"${OSXGUESTDIRECTORY}/osxkext.cpp"
-	"${OSXGUESTDIRECTORY}/osxnet.cpp"
-	"${OSXGUESTDIRECTORY}/osxaudio.cpp"
-	"${OSXGUESTDIRECTORY}/osxflash.cpp"
-	"${OSXGUESTDIRECTORY}/osxdisplay.cpp"
 )

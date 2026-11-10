@@ -28,7 +28,6 @@
 #include "osxglbridge.h"
 #if OSXGLBRIDGE
 #include "metal_compositor.h"
-#include "osxglengine.h"
 #endif
 #if OSXHOSTX64
 #include <tmmintrin.h>

@@ -183,3 +183,7 @@ elseif(NOT APPLE AND NOT CMAKE_SYSTEM_NAME MATCHES RetroCarbon)
 	find_package(OpenGL REQUIRED)
 	target_link_libraries(SheepShaverSFL PRIVATE OpenGL::GL ${GDK3_LIBRARIES})
 endif()
+
+if(APPLE)
+	set_source_files_properties("${BASILISKIISOURCE}/pdfgen.c" PROPERTIES COMPILE_OPTIONS -fno-builtin-strrchr)
+endif()

@@ -18,7 +18,7 @@
  *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 #include "../../SheepShaver/src/osxguest/osxcuda.cpp"
-#include "../../SheepShaver/src/osxguest/osxflash.cpp"
+#include "../../SheepShaver/src/osxguest/osxbus.cpp"
 
 typedef struct OsxInputTest {
 	int checks;

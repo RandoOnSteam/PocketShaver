@@ -34,7 +34,9 @@ void set_current_directory();
 
 bool MetalIsAvailable();
 
+#if defined(USE_SDL) && SDL_VERSION_ATLEAST(3, 0, 0) && defined(VIDEO_CHROMAKEY)
 void make_window_transparent(SDL_Window *window);
 void set_mouse_ignore(SDL_Window *window, int flag);
+#endif
 
 #endif

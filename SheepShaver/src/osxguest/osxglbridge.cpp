@@ -23,7 +23,6 @@
 #include "osxmachine.h"
 #include "osxglbridge.h"
 #include "osxhost.h"
-#include "osxglengine.h"
 #if OSXGLBRIDGE
 #include "metal_compositor.h"
 #include "display_mode_controller.h"

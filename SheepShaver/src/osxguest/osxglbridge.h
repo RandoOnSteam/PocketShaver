@@ -59,4 +59,25 @@ void OsxGuestDestroyGlBridge(OsxGlBridge *bridge);
 int OsxGuestGlBridgeCall(OsxGlBridge *bridge, OsxCpu *cpu, uint32 call);
 
 #endif
+
+namespace OsxGl {
+void *OsxGuestEngineCreate(void *share);
+void OsxGuestEngineDestroy(void *engine);
+void OsxGuestEngineBind(void *engine, OsxCpu *cpu);
+void OsxGuestEngineResize(void *engine, OsxCpu *cpu, uint32 width, uint32 height);
+void OsxGuestEngineCall(void *engine, OsxCpu *cpu, uint32 sub);
+void OsxGuestEngineFlush(void *engine, OsxCpu *cpu);
+void OsxGuestEngineReadPixels(void *engine, OsxCpu *cpu, uint32 width, uint32 height, void *pixels);
+void OsxGuestEngineHostString(void *engine, OsxCpu *cpu, uint32 name, char *text, uint32 size);
+int OsxGuestEngineFlurryCall(void *engine, OsxCpu *cpu, uint32 call);
+void OsxGuestEngineBeforePresent(void);
+void OsxGuestEngineAfterPresent(void);
+unsigned OsxGuestEngineTextureCreate(void *engine, OsxCpu *cpu, uint32 width, uint32 height, int floatpixels);
+void OsxGuestEngineTextureDelete(void *engine, OsxCpu *cpu, unsigned texture);
+void OsxGuestEngineAttachTexture(void *engine, OsxCpu *cpu, unsigned texture, uint32 width, uint32 height);
+void OsxGuestEngineCopyTexture(void *engine, OsxCpu *cpu, unsigned texture, uint32 width, uint32 height, uint32 internalformat, uint32 texturetarget);
+void OsxGuestEngineBlendSeparate(void *engine, OsxCpu *cpu, int separate);
+int OsxGuestEngineProgramCall(void *engine, OsxCpu *cpu, uint32 call);
+void OsxGuestEngineProgramEnable(void *engine, OsxCpu *cpu, uint32 capability, int enable);
+}
 #endif

@@ -149,9 +149,7 @@ set(SS_CORE
 	"${SS_SRC}/mmio.cpp"
 	"${SS_SRC}/pcibridge.cpp"
 	${OSXGUESTSOURCES}
-	"${SS_SRC}/osxguest/SDL/osxvideo_sdl.cpp"
-	"${SS_SRC}/osxguest/SDL/osxaudio_sdl.cpp"
-	"${SS_SRC}/osxguest/SDL/osxclip_sdl.cpp"
+	"${SS_SRC}/osxguest/SDL/osxhost_sdl.cpp"
 	"${SS_SRC}/usbuim.cpp"
 	"${SS_SRC}/macos_util.cpp"
 	"${SS_SRC}/gfxaccel.cpp"
@@ -397,7 +395,7 @@ if(ENABLE_GFXACCEL)
 		set(GFXACCEL_BACKEND "sdlgpu")
 	endif()
 	if(GFXACCEL_BACKEND STREQUAL "auto")
-	if(APPLE)
+	if(MACEMU_BUILD_POCKETSHAVER)
 		set(GFXACCEL_BACKEND "metal")
 	else()
 		set(GFXACCEL_BACKEND "opengl")
@@ -449,7 +447,6 @@ if(ENABLE_GFXACCEL)
 	if(NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
 		list(APPEND SS_GFXACCEL
 			"${SS_GFXACCEL_DIR}/sdlgpu/sdlgpu_gl_compat.cpp"
-			"${SS_GFXACCEL_DIR}/gfxaccelhostarb.cpp"
 			"${SS_SRC}/osxguest/osxglengine.cpp")
 		list(APPEND SS_GFXACCEL_INC "${SS_GFXACCEL_DIR}/sdlgpu" "${SS_GFXACCEL_DIR}/gl")
 		list(APPEND SS_GFXACCEL_DEFS OSXGLBRIDGE=1)
@@ -494,7 +491,6 @@ if(ENABLE_GFXACCEL)
 	endif()
 	list(APPEND SS_GFXACCEL
 		"${SS_GFXACCEL_DIR}/sdlgpu/sdlgpu_gl_compat.cpp"
-		"${SS_GFXACCEL_DIR}/gfxaccelhostarb.cpp"
 		"${SS_SRC}/osxguest/osxglengine.cpp"
 		"${SS_GFXACCEL_DIR}/sdlgpu/dsp_dispatch_sdlgpu.cpp"
 		"${SS_GFXACCEL_DIR}/sdlgpu/dsp_draw_context_sdlgpu.cpp"
@@ -535,8 +531,12 @@ if(ENABLE_GFXACCEL)
 		"${SS_GFXACCEL_DIR}/gl/dsp_gl_renderer.cpp"
 		"${SS_GFXACCEL_DIR}/gl/glide_gl_renderer.cpp"
 	)
-	if(NOT WIN32 AND NOT APPLE)
-		list(APPEND SS_GFXACCEL "${SS_GFXACCEL_DIR}/gl/glcontext.c" "${SS_SRC}/osxguest/osxglengine.cpp")
+	list(APPEND SS_GFXACCEL "${SS_SRC}/osxguest/osxglengine.cpp")
+	if(NOT WIN32)
+		list(APPEND SS_GFXACCEL "${SS_GFXACCEL_DIR}/gl/glcontext.c")
+		if(APPLE)
+			set_source_files_properties("${SS_GFXACCEL_DIR}/gl/glcontext.c" PROPERTIES LANGUAGE OBJC)
+		endif()
 		list(APPEND SS_GFXACCEL_DEFS OSXGLBRIDGE=1)
 	endif()
 	if(WIN32)
@@ -568,8 +568,6 @@ if(ENABLE_OSX_GUEST_TESTS AND ((WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 8) OR CMAKE_
 		"${SS_SRC}/../../tools/tests/osxjit.cpp"
 		"${SS_SRC}/osxguest/osxcpu.cpp"
 		"${SS_SRC}/osxguest/osxcpu970.cpp"
-		"${SS_SRC}/osxguest/osxfpu.cpp"
-		"${SS_SRC}/osxguest/osxvec.cpp"
 		"${SS_SRC}/osxguest/osxjit.cpp")
 	target_include_directories(OsxJitTest PRIVATE
 		${SS_PLATFORM_INC} "${SS_SRC}/include" "${SS_SRC}/osxguest"
@@ -597,8 +595,6 @@ if(ENABLE_OSX_GUEST_TESTS AND ((WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 8) OR CMAKE_
 		"${SS_SRC}/osxguest/osxpointer.cpp"
 		"${SS_SRC}/osxguest/osxcpu.cpp"
 		"${SS_SRC}/osxguest/osxcpu970.cpp"
-		"${SS_SRC}/osxguest/osxfpu.cpp"
-		"${SS_SRC}/osxguest/osxvec.cpp"
 		"${SS_SRC}/osxguest/osxjit.cpp")
 	target_include_directories(OsxInputTest PRIVATE
 		${SS_PLATFORM_INC} "${SS_SRC}/include" "${SS_SRC}/osxguest"
@@ -611,9 +607,7 @@ if(ENABLE_OSX_GUEST_TESTS AND ((WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 8) OR CMAKE_
 endif()
 
 set_source_files_properties(
-	"${SS_SRC}/osxguest/SDL/osxvideo_sdl.cpp"
-	"${SS_SRC}/osxguest/SDL/osxaudio_sdl.cpp"
-	"${SS_SRC}/osxguest/SDL/osxclip_sdl.cpp"
+	"${SS_SRC}/osxguest/SDL/osxhost_sdl.cpp"
 	PROPERTIES INCLUDE_DIRECTORIES "${B2_SRC}/SDL")
 
 function(sheepshaver_configure_target SHEEPSHAVER_EXECUTABLE)
@@ -765,3 +759,7 @@ message(STATUS "SheepShaver: QD3D media logging=${ENABLE_QD3D_MEDIA_LOGGING}")
 message(STATUS "SheepShaver: QD3D wait logging=${ENABLE_QD3D_WAIT_LOGGING}")
 message(STATUS "SheepShaver: SDL-GPU transition logging=${ENABLE_SDLGPU_TRANSITION_LOGGING}")
 message(STATUS "SheepShaver: emulator monitor=${ENABLE_EMULATOR_MONITOR}")
+
+if(APPLE)
+	set_source_files_properties("${B2_SRC}/pdfgen.c" PROPERTIES COMPILE_OPTIONS -fno-builtin-strrchr)
+endif()

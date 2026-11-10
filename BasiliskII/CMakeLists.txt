@@ -35,11 +35,14 @@ file(MAKE_DIRECTORY "${B2_GEN}")
 
 if(WIN32)
 	set(B2_SYSDEPS "${B2_SRC}/Windows")
+	set(B2_PLATFORM "${B2_SRC}/Windows")
 elseif(APPLE)
 	# Do not overwrite BasiliskII/src/MacOSX/config.h; generate in the build tree.
 	set(B2_SYSDEPS "${CMAKE_CURRENT_BINARY_DIR}")
+	set(B2_PLATFORM "${B2_SRC}/Unix")
 else()
 	set(B2_SYSDEPS "${B2_SRC}/Unix")
+	set(B2_PLATFORM "${B2_SRC}/Unix")
 endif()
 macemu_write_config(
 	"${B2_SYSDEPS}"
@@ -54,23 +57,25 @@ macemu_write_config(
 	endif()
 	if(B2_HOST_TOOLS)
 		set(B2_BUILD68K "${B2_HOST_TOOLS}/build68k${CMAKE_HOST_EXECUTABLE_SUFFIX}")
+		set(B2_BUILD68K_PATH "${B2_BUILD68K}")
 		set(B2_GENCPU "${B2_HOST_TOOLS}/gencpu${CMAKE_HOST_EXECUTABLE_SUFFIX}")
 	else()
 	add_executable(build68k "${UAE_DIR}/build68k.c")
 	target_include_directories(build68k PRIVATE
-		"${CMAKE_CURRENT_BINARY_DIR}" "${B2_SYSDEPS}" "${B2_SRC}/include" "${UAE_DIR}")
+		"${CMAKE_CURRENT_BINARY_DIR}" "${B2_SYSDEPS}" "${B2_PLATFORM}" "${B2_SRC}/include" "${UAE_DIR}")
 	target_compile_definitions(build68k PRIVATE HAVE_CONFIG_H)
 	if(MSVC)
 		target_compile_definitions(build68k PRIVATE _CRT_SECURE_NO_WARNINGS)
 	endif()
 		set(B2_BUILD68K build68k)
+		set(B2_BUILD68K_PATH "$<TARGET_FILE:build68k>")
 		set(B2_GENCPU gencpu)
 	endif()
 
 	add_custom_command(
 		OUTPUT "${B2_GEN}/cpudefs.cpp"
 		COMMAND ${CMAKE_COMMAND}
-		-DMACEMU_REDIRECT_TOOL=${B2_BUILD68K}
+		-DMACEMU_REDIRECT_TOOL=${B2_BUILD68K_PATH}
 		-DMACEMU_REDIRECT_ARGS=${UAE_DIR}/table68k
 		-DMACEMU_REDIRECT_OUTPUT=${B2_GEN}/cpudefs.cpp
 		-P ${MACEMU_CMAKE_DIR}/run_redirect.cmake
@@ -81,7 +86,7 @@ macemu_write_config(
 
 	add_library(uae_readcpu STATIC "${UAE_DIR}/readcpu.cpp" "${B2_GEN}/cpudefs.cpp")
 	target_include_directories(uae_readcpu PUBLIC
-		"${CMAKE_CURRENT_BINARY_DIR}" "${B2_SYSDEPS}" "${B2_SRC}/include" "${UAE_DIR}" "${B2_GEN}")
+		"${CMAKE_CURRENT_BINARY_DIR}" "${B2_SYSDEPS}" "${B2_PLATFORM}" "${B2_SRC}/include" "${UAE_DIR}" "${B2_GEN}")
 	target_compile_definitions(uae_readcpu PUBLIC HAVE_CONFIG_H)
 	if(MSVC)
 		target_compile_definitions(uae_readcpu PRIVATE _CRT_SECURE_NO_WARNINGS)
@@ -232,6 +237,17 @@ else()
 	)
 	if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 		list(APPEND B2_PLATFORM "${B2_SRC}/Unix/Linux/scsi_linux.cpp")
+	elseif(APPLE)
+		list(REMOVE_ITEM B2_PLATFORM "${B2_SRC}/Unix/extfs_unix.cpp" "${B2_SRC}/dummy/clip_dummy.cpp")
+		list(APPEND B2_PLATFORM
+			"${B2_SRC}/dummy/scsi_dummy.cpp"
+			"${B2_SRC}/MacOSX/extfs_macosx.cpp"
+			"${B2_SRC}/MacOSX/clip_macosx64.mm"
+			"${B2_SRC}/pict.c"
+			"${B2_SRC}/MacOSX/sys_darwin.cpp"
+			"${B2_SRC}/MacOSX/utils_macosx.mm"
+			"${B2_SRC}/MacOSX/runtool.c"
+			"${B2_SRC}/SDL/SDLMain.m")
 	else()
 		list(APPEND B2_PLATFORM "${B2_SRC}/dummy/scsi_dummy.cpp" "${B2_SRC}/Unix/posix_sem.cpp")
 	endif()
@@ -243,6 +259,9 @@ else()
 	list(APPEND B2_PLATFORM "${B2_SRC}/dummy/prefs_editor_dummy.cpp")
 	endif()
 	set(B2_PLATFORM_INC "${B2_SRC}/Unix")
+	if(APPLE)
+		list(APPEND B2_PLATFORM_INC "${B2_SRC}/MacOSX")
+	endif()
 endif()
 
 if(ENABLE_BINCUE)
@@ -255,7 +274,15 @@ endif()
 add_executable(BasiliskII
 	${B2_CORE} ${B2_SLIRP} ${B2_UAE} ${B2_PLATFORM} ${B2_UAE_GEN_SRCS} ${B2_JIT_GEN_SRCS})
 if(WIN32)
-elseif(${CMAKE_SYSTEM_NAME} MATCHES "Darwin|OSX")
+elseif(APPLE)
+	target_link_libraries(BasiliskII PRIVATE
+		"-framework Cocoa"
+		"-framework Carbon"
+		"-framework IOKit"
+		"-framework CoreFoundation"
+		"-framework Security"
+		"-framework Metal")
+	target_compile_definitions(BasiliskII PRIVATE _THREAD_SAFE ENABLE_MACOSX_ETHERHELPER)
 else()
 	find_package(X11 REQUIRED)
 	target_link_libraries(BasiliskII PRIVATE X11::X11 X11::Xext)
@@ -299,3 +326,7 @@ if(EXISTS "${B2_SRC}/SDL/keycodes")
 endif()
 
 message(STATUS "Basilisk II: UAE=${UAE_DIR} JIT=${ENABLE_JIT}")
+
+if(APPLE)
+	set_source_files_properties("${B2_SRC}/pdfgen.c" PROPERTIES COMPILE_OPTIONS -fno-builtin-strrchr)
+endif()

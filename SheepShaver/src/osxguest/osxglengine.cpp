@@ -28,6 +28,7 @@
 #include <cstring>
 #include <limits>
 #include <map>
+#include <string>
 #include <vector>
 #include "cpu_emulation.h"
 #include "vec_data.h"
@@ -63,7 +64,7 @@ static inline void GLPixelUnpackRGBA5551ToBGRA(uint16_t packed, bool reversed, u
 }
 #include "debug.h"
 #include "osxcpu.h"
-#include "osxglengine.h"
+#include "osxglbridge.h"
 
 #define OSXGLSCRATCHBASE 0xfffc0000u
 #define OSXGLSCRATCHWORD 512u

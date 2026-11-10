@@ -178,8 +178,8 @@ function(macemu_apple_sdl_xcframework SDL_XCFRAMEWORK_OUT SDL_FRAMEWORK_NAME_OUT
 			return()
 		endif()
 	endforeach()
-	message(FATAL_ERROR
-		"${SDL_FRAMEWORK_NAME}.xcframework not found (tried ${SDL_XCFRAMEWORK_CANDIDATES})")
+	set(${SDL_XCFRAMEWORK_OUT} "" PARENT_SCOPE)
+	set(${SDL_FRAMEWORK_NAME_OUT} "${SDL_FRAMEWORK_NAME}" PARENT_SCOPE)
 endfunction()
 
 function(macemu_apple_sdl_slice SDL_XCFRAMEWORK SDL_FRAMEWORK_NAME SDL_SLICE_DIR_OUT)
@@ -208,13 +208,28 @@ function(macemu_apple_sdl_slice SDL_XCFRAMEWORK SDL_FRAMEWORK_NAME SDL_SLICE_DIR
 			return()
 		endif()
 	endforeach()
-	message(FATAL_ERROR
-		"${SDL_FRAMEWORK_NAME}.xcframework slice missing (tried ${SDL_SLICE_CANDIDATES} under ${SDL_XCFRAMEWORK})")
+	set(${SDL_SLICE_DIR_OUT} "" PARENT_SCOPE)
+endfunction()
+
+# Slice of the vendored xcframework usable for this Apple target, or empty
+# when the xcframework or the slice is missing.
+function(macemu_apple_sdl_slice_dir SDL_XCFRAMEWORK_OUT SDL_FRAMEWORK_NAME_OUT SDL_SLICE_DIR_OUT)
+	macemu_apple_sdl_xcframework(SDL_XCFRAMEWORK SDL_FRAMEWORK_NAME)
+	set(SDL_SLICE_DIR "")
+	if(SDL_XCFRAMEWORK)
+		macemu_apple_sdl_slice("${SDL_XCFRAMEWORK}" "${SDL_FRAMEWORK_NAME}" SDL_SLICE_DIR)
+	endif()
+	set(${SDL_XCFRAMEWORK_OUT} "${SDL_XCFRAMEWORK}" PARENT_SCOPE)
+	set(${SDL_FRAMEWORK_NAME_OUT} "${SDL_FRAMEWORK_NAME}" PARENT_SCOPE)
+	set(${SDL_SLICE_DIR_OUT} "${SDL_SLICE_DIR}" PARENT_SCOPE)
 endfunction()
 
 function(macemu_apple_find_sdl)
-	macemu_apple_sdl_xcframework(SDL_XCFRAMEWORK SDL_FRAMEWORK_NAME)
-	macemu_apple_sdl_slice("${SDL_XCFRAMEWORK}" "${SDL_FRAMEWORK_NAME}" SDL_SLICE_DIR)
+	macemu_apple_sdl_slice_dir(SDL_XCFRAMEWORK SDL_FRAMEWORK_NAME SDL_SLICE_DIR)
+	if(NOT SDL_SLICE_DIR)
+		message(FATAL_ERROR
+			"${SDL_FRAMEWORK_NAME}.xcframework with a slice for ${MACEMU_APPLE_TARGET} not found under SheepShaver/src/MacOSX")
+	endif()
 	set(MACEMU_SDL_XCFRAMEWORK "${SDL_XCFRAMEWORK}" PARENT_SCOPE)
 	set(MACEMU_SDL_SLICE "${SDL_SLICE_DIR}" PARENT_SCOPE)
 	set(MACEMU_SDL_FRAMEWORK_NAME "${SDL_FRAMEWORK_NAME}" PARENT_SCOPE)
@@ -266,14 +281,6 @@ function(macemu_apple_link_sdl EMULATOR_EXECUTABLE)
 		target_link_options(${EMULATOR_EXECUTABLE} PRIVATE
 			"SHELL:-F ${MACEMU_SDL_SLICE}"
 			LINKER:-rpath,@executable_path/../Frameworks)
-		add_custom_command(TARGET ${EMULATOR_EXECUTABLE} POST_BUILD
-			COMMAND ${CMAKE_COMMAND} -E make_directory
-				"$<TARGET_BUNDLE_DIR:${EMULATOR_EXECUTABLE}>/Contents/Frameworks"
-			COMMAND ${CMAKE_COMMAND} -E copy_directory
-				"${MACEMU_SDL_SLICE}/${MACEMU_SDL_FRAMEWORK_NAME}.framework"
-				"$<TARGET_BUNDLE_DIR:${EMULATOR_EXECUTABLE}>/Contents/Frameworks/${MACEMU_SDL_FRAMEWORK_NAME}.framework"
-			COMMENT "Embed ${MACEMU_SDL_FRAMEWORK_NAME}.framework in ${EMULATOR_EXECUTABLE}"
-			VERBATIM)
 	endif()
 endfunction()
 
@@ -407,13 +414,17 @@ function(macemu_apple_apply_app EMULATOR_EXECUTABLE APPLE_APP_KIND)
 		set(SHEEPSHAVER_MACOSX_DIR "${CMAKE_SOURCE_DIR}/SheepShaver/src/MacOSX")
 	endif()
 
-	if(USE_SDL3)
-		set(APPLE_SDL_COMPILE_DEFINITION USE_SDL3=1)
-	else()
-		set(APPLE_SDL_COMPILE_DEFINITION USE_SDL2=1)
+	if(MACEMU_SDL_XCFRAMEWORK AND NOT CMAKE_GENERATOR STREQUAL "Xcode")
+		add_custom_command(TARGET ${EMULATOR_EXECUTABLE} POST_BUILD
+			COMMAND ${CMAKE_COMMAND} -E make_directory
+				"$<TARGET_BUNDLE_DIR:${EMULATOR_EXECUTABLE}>/Contents/Frameworks"
+			COMMAND /usr/bin/ditto
+				"${MACEMU_SDL_SLICE}/${MACEMU_SDL_FRAMEWORK_NAME}.framework"
+				"$<TARGET_BUNDLE_DIR:${EMULATOR_EXECUTABLE}>/Contents/Frameworks/${MACEMU_SDL_FRAMEWORK_NAME}.framework"
+			COMMENT "Embed ${MACEMU_SDL_FRAMEWORK_NAME}.framework in ${EMULATOR_EXECUTABLE}"
+			VERBATIM)
 	endif()
 	target_compile_definitions(${EMULATOR_EXECUTABLE} PRIVATE
-		${APPLE_SDL_COMPILE_DEFINITION}
 		_THREAD_SAFE
 		ENABLE_MACOSX_ETHERHELPER
 		DATADIR=""
@@ -623,7 +634,14 @@ function(macemu_apple_apply_app EMULATOR_EXECUTABLE APPLE_APP_KIND)
 	# CODESIGNING_FOLDER_PATH is Xcode's built-product path (includes
 	# -maccatalyst). Do not use TARGET_BUNDLE_DIR: VERBATIM escapes the
 	# EFFECTIVE_PLATFORM_NAME dollar so the suffix never expands.
-	add_custom_command(TARGET ${EMULATOR_EXECUTABLE} POST_BUILD
-		COMMAND /usr/bin/codesign --force --deep --sign - [=[${CODESIGNING_FOLDER_PATH}]=]
-		COMMENT "Ad-hoc codesign ${EMULATOR_EXECUTABLE}.app")
+	if(CMAKE_GENERATOR STREQUAL "Xcode")
+		add_custom_command(TARGET ${EMULATOR_EXECUTABLE} POST_BUILD
+			COMMAND /usr/bin/codesign --force --deep --sign - [=[${CODESIGNING_FOLDER_PATH}]=]
+			COMMENT "Ad-hoc codesign ${EMULATOR_EXECUTABLE}.app")
+	else()
+		add_custom_command(TARGET ${EMULATOR_EXECUTABLE} POST_BUILD
+			COMMAND /usr/bin/codesign --force --deep --sign - "$<TARGET_BUNDLE_DIR:${EMULATOR_EXECUTABLE}>"
+			COMMENT "Ad-hoc codesign ${EMULATOR_EXECUTABLE}.app"
+			VERBATIM)
+	endif()
 endfunction()

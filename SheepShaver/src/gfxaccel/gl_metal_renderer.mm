@@ -526,7 +526,10 @@ struct GLMetalFragmentUniforms {
 	int32_t has_texture_unit1;       // offset 76 - ARB_multitexture: unit 1 has a bound+enabled 2D texture (consumes former _pad4)
 	int32_t texenv1_mode;            // offset 80 - unit-1 texenv mode (GLTexEnvModeToShader: 0=modulate..4=add)
 	int32_t force_opaque_output;     // offset 84 - window overlay with GL blending disabled stores coverage alpha
-	int32_t _pad6, _pad7;            // offset 88-92 (pad to 96, 16-byte struct alignment)
+	int32_t _pad6, _pad7;            // offset 88-92
+	float   texenv1_color[4];        // offset 96 - unit-1 GL_TEXTURE_ENV_COLOR
+	int32_t combine[32];             // offset 112 - per unit: rgb function, alpha function, 6 sources, 6 operands, 2 unused
+	float   combine_scale[2][4];     // offset 240 - per unit: rgb scale, alpha scale, 2 unused
 };
 
 // Must match GLLight in gl_shaders.metal
@@ -573,7 +576,7 @@ static_assert(sizeof(GLMetalVertexUniforms) == 320, "GLMetalVertexUniforms size 
 // Metal float4[6] array without tripping a compile error.
 static_assert(offsetof(GLMetalVertexUniforms, clip_planes) % 16 == 0,
 			  "GLMetalVertexUniforms.clip_planes must be 16-byte aligned to match Metal float4[6]");
-static_assert(sizeof(GLMetalFragmentUniforms) == 96, "GLMetalFragmentUniforms size must match Metal GLFragmentUniforms (96 bytes)");
+static_assert(sizeof(GLMetalFragmentUniforms) == 272, "GLMetalFragmentUniforms size must match Metal GLFragmentUniforms (272 bytes)");
 static_assert(sizeof(GLMetalLight) == 128, "GLMetalLight size must match Metal GLLight (128 bytes)");
 static_assert(sizeof(GLMetalMaterial) == 80, "GLMetalMaterial size must match Metal GLMaterialData (80 bytes)");
 static_assert(sizeof(GLMetalLightingData) == 1120, "GLMetalLightingData size must match Metal GLLightingData (1120 bytes)");
@@ -3035,6 +3038,19 @@ static int32_t GLFogModeToShader(uint32_t gl_mode) {
 #define GL_BLEND_TEXENV    0x0BE2
 #define GL_REPLACE_TEX     0x1E01
 #define GL_ADD_TEX         0x0104
+#define GL_COMBINE_TEX     0x8570
+#define GLCOMBINEADDSIGNED 0x8574
+#define GLCOMBINEINTERPOLATE 0x8575
+#define GLCOMBINESUBTRACT  0x84E7
+#define GLCOMBINEDOT3RGB   0x86AE
+#define GLCOMBINEDOT3RGBA  0x86AF
+#define GLCOMBINETEXTURE   0x1702
+#define GLCOMBINECONSTANT  0x8576
+#define GLCOMBINEPRIMARY   0x8577
+#define GLCOMBINEPREVIOUS  0x8578
+#define GLCOMBINETEXTURE0  0x84C0
+#define GLCOMBINEOPERAND   0x0300
+#define GLCOMBINEUNIT      16
 
 /*
  *  Convert GL texenv mode enum to shader integer constant
@@ -3047,8 +3063,52 @@ static int32_t GLTexEnvModeToShader(uint32_t gl_mode) {
 		case GL_BLEND_TEXENV:  return 2;
 		case GL_REPLACE_TEX:   return 3;
 		case GL_ADD_TEX:       return 4;
+		case GL_COMBINE_TEX:   return 5;
 		default:               return 0;  // default to modulate
 	}
+}
+
+static int32_t GLMetalCombineFunction(uint32_t function)
+{
+	switch (function) {
+		case GL_REPLACE_TEX:        return 0;
+		case GL_ADD_TEX:            return 2;
+		case GLCOMBINEADDSIGNED:    return 3;
+		case GLCOMBINEINTERPOLATE:  return 4;
+		case GLCOMBINESUBTRACT:     return 5;
+		case GLCOMBINEDOT3RGB:      return 6;
+		case GLCOMBINEDOT3RGBA:     return 7;
+	}
+	return 1;
+}
+
+static int32_t GLMetalCombineSource(uint32_t source)
+{
+	switch (source) {
+		case GLCOMBINECONSTANT:  return 1;
+		case GLCOMBINEPRIMARY:   return 2;
+		case GLCOMBINEPREVIOUS:  return 3;
+		case GLCOMBINETEXTURE0:  return 4;
+		case GLCOMBINETEXTURE0 + 1: return 5;
+	}
+	return 0;
+}
+
+static void GLMetalCombineToShader(const GLTextureUnit &unit, int32_t *combine, float *scale)
+{
+	int index;
+	combine[0] = GLMetalCombineFunction(unit.combine_rgb);
+	combine[1] = GLMetalCombineFunction(unit.combine_alpha);
+	for (index = 0; index < 6; index++) {
+		combine[2 + index] = GLMetalCombineSource(unit.combine_source[index]);
+		combine[8 + index] = (int32_t)(unit.combine_operand[index] - GLCOMBINEOPERAND) & 3;
+	}
+	combine[14] = 0;
+	combine[15] = 0;
+	scale[0] = unit.combine_rgb_scale;
+	scale[1] = unit.combine_alpha_scale;
+	scale[2] = 1.0f;
+	scale[3] = 1.0f;
 }
 
 
@@ -3365,6 +3425,9 @@ void GLMetalFlushImmediateMode(GLContext *ctx)
 	fu.has_texture_unit1 = (GLMetalTexture2DEnabledForDraw(ctx, 1) &&
 							ctx->tex_units[1].bound_texture_2d != 0) ? 1 : 0;
 	fu.texenv1_mode = GLTexEnvModeToShader(ctx->tex_units[1].env_mode);
+	memcpy(fu.texenv1_color, ctx->tex_units[1].env_color, sizeof(fu.texenv1_color));
+	GLMetalCombineToShader(ctx->tex_units[texUnit], fu.combine, fu.combine_scale[0]);
+	GLMetalCombineToShader(ctx->tex_units[1], fu.combine + GLCOMBINEUNIT, fu.combine_scale[1]);
 	{
 		const bool isOffscreen =
 			GLContextGetOffscreenDrawable(ctx, NULL, NULL, NULL, NULL);
