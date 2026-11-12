@@ -409,7 +409,7 @@ void GfxAccelHostRectangleEnable(int unit, int enabled)
 void GfxAccelHostRectangleSampler(int unit, GLTextureObject *object)
 {
 	GfxAccelHostSelectTextureUnit(unit);
-	glTexParameteri(GFXACCELHOSTTEXTURERECTANGLE, GL_TEXTURE_MIN_FILTER, GLMetalMapTextureMinFilter(object->min_filter));
+	glTexParameteri(GFXACCELHOSTTEXTURERECTANGLE, GL_TEXTURE_MIN_FILTER, GLMetalBaseMinFilter(object->min_filter));
 	glTexParameteri(GFXACCELHOSTTEXTURERECTANGLE, GL_TEXTURE_MAG_FILTER, GLMetalMapTextureMagFilter(object->mag_filter));
 	glTexParameteri(GFXACCELHOSTTEXTURERECTANGLE, GL_TEXTURE_WRAP_S, GLMetalMapTextureWrap(object->wrap_s));
 	glTexParameteri(GFXACCELHOSTTEXTURERECTANGLE, GL_TEXTURE_WRAP_T, GLMetalMapTextureWrap(object->wrap_t));

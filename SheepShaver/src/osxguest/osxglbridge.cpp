@@ -1,5 +1,5 @@
 /*
- *  osxglbridge.cpp - host OpenGL bridge for Mac OS X guest Flurry and Quartz OpenGL contexts
+ *  osxglbridge.cpp - host OpenGL bridge for Mac OS X guest Quartz OpenGL contexts
  *
  *	(C) 2026 RandoOnSteam (battlemageloveryt@gmail.com)
  *
@@ -36,15 +36,6 @@
 #define GLBRIDGEEXTENSIONS 0x1f03u
 #define GLBRIDGETEXTURE2D 0x0de1u
 
-struct OsxGlBridge {
-	void *gl;
-	uint32 width;
-	uint32 height;
-	uint8 *vram;
-	uint32 rowbytes;
-	uint8 *pixels;
-};
-
 static void OsxGuestGlModeDescription(DMCModeDesc *mode, uint32 width, uint32 height, uint32 rowbytes, uint8 *present)
 {
 	memset(mode, 0, sizeof(*mode));
@@ -74,7 +65,7 @@ static int OsxGuestGlStartHost(uint32 width, uint32 height, uint8 *vram, uint32 
 		return 0;
 	}
 	gfxaccel_resources_init();
-	OsxGuestHostSuspendFrame(video);
+	OsxGuestHostSuspendFrame(video, *present);
 	return 1;
 }
 
@@ -87,57 +78,23 @@ void OsxGuestGlShutdownHost(void)
 	}
 }
 
-static void OsxGuestGlPublishFrame(void *gl, OsxCpu *cpu, uint8 *pixels, uint32 width, uint32 height, uint8 *vram, uint32 rowbytes)
+static void OsxGuestGlPublishFrame(void *gl, OsxCpu *cpu, uint8 *pixels, uint32 width, uint32 height, uint8 *vram, uint32 rowbytes, uint32 depth)
 {
 	uint32 row;
 	OsxGl::OsxGuestEngineReadPixels(gl, cpu, width, height, pixels);
-	for (row = 0; row < height; row++)
-		memcpy(vram + row * rowbytes, pixels + (height - row - 1) * width * 4, width * 4);
-}
-
-OsxGlBridge *OsxGuestCreateGlBridge(OsxCpu *cpu, uint32 width, uint32 height, uint8 *vram, uint32 rowbytes, OsxHostVideo *video, uint8 **present)
-{
-	OsxGlBridge *bridge;
-	if (!OsxGuestGlStartHost(width, height, vram, rowbytes, video, present))
-		return NULL;
-	bridge = (OsxGlBridge *)calloc(1, sizeof(*bridge));
-	if (!bridge)
-		return NULL;
-	bridge->pixels = (uint8 *)malloc(width * height * 4);
-	if (!bridge->pixels) {
-		free(bridge);
-		return NULL;
+	for (row = 0; row < height; row++) {
+		if (depth == OSXDEPTHTHOUSANDS)
+			OsxGuestDisplayPackPixels(vram + row * rowbytes, pixels + (height - row - 1) * width * 4, width);
+		else
+			memcpy(vram + row * rowbytes, pixels + (height - row - 1) * width * 4, width * 4);
 	}
-	bridge->gl = OsxGl::OsxGuestEngineCreate(NULL);
-	bridge->width = width;
-	bridge->height = height;
-	bridge->vram = vram;
-	bridge->rowbytes = rowbytes;
-	OsxGl::OsxGuestEngineResize(bridge->gl, cpu, width, height);
-	return bridge;
-}
-
-void OsxGuestDestroyGlBridge(OsxGlBridge *bridge)
-{
-	OsxGl::OsxGuestEngineDestroy(bridge->gl);
-	free(bridge->pixels);
-	free(bridge);
-}
-
-int OsxGuestGlBridgeCall(OsxGlBridge *bridge, OsxCpu *cpu, uint32 call)
-{
-	if (call == OSXFLURRYFLUSH) {
-		OsxGl::OsxGuestEngineFlush(bridge->gl, cpu);
-		OsxGuestGlPublishFrame(bridge->gl, cpu, bridge->pixels, bridge->width, bridge->height, bridge->vram, bridge->rowbytes);
-		return 1;
-	}
-	return OsxGl::OsxGuestEngineFlurryCall(bridge->gl, cpu, call);
 }
 
 typedef struct OsxQuartzPbuffer {
 	struct OsxQuartzPbuffer *next;
 	uint32 address;
 	uint32 segment;
+	uint32 process;
 	uint32 width;
 	uint32 height;
 	unsigned texture;
@@ -153,6 +110,8 @@ typedef struct OsxQuartzContext {
 	uint32 address;
 	uint32 engine;
 	uint32 segment;
+	uint32 process;
+	int fullscreen;
 	uint32 original[OSXQUARTZSLOTS];
 	uint32 viewport[4];
 	int appviewport;
@@ -186,10 +145,15 @@ typedef struct OsxQuartzContext {
 	uint32 windowlistindex;
 	uint32 occludercount;
 	int32 occluders[QUARTZWINDOWLISTMAX][4];
-	uint8 occluderopaque[QUARTZWINDOWLISTMAX];
 	int32 pendingrects[QUARTZWINDOWLISTMAX][4];
-	uint8 pendingopaque[QUARTZWINDOWLISTMAX];
 	uint32 pendingcount;
+	uint32 pendingregion;
+	int32 ownlevel;
+	int idle;
+	uint32 idlegpr[32];
+	uint32 idlelr;
+	uint32 idlectr;
+	uint32 idlepc;
 	uint32 presentwidth;
 	uint32 presentheight;
 	uint32 shownwidth;
@@ -207,6 +171,9 @@ struct OsxQuartzBridge {
 	OsxQuartzContext *contexts;
 	OsxQuartzPbuffer *pbuffers;
 	uint32 floatsegment;
+	uint32 floatprocess;
+	OsxQuartzProcessFunction process;
+	void *processowner;
 	int allocatedextensions;
 	uint32 width;
 	uint32 height;
@@ -228,10 +195,14 @@ struct OsxQuartzBridge {
 #define QUARTZFLUSHSURFACERECT 3
 #define QUARTZFLUSHWINDOWLIST 4
 #define QUARTZFLUSHOCCLUDER 5
-#define QUARTZFLUSHOPACITY 6
-#define QUARTZFLUSHOFFSCREEN 9
-#define QUARTZFLUSHHOSTALLOCATE 10
-#define QUARTZFLUSHHOSTZERO 11
+#define QUARTZFLUSHOWNLEVEL 6
+#define QUARTZFLUSHLEVEL 7
+#define QUARTZFLUSHOPAQUESHAPE 8
+#define QUARTZFLUSHREGIONBOUNDS 9
+#define QUARTZFLUSHRELEASEREGION 10
+#define QUARTZFLUSHOFFSCREEN 11
+#define QUARTZFLUSHHOSTALLOCATE 12
+#define QUARTZFLUSHHOSTZERO 13
 #define QUARTZFLUSHFRAME 0x200
 #define QUARTZFLUSHSCRATCH 0x40
 #define QUARTZHOSTSTRINGSIZE 128
@@ -243,6 +214,30 @@ struct OsxQuartzBridge {
 #define QUARTZSLOTGETINTEGER 105
 #define QUARTZATTRIBUTES 64
 #define QUARTZGETSTRING 118
+#define QUARTZCGLAUXBUFFERS 7
+#define QUARTZCGLCOLORSIZE 8
+#define QUARTZCGLALPHASIZE 11
+#define QUARTZCGLDEPTHSIZE 12
+#define QUARTZCGLSTENCILSIZE 13
+#define QUARTZCGLACCUMSIZE 14
+#define QUARTZCGLDISPLAYMASK 84
+#define QUARTZCGLVIRTUALSCREENCOUNT 128
+#define QUARTZCGLFULLSCREEN 54
+#define QUARTZCGLSAMPLEBUFFERS 55
+#define QUARTZCGLSAMPLES 56
+#define QUARTZCGLCOLORFLOAT 58
+#define QUARTZCGLRENDERERID 70
+#define QUARTZCGLACCELERATED 73
+#define QUARTZCGLPBUFFER 90
+#define QUARTZCGLREMOTEPBUFFER 91
+#define QUARTZCGLVIDEOMEMORY 120
+#define QUARTZCGLTEXTUREMEMORY 121
+#define QUARTZCGLCOLORSIZEINTEGER 32
+#define QUARTZRENDERERMEMORY 0x8000000u
+#define QUARTZRENDERERHARDWARE 0x21900u
+#define QUARTZSTOREMULTIPLE 47
+#define QUARTZSTACKREGISTER 1
+#define QUARTZPROLOGUESCAN 3
 
 static int OsxGuestGlGuestStore(OsxCpu *cpu, uint32 address, const uint8 *input, uint32 length)
 {
@@ -268,7 +263,7 @@ static int OsxGuestQuartzEngineSub(uint32 call)
 {
 	if (call >= 1 && call <= 336)
 		return (int)call - 1;
-	if (call >= 344 && call <= 386)
+	if (call >= 344 && call <= 403)
 		return (int)call + 62;
 	switch (call) {
 	case 338: return 400;
@@ -319,13 +314,40 @@ static int OsxGuestQuartzCallDraws(uint32 call)
 	return 0;
 }
 
+static void OsxGuestQuartzReturn(OsxCpu *cpu)
+{
+	uint32 word;
+	uint32 address;
+	uint32 value;
+	uint32 saved;
+	int index;
+	for (index = 1; index <= QUARTZPROLOGUESCAN; index++) {
+		if (!OsxGuestCpuReadVirtual(cpu, cpu->pc - index * 4, &word) || (word >> 26) != QUARTZSTOREMULTIPLE ||
+			((word >> 16) & 31) != QUARTZSTACKREGISTER)
+			continue;
+		address = cpu->gpr[QUARTZSTACKREGISTER] + (uint32)(int32)(int16)(word & 0xffff);
+		for (saved = (word >> 21) & 31; saved < 32; saved++, address += 4)
+			if (OsxGuestCpuReadVirtual(cpu, address, &value))
+				cpu->gpr[saved] = value;
+	}
+	cpu->nextpc = cpu->lr & ~3u;
+}
+
 static int OsxGuestQuartzAttributeHasValue(uint32 attribute)
 {
 	switch (attribute) {
-	case 7: case 8: case 11: case 12: case 13: case 14: case 55: case 56: case 70: case 84: case 128:
+	case QUARTZCGLAUXBUFFERS: case QUARTZCGLCOLORSIZE: case QUARTZCGLALPHASIZE: case QUARTZCGLDEPTHSIZE:
+	case QUARTZCGLSTENCILSIZE: case QUARTZCGLACCUMSIZE: case QUARTZCGLSAMPLEBUFFERS: case QUARTZCGLSAMPLES:
+	case QUARTZCGLRENDERERID: case QUARTZCGLDISPLAYMASK: case QUARTZCGLVIRTUALSCREENCOUNT:
 		return 1;
 	}
 	return 0;
+}
+
+static void OsxGuestQuartzMarkFloat(OsxQuartzBridge *bridge, OsxCpu *cpu)
+{
+	bridge->floatsegment = cpu->sr[0];
+	bridge->floatprocess = bridge->process(bridge->processowner, cpu);
 }
 
 static void OsxGuestQuartzRelaxPixelFormat(OsxQuartzBridge *bridge, OsxCpu *cpu, uint32 address)
@@ -338,10 +360,14 @@ static void OsxGuestQuartzRelaxPixelFormat(OsxQuartzBridge *bridge, OsxCpu *cpu,
 	for (source = 0; source < QUARTZATTRIBUTES; source++) {
 		if (!OsxGuestCpuReadVirtual(cpu, address + source * 4, &attribute))
 			return;
-		if (attribute == 54 || attribute == 73 || attribute == 90 || attribute == 91)
+		if (attribute == QUARTZCGLFULLSCREEN || attribute == QUARTZCGLACCELERATED || attribute == QUARTZCGLPBUFFER || attribute == QUARTZCGLREMOTEPBUFFER)
 			continue;
-		if (attribute == 58)
-			bridge->floatsegment = cpu->sr[0];
+		if (attribute == QUARTZCGLCOLORFLOAT)
+			OsxGuestQuartzMarkFloat(bridge, cpu);
+		if (attribute == QUARTZCGLRENDERERID && OsxGuestCpuReadVirtual(cpu, address + (source + 1) * 4, &value) && value == QUARTZRENDERERHARDWARE) {
+			source++;
+			continue;
+		}
 		OsxGuestCpuWriteVirtual(cpu, address + target * 4, attribute);
 		target++;
 		if (!attribute)
@@ -350,10 +376,10 @@ static void OsxGuestQuartzRelaxPixelFormat(OsxQuartzBridge *bridge, OsxCpu *cpu,
 			source++;
 			if (!OsxGuestCpuReadVirtual(cpu, address + source * 4, &value))
 				return;
-			if (attribute == 55 || attribute == 56)
+			if (attribute == QUARTZCGLSAMPLEBUFFERS || attribute == QUARTZCGLSAMPLES)
 				value = 0;
-			if (attribute == 8 && value > 32)
-				bridge->floatsegment = cpu->sr[0];
+			if (attribute == QUARTZCGLCOLORSIZE && value > QUARTZCGLCOLORSIZEINTEGER)
+				OsxGuestQuartzMarkFloat(bridge, cpu);
 			OsxGuestCpuWriteVirtual(cpu, address + target * 4, value);
 			target++;
 		}
@@ -361,7 +387,8 @@ static void OsxGuestQuartzRelaxPixelFormat(OsxQuartzBridge *bridge, OsxCpu *cpu,
 }
 
 OsxQuartzBridge *OsxGuestCreateQuartzBridge(uint32 width, uint32 height, uint32 library, uint32 strings, int extensions, int allocatedextensions,
-	uint32 allocate, uint32 clear, uint8 *vram, uint32 rowbytes, OsxHostVideo *video, uint8 **present, const uint32 *windowcalls)
+	uint32 allocate, uint32 clear, uint8 *vram, uint32 rowbytes, OsxHostVideo *video, uint8 **present, const uint32 *windowcalls,
+	OsxQuartzProcessFunction process, void *processowner)
 {
 	OsxQuartzBridge *bridge;
 	bridge = (OsxQuartzBridge *)calloc(1, sizeof(*bridge));
@@ -379,6 +406,8 @@ OsxQuartzBridge *OsxGuestCreateQuartzBridge(uint32 width, uint32 height, uint32 
 		bridge->video = video;
 		bridge->present = present;
 		bridge->windowcalls = windowcalls;
+		bridge->process = process;
+		bridge->processowner = processowner;
 	}
 	return bridge;
 }
@@ -395,7 +424,7 @@ void OsxGuestQuartzResize(OsxQuartzBridge *bridge, uint32 width, uint32 height)
 		return;
 	MetalCompositorResize(width, height, GLBRIDGEDEPTH32, bridge->rowbytes, bridge->rowbytes, *bridge->present, bridge->rowbytes * height);
 	dmc_request_mode_switch(&mode);
-	OsxGuestHostSuspendFrame(bridge->video);
+	OsxGuestHostSuspendFrame(bridge->video, *bridge->present);
 }
 
 static void OsxGuestQuartzFreeContext(OsxQuartzContext *context)
@@ -422,11 +451,74 @@ void OsxGuestDestroyQuartzBridge(OsxQuartzBridge *bridge)
 	free(bridge);
 }
 
-static OsxQuartzPbuffer *OsxGuestQuartzFindPbuffer(OsxQuartzBridge *bridge, uint32 address, uint32 segment)
+static int OsxGuestQuartzOwnerLive(const uint32 *processes, const uint32 *spaces, uint32 count, uint32 mask, uint32 segment, uint32 process)
+{
+	uint32 index;
+	for (index = 0; index < count; index++)
+		if (processes[index] == process && spaces[index] == (segment & mask))
+			return 1;
+	return 0;
+}
+
+void OsxGuestQuartzKeepProcesses(OsxQuartzBridge *bridge, const uint32 *processes, const uint32 *spaces, uint32 count, uint32 mask)
+{
+	OsxQuartzContext **context;
+	OsxQuartzContext *dead;
+	OsxQuartzPbuffer **pbuffer;
+	OsxQuartzPbuffer *stale;
+	context = &bridge->contexts;
+	while (*context) {
+		dead = *context;
+		if (!OsxGuestQuartzOwnerLive(processes, spaces, count, mask, dead->segment, dead->process) && dead->flushstep == QUARTZFLUSHIDLE) {
+			*context = dead->next;
+			OsxGuestQuartzFreeContext(dead);
+		} else
+			context = &dead->next;
+	}
+	pbuffer = &bridge->pbuffers;
+	while (*pbuffer) {
+		stale = *pbuffer;
+		if (!OsxGuestQuartzOwnerLive(processes, spaces, count, mask, stale->segment, stale->process)) {
+			*pbuffer = stale->next;
+			free(stale);
+		} else
+			pbuffer = &stale->next;
+	}
+	if (bridge->floatsegment && !OsxGuestQuartzOwnerLive(processes, spaces, count, mask, bridge->floatsegment, bridge->floatprocess)) {
+		bridge->floatsegment = 0;
+		bridge->floatprocess = 0;
+	}
+}
+
+int OsxGuestQuartzFullScreen(OsxQuartzBridge *bridge)
+{
+	OsxQuartzContext *context;
+	for (context = bridge->contexts; context; context = context->next)
+		if (context->fullscreen)
+			return 1;
+	return 0;
+}
+
+static void OsxGuestQuartzDropStale(OsxQuartzBridge *bridge, uint32 segment, uint32 process)
+{
+	OsxQuartzContext **context;
+	OsxQuartzContext *dead;
+	context = &bridge->contexts;
+	while (*context) {
+		dead = *context;
+		if (dead->segment == segment && dead->process != process && dead->flushstep == QUARTZFLUSHIDLE) {
+			*context = dead->next;
+			OsxGuestQuartzFreeContext(dead);
+		} else
+			context = &dead->next;
+	}
+}
+
+static OsxQuartzPbuffer *OsxGuestQuartzFindPbuffer(OsxQuartzBridge *bridge, uint32 address, const OsxQuartzContext *context)
 {
 	OsxQuartzPbuffer *pbuffer;
 	for (pbuffer = bridge->pbuffers; pbuffer; pbuffer = pbuffer->next)
-		if (pbuffer->address == address && pbuffer->segment == segment)
+		if (pbuffer->address == address && pbuffer->segment == context->segment && pbuffer->process == context->process)
 			return pbuffer;
 	return NULL;
 }
@@ -435,20 +527,21 @@ static int OsxGuestQuartzAttachPbuffer(OsxQuartzBridge *bridge, OsxCpu *cpu, Osx
 	uint32 width, uint32 height)
 {
 	OsxQuartzPbuffer *pbuffer;
-	pbuffer = OsxGuestQuartzFindPbuffer(bridge, address, context->segment);
+	pbuffer = OsxGuestQuartzFindPbuffer(bridge, address, context);
 	if (!pbuffer) {
 		pbuffer = (OsxQuartzPbuffer *)calloc(1, sizeof(*pbuffer));
 		if (!pbuffer)
 			return 0;
 		pbuffer->address = address;
 		pbuffer->segment = context->segment;
+		pbuffer->process = context->process;
 		pbuffer->next = bridge->pbuffers;
 		bridge->pbuffers = pbuffer;
 	}
 	if (pbuffer->width != width || pbuffer->height != height) {
 		if (pbuffer->texture)
 			OsxGl::OsxGuestEngineTextureDelete(context->gl, cpu, pbuffer->texture);
-		pbuffer->texture = OsxGl::OsxGuestEngineTextureCreate(context->gl, cpu, width, height, bridge->floatsegment == context->segment);
+		pbuffer->texture = OsxGl::OsxGuestEngineTextureCreate(context->gl, cpu, width, height, bridge->floatsegment == context->segment && bridge->floatprocess == context->process);
 		pbuffer->width = width;
 		pbuffer->height = height;
 	}
@@ -476,26 +569,29 @@ static int OsxGuestQuartzPbufferTexture(OsxQuartzBridge *bridge, OsxCpu *cpu)
 	for (context = bridge->contexts; context; context = context->next)
 		if (context->segment == cpu->sr[0] && context->address == cpu->gpr[3])
 			destination = context;
-	pbuffer = OsxGuestQuartzFindPbuffer(bridge, cpu->gpr[4], cpu->sr[0]);
-	if (!destination || !pbuffer)
+	if (!destination)
+		return 0;
+	pbuffer = OsxGuestQuartzFindPbuffer(bridge, cpu->gpr[4], destination);
+	if (!pbuffer)
 		return 0;
 	OsxGl::OsxGuestEngineCopyTexture(destination->gl, cpu, pbuffer->texture, pbuffer->width, pbuffer->height, internalformat, target);
 	cpu->gpr[3] = 0;
-	cpu->nextpc = cpu->lr & ~3u;
+	OsxGuestQuartzReturn(cpu);
 	return 1;
 }
 
 static uint8 *OsxGuestQuartzPixels(OsxQuartzContext *context, uint32 size);
 
-static void OsxGuestQuartzPresent(OsxQuartzBridge *bridge, OsxCpu *cpu, OsxQuartzContext *context)
+static void OsxGuestQuartzPresent(OsxQuartzBridge *bridge, OsxCpu *cpu, OsxQuartzContext *context, uint32 depth)
 {
 	uint8 *pixels;
-	if (context->pbuffer || context->viewport[2] != bridge->width || context->viewport[3] != bridge->height)
+	context->fullscreen = !context->pbuffer && context->viewport[2] == bridge->width && context->viewport[3] == bridge->height;
+	if (!context->fullscreen)
 		return;
 	OsxGuestQuartzEnsureTarget(bridge, cpu, context, bridge->width, bridge->height);
 	pixels = OsxGuestQuartzPixels(context, bridge->width * bridge->height * 4);
 	if (pixels)
-		OsxGuestGlPublishFrame(context->gl, cpu, pixels, bridge->width, bridge->height, bridge->vram, bridge->rowbytes);
+		OsxGuestGlPublishFrame(context->gl, cpu, pixels, bridge->width, bridge->height, bridge->vram, bridge->rowbytes, depth);
 }
 
 static void OsxGuestQuartzGuestCall(OsxCpu *cpu, OsxQuartzContext *context, int step, uint32 target)
@@ -573,7 +669,7 @@ static void OsxGuestQuartzWindowCapture(OsxCpu *cpu, OsxQuartzContext *context)
 	pixels = OsxGuestQuartzPixels(context, context->flushwidth * context->flushheight * 4);
 	if (!pixels)
 		return;
-	OsxGl::OsxGuestEngineReadPixels(context->gl, cpu, context->flushwidth, context->flushheight, pixels);
+OsxGl::OsxGuestEngineReadPixels(context->gl, cpu, context->flushwidth, context->flushheight, pixels);
 	context->presentwidth = context->flushwidth;
 	context->presentheight = context->flushheight;
 	context->windowwanted = 0;
@@ -583,7 +679,7 @@ static void OsxGuestQuartzWindowSkipFlush(OsxCpu *cpu, OsxQuartzContext *context
 {
 	OsxGuestQuartzWindowCapture(cpu, context);
 	cpu->gpr[3] = 0;
-	cpu->nextpc = cpu->lr & ~3u;
+	OsxGuestQuartzReturn(cpu);
 }
 
 static int OsxGuestQuartzWindowSettled(OsxQuartzContext *context)
@@ -604,6 +700,14 @@ static void OsxGuestQuartzGeometryFinish(OsxCpu *cpu, OsxQuartzContext *context)
 {
 	int show;
 	context->geometrytime = OsxGuestHostNanoseconds();
+	if (context->idle) {
+		memcpy(cpu->gpr, context->idlegpr, sizeof(context->idlegpr));
+		cpu->lr = context->idlelr;
+		cpu->ctr = context->idlectr;
+		context->idle = 0;
+		context->flushstep = QUARTZFLUSHIDLE;
+		return;
+	}
 	show = !context->windowshown || context->shownwidth != context->flushwidth || context->shownheight != context->flushheight;
 	context->windowshown = 1;
 	context->shownwidth = context->flushwidth;
@@ -636,7 +740,6 @@ static void OsxGuestQuartzNextOccluder(OsxQuartzBridge *bridge, OsxCpu *cpu, Osx
 		context->windowvisible = context->windowlistindex < context->windowlistcount;
 		context->geometryvalid = 1;
 		memcpy(context->occluders, context->pendingrects, sizeof(context->occluders));
-		memcpy(context->occluderopaque, context->pendingopaque, sizeof(context->occluderopaque));
 		context->occludercount = context->pendingcount;
 		OsxGuestQuartzGeometryFinish(cpu, context);
 		return;
@@ -650,7 +753,9 @@ static void OsxGuestQuartzNextOccluder(OsxQuartzBridge *bridge, OsxCpu *cpu, Osx
 static int OsxGuestQuartzWindowBegin(OsxQuartzBridge *bridge, OsxCpu *cpu, OsxQuartzContext *context, uint32 entry)
 {
 	if (!context->surfaceknown || !bridge->windowcalls[OSXQUARTZSCREENRECT] || !bridge->windowcalls[OSXQUARTZSURFACEBOUNDS] ||
-		!bridge->windowcalls[OSXQUARTZWINDOWLIST] || !bridge->windowcalls[OSXQUARTZOPACITY])
+		!bridge->windowcalls[OSXQUARTZWINDOWLIST] || !bridge->windowcalls[OSXQUARTZWINDOWLEVEL] ||
+		!bridge->windowcalls[OSXQUARTZOPAQUESHAPE] || !bridge->windowcalls[OSXQUARTZREGIONBOUNDS] ||
+		!bridge->windowcalls[OSXQUARTZRELEASEREGION])
 		return 0;
 	if (!context->appviewport && !context->original[QUARTZSLOTGETINTEGER])
 		return 0;
@@ -710,6 +815,21 @@ static void OsxGuestQuartzWindowRectDone(OsxQuartzBridge *bridge, OsxCpu *cpu, O
 	}
 	cpu->gpr[3] = context->connection;
 	cpu->gpr[4] = context->windowid;
+	cpu->gpr[5] = context->flushstack + QUARTZFLUSHSCRATCH + QUARTZLISTCOUNT;
+	OsxGuestQuartzGuestCall(cpu, context, QUARTZFLUSHOWNLEVEL, bridge->windowcalls[OSXQUARTZWINDOWLEVEL]);
+}
+
+static void OsxGuestQuartzOwnLevelDone(OsxQuartzBridge *bridge, OsxCpu *cpu, OsxQuartzContext *context)
+{
+	uint32 level;
+	if (cpu->gpr[3] || !OsxGuestCpuReadVirtual(cpu, context->flushstack + QUARTZFLUSHSCRATCH + QUARTZLISTCOUNT, &level)) {
+		context->geometryvalid = 0;
+		OsxGuestQuartzGeometryFinish(cpu, context);
+		return;
+	}
+	context->ownlevel = (int32)level;
+	cpu->gpr[3] = context->connection;
+	cpu->gpr[4] = context->windowid;
 	cpu->gpr[5] = context->surfaceid;
 	cpu->gpr[6] = context->flushstack + QUARTZFLUSHSCRATCH + QUARTZRECTSURFACE;
 	OsxGuestQuartzGuestCall(cpu, context, QUARTZFLUSHSURFACERECT, bridge->windowcalls[OSXQUARTZSURFACEBOUNDS]);
@@ -754,39 +874,129 @@ static void OsxGuestQuartzWindowListDone(OsxQuartzBridge *bridge, OsxCpu *cpu, O
 	OsxGuestQuartzNextOccluder(bridge, cpu, context);
 }
 
-static void OsxGuestQuartzOccluderDone(OsxQuartzBridge *bridge, OsxCpu *cpu, OsxQuartzContext *context)
+static void OsxGuestQuartzSkipOccluder(OsxQuartzBridge *bridge, OsxCpu *cpu, OsxQuartzContext *context)
 {
-	uint32 address;
-	address = context->flushstack + QUARTZFLUSHSCRATCH + QUARTZLISTCOUNT;
-	if (cpu->gpr[3] || !OsxGuestQuartzReadRect(cpu, context->flushstack + QUARTZFLUSHSCRATCH, context->pendingrects[context->pendingcount]) ||
-		!OsxGuestCpuWriteVirtual(cpu, address, 0)) {
-		context->windowlistindex++;
-		OsxGuestQuartzNextOccluder(bridge, cpu, context);
-		return;
-	}
-	cpu->gpr[3] = context->connection;
-	cpu->gpr[4] = context->windowlist[context->windowlistindex];
-	cpu->gpr[5] = address;
-	OsxGuestQuartzGuestCall(cpu, context, QUARTZFLUSHOPACITY, bridge->windowcalls[OSXQUARTZOPACITY]);
-}
-
-static void OsxGuestQuartzOpacityDone(OsxQuartzBridge *bridge, OsxCpu *cpu, OsxQuartzContext *context)
-{
-	uint32 opaque;
-	if (cpu->gpr[3] || !OsxGuestCpuReadVirtual(cpu, context->flushstack + QUARTZFLUSHSCRATCH + QUARTZLISTCOUNT, &opaque))
-		opaque = 0;
-	context->pendingopaque[context->pendingcount] = opaque != 0;
-	context->pendingcount++;
 	context->windowlistindex++;
 	OsxGuestQuartzNextOccluder(bridge, cpu, context);
 }
 
-static uint32 OsxGuestQuartzPixelValue(const uint8 *pixel)
+static int OsxGuestQuartzRectsMeet(const int32 *first, const int32 *second)
 {
-	return ((uint32)pixel[1] << 16) | ((uint32)pixel[2] << 8) | pixel[3];
+	return first[0] < second[0] + second[2] && first[0] + first[2] > second[0] && first[1] < second[1] + second[3] && first[1] + first[3] > second[1];
 }
 
-static uint32 OsxGuestQuartzBackingPixel(OsxQuartzBridge *bridge, int32 left, int32 top, int32 right, int32 bottom)
+static void OsxGuestQuartzOccluderDone(OsxQuartzBridge *bridge, OsxCpu *cpu, OsxQuartzContext *context)
+{
+	int32 *frame;
+	frame = context->pendingrects[context->pendingcount];
+	if (cpu->gpr[3] || !OsxGuestQuartzReadRect(cpu, context->flushstack + QUARTZFLUSHSCRATCH, frame) ||
+		!OsxGuestQuartzRectsMeet(frame, context->windowrect)) {
+		OsxGuestQuartzSkipOccluder(bridge, cpu, context);
+		return;
+	}
+	cpu->gpr[3] = context->connection;
+	cpu->gpr[4] = context->windowlist[context->windowlistindex];
+	cpu->gpr[5] = context->flushstack + QUARTZFLUSHSCRATCH + QUARTZLISTCOUNT;
+	OsxGuestQuartzGuestCall(cpu, context, QUARTZFLUSHLEVEL, bridge->windowcalls[OSXQUARTZWINDOWLEVEL]);
+}
+
+static void OsxGuestQuartzLevelDone(OsxQuartzBridge *bridge, OsxCpu *cpu, OsxQuartzContext *context)
+{
+	uint32 leveladdress;
+	uint32 level;
+	leveladdress = context->flushstack + QUARTZFLUSHSCRATCH + QUARTZLISTCOUNT;
+	if (cpu->gpr[3] || !OsxGuestCpuReadVirtual(cpu, leveladdress, &level)) {
+		OsxGuestQuartzSkipOccluder(bridge, cpu, context);
+		return;
+	}
+	if ((int32)level <= context->ownlevel) {
+		context->pendingcount++;
+		OsxGuestQuartzSkipOccluder(bridge, cpu, context);
+		return;
+	}
+	if (!OsxGuestCpuWriteVirtual(cpu, leveladdress, 0)) {
+		OsxGuestQuartzSkipOccluder(bridge, cpu, context);
+		return;
+	}
+	cpu->gpr[3] = context->connection;
+	cpu->gpr[4] = context->windowlist[context->windowlistindex];
+	cpu->gpr[5] = leveladdress;
+	OsxGuestQuartzGuestCall(cpu, context, QUARTZFLUSHOPAQUESHAPE, bridge->windowcalls[OSXQUARTZOPAQUESHAPE]);
+}
+
+static void OsxGuestQuartzOpaqueShapeDone(OsxQuartzBridge *bridge, OsxCpu *cpu, OsxQuartzContext *context)
+{
+	if (cpu->gpr[3] || !OsxGuestCpuReadVirtual(cpu, context->flushstack + QUARTZFLUSHSCRATCH + QUARTZLISTCOUNT, &context->pendingregion) ||
+		!context->pendingregion) {
+		OsxGuestQuartzSkipOccluder(bridge, cpu, context);
+		return;
+	}
+	cpu->gpr[3] = context->pendingregion;
+	cpu->gpr[4] = context->flushstack + QUARTZFLUSHSCRATCH;
+	OsxGuestQuartzGuestCall(cpu, context, QUARTZFLUSHREGIONBOUNDS, bridge->windowcalls[OSXQUARTZREGIONBOUNDS]);
+}
+
+static void OsxGuestQuartzRegionBoundsDone(OsxQuartzBridge *bridge, OsxCpu *cpu, OsxQuartzContext *context)
+{
+	int32 frame[4];
+	int32 *opaque;
+	opaque = context->pendingrects[context->pendingcount];
+	memcpy(frame, opaque, sizeof(frame));
+	if (!cpu->gpr[3] && OsxGuestQuartzReadRect(cpu, context->flushstack + QUARTZFLUSHSCRATCH, opaque) && opaque[2] > 0 && opaque[3] > 0) {
+		if (opaque[0] >= 0 && opaque[1] >= 0 && opaque[0] + opaque[2] <= frame[2] && opaque[1] + opaque[3] <= frame[3]) {
+			opaque[0] += frame[0];
+			opaque[1] += frame[1];
+		}
+		context->pendingcount++;
+	}
+	cpu->gpr[3] = context->pendingregion;
+	OsxGuestQuartzGuestCall(cpu, context, QUARTZFLUSHRELEASEREGION, bridge->windowcalls[OSXQUARTZRELEASEREGION]);
+}
+
+static uint32 OsxGuestQuartzPixelValue(const uint8 *row, int32 x, uint32 depth)
+{
+	uint8 pixel[4];
+	if (depth == OSXDEPTHTHOUSANDS) {
+		OsxGuestDisplayExpandPixels(pixel, row + x * 2, 1);
+		row = pixel;
+		x = 0;
+	}
+	return ((uint32)row[x * 4 + 1] << 16) | ((uint32)row[x * 4 + 2] << 8) | row[x * 4 + 3];
+}
+
+static void OsxGuestQuartzBlendPixel(uint8 *target, const uint8 *gl, uint32 screen, uint32 backing)
+{
+	uint32 base;
+	uint32 value;
+	int channel;
+	target[0] = gl[0];
+	for (channel = 1; channel < 4; channel++) {
+		base = (backing >> ((3 - channel) * 8)) & 0xff;
+		value = (screen >> ((3 - channel) * 8)) & 0xff;
+		if (base)
+			value = gl[channel] * value / base;
+		if (value > 0xff)
+			value = 0xff;
+		target[channel] = (uint8)value;
+	}
+}
+
+static int OsxGuestQuartzInsideRect(const int32 *rect, int32 x, int32 y)
+{
+	return x >= rect[0] && x < rect[0] + rect[2] && y >= rect[1] && y < rect[1] + rect[3];
+}
+
+static int OsxGuestQuartzInsideOccluder(OsxQuartzContext *context, const int32 *active, uint32 overlaps, int32 x, int32 y)
+{
+	uint32 occluder;
+	for (occluder = 0; occluder < overlaps; occluder++)
+		if (OsxGuestQuartzInsideRect(context->occluders[active[occluder]], x, y))
+			return 1;
+	return 0;
+}
+
+static uint32 OsxGuestQuartzBackingPixel(OsxQuartzBridge *bridge, OsxQuartzContext *context, const int32 *active, uint32 overlaps,
+	int32 left, int32 top, int32 right, int32 bottom, uint32 depth)
 {
 	uint32 candidate;
 	uint32 value;
@@ -797,7 +1007,9 @@ static uint32 OsxGuestQuartzBackingPixel(OsxQuartzBridge *bridge, int32 left, in
 	votes = 0;
 	for (y = top; y < bottom; y++) {
 		for (x = left; x < right; x++) {
-			value = OsxGuestQuartzPixelValue(bridge->vram + y * bridge->rowbytes + x * 4);
+			if (OsxGuestQuartzInsideOccluder(context, active, overlaps, x, y))
+				continue;
+			value = OsxGuestQuartzPixelValue(bridge->vram + y * bridge->rowbytes, x, depth);
 			if (!votes) {
 				candidate = value;
 				votes = 1;
@@ -810,7 +1022,7 @@ static uint32 OsxGuestQuartzBackingPixel(OsxQuartzBridge *bridge, int32 left, in
 	return candidate;
 }
 
-static void OsxGuestQuartzComposeWindow(OsxQuartzBridge *bridge, OsxQuartzContext *context, uint8 *present)
+static void OsxGuestQuartzComposeWindow(OsxQuartzBridge *bridge, OsxQuartzContext *context, uint8 *present, uint32 depth)
 {
 	int32 surfaceleft;
 	int32 surfacetop;
@@ -822,11 +1034,12 @@ static void OsxGuestQuartzComposeWindow(OsxQuartzBridge *bridge, OsxQuartzContex
 	int32 last;
 	uint32 index;
 	uint32 overlaps;
-	uint32 occluder;
 	uint8 *pixels;
-	int covered;
-	int translucent;
+	uint8 *target;
+	uint32 screen;
 	uint32 backing;
+	int32 surface[4];
+	int32 visiblebounds[4];
 	int32 active[QUARTZWINDOWLISTMAX];
 	if (!context->geometryvalid || !context->windowvisible || !context->presentwidth || !context->presentheight)
 		return;
@@ -837,23 +1050,28 @@ static void OsxGuestQuartzComposeWindow(OsxQuartzBridge *bridge, OsxQuartzContex
 		return;
 	context->windowwanted = 1;
 	surfaceleft = context->windowrect[0] + context->surfacerect[0];
-	if (context->surfacerect[1] + context->surfacerect[3] == context->windowrect[3])
-		surfacetop = context->windowrect[1] + context->surfacerect[1];
-	else
-		surfacetop = context->windowrect[1] + context->windowrect[3] - context->surfacerect[1] - context->surfacerect[3];
+	surfacetop = context->windowrect[1] + context->surfacerect[1];
 	overlaps = 0;
-	translucent = 0;
-	backing = 0;
-	for (index = 0; index < context->occludercount; index++) {
-		if (context->occluders[index][0] < surfaceleft + width && context->occluders[index][0] + context->occluders[index][2] > surfaceleft &&
-			context->occluders[index][1] < surfacetop + height && context->occluders[index][1] + context->occluders[index][3] > surfacetop) {
+	surface[0] = surfaceleft;
+	surface[1] = surfacetop;
+	surface[2] = width;
+	surface[3] = height;
+	for (index = 0; index < context->occludercount; index++)
+		if (OsxGuestQuartzRectsMeet(context->occluders[index], surface))
 			active[overlaps++] = (int32)index;
-			if (!context->occluderopaque[index])
-				translucent = 1;
-		}
-	}
-	if (translucent && surfaceleft >= 0 && surfacetop >= 0 && surfaceleft + width <= (int32)bridge->width && surfacetop + height <= (int32)bridge->height)
-		backing = OsxGuestQuartzBackingPixel(bridge, surfaceleft, surfacetop, surfaceleft + width, surfacetop + height);
+	visiblebounds[0] = surfaceleft;
+	visiblebounds[1] = surfacetop;
+	visiblebounds[2] = surfaceleft + width;
+	visiblebounds[3] = surfacetop + height;
+	if (visiblebounds[0] < 0)
+		visiblebounds[0] = 0;
+	if (visiblebounds[1] < 0)
+		visiblebounds[1] = 0;
+	if (visiblebounds[2] > (int32)bridge->width)
+		visiblebounds[2] = (int32)bridge->width;
+	if (visiblebounds[3] > (int32)bridge->height)
+		visiblebounds[3] = (int32)bridge->height;
+	backing = OsxGuestQuartzBackingPixel(bridge, context, active, overlaps, visiblebounds[0], visiblebounds[1], visiblebounds[2], visiblebounds[3], depth);
 	for (y = 0; y < height; y++) {
 		if (surfacetop + y < 0 || surfacetop + y >= (int32)bridge->height)
 			continue;
@@ -865,37 +1083,26 @@ static void OsxGuestQuartzComposeWindow(OsxQuartzBridge *bridge, OsxQuartzContex
 			last = (int32)bridge->width - surfaceleft;
 		if (first >= last)
 			continue;
-		if (!overlaps) {
-			memcpy(present + (surfacetop + y) * bridge->rowbytes + (surfaceleft + first) * 4,
-				pixels + ((height - 1 - y) * width + first) * 4, (size_t)(last - first) * 4);
-			continue;
-		}
 		for (x = first; x < last; x++) {
-			covered = 0;
-			for (occluder = 0; occluder < overlaps && !covered; occluder++) {
-				const int32 *rect = context->occluders[active[occluder]];
-				if (surfaceleft + x >= rect[0] && surfaceleft + x < rect[0] + rect[2] &&
-					surfacetop + y >= rect[1] && surfacetop + y < rect[1] + rect[3]) {
-					if (context->occluderopaque[active[occluder]] ||
-						OsxGuestQuartzPixelValue(bridge->vram + (surfacetop + y) * bridge->rowbytes + (surfaceleft + x) * 4) != backing)
-						covered = 1;
-				}
-			}
-			if (!covered)
-				memcpy(present + (surfacetop + y) * bridge->rowbytes + (surfaceleft + x) * 4,
-					pixels + ((height - 1 - y) * width + x) * 4, 4);
+			if (OsxGuestQuartzInsideOccluder(context, active, overlaps, surfaceleft + x, surfacetop + y))
+				continue;
+			target = present + (surfacetop + y) * bridge->rowbytes + (surfaceleft + x) * 4;
+			screen = OsxGuestQuartzPixelValue(bridge->vram + (surfacetop + y) * bridge->rowbytes, surfaceleft + x, depth);
+			if (screen == backing)
+				memcpy(target, pixels + ((height - 1 - y) * width + x) * 4, 4);
+			else if (overlaps)
+				OsxGuestQuartzBlendPixel(target, pixels + ((height - 1 - y) * width + x) * 4, screen, backing);
 		}
 	}
 }
 
-void OsxGuestQuartzComposeWindows(OsxQuartzBridge *bridge, const uint8 *vram, uint8 *present, uint32 size)
+void OsxGuestQuartzComposeWindows(OsxQuartzBridge *bridge, uint8 *present, uint32 depth)
 {
 	OsxQuartzContext *context;
-	memcpy(present, vram, size);
 	if (!bridge)
 		return;
 	for (context = bridge->contexts; context; context = context->next)
-		OsxGuestQuartzComposeWindow(bridge, context, present);
+		OsxGuestQuartzComposeWindow(bridge, context, present, depth);
 }
 
 static void OsxGuestQuartzOffscreenStore(OsxCpu *cpu, OsxQuartzContext *context)
@@ -944,7 +1151,7 @@ static int OsxGuestQuartzHostString(OsxQuartzBridge *bridge, OsxCpu *cpu, OsxQua
 	context->hoststringname = cpu->gpr[4];
 	if (context->hoststrings) {
 		cpu->gpr[3] = OsxGuestQuartzHostStringAddress(context);
-		cpu->nextpc = cpu->lr & ~3u;
+		OsxGuestQuartzReturn(cpu);
 		return 1;
 	}
 	if (!OsxGuestQuartzChainStart(cpu, context, QUARTZGETSTRING))
@@ -996,8 +1203,20 @@ static void OsxGuestQuartzChainAdvance(OsxQuartzBridge *bridge, OsxCpu *cpu, Osx
 	case QUARTZFLUSHOCCLUDER:
 		OsxGuestQuartzOccluderDone(bridge, cpu, context);
 		break;
-	case QUARTZFLUSHOPACITY:
-		OsxGuestQuartzOpacityDone(bridge, cpu, context);
+	case QUARTZFLUSHOWNLEVEL:
+		OsxGuestQuartzOwnLevelDone(bridge, cpu, context);
+		break;
+	case QUARTZFLUSHLEVEL:
+		OsxGuestQuartzLevelDone(bridge, cpu, context);
+		break;
+	case QUARTZFLUSHOPAQUESHAPE:
+		OsxGuestQuartzOpaqueShapeDone(bridge, cpu, context);
+		break;
+	case QUARTZFLUSHREGIONBOUNDS:
+		OsxGuestQuartzRegionBoundsDone(bridge, cpu, context);
+		break;
+	case QUARTZFLUSHRELEASEREGION:
+		OsxGuestQuartzSkipOccluder(bridge, cpu, context);
 		break;
 	case QUARTZFLUSHOFFSCREEN:
 		context->offscreenready = 1;
@@ -1088,7 +1307,43 @@ static int OsxGuestQuartzGlCall(OsxQuartzBridge *bridge, OsxQuartzContext *conte
 
 
 
-int OsxGuestQuartzBridgeCall(OsxQuartzBridge *bridge, OsxCpu *cpu, const uint32 *tails, uint32 call, FILE *log)
+int OsxGuestQuartzIdleGeometry(OsxQuartzBridge *bridge, OsxCpu *cpu, OsxQuartzEventLoopFunction eventloop, void *owner)
+{
+	OsxQuartzContext *context;
+	OsxQuartzContext *stalecontext;
+	uint64 now;
+	uint32 idlestack;
+	stalecontext = NULL;
+	now = OsxGuestHostNanoseconds();
+	for (context = bridge->contexts; context; context = context->next) {
+		if (context->segment != cpu->sr[0])
+			continue;
+		if (context->idle) {
+			if (cpu->pc != context->idlepc || cpu->gpr[1] != context->flushstack)
+				return 0;
+			OsxGuestQuartzChainAdvance(bridge, cpu, context);
+			return context->idle;
+		}
+		if (context->windowshown && context->surfaceknown && context->flushstep == QUARTZFLUSHIDLE &&
+			now - context->geometrytime > QUARTZGEOMETRYPERIOD)
+			stalecontext = context;
+	}
+	if (!stalecontext || !eventloop(owner, cpu))
+		return 0;
+	idlestack = (cpu->gpr[1] - QUARTZFLUSHFRAME) & ~15u;
+	if (!OsxGuestCpuWriteVirtual(cpu, idlestack, cpu->gpr[1]))
+		return 0;
+	memcpy(stalecontext->idlegpr, cpu->gpr, sizeof(stalecontext->idlegpr));
+	stalecontext->idlelr = cpu->lr;
+	stalecontext->idlectr = cpu->ctr;
+	stalecontext->idlepc = cpu->pc;
+	stalecontext->flushstack = idlestack;
+	stalecontext->idle = 1;
+	OsxGuestQuartzGeometryBegin(bridge, cpu, stalecontext);
+	return 1;
+}
+
+int OsxGuestQuartzBridgeCall(OsxQuartzBridge *bridge, OsxCpu *cpu, const uint32 *tails, uint32 call, uint32 depth, FILE *log)
 {
 	void *share;
 	OsxQuartzContext *context;
@@ -1099,6 +1354,7 @@ int OsxGuestQuartzBridgeCall(OsxQuartzBridge *bridge, OsxCpu *cpu, const uint32 
 	uint32 value;
 	uint32 slot;
 	uint32 next;
+	uint32 process;
 	int result;
 	context = NULL;
 	for (candidate = bridge->contexts; candidate; candidate = candidate->next) {
@@ -1108,7 +1364,7 @@ int OsxGuestQuartzBridgeCall(OsxQuartzBridge *bridge, OsxCpu *cpu, const uint32 
 		}
 	}
 	if (call == 1013) {
-		OsxGuestQuartzBridgeCall(bridge, cpu, tails, 1023, log);
+		OsxGuestQuartzBridgeCall(bridge, cpu, tails, 1023, depth, log);
 		for (candidate = bridge->contexts; candidate; candidate = candidate->next) {
 			if (candidate->segment == cpu->sr[0] && candidate->address == cpu->gpr[3]) {
 				candidate->connection = cpu->gpr[4];
@@ -1139,7 +1395,7 @@ int OsxGuestQuartzBridgeCall(OsxQuartzBridge *bridge, OsxCpu *cpu, const uint32 
 		return 1;
 	}
 	if (call == 1014) {
-		OsxGuestQuartzBridgeCall(bridge, cpu, tails, 1023, log);
+		OsxGuestQuartzBridgeCall(bridge, cpu, tails, 1023, depth, log);
 		for (candidate = bridge->contexts; candidate; candidate = candidate->next) {
 			if (candidate->segment == cpu->sr[0] && candidate->address == cpu->gpr[3]) {
 				candidate->offscreenwidth = cpu->gpr[4];
@@ -1155,19 +1411,21 @@ int OsxGuestQuartzBridgeCall(OsxQuartzBridge *bridge, OsxCpu *cpu, const uint32 
 	}
 	if (call == 1011) {
 		cpu->gpr[3] = 0;
-		cpu->nextpc = cpu->lr & ~3u;
+		OsxGuestQuartzReturn(cpu);
 		return 1;
 	}
 	if (call == 1017 || call == 1012) {
 		cpu->gpr[0] = cpu->lr;
 		value = 0;
-		if (cpu->gpr[5] == 73 || cpu->gpr[5] == 54)
+		if (cpu->gpr[5] == QUARTZCGLACCELERATED || (call == 1017 && cpu->gpr[5] == QUARTZCGLFULLSCREEN))
 			value = 1;
-		else if (cpu->gpr[5] == 120 || cpu->gpr[5] == 121)
-			value = 0x8000000;
+		else if (cpu->gpr[5] == QUARTZCGLVIDEOMEMORY || cpu->gpr[5] == QUARTZCGLTEXTUREMEMORY)
+			value = QUARTZRENDERERMEMORY;
+		else if (call == 1017 && cpu->gpr[5] == QUARTZCGLRENDERERID && cpu->gpr[4] == 0)
+			value = QUARTZRENDERERHARDWARE;
 		if (value && OsxGuestCpuWriteVirtual(cpu, cpu->gpr[6], value)) {
 			cpu->gpr[3] = 0;
-			cpu->nextpc = cpu->lr & ~3u;
+			OsxGuestQuartzReturn(cpu);
 		}
 		return 1;
 	}
@@ -1180,16 +1438,16 @@ int OsxGuestQuartzBridgeCall(OsxQuartzBridge *bridge, OsxCpu *cpu, const uint32 
 				candidate->drawableflush = 1;
 				if (OsxGuestQuartzWindowContext(bridge, candidate) && OsxGuestQuartzWindowBegin(bridge, cpu, candidate, call))
 					return 1;
-				OsxGuestQuartzPresent(bridge, cpu, candidate);
+				OsxGuestQuartzPresent(bridge, cpu, candidate, depth);
 				cpu->gpr[3] = 0;
-				cpu->nextpc = cpu->lr & ~3u;
+				OsxGuestQuartzReturn(cpu);
 				break;
 			}
 		}
 		return 1;
 	}
 	if (call == 1019) {
-		OsxGuestQuartzBridgeCall(bridge, cpu, tails, 1023, log);
+		OsxGuestQuartzBridgeCall(bridge, cpu, tails, 1023, depth, log);
 		for (candidate = bridge->contexts; candidate; candidate = candidate->next) {
 			if (candidate->segment == cpu->sr[0] && candidate->address == cpu->gpr[3]) {
 				if (!OsxGuestCpuReadVirtual(cpu, cpu->gpr[4] + 24, &address) ||
@@ -1198,7 +1456,7 @@ int OsxGuestQuartzBridgeCall(OsxQuartzBridge *bridge, OsxCpu *cpu, const uint32 
 					break;
 				if (OsxGuestQuartzAttachPbuffer(bridge, cpu, candidate, cpu->gpr[4], address, value)) {
 					cpu->gpr[3] = 0;
-					cpu->nextpc = cpu->lr & ~3u;
+					OsxGuestQuartzReturn(cpu);
 				}
 				break;
 			}
@@ -1214,10 +1472,10 @@ int OsxGuestQuartzBridgeCall(OsxQuartzBridge *bridge, OsxCpu *cpu, const uint32 
 		value = cpu->gpr[0];
 		engine = cpu->gpr[3];
 		cpu->gpr[3] -= 4;
-		OsxGuestQuartzBridgeCall(bridge, cpu, tails, 1023, log);
+		OsxGuestQuartzBridgeCall(bridge, cpu, tails, 1023, depth, log);
 		cpu->gpr[0] = value;
 		cpu->gpr[3] = engine;
-		cpu->nextpc = cpu->lr & ~3u;
+		OsxGuestQuartzReturn(cpu);
 		return 1;
 	}
 	if (!call || call == 1023) {
@@ -1229,9 +1487,11 @@ int OsxGuestQuartzBridgeCall(OsxQuartzBridge *bridge, OsxCpu *cpu, const uint32 
 		if (!address || !OsxGuestCpuReadVirtual(cpu, address, &engine) || !engine ||
 			!OsxGuestCpuReadVirtual(cpu, base + tails[0], &value) || value != OSXQUARTZTRAP)
 			return 1;
+		process = bridge->process(bridge->processowner, cpu);
+		OsxGuestQuartzDropStale(bridge, cpu->sr[0], process);
 		share = NULL;
 		for (candidate = bridge->contexts; candidate; candidate = candidate->next) {
-			if (candidate->segment != cpu->sr[0])
+			if (candidate->segment != cpu->sr[0] || candidate->process != process)
 				continue;
 			share = candidate->gl;
 			if (candidate->engine == engine)
@@ -1250,6 +1510,7 @@ int OsxGuestQuartzBridgeCall(OsxQuartzBridge *bridge, OsxCpu *cpu, const uint32 
 				context->strings = base + bridge->strings;
 			context->extensions = bridge->extensions;
 			context->segment = cpu->sr[0];
+			context->process = process;
 			context->next = bridge->contexts;
 			bridge->contexts = context;
 			if (log)
@@ -1290,9 +1551,9 @@ int OsxGuestQuartzBridgeCall(OsxQuartzBridge *bridge, OsxCpu *cpu, const uint32 
 	if (cpu->nextpc != next)
 		return 1;
 	if (result) {
-		cpu->nextpc = cpu->lr & ~3u;
+		OsxGuestQuartzReturn(cpu);
 		if (call == 591 || (call == 91 && !context->drawableflush && !OsxGuestQuartzWindowContext(bridge, context)))
-			OsxGuestQuartzPresent(bridge, cpu, context);
+			OsxGuestQuartzPresent(bridge, cpu, context, depth);
 		if (context->offscreenaddress && (call == 90 || call == 91 || call == 589 || call == 590))
 			OsxGuestQuartzOffscreenFlush(bridge, cpu, context, call);
 		else if (call == 91 && !context->drawableflush && OsxGuestQuartzWindowContext(bridge, context))

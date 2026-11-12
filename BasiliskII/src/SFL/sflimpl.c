@@ -37,5 +37,12 @@
 #include "device.h"
 #define WSDISPLAY_IMPLEMENTATION
 #include "display.h"
+#if defined(__cplusplus)
+extern "C" {
+#endif
+#include "drive.h"
+#if defined(__cplusplus)
+}
+#endif
 #define DRIVE_IMPLEMENTATION
 #include "drive.h"

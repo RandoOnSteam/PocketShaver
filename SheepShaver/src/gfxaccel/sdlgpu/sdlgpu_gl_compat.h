@@ -158,6 +158,7 @@ void SDLGPUglPopAttrib(void);
 void SDLGPUglPopMatrix(void);
 void SDLGPUglPushAttrib(GLbitfield mask);
 void SDLGPUglPushMatrix(void);
+void SDLGPUglPixelZoom(GLfloat xfactor, GLfloat yfactor);
 void SDLGPUglRasterPos2i(GLint x, GLint y);
 void SDLGPUglReadBuffer(GLenum mode);
 void SDLGPUglReadPixels(GLint x, GLint y, GLsizei width, GLsizei height,
@@ -178,6 +179,7 @@ void SDLGPUglTexEnvf(GLenum target, GLenum pname, GLfloat param);
 void SDLGPUglTexEnvfv(GLenum target, GLenum pname, const GLfloat *params);
 void SDLGPUglTexEnvi(GLenum target, GLenum pname, GLint param);
 void SDLGPUglTexGeni(GLenum coord, GLenum pname, GLint param);
+void SDLGPUglTexGenfv(GLenum coord, GLenum pname, const GLfloat *parameters);
 void SDLGPUglTexImage2D(GLenum target, GLint level, GLint internalformat,
                          GLsizei width, GLsizei height, GLint border,
                          GLenum format, GLenum type, const void *pixels);
@@ -363,6 +365,7 @@ void *GfxGLGetProcAddress(const char *name);
 #define glPopMatrix SDLGPUglPopMatrix
 #define glPushAttrib SDLGPUglPushAttrib
 #define glPushMatrix SDLGPUglPushMatrix
+#define glPixelZoom SDLGPUglPixelZoom
 #define glRasterPos2i SDLGPUglRasterPos2i
 #define glReadBuffer SDLGPUglReadBuffer
 #define glReadPixels SDLGPUglReadPixels
@@ -381,6 +384,7 @@ void *GfxGLGetProcAddress(const char *name);
 #define glTexEnvfv SDLGPUglTexEnvfv
 #define glTexEnvi SDLGPUglTexEnvi
 #define glTexGeni SDLGPUglTexGeni
+#define glTexGenfv SDLGPUglTexGenfv
 #define glTexImage2D SDLGPUglTexImage2D
 #define glTexImage3D SDLGPUglTexImage3D
 #define glTexParameterf SDLGPUglTexParameterf

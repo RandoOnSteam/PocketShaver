@@ -57,9 +57,9 @@
 
 #if defined(USE_SDL1)
 #include "glcontext.h"
-extern void *video_get_native_window(void);
+extern void *video_get_gl_handle(void);
 extern void video_get_host_window_size(int *width, int *height);
-#define GL_HOST_WINDOW video_get_native_window()
+#define GL_HOST_WINDOW video_get_gl_handle()
 static GLCONTEXT s_gl_ctx;
 static bool s_gl_ctx_created = false;
 #else
@@ -141,8 +141,8 @@ static bool HostGLCreateContext(void *window)
 	GLContextAttributes_CompatibilityProfile(&contextattributes);
 	GLContextAttributes_EndList(&contextattributes);
 	memset(&s_gl_ctx, 0, sizeof(s_gl_ctx));
-	s_gl_ctx_created = GLContext_CreateWithWindow(&s_gl_ctx,
-		(GLWINDOWHANDLE)window, &contextattributes, &pixelattributes) != 0;
+	s_gl_ctx_created = GLContext_Create(&s_gl_ctx,
+		(GLDRAWABLEHANDLE)(uintptr_t)window, &contextattributes, &pixelattributes) != 0;
 	return s_gl_ctx_created;
 }
 
@@ -170,7 +170,7 @@ static void HostGLSetSwapInterval(int interval)
 
 static void HostGLSwap(void)
 {
-	GLContext_SwapBuffers(&s_gl_ctx);
+GLContext_SwapBuffers(&s_gl_ctx);
 }
 
 static void HostGLDrawableSize(int *width, int *height)
@@ -432,6 +432,10 @@ public:
 		glPushAttrib(GL_ALL_ATTRIB_BITS);
 		if (has_multitexture)
 			ext.ActiveTexture(GL_TEXTURE0);
+		glDisable(GL_TEXTURE_GEN_S);
+		glDisable(GL_TEXTURE_GEN_T);
+		glDisable(GL_TEXTURE_GEN_R);
+		glDisable(GL_TEXTURE_GEN_Q);
 		glMatrixMode(GL_TEXTURE);
 		glPushMatrix();
 		glLoadIdentity();
@@ -633,6 +637,22 @@ static void expand_framebuffer_rect_rgba(const GuestScreenRect &rect,
 	}
 }
 
+#ifndef GL_UNPACK_ROW_LENGTH
+#define GL_UNPACK_ROW_LENGTH 0x0CF2
+#endif
+#ifndef GL_UNSIGNED_INT_8_8_8_8
+#define GL_UNSIGNED_INT_8_8_8_8 0x8035
+#endif
+#ifndef GL_UNSIGNED_INT_8_8_8_8_REV
+#define GL_UNSIGNED_INT_8_8_8_8_REV 0x8367
+#endif
+#ifdef WORDS_BIGENDIAN
+#define COMPOSITORGUESTPIXELTYPE GL_UNSIGNED_INT_8_8_8_8_REV
+#else
+#define COMPOSITORGUESTPIXELTYPE GL_UNSIGNED_INT_8_8_8_8
+#endif
+#define COMPOSITORGUESTPIXELBYTES 4
+
 /* Refresh the presentation texture from guest VRAM. No dirty journal: every
  * writer (QD, WM, engines after resolve) shares screen_base. */
 static bool upload_guest_screen_to_texture(void)
@@ -644,6 +664,17 @@ static bool upload_guest_screen_to_texture(void)
 	MetalCompositorEnsureFrameBufferTexture();
 	glEnable(GL_TEXTURE_2D);
 	glBindTexture(GL_TEXTURE_2D, s_fb_tex);
+#if !defined(GFXACCEL_USE_SDLGPU)
+	if (compositor_bits_per_pixel == 32) {
+		glPixelStorei(GL_UNPACK_ROW_LENGTH,
+					  compositor_row_bytes / COMPOSITORGUESTPIXELBYTES);
+		glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0,
+						compositor_pixel_width, compositor_pixel_height,
+						GL_BGRA, COMPOSITORGUESTPIXELTYPE, compositor_buffer);
+		glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+		return true;
+	}
+#endif
 	static std::vector<uint8_t> rgba;
 	const GuestScreenRect screen = {
 		0, 0, compositor_pixel_width, compositor_pixel_height
@@ -1300,6 +1331,7 @@ void MetalCompositorPresent_(bool presentvbltick = true)
 	glBindTexture(GL_TEXTURE_2D, s_fb_tex);
 	glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
 	glDisable(GL_BLEND);
+	glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
 	glColor4f(1.f, 1.f, 1.f, 1.f);
 	draw_textured_quad();
 	GLCompositorDeviceSwap();

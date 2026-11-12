@@ -22,10 +22,8 @@
 
 #include "osxcpu.h"
 
-#define OSXPVR 0x00080202
 #define OSXPVRG4 0x000c0209
 #define OSXCPUFREQUENCYG4 1000000000
-#define OSXCPUFREQUENCY 266000000
 #define OSXBUSFREQUENCY 66666666
 #define OSXTIMEBASEFREQUENCY 16666666
 
@@ -79,7 +77,7 @@
 #define OSXATAPISECTOR 2048
 #define OSXATAPICDSECTORS 405000
 #define OSXATABUFFER 65536
-#define OSXATADELAY 1500
+#define OSXATADELAY 200
 
 #define OSXNVRAMSIZE 8192
 #define OSXPRAMSIZE 256
@@ -187,14 +185,19 @@ typedef struct OsxAtaDrive {
 #define OSXQUARTZSCREENRECT 0
 #define OSXQUARTZSURFACEBOUNDS 1
 #define OSXQUARTZWINDOWLIST 2
-#define OSXQUARTZOPACITY 3
-#define OSXQUARTZWINDOWCALLS 4
+#define OSXQUARTZWINDOWLEVEL 3
+#define OSXQUARTZOPAQUESHAPE 4
+#define OSXQUARTZREGIONBOUNDS 5
+#define OSXQUARTZRELEASEREGION 6
+#define OSXQUARTZWINDOWCALLS 7
 
 typedef struct OsxDiskPatch {
 	uint64 offset;
 	uint8 bytes[16];
 	int length;
 	int atapionly;
+	int checksumknown;
+	uint32 checksum;
 	const OsxAtaDrive *drive;
 } OsxDiskPatch;
 
@@ -241,11 +244,11 @@ typedef struct OsxAdbDevice {
 } OsxAdbDevice;
 
 typedef struct OsxMouseEvent {
-	int x;
-	int y;
-	int button;
-	int motion;
-	int wheel;
+	int16 x;
+	int16 y;
+	int16 wheel;
+	uint8 button;
+	uint8 motion;
 } OsxMouseEvent;
 
 typedef struct OsxCuda {
@@ -505,6 +508,13 @@ typedef struct OsxClip {
 	uint64 lastget;
 } OsxClip;
 
+#define OSXGAMMAENTRIES 256
+#define OSXGAMMACHANNELS 3
+#define OSXDISPLAYRESIZED 1
+#define OSXDISPLAYREDRAW 2
+#define OSXDEPTHTHOUSANDS 16
+#define OSXDEPTHMILLIONS 32
+
 struct OsxMachine {
 	OsxCpu *cpu;
 	uint8 *ram;
@@ -520,6 +530,8 @@ struct OsxMachine {
 	uint32 displaymode;
 	uint32 displaypreferred;
 	int displaycustom;
+	uint8 gamma[OSXGAMMAENTRIES * OSXGAMMACHANNELS];
+	uint32 displaybase;
 	uint32 configaddress;
 	OsxPciFunction pci[OSXPCIDEVICES];
 	uint32 heathrowfcr[2];
@@ -545,7 +557,6 @@ struct OsxMachine {
 	uint32 kernelentry;
 	uint32 bootargs;
 	int bootpartition;
-	int flurry;
 	int quartz;
 	uint32 quartztails[OSXQUARTZSLOTS];
 	uint32 quartzbase;
@@ -553,8 +564,6 @@ struct OsxMachine {
 	uint32 quartzstrings;
 	int quartzextensions;
 	int quartzallocatedextensions;
-	uint32 flurrystubs[86];
-	uint32 flurryinit;
 	uint32 kernelend;
 	uint32 scratch;
 	uint8 *kernelimage;
@@ -641,6 +650,8 @@ void OsxGuestFlashSave(OsxMachine *machine);
 
 uint8 *OsxGuestDisplayDriver(uint32 *length);
 void OsxGuestDisplayReset(OsxMachine *machine);
+void OsxGuestDisplayExpandPixels(uint8 *target, const uint8 *source, uint32 count);
+void OsxGuestDisplayPackPixels(uint8 *target, const uint8 *source, uint32 count);
 int OsxGuestDisplayDriverCall(OsxMachine *machine, OsxCpu *cpu);
 
 void OsxGuestCudaReset(OsxMachine *machine);
@@ -656,6 +667,7 @@ void OsxGuestPointerHook(OsxCpu *cpu, void *context, uint32 address);
 int OsxGuestBootLoad(OsxMachine *machine, const char *imagepath, int bootbus, int bootunit, const char *commandline);
 uint32 OsxGuestFindKernelSymbol(OsxMachine *machine, const char *name);
 int OsxGuestClipSyscall(OsxMachine *machine, OsxCpu *cpu);
+int OsxGuestClipEventLoop(OsxMachine *machine, OsxCpu *cpu);
 int OsxGuestKextSymbolOffset(OsxMachine *machine, const char *bundle, const char *symbol, uint32 *offset);
 uint32 OsxGuestAdler32(const uint8 *data, uint32 length);
 int OsxGuestMkextHasBundle(const uint8 *mkext, uint32 size, const char *bundle);

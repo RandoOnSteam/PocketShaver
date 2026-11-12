@@ -3209,6 +3209,21 @@ void *video_get_native_window(void)
 #endif
 }
 
+void *video_get_gl_handle(void)
+{
+	SDL_SysWMinfo windowinfo;
+	SDL_VERSION(&windowinfo.version);
+	if (SDL_GetWMInfo(&windowinfo) <= 0)
+		return NULL;
+#if defined(WIN32)
+	return (void *)GetDC(windowinfo.window);
+#elif defined(SDL_VIDEO_DRIVER_X11)
+	return (void *)(uintptr)windowinfo.info.x11.window;
+#else
+	return NULL;
+#endif
+}
+
 void video_get_host_window_size(int *width, int *height)
 {
 	*width = 0;

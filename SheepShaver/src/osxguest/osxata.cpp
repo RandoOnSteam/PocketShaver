@@ -376,6 +376,18 @@ static void OsxGuestAtapiFail(OsxMachine *machine, OsxAtaBus *bus, OsxAtaDrive *
 	OsxGuestAtapiComplete(machine, bus, drive, 1);
 }
 
+static int OsxGuestPatchUsable(const OsxDiskPatch *patch, const OsxAtaDrive *drive)
+{
+	if (patch->length <= 0 || (patch->atapionly && !drive->atapi))
+		return 0;
+	return !patch->drive || patch->drive == drive;
+}
+
+static int OsxGuestPatchCovers(const OsxDiskPatch *patch, const OsxAtaDrive *drive, uint64 start, uint64 length)
+{
+	return OsxGuestPatchUsable(patch, drive) && patch->offset < start + length && patch->offset + patch->length > start;
+}
+
 static void OsxGuestApplyPatches(OsxAtaBus *bus, OsxAtaDrive *drive, uint8 *data, uint64 start, uint32 length)
 {
 	OsxDiskPatch *patch;
@@ -383,14 +395,142 @@ static void OsxGuestApplyPatches(OsxAtaBus *bus, OsxAtaDrive *drive, uint8 *data
 	int byte;
 	for (index = 0; index < bus->patchcount; index++) {
 		patch = &bus->patches[index];
-		if (patch->atapionly && !drive->atapi)
-			continue;
-		if ((patch->drive && patch->drive != drive) || patch->offset >= start + length || patch->offset + patch->length <= start)
+		if (!OsxGuestPatchCovers(patch, drive, start, length))
 			continue;
 		for (byte = 0; byte < patch->length; byte++)
 			if (patch->offset + byte >= start && patch->offset + byte < start + length)
 				data[patch->offset + byte - start] = patch->bytes[byte];
 	}
+}
+
+static void OsxGuestRestorePatches(OsxAtaBus *bus, OsxAtaDrive *drive, uint8 *data, uint64 start, uint32 length)
+{
+	uint8 originalsector[OSXATASECTOR * 2];
+	OsxDiskPatch *patch;
+	uint64 patchstart;
+	uint64 patchend;
+	uint64 sectorstart;
+	int index;
+	for (index = 0; index < bus->patchcount; index++) {
+		patch = &bus->patches[index];
+		if (!OsxGuestPatchCovers(patch, drive, start, length))
+			continue;
+		patchstart = patch->offset;
+		if (patchstart < start)
+			patchstart = start;
+		patchend = patch->offset + patch->length;
+		if (patchend > start + length)
+			patchend = start + length;
+		if (memcmp(data + (patchstart - start), patch->bytes + (patchstart - patch->offset), (size_t)(patchend - patchstart))) {
+			patch->length = 0;
+			continue;
+		}
+		sectorstart = patchstart - patchstart % OSXATASECTOR;
+		if (Sys_read(drive->file, originalsector, (loff_t)sectorstart, sizeof(originalsector)) != sizeof(originalsector))
+			continue;
+		memcpy(data + (patchstart - start), originalsector + (patchstart - sectorstart), (size_t)(patchend - patchstart));
+	}
+}
+
+static int OsxGuestMovePatches(OsxAtaBus *bus, OsxAtaDrive *drive, uint64 sourcesector, uint64 targetsector)
+{
+	OsxDiskPatch *patch;
+	OsxDiskPatch *movedpatch;
+	uint64 patchstart;
+	uint64 patchend;
+	int index;
+	int existingcount;
+	int movecount;
+	existingcount = bus->patchcount;
+	movecount = 0;
+	for (index = 0; index < existingcount; index++)
+		movecount += OsxGuestPatchCovers(&bus->patches[index], drive, sourcesector, OSXATASECTOR);
+	if (bus->patchcount + movecount > OSXDISKPATCHES)
+		return 0;
+	for (index = 0; index < existingcount; index++) {
+		patch = &bus->patches[index];
+		if (!OsxGuestPatchCovers(patch, drive, sourcesector, OSXATASECTOR))
+			continue;
+		patchstart = patch->offset;
+		if (patchstart < sourcesector)
+			patchstart = sourcesector;
+		patchend = patch->offset + patch->length;
+		if (patchend > sourcesector + OSXATASECTOR)
+			patchend = sourcesector + OSXATASECTOR;
+		movedpatch = &bus->patches[bus->patchcount++];
+		movedpatch->offset = targetsector + (patchstart - sourcesector);
+		movedpatch->length = (int)(patchend - patchstart);
+		movedpatch->atapionly = 0;
+		movedpatch->checksumknown = 0;
+		movedpatch->drive = patch->drive;
+		memcpy(movedpatch->bytes, patch->bytes + (patchstart - patch->offset), (size_t)movedpatch->length);
+	}
+	return 1;
+}
+
+static uint32 OsxGuestSectorChecksum(const uint8 *data)
+{
+	uint32 checksum;
+	int index;
+	checksum = 2166136261u;
+	for (index = 0; index < OSXATASECTOR; index++)
+		checksum = (checksum ^ data[index]) * 16777619u;
+	return checksum;
+}
+
+static int OsxGuestReadPatchedSector(OsxAtaBus *bus, OsxAtaDrive *drive, uint64 sourcesector, uint8 *originalsector, uint8 *patchedsector)
+{
+	if (Sys_read(drive->file, originalsector, (loff_t)sourcesector, OSXATASECTOR) != OSXATASECTOR)
+		return 0;
+	memcpy(patchedsector, originalsector, OSXATASECTOR);
+	OsxGuestApplyPatches(bus, drive, patchedsector, sourcesector, OSXATASECTOR);
+	return 1;
+}
+
+static void OsxGuestRelocatePatches(OsxAtaBus *bus, OsxAtaDrive *drive, uint8 *data, uint64 start, uint32 length)
+{
+	uint8 originalsector[OSXATASECTOR];
+	uint8 patchedsector[OSXATASECTOR];
+	OsxDiskPatch *patch;
+	uint64 writesector;
+	uint64 sourcesector;
+	uint32 writeoffset;
+	uint32 sectoroffset;
+	uint32 checksum;
+	int index;
+	int existingcount;
+	existingcount = bus->patchcount;
+	for (writeoffset = 0; writeoffset + OSXATASECTOR <= length; writeoffset += OSXATASECTOR) {
+		writesector = start + writeoffset;
+		checksum = OsxGuestSectorChecksum(data + writeoffset);
+		for (index = 0; index < existingcount; index++) {
+			patch = &bus->patches[index];
+			if (!OsxGuestPatchUsable(patch, drive))
+				continue;
+			sectoroffset = (uint32)(patch->offset % OSXATASECTOR);
+			sourcesector = patch->offset - sectoroffset;
+			if (sourcesector == writesector || sectoroffset + patch->length > OSXATASECTOR ||
+				memcmp(data + writeoffset + sectoroffset, patch->bytes, (size_t)patch->length))
+				continue;
+			if (!patch->checksumknown) {
+				if (!OsxGuestReadPatchedSector(bus, drive, sourcesector, originalsector, patchedsector))
+					continue;
+				patch->checksum = OsxGuestSectorChecksum(patchedsector);
+				patch->checksumknown = 1;
+			}
+			if (patch->checksum != checksum || !OsxGuestReadPatchedSector(bus, drive, sourcesector, originalsector, patchedsector) ||
+				memcmp(patchedsector, data + writeoffset, OSXATASECTOR) || !OsxGuestMovePatches(bus, drive, sourcesector, writesector))
+				continue;
+			memcpy(data + writeoffset, originalsector, OSXATASECTOR);
+			break;
+		}
+	}
+}
+
+static void OsxGuestCleanWrite(OsxAtaBus *bus, OsxAtaDrive *drive, uint8 *data, uint64 start, uint32 length)
+{
+	OsxGuestRestorePatches(bus, drive, data, start, length);
+	OsxGuestRelocatePatches(bus, drive, data, start, length);
 }
 
 static int OsxGuestReadCDSector(OsxAtaDrive *drive, void *buffer, uint32 sector, uint8 type, uint8 flags)
@@ -579,6 +719,7 @@ static void OsxGuestWriteBlockDone(OsxMachine *machine, OsxAtaBus *bus)
 	uint32 sectors;
 	drive = OsxGuestSelectedDrive(bus);
 	sectors = bus->bufferlength / OSXATASECTOR;
+	OsxGuestCleanWrite(bus, drive, bus->buffer, bus->lba * OSXATASECTOR, bus->bufferlength);
 	if (Sys_write(drive->file, bus->buffer, (loff_t)(bus->lba * OSXATASECTOR), bus->bufferlength) != bus->bufferlength) {
 		OsxGuestCompleteCommand(machine, bus, 1);
 		return;
@@ -1392,6 +1533,7 @@ void OsxGuestAtaDmaReady(OsxMachine *machine, int busindex)
 			bytes = sectors * OSXATASECTOR;
 			consumed = (uint32)OsxGuestDbdmaTransfer(machine, bus->dmachannel, bus->buffer, bytes, 0);
 			consumed &= ~(uint32)(OSXATASECTOR - 1);
+			OsxGuestCleanWrite(bus, drive, bus->buffer, bus->lba * OSXATASECTOR, consumed);
 			if (consumed && Sys_write(drive->file, bus->buffer, (loff_t)(bus->lba * OSXATASECTOR), consumed) != consumed) {
 				failed = 1;
 				break;

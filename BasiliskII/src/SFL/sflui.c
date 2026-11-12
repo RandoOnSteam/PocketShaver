@@ -26,7 +26,7 @@
 #include "thread.h"
 #include "display.h"
 #include "sflui.h"
-#if defined(SFLMONITORENABLED)
+#if defined(ENABLE_EMULATOR_MONITOR)
 #include "sflmonitor.h"
 #endif
 #include "sflmain.h"
@@ -62,11 +62,13 @@ typedef struct SFLUIAPP
 {
 	WSAPP super;
 	WSWINDOW window;
+	void *glhandle;
 	WSWNDCLASS wc;
 	WSTICKER ticker;
 	WSOC oc;
 	WSCRITICALSECTION lock;
 	unsigned char *frame;
+	unsigned char *captureframe;
 	unsigned char *shadow;
 	size_t shadowbytes;
 	int dirtytop;
@@ -82,6 +84,7 @@ typedef struct SFLUIAPP
 	int ocheight;
 	unsigned char palette[SFLUIPALETTESIZE * 3];
 	SFLUIINPUT input;
+	int capture;
 	void *inputcontext;
 	SFLUIINPUTEVENT inputs[SFLUIINPUTCOUNT];
 	unsigned int inputread;
@@ -93,8 +96,17 @@ typedef struct SFLUIAPP
 	guipos_t mousex;
 	guipos_t mousey;
 	wsbool mousepending;
+	wsbool warppending;
 	int clientwidth;
 	int clientheight;
+	int requestwidth;
+	int requestheight;
+	int extrawidth;
+	int extraheight;
+	int priorwidth;
+	int priorheight;
+	wsbool extraknown;
+	wsbool requestpending;
 	int clipboardrepaints;
 	char *cliptext;
 	size_t cliplength;
@@ -111,7 +123,7 @@ typedef struct SFLUIAPP
 	WSRECT windowrect;
 	wsbool occreated;
 	wsbool tickercreated;
-#if defined(SFLMONITORENABLED)
+#if defined(ENABLE_EMULATOR_MONITOR)
 	SFLMONITOR monitor;
 	wsbool monitorcreated;
 #endif
@@ -348,7 +360,21 @@ static int SflUiAdbFromKey(size_t wskey)
 		{WSKEY_F1, 0x7a}, {WSKEY_LEFT, 0x7b}, {WSKEY_RIGHT, 0x7c}, {WSKEY_DOWN, 0x7d},
 		{WSKEY_UP, 0x7e}
 	};
+#if defined(WSGTK) || defined(WSQTOPT)
+	static const char shifted[] = "~!@#$%^&*()_+{}|:\"<>?";
+	static const char plain[] = "`1234567890-=[]\\;',./";
+	const char *found;
+#endif
 	size_t index;
+#if defined(WSGTK) || defined(WSQTOPT)
+	if (wskey >= 'a' && wskey <= 'z') {
+		wskey -= 'a' - 'A';
+	} else if (wskey > ' ' && wskey <= '~') {
+		found = strchr(shifted, (int)wskey);
+		if (found != NULL)
+			wskey = (size_t)plain[found - shifted];
+	}
+#endif
 	for (index = 0; index < countof(keys); index++)
 		if (keys[index].wskey == wskey)
 			return keys[index].adb;
@@ -451,9 +477,14 @@ static void SflUiDraw(SFLUIAPP *pThis, WSDC *dc)
 		pThis->dirtybottom = pThis->frameheight - 1;
 		pThis->fullconvert = FALSE;
 	}
+	if (pThis->shadow == NULL || pThis->shadowbytes != (size_t)pThis->framerowbytes * pThis->frameheight) {
+		pThis->fullconvert = TRUE;
+		WSCriticalSection_Unlock(&pThis->lock);
+		return;
+	}
 	WSOC_LockPixels(&pThis->oc);
 	WSOC_GetObject(&pThis->oc, &object);
-	if (object.bits != NULL && object.bpp == 32 && pThis->shadow != NULL) {
+	if (object.bits != NULL && object.bpp == 32) {
 		SflUiPixelOffsets(object.memorypixelformat, &ro, &go, &bo, &ao);
 		for (y = pThis->dirtytop; y <= pThis->dirtybottom; y++) {
 			row = y;
@@ -510,12 +541,30 @@ static void SflUiMouseDeliver(SFLUIAPP *pThis, guipos_t x, guipos_t y)
 	SflEmulatorMouse((int)(x * pThis->framewidth / width), (int)(y * pThis->frameheight / height));
 }
 
+static int SflUiRelative(SFLUIAPP *pThis)
+{
+	if (pThis->input)
+		return pThis->capture;
+	return SflEmulatorRelativeMouse(SFLRELATIVEUPDATE);
+}
+
+static guipos_t SflUiDistance(guipos_t deltax, guipos_t deltay)
+{
+	if (deltax < 0)
+		deltax = -deltax;
+	if (deltay < 0)
+		deltay = -deltay;
+	return deltax + deltay;
+}
+
 static void SflUiMouse(SFLUIAPP *pThis, guipos_t x, guipos_t y)
 {
 	guipos_t centerx;
 	guipos_t centery;
 	guipos_t screenx;
 	guipos_t screeny;
+	guipos_t deltax;
+	guipos_t deltay;
 #if defined(WSMACCLASSICORCARBON)
 	guipos_t originx = 0;
 	guipos_t originy = 0;
@@ -523,18 +572,36 @@ static void SflUiMouse(SFLUIAPP *pThis, guipos_t x, guipos_t y)
 	x -= originx;
 	y -= originy;
 #endif
-	if (!pThis->input && SflEmulatorRelativeMouse(SFLRELATIVEUPDATE)) {
+	if (SflUiRelative(pThis)) {
 		centerx = pThis->clientwidth / 2;
 		centery = pThis->clientheight / 2;
-		if (x != centerx || y != centery) {
-			SflEmulatorMouse((int)(x - centerx), (int)(y - centery));
+		if (x == centerx && y == centery && pThis->warppending)
+			return;
+		deltax = x - pThis->mousex;
+		deltay = y - pThis->mousey;
+		if (pThis->warppending && SflUiDistance(x - centerx, y - centery) <= SflUiDistance(deltax, deltay)) {
+			deltax = x - centerx;
+			deltay = y - centery;
+		}
+		pThis->warppending = FALSE;
+		pThis->mousex = x;
+		pThis->mousey = y;
+		if (deltax != 0 || deltay != 0) {
+			if (pThis->input)
+				SflUiQueueInput(SFLUIINPUTMOTION, (int)deltax, (int)deltay);
+			else
+				SflEmulatorMouse((int)deltax, (int)deltay);
+		}
+		if (SflUiDistance(x - centerx, 0) > centerx / 2 || SflUiDistance(0, y - centery) > centery / 2) {
 			screenx = centerx;
 			screeny = centery;
 			WSWindow_ClientToScreen(&pThis->window, &screenx, &screeny);
 			WSCursorWarp(screenx, screeny);
+			pThis->warppending = TRUE;
 		}
 		return;
 	}
+	pThis->warppending = FALSE;
 	pThis->mousex = x;
 	pThis->mousey = y;
 	pThis->mousepending = TRUE;
@@ -599,6 +666,17 @@ static void SflUiUpdateClientSize(SFLUIAPP *pThis)
 	pThis->clientwidth = (int)WSRect_GetWidth(&client);
 	pThis->clientheight = (int)WSRect_GetHeight(&client);
 	WSCriticalSection_Unlock(&pThis->lock);
+	if (!pThis->requestpending || pThis->fullscreen)
+		return;
+	if (pThis->clientwidth == pThis->priorwidth && pThis->clientheight == pThis->priorheight
+		&& (pThis->clientwidth != pThis->framewidth || pThis->clientheight != pThis->frameheight))
+		return;
+	pThis->requestpending = FALSE;
+	pThis->extrawidth = pThis->requestwidth - pThis->clientwidth;
+	pThis->extraheight = pThis->requestheight - pThis->clientheight;
+	pThis->extraknown = TRUE;
+	if (pThis->clientwidth != pThis->framewidth || pThis->clientheight != pThis->frameheight)
+		SflUiApplySize(pThis);
 }
 
 static void SflUiClipboardSync(SFLUIAPP *pThis)
@@ -724,6 +802,9 @@ WSMOUSEMOVEEVENT_CALLBACK(SflUiOnMouseMove)
 {
 	WSMOUSEMOVEEVENT ev;
 	WSMouseMoveEvent_Construct(&ev);
+#if defined(WSGTK) || defined(WSQTOPT) || (defined(__MACH__) && !defined(WSMACCLASSICORCARBON))
+	WSCursorSet(&SflUiApp->window, WSCURSORTYPE_NONE);
+#endif
 	SflUiMouse(SflUiApp, WSMouseMoveEvent_GetX(&ev), WSMouseMoveEvent_GetY(&ev));
 	SflUiRefresh(SflUiApp);
 	return WSMOUSEMOVEEVENT_UNHANDLED;
@@ -799,6 +880,22 @@ WSTICKEREVENT_CALLBACK(SflUiOnTicker)
 	return WSTICKEREVENT_UNHANDLED;
 }
 
+void SflUiSetPointerCapture(int capture)
+{
+	SFLUIAPP *pThis;
+	guipos_t screenx;
+	guipos_t screeny;
+	pThis = SflUiApp;
+	pThis->capture = capture;
+	if (!capture)
+		return;
+	screenx = pThis->clientwidth / 2;
+	screeny = pThis->clientheight / 2;
+	WSWindow_ClientToScreen(&pThis->window, &screenx, &screeny);
+	WSCursorWarp(screenx, screeny);
+	pThis->warppending = TRUE;
+}
+
 void SflUiSetInput(SFLUIINPUT input, void *context)
 {
 	SFLUIAPP *pThis = SflUiApp;
@@ -854,17 +951,22 @@ static void SflUiApplySize(SFLUIAPP *pThis)
 {
 	WSRECT outer;
 	WSRECT client;
-	guipos_t extrawidth;
-	guipos_t extraheight;
 	if (pThis->fullscreen) {
 		SflUiSetDisplayMode(pThis);
 		return;
 	}
-	WSWindow_GetRect(&pThis->window, &outer);
 	WSWindow_GetClientRect(&pThis->window, &client);
-	extrawidth = WSRect_GetWidth(&outer) - WSRect_GetWidth(&client);
-	extraheight = WSRect_GetHeight(&outer) - WSRect_GetHeight(&client);
-	WSWindow_SetSize(&pThis->window, pThis->framewidth + extrawidth, pThis->frameheight + extraheight);
+	if (!pThis->extraknown) {
+		WSWindow_GetRect(&pThis->window, &outer);
+		pThis->extrawidth = (int)(WSRect_GetWidth(&outer) - WSRect_GetWidth(&client));
+		pThis->extraheight = (int)(WSRect_GetHeight(&outer) - WSRect_GetHeight(&client));
+	}
+	pThis->priorwidth = (int)WSRect_GetWidth(&client);
+	pThis->priorheight = (int)WSRect_GetHeight(&client);
+	pThis->requestwidth = pThis->framewidth + pThis->extrawidth;
+	pThis->requestheight = pThis->frameheight + pThis->extraheight;
+	pThis->requestpending = TRUE;
+	WSWindow_SetSize(&pThis->window, pThis->requestwidth, pThis->requestheight);
 }
 
 static void SflUiEnterFullScreen(SFLUIAPP *pThis)
@@ -896,6 +998,13 @@ static void SflUiToggleFullScreen(SFLUIAPP *pThis)
 void *SflUiGetWindowHandle(void)
 {
 	return WSWindow_GetHandle(&SflUiApp->window);
+}
+
+void *SflUiGetGLHandle(void)
+{
+	if (SflUiApp->glhandle == NULL)
+		SflUiApp->glhandle = WSWindow_AllocGLHandle(&SflUiApp->window);
+	return SflUiApp->glhandle;
 }
 
 int SflUiOpen(const char *title, int width, int height, int fullscreen, int frameskip)
@@ -952,6 +1061,9 @@ void SflUiClose(void)
 	}
 	if (pThis->fullscreen)
 		SflUiLeaveFullScreen(pThis);
+	if (pThis->glhandle != NULL)
+		WSWindow_FreeGLHandle(&pThis->window, pThis->glhandle);
+	pThis->glhandle = NULL;
 	WSWindow_Destroy(&pThis->window);
 	WSWndClass_Destroy(&pThis->wc, &pThis->super);
 	pThis->windowopen = FALSE;
@@ -965,6 +1077,7 @@ void SflUiSetFrame(unsigned char *buffer, int width, int height, int rowbytes, i
 	WSCriticalSection_Lock(&pThis->lock);
 	sizechanged = width != pThis->framewidth || height != pThis->frameheight;
 	pThis->frame = buffer;
+	pThis->captureframe = NULL;
 	pThis->framewidth = width;
 	pThis->frameheight = height;
 	pThis->framerowbytes = rowbytes;
@@ -973,6 +1086,16 @@ void SflUiSetFrame(unsigned char *buffer, int width, int height, int rowbytes, i
 	WSCriticalSection_Unlock(&pThis->lock);
 	if (sizechanged)
 		wsatomicintstore(&pThis->resize, 1);
+}
+
+void SflUiSuspendFrame(unsigned char *capture)
+{
+	SFLUIAPP *pThis;
+	pThis = SflUiApp;
+	WSCriticalSection_Lock(&pThis->lock);
+	pThis->frame = NULL;
+	pThis->captureframe = capture;
+	WSCriticalSection_Unlock(&pThis->lock);
 }
 
 void SflUiSetPalette(const unsigned char *rgb, int count)
@@ -1051,14 +1174,18 @@ static unsigned char *SflUiCopyHost(SFLUIAPP *pThis, int *width, int *height)
 static unsigned char *SflUiCopyGuest(SFLUIAPP *pThis, int *width, int *height)
 {
 	unsigned char *pixels;
+	unsigned char *source;
 	int y;
-	if (pThis->frame == NULL || pThis->framewidth <= 0 || pThis->frameheight <= 0)
+	source = pThis->frame;
+	if (source == NULL)
+		source = pThis->captureframe;
+	if (source == NULL || pThis->framewidth <= 0 || pThis->frameheight <= 0)
 		return NULL;
 	pixels = WSALLOC(unsigned char, (size_t)pThis->framewidth * pThis->frameheight * SFLUIPIXELBYTES);
 	if (pixels == NULL)
 		return NULL;
 	for (y = 0; y < pThis->frameheight; y++)
-		SflUiConvertRow(pThis, pThis->frame + (size_t)y * pThis->framerowbytes,
+		SflUiConvertRow(pThis, source + (size_t)y * pThis->framerowbytes,
 			pixels + (size_t)y * pThis->framewidth * SFLUIPIXELBYTES, 0, 1, 2, 3);
 	*width = pThis->framewidth;
 	*height = pThis->frameheight;
@@ -1157,6 +1284,8 @@ static wsbool SflUiOnInit(SFLUIAPP *pThis)
 	SflUiApp = pThis;
 	pThis->status = NULL;
 	pThis->frame = NULL;
+	pThis->captureframe = NULL;
+	pThis->warppending = FALSE;
 	pThis->framewidth = 0;
 	pThis->frameheight = 0;
 	pThis->framerowbytes = 0;
@@ -1174,6 +1303,14 @@ static wsbool SflUiOnInit(SFLUIAPP *pThis)
 	pThis->mousepending = FALSE;
 	pThis->clientwidth = 0;
 	pThis->clientheight = 0;
+	pThis->requestwidth = 0;
+	pThis->requestheight = 0;
+	pThis->extrawidth = 0;
+	pThis->extraheight = 0;
+	pThis->priorwidth = 0;
+	pThis->priorheight = 0;
+	pThis->extraknown = FALSE;
+	pThis->requestpending = FALSE;
 	pThis->clipboardrepaints = 0;
 	pThis->shadow = NULL;
 	pThis->shadowbytes = 0;
@@ -1190,7 +1327,7 @@ static wsbool SflUiOnInit(SFLUIAPP *pThis)
 	pThis->windowopen = FALSE;
 	pThis->occreated = FALSE;
 	pThis->tickercreated = FALSE;
-#if defined(SFLMONITORENABLED)
+#if defined(ENABLE_EMULATOR_MONITOR)
 	pThis->monitorcreated = FALSE;
 #endif
 #if defined(SFLMAINRUNEMULATORONMAINTHREAD)
@@ -1198,6 +1335,8 @@ static wsbool SflUiOnInit(SFLUIAPP *pThis)
 #endif
 	WSMemoryClear(pThis->palette, sizeof(pThis->palette));
 	WSMemoryClear(pThis->keys, sizeof(pThis->keys));
+	pThis->glhandle = NULL;
+	pThis->capture = 0;
 	wsatomicintstore(&pThis->quit, 0);
 	wsatomicintstore(&pThis->resize, 0);
 	wsatomicintstore(&pThis->repaint, 0);
@@ -1206,10 +1345,19 @@ static wsbool SflUiOnInit(SFLUIAPP *pThis)
 	WSDisplaySetDPIAware(); /* Win32 */
 	WSEnableVisualStyles(); /* Win32 */
 #endif
+#if defined(WSGTK)
+	setenv("GDK_BACKEND", "x11", 0);
+	setenv("GSK_RENDERER", "cairo", 0);
+#elif defined(WSKDE)
+	setenv("QT_QPA_PLATFORM", "xcb", 0);
+#endif
+#if defined(WSGTK) && defined(GDK_WINDOWING_X11)
+	XInitThreads();
+#endif
 	return WSApp_Create(&pThis->super);
 }
 
-#if defined(SFLMONITORENABLED)
+#if defined(ENABLE_EMULATOR_MONITOR)
 static void SflUiStartMonitor(SFLUIAPP *pThis)
 {
 	const char *variable;
@@ -1266,7 +1414,7 @@ static wsbool SflUiOnLoopBegin(SFLUIAPP *pThis)
 		return FALSE;
 	if (!pThis->windowopen)
 		return FALSE;
-#if defined(SFLMONITORENABLED)
+#if defined(ENABLE_EMULATOR_MONITOR)
 	SflUiStartMonitor(pThis);
 #endif
 	pThis->tickercreated = WSTicker_Create(&pThis->ticker,
@@ -1293,7 +1441,7 @@ static wsbool SflUiOnLoopEnd(SFLUIAPP *pThis)
 		WSTicker_Destroy(&pThis->ticker);
 		pThis->tickercreated = FALSE;
 	}
-#if defined(SFLMONITORENABLED)
+#if defined(ENABLE_EMULATOR_MONITOR)
 	SflUiStopMonitor(pThis);
 #endif
 	SflEmulatorStop();
@@ -1318,17 +1466,17 @@ static void SflUiOnRun(SFLUIAPP *pThis)
 		return;
 	}
 	if (mode == SFLNATIVEBOOT) {
-#if defined(SFLMONITORENABLED)
+#if defined(ENABLE_EMULATOR_MONITOR)
 		SflUiStartMonitor(pThis);
 #endif
 		SflEmulatorStart();
-#if defined(SFLMONITORENABLED)
+#if defined(ENABLE_EMULATOR_MONITOR)
 		SflUiStopMonitor(pThis);
 #endif
 		SflEmulatorStop();
 	} else if (pThis->windowopen)
 	{
-		#if defined(SFLMONITORENABLED)
+		#if defined(ENABLE_EMULATOR_MONITOR)
 			SflUiStartMonitor(pThis);
 		#endif
 		WSTimerBeginPeriod(1);
@@ -1343,7 +1491,7 @@ static void SflUiOnRun(SFLUIAPP *pThis)
 			pThis->tickercreated = FALSE;
 			SflEmulatorStop();
 		}
-		#if defined(SFLMONITORENABLED)
+		#if defined(ENABLE_EMULATOR_MONITOR)
 			SflUiStopMonitor(pThis);
 		#endif
 	}

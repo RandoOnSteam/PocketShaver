@@ -670,6 +670,10 @@ static GLContext *GLContextNew(int width, int height)
 		T.current_texcoord[2] = 0.0f;
 		T.current_texcoord[3] = 1.0f;
 		T.texgen_s_enabled = T.texgen_t_enabled = T.texgen_r_enabled = T.texgen_q_enabled = false;
+		memset(T.texgen_object_plane, 0, sizeof(T.texgen_object_plane));
+		T.texgen_object_plane[0][0] = 1.0f;
+		T.texgen_object_plane[1][1] = 1.0f;
+		memcpy(T.texgen_eye_plane, T.texgen_object_plane, sizeof(T.texgen_eye_plane));
 		T.texgen_s_mode = T.texgen_t_mode = T.texgen_r_mode = T.texgen_q_mode = 0;
 	}
 	ctx->active_texture = 0;
@@ -3597,6 +3601,36 @@ uint32_t NativeGLUProject(GLContext *ctx,
 }
 
 
+int GLInvertMatrix(const double *matrix, double *inverse)
+{
+	double determinant;
+	int element;
+	inverse[0] = matrix[5]*matrix[10]*matrix[15] - matrix[5]*matrix[11]*matrix[14] - matrix[9]*matrix[6]*matrix[15] + matrix[9]*matrix[7]*matrix[14] + matrix[13]*matrix[6]*matrix[11] - matrix[13]*matrix[7]*matrix[10];
+	inverse[4] = -matrix[4]*matrix[10]*matrix[15] + matrix[4]*matrix[11]*matrix[14] + matrix[8]*matrix[6]*matrix[15] - matrix[8]*matrix[7]*matrix[14] - matrix[12]*matrix[6]*matrix[11] + matrix[12]*matrix[7]*matrix[10];
+	inverse[8] = matrix[4]*matrix[9]*matrix[15] - matrix[4]*matrix[11]*matrix[13] - matrix[8]*matrix[5]*matrix[15] + matrix[8]*matrix[7]*matrix[13] + matrix[12]*matrix[5]*matrix[11] - matrix[12]*matrix[7]*matrix[9];
+	inverse[12] = -matrix[4]*matrix[9]*matrix[14] + matrix[4]*matrix[10]*matrix[13] + matrix[8]*matrix[5]*matrix[14] - matrix[8]*matrix[6]*matrix[13] - matrix[12]*matrix[5]*matrix[10] + matrix[12]*matrix[6]*matrix[9];
+	inverse[1] = -matrix[1]*matrix[10]*matrix[15] + matrix[1]*matrix[11]*matrix[14] + matrix[9]*matrix[2]*matrix[15] - matrix[9]*matrix[3]*matrix[14] - matrix[13]*matrix[2]*matrix[11] + matrix[13]*matrix[3]*matrix[10];
+	inverse[5] = matrix[0]*matrix[10]*matrix[15] - matrix[0]*matrix[11]*matrix[14] - matrix[8]*matrix[2]*matrix[15] + matrix[8]*matrix[3]*matrix[14] + matrix[12]*matrix[2]*matrix[11] - matrix[12]*matrix[3]*matrix[10];
+	inverse[9] = -matrix[0]*matrix[9]*matrix[15] + matrix[0]*matrix[11]*matrix[13] + matrix[8]*matrix[1]*matrix[15] - matrix[8]*matrix[3]*matrix[13] - matrix[12]*matrix[1]*matrix[11] + matrix[12]*matrix[3]*matrix[9];
+	inverse[13] = matrix[0]*matrix[9]*matrix[14] - matrix[0]*matrix[10]*matrix[13] - matrix[8]*matrix[1]*matrix[14] + matrix[8]*matrix[2]*matrix[13] + matrix[12]*matrix[1]*matrix[10] - matrix[12]*matrix[2]*matrix[9];
+	inverse[2] = matrix[1]*matrix[6]*matrix[15] - matrix[1]*matrix[7]*matrix[14] - matrix[5]*matrix[2]*matrix[15] + matrix[5]*matrix[3]*matrix[14] + matrix[13]*matrix[2]*matrix[7] - matrix[13]*matrix[3]*matrix[6];
+	inverse[6] = -matrix[0]*matrix[6]*matrix[15] + matrix[0]*matrix[7]*matrix[14] + matrix[4]*matrix[2]*matrix[15] - matrix[4]*matrix[3]*matrix[14] - matrix[12]*matrix[2]*matrix[7] + matrix[12]*matrix[3]*matrix[6];
+	inverse[10] = matrix[0]*matrix[5]*matrix[15] - matrix[0]*matrix[7]*matrix[13] - matrix[4]*matrix[1]*matrix[15] + matrix[4]*matrix[3]*matrix[13] + matrix[12]*matrix[1]*matrix[7] - matrix[12]*matrix[3]*matrix[5];
+	inverse[14] = -matrix[0]*matrix[5]*matrix[14] + matrix[0]*matrix[6]*matrix[13] + matrix[4]*matrix[1]*matrix[14] - matrix[4]*matrix[2]*matrix[13] - matrix[12]*matrix[1]*matrix[6] + matrix[12]*matrix[2]*matrix[5];
+	inverse[3] = -matrix[1]*matrix[6]*matrix[11] + matrix[1]*matrix[7]*matrix[10] + matrix[5]*matrix[2]*matrix[11] - matrix[5]*matrix[3]*matrix[10] - matrix[9]*matrix[2]*matrix[7] + matrix[9]*matrix[3]*matrix[6];
+	inverse[7] = matrix[0]*matrix[6]*matrix[11] - matrix[0]*matrix[7]*matrix[10] - matrix[4]*matrix[2]*matrix[11] + matrix[4]*matrix[3]*matrix[10] + matrix[8]*matrix[2]*matrix[7] - matrix[8]*matrix[3]*matrix[6];
+	inverse[11] = -matrix[0]*matrix[5]*matrix[11] + matrix[0]*matrix[7]*matrix[9] + matrix[4]*matrix[1]*matrix[11] - matrix[4]*matrix[3]*matrix[9] - matrix[8]*matrix[1]*matrix[7] + matrix[8]*matrix[3]*matrix[5];
+	inverse[15] = matrix[0]*matrix[5]*matrix[10] - matrix[0]*matrix[6]*matrix[9] - matrix[4]*matrix[1]*matrix[10] + matrix[4]*matrix[2]*matrix[9] + matrix[8]*matrix[1]*matrix[6] - matrix[8]*matrix[2]*matrix[5];
+
+	determinant = matrix[0]*inverse[0] + matrix[1]*inverse[4] + matrix[2]*inverse[8] + matrix[3]*inverse[12];
+	if (fabs(determinant) < 1e-30)
+		return 0;
+	determinant = 1.0 / determinant;
+	for (element = 0; element < 16; element++)
+		inverse[element] *= determinant;
+	return 1;
+}
+
 /*
  *  NativeGLUUnProject -- inverse of gluProject
  *
@@ -3628,32 +3662,9 @@ uint32_t NativeGLUUnProject(GLContext *ctx,
 			combined[c*4+r] = proj[0*4+r]*model[c*4+0] + proj[1*4+r]*model[c*4+1] +
 							  proj[2*4+r]*model[c*4+2] + proj[3*4+r]*model[c*4+3];
 
-	// Invert the combined 4x4 matrix
 	double inv[16];
-	{
-		double *m = combined;
-		inv[0] = m[5]*m[10]*m[15] - m[5]*m[11]*m[14] - m[9]*m[6]*m[15] + m[9]*m[7]*m[14] + m[13]*m[6]*m[11] - m[13]*m[7]*m[10];
-		inv[4] = -m[4]*m[10]*m[15] + m[4]*m[11]*m[14] + m[8]*m[6]*m[15] - m[8]*m[7]*m[14] - m[12]*m[6]*m[11] + m[12]*m[7]*m[10];
-		inv[8] = m[4]*m[9]*m[15] - m[4]*m[11]*m[13] - m[8]*m[5]*m[15] + m[8]*m[7]*m[13] + m[12]*m[5]*m[11] - m[12]*m[7]*m[9];
-		inv[12] = -m[4]*m[9]*m[14] + m[4]*m[10]*m[13] + m[8]*m[5]*m[14] - m[8]*m[6]*m[13] - m[12]*m[5]*m[10] + m[12]*m[6]*m[9];
-		inv[1] = -m[1]*m[10]*m[15] + m[1]*m[11]*m[14] + m[9]*m[2]*m[15] - m[9]*m[3]*m[14] - m[13]*m[2]*m[11] + m[13]*m[3]*m[10];
-		inv[5] = m[0]*m[10]*m[15] - m[0]*m[11]*m[14] - m[8]*m[2]*m[15] + m[8]*m[3]*m[14] + m[12]*m[2]*m[11] - m[12]*m[3]*m[10];
-		inv[9] = -m[0]*m[9]*m[15] + m[0]*m[11]*m[13] + m[8]*m[1]*m[15] - m[8]*m[3]*m[13] - m[12]*m[1]*m[11] + m[12]*m[3]*m[9];
-		inv[13] = m[0]*m[9]*m[14] - m[0]*m[10]*m[13] - m[8]*m[1]*m[14] + m[8]*m[2]*m[13] + m[12]*m[1]*m[10] - m[12]*m[2]*m[9];
-		inv[2] = m[1]*m[6]*m[15] - m[1]*m[7]*m[14] - m[5]*m[2]*m[15] + m[5]*m[3]*m[14] + m[13]*m[2]*m[7] - m[13]*m[3]*m[6];
-		inv[6] = -m[0]*m[6]*m[15] + m[0]*m[7]*m[14] + m[4]*m[2]*m[15] - m[4]*m[3]*m[14] - m[12]*m[2]*m[7] + m[12]*m[3]*m[6];
-		inv[10] = m[0]*m[5]*m[15] - m[0]*m[7]*m[13] - m[4]*m[1]*m[15] + m[4]*m[3]*m[13] + m[12]*m[1]*m[7] - m[12]*m[3]*m[5];
-		inv[14] = -m[0]*m[5]*m[14] + m[0]*m[6]*m[13] + m[4]*m[1]*m[14] - m[4]*m[2]*m[13] - m[12]*m[1]*m[6] + m[12]*m[2]*m[5];
-		inv[3] = -m[1]*m[6]*m[11] + m[1]*m[7]*m[10] + m[5]*m[2]*m[11] - m[5]*m[3]*m[10] - m[9]*m[2]*m[7] + m[9]*m[3]*m[6];
-		inv[7] = m[0]*m[6]*m[11] - m[0]*m[7]*m[10] - m[4]*m[2]*m[11] + m[4]*m[3]*m[10] + m[8]*m[2]*m[7] - m[8]*m[3]*m[6];
-		inv[11] = -m[0]*m[5]*m[11] + m[0]*m[7]*m[9] + m[4]*m[1]*m[11] - m[4]*m[3]*m[9] - m[8]*m[1]*m[7] + m[8]*m[3]*m[5];
-		inv[15] = m[0]*m[5]*m[10] - m[0]*m[6]*m[9] - m[4]*m[1]*m[10] + m[4]*m[2]*m[9] + m[8]*m[1]*m[6] - m[8]*m[2]*m[5];
-
-		double det = m[0]*inv[0] + m[1]*inv[4] + m[2]*inv[8] + m[3]*inv[12];
-		if (fabs(det) < 1e-30) return 0;
-		det = 1.0 / det;
-		for (int i = 0; i < 16; i++) inv[i] *= det;
-	}
+	if (!GLInvertMatrix(combined, inv))
+		return 0;
 
 	// Un-viewport: map window coords back to NDC [-1,1]
 	double in[4];

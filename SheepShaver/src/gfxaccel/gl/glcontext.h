@@ -4560,6 +4560,33 @@ int GLContext_CreateClone(GLCONTEXT* pThis, GLCONTEXTHANDLE clone,
 			DefaultScreen(pThis->mhDisplay), pixelattriblist, &returned);
 		if (pThis->mhSurface)
 		{
+			XWindowAttributes windowattributes;
+			XVisualInfo* candidate;
+			GLXFBConfig first;
+			int index;
+			int matched;
+			if (drawable && XGetWindowAttributes(pThis->mhDisplay,
+				(Window)drawable, &windowattributes))
+			{ /* Match visual to the window to prevent BadMatch on MakeCurrent */
+				matched = 0;
+				for (index = 0; index < returned && !matched; ++index)
+				{
+					candidate = glXGetVisualFromFBConfig(pThis->mhDisplay,
+						pThis->mhSurface[index]);
+					if (candidate)
+					{
+						matched = candidate->visualid ==
+							XVisualIDFromVisual(windowattributes.visual);
+						XFree(candidate);
+						if (matched)
+						{
+							first = pThis->mhSurface[0];
+							pThis->mhSurface[0] = pThis->mhSurface[index];
+							pThis->mhSurface[index] = first;
+						}
+					}
+				}
+			}
 			GLContext_PixelFormat(pThis) =
 				glXGetVisualFromFBConfig(pThis->mhDisplay, *pThis->mhSurface);
 			if (!GLContext_PixelFormat(pThis))

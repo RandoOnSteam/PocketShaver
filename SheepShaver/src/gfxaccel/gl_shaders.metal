@@ -66,6 +66,7 @@ struct GLVertexUniforms {
     int      two_side_lighting; // GL_LIGHT_MODEL_TWO_SIDE: negate normal for back-facing vertices
     // User clip planes (GL_CLIP_PLANE0-5). Equation is dot(plane, eye_pos) >= 0.
     int      num_clip_planes;   // number of enabled clip planes (0-6)
+    float    fog_facing;
     float4   clip_planes[6];    // plane equations in eye space
 };
 
@@ -168,7 +169,7 @@ struct GLMaterialData {
     float4 specular;
     float4 emission;
     float  shininess;
-    float  _pad0;
+    float  local_viewer;
     float  _pad1;
     float  _pad2;
 };
@@ -272,9 +273,11 @@ vertex GLVertexOut gl_vertex_main(
 
             // Specular contribution
             float4 specular_contrib = float4(0.0);
-            if (NdotL > 0.0 && lighting.material.shininess > 0.0) {
-                float3 V = normalize(-eye_pos.xyz);   // view direction (eye at origin)
-                float3 H = normalize(L + V);           // half vector
+            if (NdotL > 0.0) {
+                float3 V = float3(0.0, 0.0, 1.0);
+                if (lighting.material.local_viewer != 0.0)
+                    V = normalize(-eye_pos.xyz);
+                float3 H = normalize(L + V);
                 float NdotH = max(dot(eye_normal, H), 0.0);
                 float spec = pow(NdotH, lighting.material.shininess);
                 specular_contrib = spec * light.specular * lighting.material.specular;
@@ -291,7 +294,7 @@ vertex GLVertexOut gl_vertex_main(
 
     // 6. Fog factor computation
     if (uniforms.fog_enabled) {
-        float dist = abs(eye_pos.z);
+        float dist = uniforms.fog_facing * eye_pos.z;
         float fog_factor = 1.0;
         if (uniforms.fog_mode == 1) {
             // Linear
@@ -304,7 +307,7 @@ vertex GLVertexOut gl_vertex_main(
             float dz = uniforms.fog_density * dist;
             fog_factor = exp(-dz * dz);
         }
-        out.fog_factor = clamp(fog_factor, 0.0, 1.0);
+        out.fog_factor = fog_factor;
     } else {
         out.fog_factor = 1.0;
     }
@@ -418,7 +421,7 @@ fragment float4 gl_fragment_main(
     if (uniforms.fog_color.w > -0.5) {
         // Use fog_color.w as a sentinel: >= 0 means fog is active
         // (We always compute fog_factor in vertex shader, check fog_color validity here)
-        color.rgb = mix(uniforms.fog_color.rgb, color.rgb, in.fog_factor);
+        color.rgb = mix(uniforms.fog_color.rgb, color.rgb, saturate(in.fog_factor));
     }
 
     // Alpha test

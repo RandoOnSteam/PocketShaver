@@ -55,7 +55,6 @@ prefs_desc common_prefs_items[] = {
 	{"osxbootargs", TYPE_STRING, false,  "Mac OS X kernel boot arguments"},
 	{"osxseconds", TYPE_INT32, false,   "stop the Mac OS X guest after this many seconds"},
 	{"osxjit", TYPE_BOOLEAN, false,     "enable the Mac OS X native JIT compiler"},
-	{"osxflurry", TYPE_BOOLEAN, false,  "accelerate supported Flurry savers with host OpenGL"},
 	{"osxquartz", TYPE_BOOLEAN, false, "accelerate supported Quartz OpenGL contexts"},
 #if defined(OSXG5) && OSXG5
 	{"osxcpu970", TYPE_BOOLEAN, false,  "run the Mac OS X guest on a PowerPC 970 (G5) CPU"},
@@ -150,7 +149,6 @@ void AddPrefsDefaults(void)
 #endif
 	PrefsAddBool("gfxaccel", true);
 	PrefsAddBool("osxjit", true);
-	PrefsAddBool("osxflurry", true);
 	PrefsAddBool("osxquartz", true);
 	PrefsAddBool("nqdaccel",true);
 	PrefsAddBool("raveaccel",true);

@@ -1,5 +1,5 @@
 /*
- *  osxglbridge.h - host OpenGL bridge for Mac OS X guest Flurry and Quartz OpenGL contexts
+ *  osxglbridge.h - host OpenGL bridge for Mac OS X guest Quartz OpenGL contexts
  *
  *	(C) 2026 RandoOnSteam (battlemageloveryt@gmail.com)
  *
@@ -20,11 +20,6 @@
 #ifndef OSXGLBRIDGE_H
 #define OSXGLBRIDGE_H
 
-#define OSXFLURRYTRAP 0x44f00002u
-#define OSXFLURRYSTUB 0x9608u
-#define OSXFLURRYSTUBSIZE 32u
-#define OSXFLURRYSTUBCOUNT 66u
-#define OSXFLURRYFLUSH 60u
 #define OSXQUARTZTRAP 0x44c00002u
 #define OSXQUARTZSTRINGS 0x400u
 #define OSXQUARTZRENDERERSTRING 0x800u
@@ -34,7 +29,7 @@
 #define OSXQUARTZVERSION "1.3 APPLE-bridge"
 #define OSXQUARTZEXTENSIONS "GL_ARB_multitexture GL_ARB_texture_rectangle GL_EXT_texture_rectangle " \
 	"GL_ARB_texture_non_power_of_two GL_APPLE_client_storage GL_APPLE_packed_pixels GL_EXT_bgra GL_EXT_abgr " \
-	"GL_EXT_blend_func_separate GL_EXT_blend_minmax GL_EXT_blend_subtract GL_ARB_texture_env_combine " \
+	"GL_EXT_blend_func_separate GL_EXT_blend_minmax GL_EXT_blend_subtract GL_EXT_secondary_color GL_ARB_texture_env_combine " \
 	"GL_ARB_texture_env_add GL_ARB_texture_env_crossbar GL_ARB_texture_env_dot3 GL_ARB_texture_border_clamp " \
 	"GL_EXT_texture_edge_clamp GL_SGIS_texture_edge_clamp GL_ARB_texture_mirrored_repeat GL_EXT_texture_lod_bias " \
 	"GL_SGIS_generate_mipmap GL_EXT_texture_filter_anisotropic GL_ARB_texture_float GL_APPLE_float_pixels " \
@@ -45,18 +40,20 @@
 #endif
 #if OSXGLBRIDGE
 
-typedef struct OsxGlBridge OsxGlBridge;
 typedef struct OsxQuartzBridge OsxQuartzBridge;
+typedef uint32 (*OsxQuartzProcessFunction)(void *owner, OsxCpu *cpu);
+typedef int (*OsxQuartzEventLoopFunction)(void *owner, OsxCpu *cpu);
 OsxQuartzBridge *OsxGuestCreateQuartzBridge(uint32 width, uint32 height, uint32 library, uint32 strings, int extensions, int allocatedextensions,
-	uint32 allocate, uint32 clear, uint8 *vram, uint32 rowbytes, struct OsxHostVideo *video, uint8 **present, const uint32 *windowcalls);
-void OsxGuestQuartzComposeWindows(OsxQuartzBridge *bridge, const uint8 *vram, uint8 *present, uint32 size);
+	uint32 allocate, uint32 clear, uint8 *vram, uint32 rowbytes, struct OsxHostVideo *video, uint8 **present, const uint32 *windowcalls,
+	OsxQuartzProcessFunction process, void *processowner);
+void OsxGuestQuartzComposeWindows(OsxQuartzBridge *bridge, uint8 *present, uint32 depth);
 void OsxGuestDestroyQuartzBridge(OsxQuartzBridge *bridge);
 void OsxGuestQuartzResize(OsxQuartzBridge *bridge, uint32 width, uint32 height);
-int OsxGuestQuartzBridgeCall(OsxQuartzBridge *bridge, OsxCpu *cpu, const uint32 *tails, uint32 call, FILE *log);
-OsxGlBridge *OsxGuestCreateGlBridge(OsxCpu *cpu, uint32 width, uint32 height, uint8 *vram, uint32 rowbytes, struct OsxHostVideo *video, uint8 **present);
+int OsxGuestQuartzFullScreen(OsxQuartzBridge *bridge);
+int OsxGuestQuartzIdleGeometry(OsxQuartzBridge *bridge, OsxCpu *cpu, OsxQuartzEventLoopFunction eventloop, void *owner);
+void OsxGuestQuartzKeepProcesses(OsxQuartzBridge *bridge, const uint32 *processes, const uint32 *spaces, uint32 count, uint32 mask);
+int OsxGuestQuartzBridgeCall(OsxQuartzBridge *bridge, OsxCpu *cpu, const uint32 *tails, uint32 call, uint32 depth, FILE *log);
 void OsxGuestGlShutdownHost(void);
-void OsxGuestDestroyGlBridge(OsxGlBridge *bridge);
-int OsxGuestGlBridgeCall(OsxGlBridge *bridge, OsxCpu *cpu, uint32 call);
 
 #endif
 
@@ -69,7 +66,6 @@ void OsxGuestEngineCall(void *engine, OsxCpu *cpu, uint32 sub);
 void OsxGuestEngineFlush(void *engine, OsxCpu *cpu);
 void OsxGuestEngineReadPixels(void *engine, OsxCpu *cpu, uint32 width, uint32 height, void *pixels);
 void OsxGuestEngineHostString(void *engine, OsxCpu *cpu, uint32 name, char *text, uint32 size);
-int OsxGuestEngineFlurryCall(void *engine, OsxCpu *cpu, uint32 call);
 void OsxGuestEngineBeforePresent(void);
 void OsxGuestEngineAfterPresent(void);
 unsigned OsxGuestEngineTextureCreate(void *engine, OsxCpu *cpu, uint32 width, uint32 height, int floatpixels);

@@ -318,6 +318,8 @@ uint64 OsxCpuHostTicks(void);
 void OsxGuestCpuCalibrateTimebase(OsxCpu *cpu);
 uint64 OsxGuestCpuNextDeadline(OsxCpu *cpu);
 uint64 OsxGuestHostNanoseconds(void);
+void OsxGuestHostHugePages(void *memory, size_t size);
+void OsxGuestHostShortSleep(uint32 microseconds);
 int OsxGuestCpuAddHook(OsxCpu *cpu, uint32 address, OsxHookFunction function, void *context);
 OSXJITABI int OsxGuestCpuFillTlb(OsxCpu *cpu, uint32 address, int kind);
 int OsxGuestCpuTranslate(OsxCpu *cpu, uint32 address, int kind, int raise, uint32 *physical);

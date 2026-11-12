@@ -12,7 +12,7 @@
 #ifndef GL_ENGINE_H
 #define GL_ENGINE_H
 
-#include <cstdint>
+#include <stdint.h>
 #include <vector>
 #include <map>
 
@@ -874,6 +874,15 @@ struct GLMaterial {
     float shininess;
 };
 
+#define GLLINEARSHININESS 1.0f
+
+static inline float GLMaterialExponent(const GLMaterial &material)
+{
+	if (material.shininess == 0.0f)
+		return GLLINEARSHININESS;
+	return material.shininess;
+}
+
 
 /*
  *  GLTextureUnit -- per-unit texture state (GL 1.2 supports up to 4 units)
@@ -905,6 +914,8 @@ struct GLTextureUnit {
     int      texgen_t_mode;
     int      texgen_r_mode;
     int      texgen_q_mode;
+    float    texgen_object_plane[4][4];
+    float    texgen_eye_plane[4][4];
 };
 
 
@@ -994,7 +1005,7 @@ struct GLAttribStackEntry {
     float    light_model_ambient[4];
     bool     light_model_two_side;
     bool     light_model_local_viewer;
-    bool     light_enabled[8];
+    GLLight  saved_lights[8];
     // --- GL_FOG_BIT ---
     bool     fog_enabled;
     uint32_t fog_mode;

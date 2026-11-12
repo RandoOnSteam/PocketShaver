@@ -32,7 +32,9 @@ void SflUiQuitFullScreen(void);
 void SflUiGetDesktopSize(int *width, int *height);
 void SflUiClose(void);
 void *SflUiGetWindowHandle(void);
+void *SflUiGetGLHandle(void);
 void SflUiSetFrame(unsigned char *buffer, int width, int height, int rowbytes, int bits);
+void SflUiSuspendFrame(unsigned char *capture);
 void SflUiSetPalette(const unsigned char *rgb, int count);
 void SflUiAlert(const char *title, const char *text);
 void SflUiRequestQuit(void);
@@ -42,9 +44,11 @@ void SflUiPumpEvents(void);
 #define SFLUIINPUTKEY 3
 #define SFLUIINPUTQUIT 4
 #define SFLUIINPUTWHEEL 5
+#define SFLUIINPUTMOTION 6
 typedef void (*SFLUIINPUT)(void *context, int operation, int first, int second);
 void SflUiSetInput(SFLUIINPUT input, void *context);
 int SflUiQueueInput(int operation, int first, int second);
+void SflUiSetPointerCapture(int capture);
 int SflUiIsQuitting(void);
 void SflUiNetworkTransfer(const unsigned char *frame, int length, int incoming);
 void SflUiNotify(const char *text);

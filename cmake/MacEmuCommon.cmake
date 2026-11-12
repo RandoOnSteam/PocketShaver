@@ -235,9 +235,12 @@ function(macemu_find_sdl)
 		else()
 			set(SDL1_LIBRARY_SUFFIX lib/x86)
 		endif()
-		set(SDL1_ROOTS
-			"${CMAKE_SOURCE_DIR}/thirdparty/SDL-1.2.15"
-			"${CMAKE_CURRENT_SOURCE_DIR}/../thirdparty/SDL-1.2.15")
+		set(SDL1_ROOTS "")
+		if(WIN32)
+			set(SDL1_ROOTS
+				"${CMAKE_SOURCE_DIR}/thirdparty/SDL-1.2.15"
+				"${CMAKE_CURRENT_SOURCE_DIR}/../thirdparty/SDL-1.2.15")
+		endif()
 		find_path(SDL1_INCLUDE_DIR SDL.h
 			HINTS ${SDL1_ROOTS} ENV SDL1DIR
 			PATH_SUFFIXES include include/SDL)
@@ -251,6 +254,17 @@ function(macemu_find_sdl)
 			find_file(SDL1_RUNTIME NAMES SDL.dll
 				HINTS ${SDL1_ROOTS} ENV SDL1DIR
 				PATH_SUFFIXES ${SDL1_LIBRARY_SUFFIX} bin)
+		endif()
+		if(NOT SDL1_INCLUDE_DIR OR NOT SDL1_LIBRARY)
+			find_package(PkgConfig QUIET)
+			if(PKG_CONFIG_FOUND)
+				pkg_check_modules(SDL1PC QUIET sdl)
+			endif()
+			if(SDL1PC_FOUND)
+				find_path(SDL1_INCLUDE_DIR SDL.h HINTS ${SDL1PC_INCLUDE_DIRS})
+				find_library(SDL1_LIBRARY NAMES SDL HINTS ${SDL1PC_LIBRARY_DIRS})
+				find_library(SDL1MAIN_LIBRARY NAMES SDLmain HINTS ${SDL1PC_LIBRARY_DIRS})
+			endif()
 		endif()
 		if(NOT SDL1_INCLUDE_DIR OR NOT SDL1_LIBRARY)
 			message(FATAL_ERROR

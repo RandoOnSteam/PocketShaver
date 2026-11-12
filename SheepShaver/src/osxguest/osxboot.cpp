@@ -41,6 +41,9 @@
 #define BOOTARGSSIZE 0x200
 #define BOOTSCREENGRAY 0xbf
 #define BOOTCLUTSPINNERENTRY 3
+#define NDRVSUPPORTPATH "/System/Library/Extensions/IONDRVSupport.kext/IONDRVSupport"
+#define NDRVTRANSLATESBASE "pmap_find_phys"
+#define NDRVPHYSICALBASE 1u
 #define BOOTCLUTFULL 0xff
 #define BOOTCLUTYELLOW 0xcc
 #define BOOTSPINNERSCAN 0x800
@@ -731,6 +734,7 @@ static int OsxGuestAddGuestFilePatch(OsxHfsVolume *volume, const OsxHfsFork *for
 			patch->offset = volume->base + (uint64)fork->extents[extent].start * volume->blocksize + offset;
 			patch->length = length;
 			patch->atapionly = 0;
+			patch->checksumknown = 0;
 			patch->drive = drive;
 			memcpy(patch->bytes, bytes, length);
 			return 1;
@@ -748,109 +752,6 @@ static uint64 OsxGuestFileHash(const uint8 *image, uint32 size)
 	for (index = 0; index < size; index++)
 		hash = (hash ^ image[index]) * 1099511628211ULL;
 	return hash;
-}
-
-static int OsxGuestPrepareFlurry(OsxMachine *machine, OsxHfsVolume *volume, int bootbus, int bootunit)
-{
-	uint8 record[248];
-	uint8 replacement[16];
-	uint8 *image;
-	uint32 size;
-	uint32 index;
-	uint32 call;
-	uint32 stub;
-	uint32 stubstart;
-	uint32 stubsize;
-	uint32 stubcount;
-	uint32 symboltable;
-	uint32 symbolbias;
-	uint32 slicebase;
-	uint32 interval;
-	uint32 initoffset;
-	uint64 hash;
-	int originalcount;
-	OsxHfsFork *fork;
-	OsxAtaBus *bus;
-	const OsxAtaDrive *drive;
-	if (!OsxGuestLookupPath(volume, "/System/Library/Screen Savers/Flurry.saver/Contents/MacOS/Flurry", record) ||
-		OsxGuestBig16(record) != HFSFILERECORD || OsxGuestBig32(record + 88) != 0)
-		return 0;
-	size = OsxGuestBig32(record + 92);
-	if (size != 64020 && size != 60524 && size != 60584 && size != 140032)
-		return 0;
-	image = OsxGuestReadRecord(volume, record, &size);
-	if (!image)
-		return 0;
-	hash = OsxGuestFileHash(image, size);
-	stubstart = OSXFLURRYSTUB;
-	stubsize = OSXFLURRYSTUBSIZE;
-	stubcount = OSXFLURRYSTUBCOUNT;
-	interval = 0xadd8;
-	slicebase = 0;
-	switch (hash) {
-	case 0xc77ec9fd0cbf6851ULL:
-		initoffset = 0x14a8;
-		stubstart = 0x95ec;
-		stubsize = 36;
-		symboltable = 59344;
-		symbolbias = 99;
-		break;
-	case 0x709f32ff31048fadULL:
-		initoffset = 0x1568;
-		symboltable = 58156;
-		symbolbias = 0;
-		break;
-	case 0x8110edabd1489199ULL:
-	case 0x6d58e084d36befc7ULL:
-		initoffset = 0x1560;
-		symboltable = 58180;
-		symbolbias = 2;
-		break;
-	case 0xdfc6e7005e22bd2fULL:
-		initoffset = 0x110c;
-		slicebase = 0x12000;
-		stubstart = 0x9518;
-		stubcount = 69;
-		symboltable = slicebase + 58316;
-		symbolbias = 4;
-		interval = 0x1cdb8;
-		break;
-	default:
-		free(image);
-		return 0;
-	}
-	fork = (OsxHfsFork *)malloc(sizeof(OsxHfsFork));
-	if (!fork) {
-		free(image);
-		return 0;
-	}
-	OsxGuestParseFork(record + 88, OsxGuestBig32(record + 8), 0, fork);
-	OsxGuestCompleteFork(volume, fork);
-	bus = &machine->ata[bootbus];
-	drive = &bus->drives[bootunit];
-	originalcount = bus->patchcount;
-	for (index = 0; index < stubcount; index++) {
-		call = OsxGuestBig32(image + symboltable + index * 4) - symbolbias;
-		if (call < 45 || call > 85 || call == 63 || call == 84)
-			continue;
-		stub = stubstart + (index + 1) * stubsize - 4;
-		OsxGuestStoreBig32(replacement, OSXFLURRYTRAP | (call << 8));
-		if (!OsxGuestAddGuestFilePatch(volume, fork, bus, drive, slicebase + stub, replacement, 4))
-			break;
-		machine->flurrystubs[call] = stub;
-	}
-	OsxGuestStoreBig32(replacement, OSXFLURRYTRAP);
-	if (index == stubcount && OsxGuestAddGuestFilePatch(volume, fork, bus, drive, slicebase + initoffset, replacement, 4)) {
-		OsxGuestStoreBig32(replacement, 0x3f911111);
-		OsxGuestStoreBig32(replacement + 4, 0x11111111);
-		if (OsxGuestAddGuestFilePatch(volume, fork, bus, drive, interval, replacement, 8))
-			machine->flurryinit = initoffset;
-	}
-	if (!machine->flurryinit)
-		bus->patchcount = originalcount;
-	free(fork);
-	free(image);
-	return bus->patchcount != originalcount;
 }
 
 static int OsxGuestAddGuestFileBytes(OsxHfsVolume *volume, const OsxHfsFork *fork, OsxAtaBus *bus,
@@ -1687,7 +1588,8 @@ static int OsxGuestPrepareQuartz(OsxMachine *machine, OsxHfsVolume *volume, OsxA
 static void OsxGuestFindClipboardFunctions(OsxMachine *machine, OsxHfsVolume *volume)
 {
 	static const char *const systemnames[3] = { "_malloc", "_free", "_bzero" };
-	static const char *const windownames[OSXQUARTZWINDOWCALLS] = { "_CGSGetScreenRectForWindow", "_CGSGetSurfaceBounds", "_CGSGetOnScreenWindowList", "_CGSGetWindowOpacity" };
+	static const char *const windownames[OSXQUARTZWINDOWCALLS] = { "_CGSGetScreenRectForWindow", "_CGSGetSurfaceBounds", "_CGSGetOnScreenWindowList",
+		"_CGSGetWindowLevel", "_CGSGetWindowOpaqueShape", "_CGSGetRegionBounds", "_CGSReleaseRegion" };
 	static const char *const toolboxnames[5] = {
 		"_GetCurrentScrap", "_ClearCurrentScrap", "_PutScrapFlavor", "_GetScrapFlavorSize", "_GetScrapFlavorData"
 	};
@@ -2883,19 +2785,12 @@ static OsxTreeNode *OsxGuestBuildTree(OsxBootState *state, OsxTreeNode **memorym
 		OsxGuestAddProperty(node, "general-purpose", "", 0);
 	} else {
 #endif
-	if (state->machine->pvr == OSXPVRG4) {
-		node = OsxGuestNewNode(node, "PowerPC,G4");
-		OsxGuestAddProperty(node, "altivec", "", 0);
-	} else {
-		node = OsxGuestNewNode(node, "PowerPC,750");
-	}
+	node = OsxGuestNewNode(node, "PowerPC,G4");
+	OsxGuestAddProperty(node, "altivec", "", 0);
 	OsxGuestAddString(node, "device_type", "cpu");
 	OsxGuestAddCell(node, "reg", 0);
 	OsxGuestAddCell(node, "cpu-version", state->machine->pvr);
-	if (state->machine->pvr == OSXPVRG4)
-		OsxGuestAddCell(node, "clock-frequency", OSXCPUFREQUENCYG4);
-	else
-		OsxGuestAddCell(node, "clock-frequency", OSXCPUFREQUENCY);
+	OsxGuestAddCell(node, "clock-frequency", OSXCPUFREQUENCYG4);
 	OsxGuestAddCell(node, "bus-frequency", OSXBUSFREQUENCY);
 	OsxGuestAddCell(node, "timebase-frequency", OSXTIMEBASEFREQUENCY);
 	OsxGuestAddCell(node, "d-cache-size", 0x8000);
@@ -3141,7 +3036,8 @@ static void OsxGuestCenterCornerSpinner(OsxMachine *machine)
 }
 
 static void OsxGuestMatchSpinnerToBootScreen(OsxMachine *machine)
-{
+{ /* 10.2 has a spinner with a yellow/orange background due to a 
+		BOOTX palette issue. This fixes it to gray for that case. */
 	uint32 table;
 	uint8 *entry;
 	table = OsxGuestFindKernelSymbol(machine, "_appleClut8");
@@ -3170,29 +3066,6 @@ static void OsxGuestStartSpinnerImmediately(OsxMachine *machine)
 			return;
 		}
 	}
-}
-
-static int OsxGuestNeedsVectorCpu(OsxHfsVolume *volume)
-{
-	uint8 *dyld;
-	uint32 size;
-	uint32 count;
-	uint32 index;
-	int compatible;
-	dyld = OsxGuestReadFile(volume, "/usr/lib/dyld", &size);
-	if (dyld == NULL)
-		return 0;
-	compatible = 0;
-	if (size >= 8 && OsxGuestBig32(dyld) == 0xcafebabe) {
-		count = OsxGuestBig32(dyld + 4);
-		for (index = 0; index < count && 8 + index * 20 + 20 <= size; index++)
-			if (OsxGuestBig32(dyld + 8 + index * 20) == 18 && OsxGuestBig32(dyld + 8 + index * 20 + 4) <= 9)
-				compatible = 1;
-	} else if (size < 12 || OsxGuestBig32(dyld) != 0xfeedface || OsxGuestBig32(dyld + 8) <= 9) {
-		compatible = 1;
-	}
-	free(dyld);
-	return !compatible;
 }
 
 static uint8 *OsxGuestAddVolumeBundles(OsxHfsVolume *volume, uint8 *mkext, uint32 *size, const char *const *bundles, int count)
@@ -3277,8 +3150,10 @@ int OsxGuestBootLoad(OsxMachine *machine, const char *imagepath, int bootbus, in
 	void *file;
 	uint8 *kernel;
 	uint8 *mkext;
+	uint8 *support;
 	uint32 kernelsize;
 	uint32 mkextsize;
+	uint32 supportsize;
 	uint32 address;
 	uint32 treesize;
 	uint32 treeaddress;
@@ -3294,9 +3169,7 @@ int OsxGuestBootLoad(OsxMachine *machine, const char *imagepath, int bootbus, in
 		return 0;
 	}
 	sprintf(state.rootpath, "/pci@80000000/mac-io@10/ata@%x/@%d:%d", 0x20000 + bootbus * 0x1000, bootunit, volume.partition);
-	machine->pvr = OSXPVR;
-	if (OsxGuestNeedsVectorCpu(&volume))
-		machine->pvr = OSXPVRG4;
+	machine->pvr = OSXPVRG4;
 #if OSXG5
 	if (PrefsFindBool("osxcpu970") || machine->g5)
 		machine->pvr = OSX970PVR;
@@ -3312,6 +3185,12 @@ int OsxGuestBootLoad(OsxMachine *machine, const char *imagepath, int bootbus, in
 		return 0;
 	}
 	state.ignorendrv = OsxGuestContainsBytes(kernel, kernelsize, "Darwin Kernel Version 1.");
+	supportsize = 0;
+	support = OsxGuestReadFile(&volume, NDRVSUPPORTPATH, &supportsize);
+	machine->displaybase = OSXVRAMBASE;
+	if (OsxGuestContainsBytes(support, supportsize, NDRVTRANSLATESBASE))
+		machine->displaybase |= NDRVPHYSICALBASE;
+	free(support);
 	mkext = NULL;
 	if (!state.ignorendrv)
 		mkext = OsxGuestReadFile(&volume, "/System/Library/Extensions.mkext", &mkextsize);
@@ -3349,8 +3228,6 @@ int OsxGuestBootLoad(OsxMachine *machine, const char *imagepath, int bootbus, in
 	OsxGuestFindClipboardFunctions(machine, &volume);
 	machine->quartzallocatedextensions = OsxGuestPrepareSaverSoftware(&volume, &machine->ata[bootbus], &machine->ata[bootbus].drives[bootunit]);
 	OsxGuestPrepareJaguarLogin(&volume, &machine->ata[bootbus], &machine->ata[bootbus].drives[bootunit]);
-	if (machine->flurry)
-		machine->flurry = OsxGuestPrepareFlurry(machine, &volume, bootbus, bootunit);
 	if (machine->quartz)
 		machine->quartz = OsxGuestPrepareQuartz(machine, &volume, &machine->ata[bootbus], &machine->ata[bootbus].drives[bootunit]);
 	OsxGuestCloseVolume(&volume);

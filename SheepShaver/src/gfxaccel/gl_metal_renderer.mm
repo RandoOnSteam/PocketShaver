@@ -503,9 +503,7 @@ struct GLMetalVertexUniforms {
 	int32_t two_side_lighting;  // GL_LIGHT_MODEL_TWO_SIDE
 	// User clip planes (must match GLVertexUniforms in gl_shaders.metal)
 	int32_t num_clip_planes;    // offset 216 (not 16-byte aligned: 216 = 13.5 * 16)
-	float   _clip_pad[1];       // offset 220: ONE float (4 bytes) brings the next field
-								// to offset 224 = 14 * 16, the float4 alignment boundary.
-								// (only 4 bytes are needed here, not 12 - see static_assert below)
+	float   fog_facing;
 	float   clip_planes[6][4];  // offset 224, 16-byte aligned: 6 clip plane equations (float4 each)
 };
 
@@ -557,7 +555,8 @@ struct GLMetalMaterial {
 	float specular[4];
 	float emission[4];
 	float shininess;
-	float _pad0, _pad1, _pad2;
+	float local_viewer;
+	float _pad1, _pad2;
 };
 
 // Must match GLLightingData in gl_shaders.metal
@@ -3379,6 +3378,9 @@ void GLMetalFlushImmediateMode(GLContext *ctx)
 	vu.fog_enabled = fogActiveForDraw ? 1 : 0;
 	vu.fog_mode = fogActiveForDraw ? GLFogModeToShader(ctx->fog_mode) : 0;
 	vu.fog_start = ctx->fog_start;
+	vu.fog_facing = -1.0f;
+	if (ctx->projection_stack[ctx->projection_depth][11] > 0.0f)
+		vu.fog_facing = 1.0f;
 	vu.fog_end = ctx->fog_end;
 	vu.fog_density = ctx->fog_density;
 	vu.point_size = ctx->point_size;
@@ -3387,7 +3389,6 @@ void GLMetalFlushImmediateMode(GLContext *ctx)
 	// ---- User clip planes ----
 	int nClipPlanes = 0;
 	memset(vu.clip_planes, 0, sizeof(vu.clip_planes));
-	memset(vu._clip_pad, 0, sizeof(vu._clip_pad));
 	for (int i = 0; i < 6; i++) {
 		if (ctx->clip_plane_enabled[i]) {
 			GLMetalCopyClipPlaneToUniform(vu.clip_planes[nClipPlanes], ctx->clip_planes[i]);
@@ -3461,7 +3462,10 @@ void GLMetalFlushImmediateMode(GLContext *ctx)
 	memcpy(ld->material.diffuse, ctx->materials[0].diffuse, sizeof(float) * 4);
 	memcpy(ld->material.specular, ctx->materials[0].specular, sizeof(float) * 4);
 	memcpy(ld->material.emission, ctx->materials[0].emission, sizeof(float) * 4);
-	ld->material.shininess = ctx->materials[0].shininess;
+	ld->material.shininess = GLMaterialExponent(ctx->materials[0]);
+	ld->material.local_viewer = 0.0f;
+	if (ctx->light_model_local_viewer)
+		ld->material.local_viewer = 1.0f;
 	memcpy(ld->global_ambient, ctx->light_model_ambient, sizeof(float) * 4);
 
 	// ---- Get/create pipeline state ----

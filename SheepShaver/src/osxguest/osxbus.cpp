@@ -1636,6 +1636,14 @@ uint64 OsxGuestBmacNextDeadline(OsxMachine *machine)
 #define DISPLAYGETNEXTRESOLUTION 17
 #define DISPLAYGETVIDEOPARAMETERS 18
 
+#define DISPLAYGAMMAFORMULASIZE 4
+#define DISPLAYGAMMACHANNELS 6
+#define DISPLAYGAMMACOUNT 8
+#define DISPLAYGAMMAWIDTH 10
+#define DISPLAYGAMMADATA 12
+#define DISPLAYGAMMABITS 8
+#define DISPLAYGAMMAMAXBYTES 2
+
 #define DISPLAYSWITCHDEPTH 0
 #define DISPLAYSWITCHDATA 2
 #define DISPLAYSWITCHPAGE 6
@@ -1684,7 +1692,8 @@ uint64 OsxGuestBmacNextDeadline(OsxMachine *machine)
 #define DISPLAYTIMINGDATA 12
 #define DISPLAYTIMINGFLAGS 16
 
-#define DISPLAYDEPTHMODE 0x80u
+#define DISPLAYDEPTHTHOUSANDS 0x80u
+#define DISPLAYDEPTHMILLIONS 0x81u
 #define DISPLAYMODECURRENT 0u
 #define DISPLAYMODEFIRST 0xfffffffeu
 #define DISPLAYMODENOMORE 0xfffffffdu
@@ -1692,9 +1701,14 @@ uint64 OsxGuestBmacNextDeadline(OsxMachine *machine)
 #define DISPLAYREFRESH (60u << 16)
 #define DISPLAYRESOLUTION 0x00480000u
 #define DISPLAYPIXELDIRECT 0x10
-#define DISPLAYPIXELSIZE 32
 #define DISPLAYCOMPONENTS 3
 #define DISPLAYCOMPONENTSIZE 8
+#define DISPLAYCOMPONENTSIZETHOUSANDS 5
+#define DISPLAYTHOUSANDSRED 10
+#define DISPLAYTHOUSANDSGREEN 5
+#define DISPLAYTHOUSANDSMASK 31u
+#define DISPLAYTHOUSANDSSHIFT 3
+#define DISPLAYTHOUSANDSFILL 2
 #define DISPLAYDEVICEDIRECT 2
 #define DISPLAYMULTIMODECONNECT 6
 #define DISPLAYTAGGEDTYPE 6
@@ -1798,6 +1812,53 @@ static void OsxGuestDisplayDimensions(OsxMachine *machine, uint32 mode, uint32 *
 	}
 }
 
+static uint8 OsxGuestDisplayWiden(uint32 value)
+{
+	value &= DISPLAYTHOUSANDSMASK;
+	return (uint8)((value << DISPLAYTHOUSANDSSHIFT) | (value >> DISPLAYTHOUSANDSFILL));
+}
+
+void OsxGuestDisplayExpandPixels(uint8 *target, const uint8 *source, uint32 count)
+{
+	uint32 index;
+	uint32 value;
+	for (index = 0; index < count; index++) {
+		value = ((uint32)source[index * 2] << 8) | source[index * 2 + 1];
+		target[index * 4] = 0;
+		target[index * 4 + 1] = OsxGuestDisplayWiden(value >> DISPLAYTHOUSANDSRED);
+		target[index * 4 + 2] = OsxGuestDisplayWiden(value >> DISPLAYTHOUSANDSGREEN);
+		target[index * 4 + 3] = OsxGuestDisplayWiden(value);
+	}
+}
+
+void OsxGuestDisplayPackPixels(uint8 *target, const uint8 *source, uint32 count)
+{
+	uint32 index;
+	uint32 value;
+	for (index = 0; index < count; index++) {
+		value = ((uint32)(source[index * 4 + 1] >> DISPLAYTHOUSANDSSHIFT) << DISPLAYTHOUSANDSRED) |
+			((uint32)(source[index * 4 + 2] >> DISPLAYTHOUSANDSSHIFT) << DISPLAYTHOUSANDSGREEN) | (source[index * 4 + 3] >> DISPLAYTHOUSANDSSHIFT);
+		target[index * 2] = (uint8)(value >> 8);
+		target[index * 2 + 1] = (uint8)value;
+	}
+}
+
+static uint32 OsxGuestDisplayDepthBits(uint32 depthmode)
+{
+	if (depthmode == DISPLAYDEPTHTHOUSANDS)
+		return OSXDEPTHTHOUSANDS;
+	if (depthmode == DISPLAYDEPTHMILLIONS)
+		return OSXDEPTHMILLIONS;
+	return 0;
+}
+
+static uint32 OsxGuestDisplayDepthMode(OsxMachine *machine)
+{
+	if (machine->depth == OSXDEPTHTHOUSANDS)
+		return DISPLAYDEPTHTHOUSANDS;
+	return DISPLAYDEPTHMILLIONS;
+}
+
 void OsxGuestDisplayReset(OsxMachine *machine)
 {
 	uint32 index;
@@ -1812,6 +1873,8 @@ void OsxGuestDisplayReset(OsxMachine *machine)
 		}
 	}
 	machine->displaypreferred = machine->displaymode;
+	for (index = 0; index < OSXGAMMAENTRIES * OSXGAMMACHANNELS; index++)
+		machine->gamma[index] = (uint8)(index % OSXGAMMAENTRIES);
 }
 
 static uint32 OsxGuestDisplayRead(OsxCpu *cpu, uint32 address, int size)
@@ -1876,7 +1939,7 @@ static int OsxGuestDisplayNextResolution(OsxMachine *machine, OsxCpu *cpu, uint3
 	OsxGuestDisplayWrite(cpu, param + DISPLAYRESOLUTIONWIDTH, 4, width);
 	OsxGuestDisplayWrite(cpu, param + DISPLAYRESOLUTIONHEIGHT, 4, height);
 	OsxGuestDisplayWrite(cpu, param + DISPLAYRESOLUTIONREFRESH, 4, DISPLAYREFRESH);
-	OsxGuestDisplayWrite(cpu, param + DISPLAYRESOLUTIONDEPTH, 2, DISPLAYDEPTHMODE);
+	OsxGuestDisplayWrite(cpu, param + DISPLAYRESOLUTIONDEPTH, 2, DISPLAYDEPTHMILLIONS);
 	return DISPLAYNOERROR;
 }
 
@@ -1888,9 +1951,15 @@ static int OsxGuestDisplayVideoParameters(OsxMachine *machine, OsxCpu *cpu, uint
 	uint32 width;
 	uint32 height;
 	uint32 timing;
+	uint32 depth;
+	uint32 componentsize;
 	mode = OsxGuestDisplayRead(cpu, param + DISPLAYPARAMETERSMODE, 4);
-	if (!OsxGuestDisplayModeSize(machine, mode, &found) || OsxGuestDisplayRead(cpu, param + DISPLAYPARAMETERSDEPTH, 2) != DISPLAYDEPTHMODE)
+	depth = OsxGuestDisplayDepthBits(OsxGuestDisplayRead(cpu, param + DISPLAYPARAMETERSDEPTH, 2));
+	if (!OsxGuestDisplayModeSize(machine, mode, &found) || !depth)
 		return DISPLAYPARAMERROR;
+	componentsize = DISPLAYCOMPONENTSIZE;
+	if (depth == OSXDEPTHTHOUSANDS)
+		componentsize = DISPLAYCOMPONENTSIZETHOUSANDS;
 	OsxGuestDisplayDimensions(machine, mode, &width, &height, &timing);
 	block = OsxGuestDisplayRead(cpu, param + DISPLAYPARAMETERSBLOCK, 4);
 	OsxGuestDisplayWrite(cpu, block + DISPLAYBLOCKOFFSET, 4, 0);
@@ -1904,9 +1973,9 @@ static int OsxGuestDisplayVideoParameters(OsxMachine *machine, OsxCpu *cpu, uint
 	OsxGuestDisplayWrite(cpu, block + DISPLAYBLOCKHRES, 4, DISPLAYRESOLUTION);
 	OsxGuestDisplayWrite(cpu, block + DISPLAYBLOCKVRES, 4, DISPLAYRESOLUTION);
 	OsxGuestDisplayWrite(cpu, block + DISPLAYBLOCKPIXELTYPE, 2, DISPLAYPIXELDIRECT);
-	OsxGuestDisplayWrite(cpu, block + DISPLAYBLOCKPIXELSIZE, 2, DISPLAYPIXELSIZE);
+	OsxGuestDisplayWrite(cpu, block + DISPLAYBLOCKPIXELSIZE, 2, depth);
 	OsxGuestDisplayWrite(cpu, block + DISPLAYBLOCKCOMPONENTS, 2, DISPLAYCOMPONENTS);
-	OsxGuestDisplayWrite(cpu, block + DISPLAYBLOCKCOMPONENTSIZE, 2, DISPLAYCOMPONENTSIZE);
+	OsxGuestDisplayWrite(cpu, block + DISPLAYBLOCKCOMPONENTSIZE, 2, componentsize);
 	OsxGuestDisplayWrite(cpu, block + DISPLAYBLOCKPLANEBYTES, 4, 0);
 	OsxGuestDisplayWrite(cpu, param + DISPLAYPARAMETERSPAGES, 4, 1);
 	OsxGuestDisplayWrite(cpu, param + DISPLAYPARAMETERSDEVICE, 4, DISPLAYDEVICEDIRECT);
@@ -1938,10 +2007,10 @@ static int OsxGuestDisplayModeTiming(OsxMachine *machine, OsxCpu *cpu, uint32 pa
 
 static void OsxGuestDisplayCurrentMode(OsxMachine *machine, OsxCpu *cpu, uint32 param)
 {
-	OsxGuestDisplayWrite(cpu, param + DISPLAYSWITCHDEPTH, 2, DISPLAYDEPTHMODE);
+	OsxGuestDisplayWrite(cpu, param + DISPLAYSWITCHDEPTH, 2, OsxGuestDisplayDepthMode(machine));
 	OsxGuestDisplayWrite(cpu, param + DISPLAYSWITCHDATA, 4, machine->displaymode);
 	OsxGuestDisplayWrite(cpu, param + DISPLAYSWITCHPAGE, 2, 0);
-	OsxGuestDisplayWrite(cpu, param + DISPLAYSWITCHBASE, 4, OSXVRAMBASE);
+	OsxGuestDisplayWrite(cpu, param + DISPLAYSWITCHBASE, 4, machine->displaybase);
 }
 
 static int OsxGuestDisplayStatus(OsxMachine *machine, OsxCpu *cpu, uint32 code, uint32 param)
@@ -1968,7 +2037,7 @@ static int OsxGuestDisplayStatus(OsxMachine *machine, OsxCpu *cpu, uint32 code, 
 	case DISPLAYGETMODETIMING:
 		return OsxGuestDisplayModeTiming(machine, cpu, param);
 	case DISPLAYGETPREFERRED:
-		OsxGuestDisplayWrite(cpu, param + DISPLAYSWITCHDEPTH, 2, DISPLAYDEPTHMODE);
+		OsxGuestDisplayWrite(cpu, param + DISPLAYSWITCHDEPTH, 2, DISPLAYDEPTHMILLIONS);
 		OsxGuestDisplayWrite(cpu, param + DISPLAYSWITCHDATA, 4, machine->displaypreferred);
 		return DISPLAYNOERROR;
 	case DISPLAYGETNEXTRESOLUTION:
@@ -1986,36 +2055,83 @@ static int OsxGuestDisplaySwitch(OsxMachine *machine, OsxCpu *cpu, uint32 param,
 	uint32 width;
 	uint32 height;
 	uint32 timing;
+	uint32 depth;
 	mode = OsxGuestDisplayRead(cpu, param + DISPLAYSWITCHDATA, 4);
-	if (OsxGuestDisplayRead(cpu, param + DISPLAYSWITCHDEPTH, 2) != DISPLAYDEPTHMODE || !OsxGuestDisplayModeSize(machine, mode, &found))
+	depth = OsxGuestDisplayDepthBits(OsxGuestDisplayRead(cpu, param + DISPLAYSWITCHDEPTH, 2));
+	if (!depth || !OsxGuestDisplayModeSize(machine, mode, &found))
 		return DISPLAYPARAMERROR;
 	OsxGuestDisplayDimensions(machine, mode, &width, &height, &timing);
 	OsxGuestDisplayWrite(cpu, param + DISPLAYSWITCHBASE, 4, OSXVRAMBASE);
-	if (mode == machine->displaymode)
+	if (mode == machine->displaymode && depth == machine->depth)
 		return DISPLAYNOERROR;
+	*resized = OSXDISPLAYREDRAW;
+	if (mode != machine->displaymode)
+		*resized = OSXDISPLAYRESIZED;
 	machine->displaymode = mode;
 	machine->width = width;
 	machine->height = height;
+	machine->depth = depth;
 	memset(machine->vram, 0, machine->rowbytes * machine->maxheight);
-	*resized = 1;
 	return DISPLAYNOERROR;
 }
 
-static int OsxGuestDisplayControl(OsxMachine *machine, OsxCpu *cpu, uint32 code, uint32 param, int *resized)
+static int OsxGuestDisplayGamma(OsxMachine *machine, OsxCpu *cpu, uint32 param)
+{
+	uint32 table;
+	uint32 channels;
+	uint32 count;
+	uint32 width;
+	uint32 bytes;
+	uint32 data;
+	uint32 channel;
+	uint32 index;
+	uint32 value;
+	table = OsxGuestDisplayRead(cpu, param, 4);
+	channels = 0;
+	count = 0;
+	width = 0;
+	data = 0;
+	if (table) {
+		channels = OsxGuestDisplayRead(cpu, table + DISPLAYGAMMACHANNELS, 2);
+		count = OsxGuestDisplayRead(cpu, table + DISPLAYGAMMACOUNT, 2);
+		width = OsxGuestDisplayRead(cpu, table + DISPLAYGAMMAWIDTH, 2);
+		data = table + DISPLAYGAMMADATA + OsxGuestDisplayRead(cpu, table + DISPLAYGAMMAFORMULASIZE, 2);
+	}
+	bytes = (width + DISPLAYGAMMABITS - 1) / DISPLAYGAMMABITS;
+	if (table && (channels == 0 || channels > OSXGAMMACHANNELS || count == 0 || bytes == 0 || bytes > DISPLAYGAMMAMAXBYTES))
+		return 0;
+	for (index = 0; index < OSXGAMMAENTRIES * OSXGAMMACHANNELS; index++) {
+		value = index % OSXGAMMAENTRIES;
+		if (table) {
+			channel = (index / OSXGAMMAENTRIES) % channels;
+			value = OsxGuestDisplayRead(cpu, data + (channel * count + value * count / OSXGAMMAENTRIES) * bytes, (int)bytes);
+			if (width > DISPLAYGAMMABITS)
+				value >>= width - DISPLAYGAMMABITS;
+			else
+				value <<= DISPLAYGAMMABITS - width;
+		}
+		machine->gamma[index] = (uint8)value;
+	}
+	return OSXDISPLAYREDRAW;
+}
+
+static int OsxGuestDisplayControl(OsxMachine *machine, OsxCpu *cpu, uint32 code, uint32 param, int *change)
 {
 	switch (code) {
 	case DISPLAYSETMODE:
 		OsxGuestDisplayWrite(cpu, param + DISPLAYSWITCHBASE, 4, OSXVRAMBASE);
 		return DISPLAYNOERROR;
-	case DISPLAYSETENTRIES:
 	case DISPLAYSETGAMMA:
+		*change = OsxGuestDisplayGamma(machine, cpu, param);
+		return DISPLAYNOERROR;
+	case DISPLAYSETENTRIES:
 	case DISPLAYGRAYPAGE:
 	case DISPLAYSETGRAY:
 	case DISPLAYSETINTERRUPT:
 	case DISPLAYDIRECTSETENTRIES:
 		return DISPLAYNOERROR;
 	case DISPLAYSWITCHMODE:
-		return OsxGuestDisplaySwitch(machine, cpu, param, resized);
+		return OsxGuestDisplaySwitch(machine, cpu, param, change);
 	case DISPLAYSAVEPREFERRED:
 		machine->displaypreferred = OsxGuestDisplayRead(cpu, param + DISPLAYSWITCHDATA, 4);
 		return DISPLAYNOERROR;
@@ -2029,14 +2145,14 @@ int OsxGuestDisplayDriverCall(OsxMachine *machine, OsxCpu *cpu)
 	uint32 code;
 	uint32 param;
 	int result;
-	int resized;
+	int change;
 	contents = cpu->gpr[5];
-	resized = 0;
+	change = 0;
 	result = DISPLAYNOERROR;
 	code = OsxGuestDisplayRead(cpu, contents + DISPLAYCSCODE, 2);
 	param = OsxGuestDisplayRead(cpu, contents + DISPLAYCSPARAM, 4);
 	if (cpu->gpr[6] == DISPLAYCOMMANDCONTROL)
-		result = OsxGuestDisplayControl(machine, cpu, code, param, &resized);
+		result = OsxGuestDisplayControl(machine, cpu, code, param, &change);
 	else if (cpu->gpr[6] == DISPLAYCOMMANDSTATUS)
 		result = OsxGuestDisplayStatus(machine, cpu, code, param);
 	else if (cpu->gpr[6] == DISPLAYCOMMANDKILL)
@@ -2044,5 +2160,5 @@ int OsxGuestDisplayDriverCall(OsxMachine *machine, OsxCpu *cpu)
 	if (machine->log)
 		fprintf(machine->log, "display command %u code %u result %d mode %x %ux%u\n", cpu->gpr[6], code, result, machine->displaymode, machine->width, machine->height);
 	cpu->gpr[3] = (uint32)result;
-	return resized;
+	return change;
 }

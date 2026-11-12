@@ -26,6 +26,11 @@
 #include "imageio.h"
 
 #define IMAGEMAXCODES 288
+#define IMAGEFASTBITS 9
+#define IMAGEFASTSIZE (1 << IMAGEFASTBITS)
+#define IMAGEFASTLENGTHBITS 4
+#define IMAGEFASTLENGTHMASK ((1 << IMAGEFASTLENGTHBITS) - 1)
+#define IMAGEREFILLBITS 24
 
 typedef struct ImageInflateState {
 	const uint8 *source;
@@ -42,6 +47,7 @@ typedef struct ImageInflateState {
 typedef struct ImageHuffman {
 	short count[16];
 	short symbol[IMAGEMAXCODES];
+	short fast[IMAGEFASTSIZE];
 } ImageHuffman;
 
 uint64 ImageLoadBig64(const uint8 *data)
@@ -115,6 +121,7 @@ static int InflateStored(ImageInflateState *state)
 {
 	const uint8 *source;
 	size_t length;
+	state->sourceposition -= (size_t)(state->bitcount / 8);
 	state->bitbuffer = 0;
 	state->bitcount = 0;
 	if (state->sourceposition + 4 > state->sourcelength)
@@ -138,6 +145,10 @@ static int InflateBuild(ImageHuffman *huffman, const short *lengths, int count)
 	int symbol;
 	int length;
 	int left;
+	int reversed;
+	int bit;
+	int index;
+	memset(huffman->fast, 0, sizeof(huffman->fast));
 	for (length = 0; length < 16; length++)
 		huffman->count[length] = 0;
 	for (symbol = 0; symbol < count; symbol++)
@@ -157,26 +168,46 @@ static int InflateBuild(ImageHuffman *huffman, const short *lengths, int count)
 	for (symbol = 0; symbol < count; symbol++)
 		if (lengths[symbol] != 0)
 			huffman->symbol[offsets[lengths[symbol]]++] = (short)symbol;
+	symbol = 0;
+	left = 0;
+	for (length = 1; length <= IMAGEFASTBITS; length++) {
+		left <<= 1;
+		for (index = 0; index < huffman->count[length]; index++) {
+			reversed = 0;
+			for (bit = 0; bit < length; bit++)
+				reversed |= ((left >> bit) & 1) << (length - 1 - bit);
+			for (; reversed < IMAGEFASTSIZE; reversed += 1 << length)
+				huffman->fast[reversed] = (short)((huffman->symbol[symbol] << IMAGEFASTLENGTHBITS) | length);
+			symbol++;
+			left++;
+		}
+	}
 	return 1;
 }
 
-static int InflateDecode(ImageInflateState *state, const ImageHuffman *huffman)
+static inline int InflateSymbol(const ImageHuffman *huffman, uint32 bitbuffer, int bitcount, int *used)
 {
 	int code;
 	int first;
 	int index;
 	int length;
 	int count;
+	code = huffman->fast[bitbuffer & (IMAGEFASTSIZE - 1)];
+	length = code & IMAGEFASTLENGTHMASK;
+	if (code && length <= bitcount) {
+		*used = length;
+		return code >> IMAGEFASTLENGTHBITS;
+	}
 	code = 0;
 	first = 0;
 	index = 0;
-	for (length = 1; length < 16; length++) {
-		code |= InflateBits(state, 1);
-		if (state->failed)
-			return -1;
+	for (length = 1; length < 16 && length <= bitcount; length++) {
+		code |= (int)((bitbuffer >> (length - 1)) & 1);
 		count = huffman->count[length];
-		if (code - count < first)
+		if (code - count < first) {
+			*used = length;
 			return huffman->symbol[index + (code - first)];
+		}
 		index += count;
 		first += count;
 		first <<= 1;
@@ -185,42 +216,115 @@ static int InflateDecode(ImageInflateState *state, const ImageHuffman *huffman)
 	return -1;
 }
 
+static int InflateDecode(ImageInflateState *state, const ImageHuffman *huffman)
+{
+	int symbol;
+	int used;
+	while (state->bitcount <= IMAGEREFILLBITS && state->sourceposition < state->sourcelength) {
+		state->bitbuffer |= (uint32)state->source[state->sourceposition++] << state->bitcount;
+		state->bitcount += 8;
+	}
+	symbol = InflateSymbol(huffman, state->bitbuffer, state->bitcount, &used);
+	if (symbol < 0) {
+		state->failed = 1;
+		return -1;
+	}
+	state->bitbuffer >>= used;
+	state->bitcount -= used;
+	return symbol;
+}
+
 static int InflateCodes(ImageInflateState *state, const ImageHuffman *lengthcodes, const ImageHuffman *distancecodes)
 {
 	static const short lengthbase[29] = {3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258};
 	static const short lengthextra[29] = {0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0};
 	static const short distancebase[30] = {1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577};
 	static const short distanceextra[30] = {0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13};
-	int symbol;
+	const uint8 *source;
+	uint8 *target;
+	size_t sourcelength;
+	size_t sourceposition;
+	size_t targetlength;
+	size_t targetposition;
 	size_t length;
 	size_t distance;
-	for (;;) {
-		symbol = InflateDecode(state, lengthcodes);
-		if (symbol < 0)
-			return 0;
-		if (symbol == 256)
-			return 1;
-		if (symbol < 256) {
-			if (state->targetposition >= state->targetlength)
-				return 0;
-			state->target[state->targetposition++] = (uint8)symbol;
-			continue;
+	uint32 bitbuffer;
+	int bitcount;
+	int symbol;
+	int used;
+	int completed;
+	source = state->source;
+	target = state->target;
+	sourcelength = state->sourcelength;
+	sourceposition = state->sourceposition;
+	targetlength = state->targetlength;
+	targetposition = state->targetposition;
+	bitbuffer = state->bitbuffer;
+	bitcount = state->bitcount;
+	completed = -1;
+	while (completed < 0) {
+		while (bitcount <= IMAGEREFILLBITS && sourceposition < sourcelength) {
+			bitbuffer |= (uint32)source[sourceposition++] << bitcount;
+			bitcount += 8;
 		}
-		symbol -= 257;
-		if (symbol >= 29)
-			return 0;
-		length = (size_t)(lengthbase[symbol] + InflateBits(state, lengthextra[symbol]));
-		symbol = InflateDecode(state, distancecodes);
-		if (symbol < 0 || symbol >= 30)
-			return 0;
-		distance = (size_t)(distancebase[symbol] + InflateBits(state, distanceextra[symbol]));
-		if (state->failed || distance > state->targetposition || state->targetposition + length > state->targetlength)
-			return 0;
-		while (length--) {
-			state->target[state->targetposition] = state->target[state->targetposition - distance];
-			state->targetposition++;
+		symbol = InflateSymbol(lengthcodes, bitbuffer, bitcount, &used);
+		if (symbol < 0) {
+			completed = 0;
+		} else if (symbol < 256) {
+			bitbuffer >>= used;
+			bitcount -= used;
+			if (targetposition >= targetlength)
+				completed = 0;
+			else
+				target[targetposition++] = (uint8)symbol;
+		} else if (symbol == 256) {
+			bitbuffer >>= used;
+			bitcount -= used;
+			completed = 1;
+		} else if (symbol >= 257 + 29 || used + lengthextra[symbol - 257] > bitcount) {
+			completed = 0;
+		} else {
+			bitbuffer >>= used;
+			bitcount -= used;
+			symbol -= 257;
+			used = lengthextra[symbol];
+			length = (size_t)lengthbase[symbol] + (bitbuffer & ((1u << used) - 1));
+			bitbuffer >>= used;
+			bitcount -= used;
+			while (bitcount <= IMAGEREFILLBITS && sourceposition < sourcelength) {
+				bitbuffer |= (uint32)source[sourceposition++] << bitcount;
+				bitcount += 8;
+			}
+			symbol = InflateSymbol(distancecodes, bitbuffer, bitcount, &used);
+			if (symbol < 0 || symbol >= 30) {
+				completed = 0;
+			} else {
+				bitbuffer >>= used;
+				bitcount -= used;
+				while (bitcount <= IMAGEREFILLBITS && sourceposition < sourcelength) {
+					bitbuffer |= (uint32)source[sourceposition++] << bitcount;
+					bitcount += 8;
+				}
+				used = distanceextra[symbol];
+				distance = (size_t)distancebase[symbol] + (bitbuffer & ((1u << used) - 1));
+				if (used > bitcount || distance > targetposition || targetposition + length > targetlength) {
+					completed = 0;
+				} else {
+					bitbuffer >>= used;
+					bitcount -= used;
+					while (length--) {
+						target[targetposition] = target[targetposition - distance];
+						targetposition++;
+					}
+				}
+			}
 		}
 	}
+	state->sourceposition = sourceposition;
+	state->targetposition = targetposition;
+	state->bitbuffer = bitbuffer;
+	state->bitcount = bitcount;
+	return completed;
 }
 
 static int InflateFixed(ImageInflateState *state)

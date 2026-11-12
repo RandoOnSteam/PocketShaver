@@ -31,6 +31,10 @@
 #include "osxcpu.h"
 #include <fenv.h>
 
+#define OSXHUGEPAGEBYTES 0x200000
+#define OSXSHORTSLEEPSLACK 150
+#define OSXHIGHRESOLUTIONTIMER 0x00000002
+
 #define OSXPAGEMASK 0xfffff000
 #define OSXACCESSFAULT 0
 #define OSXACCESSHOST 1
@@ -195,6 +199,45 @@ uint64 OsxGuestHostNanoseconds(void)
 #endif
 }
 
+void OsxGuestHostHugePages(void *memory, size_t size)
+{
+#if defined(__linux__) && defined(MADV_HUGEPAGE)
+	size_t first;
+	size_t last;
+	first = ((size_t)memory + OSXHUGEPAGEBYTES - 1) & ~(size_t)(OSXHUGEPAGEBYTES - 1);
+	last = ((size_t)memory + size) & ~(size_t)(OSXHUGEPAGEBYTES - 1);
+	if (memory != NULL && last > first)
+		madvise((void *)first, last - first, MADV_HUGEPAGE);
+#else
+	(void)memory;
+	(void)size;
+#endif
+}
+
+void OsxGuestHostShortSleep(uint32 microseconds)
+{
+#if defined(_WIN32)
+	HANDLE timer;
+	LARGE_INTEGER duration;
+	if (microseconds <= OSXSHORTSLEEPSLACK)
+		return;
+	timer = CreateWaitableTimerExW(NULL, NULL, OSXHIGHRESOLUTIONTIMER, TIMER_ALL_ACCESS);
+	if (timer == NULL)
+		return;
+	duration.QuadPart = -(LONGLONG)(microseconds - OSXSHORTSLEEPSLACK) * 10;
+	if (SetWaitableTimer(timer, &duration, 0, NULL, NULL, FALSE))
+		WaitForSingleObject(timer, INFINITE);
+	CloseHandle(timer);
+#else
+	struct timespec duration;
+	if (microseconds <= OSXSHORTSLEEPSLACK)
+		return;
+	duration.tv_sec = 0;
+	duration.tv_nsec = (long)(microseconds - OSXSHORTSLEEPSLACK) * 1000;
+	nanosleep(&duration, NULL);
+#endif
+}
+
 int OsxGuestHostFeature(int feature)
 {
 #if defined(_WIN32)
@@ -291,6 +334,47 @@ static void OsxGuestInvalidateTlbPage(OsxCpu *cpu, uint32 address)
 	for (mode = 0; mode < OSXMODEREAL; mode++)
 		for (kind = 0; kind < OSXTLBKINDS; kind++)
 			cpu->tlb[mode][kind][index].page = OSXTLBINVALID;
+	cpu->fetchtag = 0;
+}
+
+#define OSXBATVALID 3u
+#define OSXBATLENGTHBITS 0x1ffcu
+#define OSXBATLENGTHSHIFT 15
+#define OSXBATEFFECTIVE 0xfffe0000u
+#define OSXBATMINIMUM 0x20000u
+
+static void OsxGuestInvalidateTlbBlock(OsxCpu *cpu, uint32 upper, int firstkind, int lastkind)
+{
+	uint32 blockmask;
+	uint32 start;
+	uint32 length;
+	uint32 page;
+	uint32 offset;
+	int mode;
+	int kind;
+	int index;
+	if (!(upper & OSXBATVALID))
+		return;
+	blockmask = (upper & OSXBATLENGTHBITS) << OSXBATLENGTHSHIFT;
+	start = upper & OSXBATEFFECTIVE & ~blockmask;
+	length = blockmask + OSXBATMINIMUM;
+	if ((length >> 12) < OSXTLBSIZE) {
+		for (offset = 0; offset < length; offset += 0x1000) {
+			index = ((start + offset) >> 12) & OSXTLBMASK;
+			for (mode = 0; mode < OSXMODEREAL; mode++)
+				for (kind = firstkind; kind <= lastkind; kind++)
+					if (cpu->tlb[mode][kind][index].page - start < length)
+						cpu->tlb[mode][kind][index].page = OSXTLBINVALID;
+		}
+	} else {
+		for (mode = 0; mode < OSXMODEREAL; mode++)
+			for (kind = firstkind; kind <= lastkind; kind++)
+				for (index = 0; index < OSXTLBSIZE; index++) {
+					page = cpu->tlb[mode][kind][index].page;
+					if (page - start < length)
+						cpu->tlb[mode][kind][index].page = OSXTLBINVALID;
+				}
+	}
 	cpu->fetchtag = 0;
 }
 
@@ -1274,14 +1358,16 @@ static int OsxGuestWriteSpr(OsxCpu *cpu, uint32 number, uint32 value)
 	case 284: case 285: OsxGuestWriteTimebase(cpu, number, value); return 1;
 	case 528: case 529: case 530: case 531: case 532: case 533: case 534: case 535:
 		if (cpu->ibat[number - 528] != value) {
+			OsxGuestInvalidateTlbBlock(cpu, cpu->ibat[(number - 528) & ~1], OSXTLBFETCH, OSXTLBFETCH);
 			cpu->ibat[number - 528] = value;
-			OsxGuestCpuFlushTlb(cpu);
+			OsxGuestInvalidateTlbBlock(cpu, cpu->ibat[(number - 528) & ~1], OSXTLBFETCH, OSXTLBFETCH);
 		}
 		return 1;
 	case 536: case 537: case 538: case 539: case 540: case 541: case 542: case 543:
 		if (cpu->dbat[number - 536] != value) {
+			OsxGuestInvalidateTlbBlock(cpu, cpu->dbat[(number - 536) & ~1], OSXTLBREAD, OSXTLBWRITE);
 			cpu->dbat[number - 536] = value;
-			OsxGuestCpuFlushTlb(cpu);
+			OsxGuestInvalidateTlbBlock(cpu, cpu->dbat[(number - 536) & ~1], OSXTLBREAD, OSXTLBWRITE);
 		}
 		return 1;
 	case 952: cpu->mmcr[0] = value; return 1;

@@ -1760,7 +1760,7 @@ static void decrementer_timer_wait(powerpc_decrementer_timer *t, uint64 usec)
 
 	// pthread_cond_timedwait takes an absolute CLOCK_REALTIME point.
 	struct timespec ts;
-#if defined(CLOCK_REALTIME)
+#if defined(HAVE_CLOCK_GETTIME)
 	clock_gettime(CLOCK_REALTIME, &ts);
 #else
 	struct timeval tv;

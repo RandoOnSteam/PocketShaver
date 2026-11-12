@@ -444,6 +444,8 @@ struct FixedState {
 	float raster_x;
 	float raster_y;
 	bool raster_valid;
+	float pixel_zoom_x;
+	float pixel_zoom_y;
 
 	FixedState();
 };
@@ -886,7 +888,7 @@ FixedState::FixedState()
 	  light_model_local_viewer(false), light_model_two_side(false),
 	  clear_depth(1.0), clear_stencil(0), point_size(1.0f), line_width(1.0f),
 	  shade_model(GL_SMOOTH), unpack_alignment(4), pack_alignment(4),
-	  raster_x(0.0f), raster_y(0.0f), raster_valid(false)
+	  raster_x(0.0f), raster_y(0.0f), raster_valid(false), pixel_zoom_x(1.0f), pixel_zoom_y(1.0f)
 {
 	SDLGPUSetIdentityMatrix(modelview);
 	SDLGPUSetIdentityMatrix(projection);
@@ -2681,7 +2683,7 @@ static void SDLGPUComputeVertexColor(const float eye_position[4], float color[4]
 	for (int channel = 0; channel < 3; channel++) {
 		color[channel] = s_state.material.emission[channel] +
 			s_state.light_model_ambient[channel] * material_ambient[channel];
-		secondary[channel] = s_state.current_secondary[channel];
+		secondary[channel] = 0.0f;
 	}
 	color[3] = material_diffuse[3];
 	secondary[3] = 1.0f;
@@ -2735,6 +2737,10 @@ static void SDLGPUComputeVertexColor(const float eye_position[4], float color[4]
 			secondary[channel] += attenuation * light.specular[channel] *
 				s_state.material.specular[channel] * specular;
 		}
+	}
+	for (int channel = 0; channel < 3; channel++) {
+		color[channel] += secondary[channel];
+		secondary[channel] = 0.0f;
 	}
 	for (int channel = 0; channel < 4; channel++) {
 		color[channel] = SDLGPUClampFloat(color[channel], 0.0f, 1.0f);
@@ -3878,6 +3884,10 @@ extern "C" void SDLGPUglTexGeni(GLenum, GLenum, GLint)
 {
 }
 
+extern "C" void SDLGPUglTexGenfv(GLenum, GLenum, const GLfloat *)
+{
+}
+
 extern "C" void SDLGPUglLightfv(GLenum light_name, GLenum name, const GLfloat *parameters)
 {
 	int index = (int)(light_name - GL_LIGHT0);
@@ -4766,8 +4776,8 @@ static void SDLGPUDrawPixelBlock(int width, int height, GLenum format, GLenum ty
 		&color_level)) {
 		float left = saved.raster_x;
 		float bottom = saved.raster_y;
-		float right = left + width;
-		float top = bottom + height;
+		float right = left + width * saved.pixel_zoom_x;
+		float top = bottom + height * saved.pixel_zoom_y;
 		std::vector<CompatVertex> quad;
 		quad.push_back(SDLGPUCreateScreenVertex(left, bottom, 0.0f, 1.0f, target_width, target_height));
 		quad.push_back(SDLGPUCreateScreenVertex(right, bottom, 1.0f, 1.0f, target_width, target_height));
@@ -4779,6 +4789,12 @@ static void SDLGPUDrawPixelBlock(int width, int height, GLenum format, GLenum ty
 	}
 	s_state = saved;
 	SDLGPUglDeleteTextures(1, &texture_name);
+}
+
+extern "C" void SDLGPUglPixelZoom(GLfloat xfactor, GLfloat yfactor)
+{
+	s_state.pixel_zoom_x = xfactor;
+	s_state.pixel_zoom_y = yfactor;
 }
 
 extern "C" void SDLGPUglDrawPixels(GLsizei width, GLsizei height,

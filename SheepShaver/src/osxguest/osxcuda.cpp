@@ -75,6 +75,9 @@
 
 #define ADBKEYBOARDADDRESS 2
 #define ADBMOUSEADDRESS 3
+#define ADBVIRTUALARROWS 0x7b
+#define ADBRAWARROWS 0x3b
+#define ADBARROWCOUNT 4
 #define MACEPOCHOFFSET 2082844800u
 
 static uint64 OsxGuestMicrosecondsToTicks(uint32 microseconds)
@@ -196,7 +199,7 @@ static int OsxGuestMouseHasData(OsxCuda *cuda)
 {
 	if (cuda->mouseabsolute)
 		return cuda->mouseread != cuda->mousewrite && (cuda->pointerwrite + 1) % OSXMOUSEQUEUE != cuda->pointerread;
-	return cuda->mousedx != 0 || cuda->mousedy != 0 || cuda->mousepending != 0;
+	return cuda->mousedx != 0 || cuda->mousedy != 0 || cuda->mousepending != 0 || ((cuda->mousebutton ^ cuda->mousereported) & ~1) != 0;
 }
 
 static int OsxGuestTalkKeyboard(OsxCuda *cuda, int reg, uint8 *output)
@@ -252,19 +255,20 @@ static int OsxGuestTalkMouse(OsxCuda *cuda, int reg, uint8 *output)
 			if (!(event->button & 1))
 				output[0] = 0x80;
 			output[1] = 0x81;
-			cuda->mousereported = event->button & 1;
+			cuda->mousereported = event->button;
 			return 2;
 		}
 		dx = OsxGuestClampDelta(cuda->mousedx);
 		dy = OsxGuestClampDelta(cuda->mousedy);
 		cuda->mousedx -= dx;
 		cuda->mousedy -= dy;
+		cuda->mousereported = (cuda->mousereported & 1) | (cuda->mousebutton & ~1);
 		if (cuda->mousepending) {
-			cuda->mousereported = !cuda->mousereported;
+			cuda->mousereported ^= 1;
 			cuda->mousepending--;
 		}
 		output[0] = (uint8)(dy & 0x7f);
-		if (!cuda->mousereported)
+		if (!(cuda->mousereported & 1))
 			output[0] |= 0x80;
 		output[1] = (uint8)(0x80 | (dx & 0x7f));
 		return 2;
@@ -1055,6 +1059,8 @@ void OsxGuestCudaKey(OsxMachine *machine, int code, int down)
 	next = (cuda->keywrite + 1) % OSXADBQUEUE;
 	if (next == cuda->keyread)
 		return;
+	if (code >= ADBVIRTUALARROWS && code < ADBVIRTUALARROWS + ADBARROWCOUNT)
+		code -= ADBVIRTUALARROWS - ADBRAWARROWS;
 	if (down)
 		cuda->keyqueue[cuda->keywrite] = (uint8)(code & 0x7f);
 	else

@@ -79,6 +79,7 @@ struct GLMetalStateCache {
 	float tex_env_color[4][4];
 	bool texgen_enabled[4][4];
 	GLint texgen_mode[4][4];
+	float texgen_object_plane[4][4][4];
 	/* NOTE: sampler state (filter/wrap) is deliberately NOT cached here. It is
 	 * per texture OBJECT, so a single global slot gets it wrong the moment the
 	 * guest alternates between two textures with different filters. It lives on
@@ -255,11 +256,10 @@ static void GLMetalApplyScissorState(GLContext *ctx,GLMetalStateCache &C,
  *
  * Classic GL_CLAMP becomes GL_CLAMP_TO_EDGE: desktop GL_CLAMP blends in the
  * texture border colour at the edge, which is not what QuickDraw/AGL titles
- * expect and shows up as a dark fringe. Mip min-filters collapse to their base
- * because a single-level texture with a mip filter is INCOMPLETE on desktop GL
- * and samples as black. An explicit GL_NEAREST is honoured; the untouched
- * creation default (GL_NEAREST_MIPMAP_LINEAR) maps to GL_LINEAR so textures the
- * guest never configured keep their previous look. */
+ * expect and shows up as a dark fringe. Mip min-filters happen when the
+ * guest supplies the whole level chain, otherwise they collapse to their base
+ * as an incomplete texture with a mip filter samples as black on desktop
+ * GL. */
 static GLint GLMetalMapTextureWrap(uint32_t w)
 {
 	return (w == 0x2900 /*GL_CLAMP*/ || w == GL_CLAMP_TO_EDGE)
@@ -271,15 +271,38 @@ static GLint GLMetalMapTextureMagFilter(uint32_t f)
 	return (f == GL_NEAREST) ? GL_NEAREST : GL_LINEAR;
 }
 
-static GLint GLMetalMapTextureMinFilter(uint32_t f)
+static GLint GLMetalBaseMinFilter(uint32_t filter)
 {
-	switch(f) {
-	case GL_NEAREST:
-	case 0x2700 /*GL_NEAREST_MIPMAP_NEAREST*/:
+	if(filter == GL_NEAREST || filter == GL_NEAREST_MIPMAP_NEAREST)
 		return GL_NEAREST;
-	default:
-		return GL_LINEAR;
+	return GL_LINEAR;
+}
+
+static bool GLMetalBoundChainComplete(const GLTextureObject &texture)
+{
+	int size = texture.width;
+	GLint level = 0;
+	GLint width = 0;
+	if(texture.height > size)
+		size = texture.height;
+	while(size > 1) {
+		size >>= 1;
+		++level;
 	}
+	glGetTexLevelParameteriv(GL_TEXTURE_2D,level,GL_TEXTURE_WIDTH,&width);
+	return width > 0;
+}
+
+static GLint GLMetalMapBoundMinFilter(const GLTextureObject &texture)
+{
+	const uint32_t filter = texture.min_filter;
+	if(texture.sampler_applied && (texture.applied_min == filter ||
+		texture.applied_min == (uint32_t)GLMetalBaseMinFilter(filter)))
+		return (GLint)texture.applied_min;
+	if(texture.has_mipmaps && filter >= GL_NEAREST_MIPMAP_NEAREST &&
+		filter <= GL_LINEAR_MIPMAP_LINEAR && GLMetalBoundChainComplete(texture))
+		return (GLint)filter;
+	return GLMetalBaseMinFilter(filter);
 }
 
 /* Invalidate the cached texture bindings for all host units.
@@ -387,6 +410,22 @@ static bool GLMetalApplyTextureUnit(GLContext *ctx,int unit,
 				if(!cache_ok || C.texgen_mode[unit][i] != resolved)
 					glTexGeni(pname[i],GL_TEXTURE_GEN_MODE,resolved);
 				C.texgen_mode[unit][i] = resolved;
+				if(resolved == GL_OBJECT_LINEAR) {
+					const float *plane = ctx->tex_units[unit].texgen_object_plane[i];
+					if(!cache_ok || memcmp(C.texgen_object_plane[unit][i],plane,sizeof(C.texgen_object_plane[unit][i]))) {
+						glTexGenfv(pname[i],GL_OBJECT_PLANE,plane);
+						memcpy(C.texgen_object_plane[unit][i],plane,sizeof(C.texgen_object_plane[unit][i]));
+					}
+				}
+				else if(resolved == GL_EYE_LINEAR) {
+					const float *plane = ctx->tex_units[unit].texgen_eye_plane[i];
+					const float *modelview = ctx->modelview_stack[ctx->modelview_depth];
+					GLfloat loadedplane[4];
+					for(int column = 0; column < 4; ++column)
+						loadedplane[column] = plane[0]*modelview[column*4+0] + plane[1]*modelview[column*4+1] +
+							plane[2]*modelview[column*4+2] + plane[3]*modelview[column*4+3];
+					glTexGenfv(pname[i],GL_EYE_PLANE,loadedplane);
+				}
 			}
 			else if(!cache_ok || C.texgen_enabled[unit][i]) {
 				glDisable(coord[i]);
@@ -405,7 +444,7 @@ static bool GLMetalApplyTextureUnit(GLContext *ctx,int unit,
 
 		GLTextureObject &TO = *TU.bound_object_2d;
 		const GLint magf = GLMetalMapTextureMagFilter(TO.mag_filter);
-		const GLint minf = GLMetalMapTextureMinFilter(TO.min_filter);
+		const GLint minf = GLMetalMapBoundMinFilter(TO);
 		const GLint ws = GLMetalMapTextureWrap(TO.wrap_s);
 		const GLint wt = GLMetalMapTextureWrap(TO.wrap_t);
 		if(!TO.sampler_applied || TO.applied_mag != (uint32_t)magf) {
@@ -724,6 +763,8 @@ static void GLMetalEmitVertex(const GLVertex &v,bool force_opaque,
 	if(ext.SecondaryColor3f)
 		ext.SecondaryColor3f(v.secondary_color[0],v.secondary_color[1],
 							 v.secondary_color[2]);
+	if(ext.FogCoordf)
+		ext.FogCoordf(v.fog_coord);
 	if(ext.multitex && ext.MultiTexCoord4f) {
 		/* Perspective-capable multitex: q=1 for FFP current coords */
 		for(int unit = 0; unit < 4; ++unit) {
@@ -1224,11 +1265,8 @@ static unsigned GLMetalApplyState(GLContext *ctx)
 
 #undef APPLY_HOST_CAP
 
-	/* Glide uses explicit fog coordinates. Classic AGL exposes no such state,
-	 * so restore the fixed-function fragment-depth source on every ownership
-	 * boundary, even if fog is enabled only later in the same guest frame. */
 	if(!cache_ok && ext.FogCoordf)
-		glFogi(GL_FOG_COORDINATE_SOURCE,GL_FRAGMENT_DEPTH);
+		glFogi(GL_FOG_COORDINATE_SOURCE,GL_FOG_COORDINATE);
 	if(ctx->fog_enabled) {
 		glEnable(GL_FOG);
 		glFogi(GL_FOG_MODE,(GLint)(ctx->fog_mode ? ctx->fog_mode : GL_LINEAR));
@@ -1289,12 +1327,12 @@ static unsigned GLMetalApplyState(GLContext *ctx)
 		glMaterialfv(GL_FRONT,GL_DIFFUSE,ctx->materials[0].diffuse);
 		glMaterialfv(GL_FRONT,GL_SPECULAR,ctx->materials[0].specular);
 		glMaterialfv(GL_FRONT,GL_EMISSION,ctx->materials[0].emission);
-		glMaterialf(GL_FRONT,GL_SHININESS,ctx->materials[0].shininess);
+		glMaterialf(GL_FRONT,GL_SHININESS,GLMaterialExponent(ctx->materials[0]));
 		glMaterialfv(GL_BACK,GL_AMBIENT,ctx->materials[1].ambient);
 		glMaterialfv(GL_BACK,GL_DIFFUSE,ctx->materials[1].diffuse);
 		glMaterialfv(GL_BACK,GL_SPECULAR,ctx->materials[1].specular);
 		glMaterialfv(GL_BACK,GL_EMISSION,ctx->materials[1].emission);
-		glMaterialf(GL_BACK,GL_SHININESS,ctx->materials[1].shininess);
+		glMaterialf(GL_BACK,GL_SHININESS,GLMaterialExponent(ctx->materials[1]));
 		if(ctx->color_material_enabled) {
 			glEnable(GL_COLOR_MATERIAL);
 			glColorMaterial(ctx->color_material_face ? ctx->color_material_face : GL_FRONT_AND_BACK,
@@ -1307,8 +1345,24 @@ static unsigned GLMetalApplyState(GLContext *ctx)
 	return texture_unit_mask;
 }
 
+static void GLMetalComputeFogDepth(GLContext *ctx)
+{
+	const float *modelview = ctx->modelview_stack[ctx->modelview_depth];
+	const float *projection = ctx->projection_stack[ctx->projection_depth];
+	float facing = -1.f;
+	if(projection[11] > 0.f)
+		facing = 1.f;
+	for(size_t index = 0; index < ctx->im_vertices.size(); ++index) {
+		GLVertex &vertex = ctx->im_vertices[index];
+		vertex.fog_coord = facing * (modelview[2] * vertex.position[0] + modelview[6] * vertex.position[1] +
+			modelview[10] * vertex.position[2] + modelview[14] * vertex.position[3]);
+	}
+}
+
 void GLMetalFlushImmediateMode(GLContext*ctx){
 	if(!ctx||!SharedMetalDevice()||ctx->im_vertices.empty())return;
+	if(ctx->fog_enabled)
+		GLMetalComputeFogDepth(ctx);
 	GLMetalBeginFrame(ctx);
 	if(!s_frame_active)return;
 	const unsigned texture_unit_mask=GLMetalApplyState(ctx);
@@ -1395,34 +1449,7 @@ void GLMetalUploadTexture(GLContext*ctx,GLTextureObject*texObj,int level,int wid
 	}
 
 	glBindTexture(GL_TEXTURE_2D,id);
-	/* Apply the guest's OWN sampler state, not a hard-coded GL_LINEAR.
-	 *
-	 * This used to force MIN/MAG = GL_LINEAR on every upload. Diablo II asks for
-	 * GL_NEAREST + GL_CLAMP on its menu-font glyphs, and it re-uploads those
-	 * textures constantly, so the forced LINEAR kept winning: each glyph is drawn
-	 * as a 64px quad advancing only 6-10px (letters overlap ~85%), and linear
-	 * filtering samples beyond the glyph's few ink columns into the neighbouring
-	 * letter's footprint - the "extra strokes through the middle" artifact
-	 * (O -> +, G -> G-with-bar). The texture data itself is fine: the padding
-	 * around every glyph measures alpha 0x00.
-	 *
-	 * Mapping matches GLMetalApplyState(): classic GL_CLAMP -> CLAMP_TO_EDGE
-	 * (desktop GL_CLAMP samples the border colour), and mip min-filters collapse
-	 * to their base so a single-level texture is not incomplete (-> black). */
-	{
-		const GLint minf = GLMetalMapTextureMinFilter(texObj->min_filter);
-		const GLint magf = GLMetalMapTextureMagFilter(texObj->mag_filter);
-		const GLint ws   = GLMetalMapTextureWrap(texObj->wrap_s);
-		const GLint wt   = GLMetalMapTextureWrap(texObj->wrap_t);
-		glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,minf);
-		glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,magf);
-		glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,ws);
-		glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,wt);
-		/* Record what the host object now holds so the per-draw apply agrees. */
-		texObj->applied_min=(uint32_t)minf; texObj->applied_mag=(uint32_t)magf;
-		texObj->applied_wrap_s=(uint32_t)ws; texObj->applied_wrap_t=(uint32_t)wt;
-		texObj->sampler_applied=true;
-	}
+	texObj->sampler_applied=false;
 	/* Honour the guest's requested internal format instead of always allocating
 	 * RGBA8. When the guest asked for an alpha-less format (GL_RGB / the legacy
 	 * component count 3), allocating RGBA8 means the texture HAS an alpha
@@ -1498,6 +1525,7 @@ void GLMetalDrawPixels(GLContext*ctx,int width,int height,const uint8_t*pixels,i
 	if(!s_frame_active)return;
 	GLMetalApplyState(ctx);
 	glRasterPos2i(0,0);
+	glPixelZoom(ctx->pixel_zoom_x,ctx->pixel_zoom_y);
 	glDrawPixels(width,height,GL_BGRA,GL_UNSIGNED_BYTE,pixels);
 }
 void GLMetalBitmap(GLContext*ctx,int width,int height,const uint8_t*bits,int data_len){

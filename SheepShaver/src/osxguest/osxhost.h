@@ -26,6 +26,7 @@
 #define OSXHOSTWHEEL 4
 #define OSXHOSTKEY 5
 #define OSXHOSTREDRAW 6
+#define OSXHOSTMOTION 7
 #define OSXHOSTRUNS 16
 
 struct OsxHostVideo;
@@ -33,8 +34,9 @@ typedef void (*OsxHostInput)(void *context, int operation, int first, int second
 
 OsxHostVideo *OsxGuestHostOpen(int width, int height, OsxHostInput input, void *context);
 void OsxGuestHostClose(OsxHostVideo *video);
-void OsxGuestHostSuspendFrame(OsxHostVideo *video);
+void OsxGuestHostSuspendFrame(OsxHostVideo *video, uint8 *present);
 void OsxGuestHostResize(OsxHostVideo *video, int width, int height);
+void OsxGuestHostCapturePointer(OsxHostVideo *video, int capture);
 uint8 *OsxGuestHostLock(OsxHostVideo *video, int *pitch, int *raw);
 int OsxGuestHostPresent(OsxHostVideo *video, const uint32 *runstart, const uint32 *runend, int runs);
 void OsxGuestHostEvents(OsxHostVideo *video, const uint8 *vram);

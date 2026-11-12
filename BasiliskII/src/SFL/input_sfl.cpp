@@ -43,6 +43,8 @@ void SflEmulatorMouseButton(int button, int down)
 {
 	const char *modifier;
 	int key;
+	if (SflUiQueueInput(SFLUIINPUTBUTTON, button, down))
+		return;
 	if (button == 1) {
 		modifier = PrefsFindString("rightclick");
 		key = 0x36;
@@ -52,8 +54,6 @@ void SflEmulatorMouseButton(int button, int down)
 		if (!down) SflEmulatorKey(key, 0);
 		return;
 	}
-	if (SflUiQueueInput(SFLUIINPUTBUTTON, button, down))
-		return;
 	if (down)
 		ADBMouseDown(button);
 	else

@@ -2869,6 +2869,7 @@ int OsxGuestJitCreate(OsxCpu *cpu)
 	OsxNativeState *state;
 	int index;
 	state = (OsxNativeState *)calloc(1, sizeof(OsxNativeState));
+	OsxGuestHostHugePages(state, sizeof(OsxNativeState));
 	if (state == NULL)
 		return 0;
 	state->pagecount = (cpu->ramsize + 4095) >> 12;
@@ -2889,9 +2890,11 @@ int OsxGuestJitCreate(OsxCpu *cpu)
 	state->versions = (uint32 *)calloc(state->pagecount, sizeof(uint32));
 	state->compiledpages = (uint8 *)calloc(state->pagecount, 1);
 	state->records = (OsxNativeRecord *)malloc(OSXJITRECORDS * sizeof(OsxNativeRecord));
+	OsxGuestHostHugePages(state->records, OSXJITRECORDS * sizeof(OsxNativeRecord));
 	if (state->records)
 		memset(state->records, 0xff, OSXJITRECORDS * sizeof(OsxNativeRecord));
 	state->writebase = OsxGuestJitAllocate(OSXJITBYTES);
+	OsxGuestHostHugePages(state->writebase, OSXJITBYTES);
 	state->executebase = state->writebase;
 	cpu->nativejit = state;
 	if (state->versions == NULL || state->compiledpages == NULL || state->records == NULL || state->writebase == NULL || state->executebase == NULL) {

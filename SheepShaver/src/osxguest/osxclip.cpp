@@ -456,6 +456,20 @@ static int OsxGuestAdvanceGet(OsxMachine *machine, OsxClip *clip, OsxCpu *cpu, u
 	return OsxGuestFinish(clip, cpu);
 }
 
+static int OsxGuestClipReceive(OsxCpu *cpu)
+{
+	if (cpu->gpr[0] != CLIPMACHMSG && cpu->gpr[0] != CLIPMACHMSGOVERWRITE)
+		return 0;
+	return (cpu->gpr[4] & (CLIPMACHSEND | CLIPMACHRECEIVE)) == CLIPMACHRECEIVE;
+}
+
+int OsxGuestClipEventLoop(OsxMachine *machine, OsxCpu *cpu)
+{
+	if (!machine->clip.ready || !(cpu->msr & OSXMSRPR) || !OsxGuestClipReceive(cpu))
+		return 0;
+	return OsxGuestEventLoopThread(&machine->clip, cpu);
+}
+
 int OsxGuestClipSyscall(OsxMachine *machine, OsxCpu *cpu)
 {
 	OsxClip *clip;
@@ -484,7 +498,7 @@ int OsxGuestClipSyscall(OsxMachine *machine, OsxCpu *cpu)
 		}
 		return 0;
 	}
-	if ((cpu->gpr[0] != CLIPMACHMSG && cpu->gpr[0] != CLIPMACHMSGOVERWRITE) || (cpu->gpr[4] & (CLIPMACHSEND | CLIPMACHRECEIVE)) != CLIPMACHRECEIVE)
+	if (!OsxGuestClipReceive(cpu))
 		return 0;
 	if (clip->functions[OSXCLIPDOCK]) {
 		if (OsxGuestReadWord(cpu, clip->functions[OSXCLIPDOCK] + 20) != clip->functions[OSXCLIPDOCKCOMMANDS])

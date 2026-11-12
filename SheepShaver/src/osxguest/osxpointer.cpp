@@ -75,6 +75,23 @@ static void OsxGuestScrollWheel(OsxCpu *cpu, OsxPointer *pointer, int delta)
 	}
 }
 
+#define OSXHOSTRIGHTBUTTON 2
+#define OSXHOSTMIDDLEBUTTON 4
+#define OSXGUESTRIGHTBUTTON 1
+#define OSXGUESTMIDDLEBUTTON 2
+#define OSXGUESTLEFTBUTTON 4
+
+static uint32 OsxGuestExtraButtons(int hostbuttons)
+{
+	uint32 buttons;
+	buttons = 0;
+	if (hostbuttons & OSXHOSTRIGHTBUTTON)
+		buttons |= OSXGUESTRIGHTBUTTON;
+	if (hostbuttons & OSXHOSTMIDDLEBUTTON)
+		buttons |= OSXGUESTMIDDLEBUTTON;
+	return buttons;
+}
+
 void OsxGuestPointerHook(OsxCpu *cpu, void *context, uint32 address)
 {
 	OsxPointer *pointer;
@@ -103,7 +120,10 @@ void OsxGuestPointerHook(OsxCpu *cpu, void *context, uint32 address)
 		return;
 	cuda = &pointer->machine->cuda;
 	if (cuda->pointerread == cuda->pointerwrite) {
-		cpu->nextpc = cpu->lr;
+		if (cuda->mouseabsolute)
+			cpu->nextpc = cpu->lr;
+		else
+			cpu->gpr[4] |= OsxGuestExtraButtons(cuda->mousebutton);
 		return;
 	}
 	delta = 0;
@@ -143,13 +163,9 @@ void OsxGuestPointerHook(OsxCpu *cpu, void *context, uint32 address)
 		!OsxGuestCpuWriteVirtual(cpu, stack + 0x44, pointer->machine->width) ||
 		!OsxGuestCpuWriteVirtual(cpu, stack + 0x48, pointer->machine->height))
 		return;
-	buttons = 0;
+	buttons = OsxGuestExtraButtons(pointer->pointerbuttons);
 	if (pressed)
-		buttons |= 4;
-	if (pointer->pointerbuttons & 2)
-		buttons |= 1;
-	if (pointer->pointerbuttons & 4)
-		buttons |= 2;
+		buttons |= OSXGUESTLEFTBUTTON;
 	OsxGuestCallGuest(cpu, pointer, stack, pointer->absoluteaddress);
 	cpu->gpr[4] = buttons;
 	cpu->gpr[5] = stack + 0x40;

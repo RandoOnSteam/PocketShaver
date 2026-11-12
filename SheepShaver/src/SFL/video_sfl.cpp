@@ -397,6 +397,11 @@ void *video_get_native_window(void)
 	return SflUiGetWindowHandle();
 }
 
+void *video_get_gl_handle(void)
+{
+	return SflUiGetGLHandle();
+}
+
 void video_get_host_window_size(int *width, int *height)
 {
 	int framewidth;

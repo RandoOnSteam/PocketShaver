@@ -834,6 +834,24 @@ static void AdoptSDLWindowOnMain(void *)
 }
 #endif
 
+static Uint32 SDLGfxAccelWindowFlags(void)
+{
+#if defined(ENABLE_GFXACCEL) && defined(SHEEPSHAVER)
+#if !defined(GFXACCEL_USE_SDLGPU)
+	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
+	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 1);
+	SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
+	SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
+	SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8);
+	SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK,
+		                SDL_GL_CONTEXT_PROFILE_COMPATIBILITY);
+#endif
+	return SDL_WINDOW_OPENGL;
+#else
+	return 0;
+#endif
+}
+
 static SDL_Surface *init_sdl_video(int width, int height, int depth, Uint32 flags, int pitch)
 {
     if (guest_surface) {
@@ -873,18 +891,7 @@ static SDL_Surface *init_sdl_video(int width, int height, int depth, Uint32 flag
 #ifdef SDL_PLATFORM_MACOS
 	if (MetalIsAvailable()) window_flags |= SDL_WINDOW_METAL;
 #endif
-#if defined(ENABLE_GFXACCEL) && defined(SHEEPSHAVER)
-	window_flags |= SDL_WINDOW_OPENGL;
-#if !defined(GFXACCEL_USE_SDLGPU)
-	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
-	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 1);
-	SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
-	SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
-	SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8);
-	SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK,
-		                SDL_GL_CONTEXT_PROFILE_COMPATIBILITY);
-#endif
-#endif
+	window_flags |= SDLGfxAccelWindowFlags();
 
 	if (!sdl_window) {
 		float m = get_mag_rate() * get_display_scale();
@@ -1774,7 +1781,7 @@ SDL_Surface *SDLSetVideoModeQuietly(int width, int height, int depth, Uint32 fla
 	SDL_SetHint(SDL_HINT_WINDOW_ACTIVATE_WHEN_SHOWN, "0");
 	sdl_window = NULL;
 	scale = get_display_scale();
-	sdl_window = SDL_CreateWindow("", (int)(width * scale), (int)(height * scale), flags);
+	sdl_window = SDL_CreateWindow("", (int)(width * scale), (int)(height * scale), flags | SDLGfxAccelWindowFlags());
 	if (sdl_window == NULL)
 		return NULL;
 	if ((int)(width * scale) == width)

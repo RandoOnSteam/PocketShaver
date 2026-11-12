@@ -222,6 +222,8 @@ extern bool RaveGetLastCL8ColorTableRGBSnapshot(uint8_t outRGB[768]);
 #define GL_EYE_LINEAR                     0x2400
 #define GL_SPHERE_MAP                     0x2402
 #define GL_OBJECT_PLANE                   0x2501
+#define GL_INTEGER_COLOR_SCALE            2147483647.0f
+#define GL_SECONDARY_COLOR_ARRAY          0x845E
 #define GL_EYE_PLANE                      0x2502
 #define GL_S                              0x2000
 #define GL_T                              0x2001
@@ -1276,6 +1278,12 @@ void NativeGLLighti(GLContext *ctx, uint32_t light, uint32_t pname, int32_t para
 	NativeGLLightf(ctx, light, pname, (float)param);
 }
 
+static bool GLIsIntegerColorParameter(uint32_t pname)
+{
+	return pname == GL_AMBIENT || pname == GL_DIFFUSE || pname == GL_SPECULAR ||
+		pname == GL_EMISSION || pname == GL_AMBIENT_AND_DIFFUSE;
+}
+
 void NativeGLLightiv(GLContext *ctx, uint32_t light, uint32_t pname, uint32_t mac_ptr)
 {
 	// Read integers, convert to float, store via fv path
@@ -1292,8 +1300,11 @@ void NativeGLLightiv(GLContext *ctx, uint32_t light, uint32_t pname, uint32_t ma
 			 pname == GL_QUADRATIC_ATTENUATION) count = 1;
 
 	float vals[4];
-	for (int i = 0; i < count; i++)
+	for (int i = 0; i < count; i++) {
 		vals[i] = (float)(int32_t)ReadMacInt32(mac_ptr + i * 4);
+		if (GLIsIntegerColorParameter(pname))
+			vals[i] /= GL_INTEGER_COLOR_SCALE;
+	}
 
 	switch (pname) {
 	case GL_AMBIENT:    for (int i = 0; i < 4; i++) l.ambient[i] = vals[i]; break;
@@ -1343,7 +1354,7 @@ void NativeGLLightModeliv(GLContext *ctx, uint32_t pname, uint32_t mac_ptr)
 {
 	if (pname == GL_LIGHT_MODEL_AMBIENT) {
 		for (int i = 0; i < 4; i++)
-			ctx->light_model_ambient[i] = (float)(int32_t)ReadMacInt32(mac_ptr + i * 4);
+			ctx->light_model_ambient[i] = (float)(int32_t)ReadMacInt32(mac_ptr + i * 4) / GL_INTEGER_COLOR_SCALE;
 	} else {
 		NativeGLLightModeli(ctx, pname, (int32_t)ReadMacInt32(mac_ptr));
 	}
@@ -1408,8 +1419,11 @@ void NativeGLMaterialiv(GLContext *ctx, uint32_t face, uint32_t pname, uint32_t 
 {
 	int count = (pname == GL_SHININESS) ? 1 : 4;
 	float vals[4];
-	for (int i = 0; i < count; i++)
+	for (int i = 0; i < count; i++) {
 		vals[i] = (float)(int32_t)ReadMacInt32(mac_ptr + i * 4);
+		if (GLIsIntegerColorParameter(pname))
+			vals[i] /= GL_INTEGER_COLOR_SCALE;
+	}
 	gl_set_material_fv(ctx, face, pname, vals);
 }
 
@@ -1458,7 +1472,7 @@ void NativeGLFogiv(GLContext *ctx, uint32_t pname, uint32_t mac_ptr)
 {
 	if (pname == GL_FOG_COLOR) {
 		for (int i = 0; i < 4; i++)
-			ctx->fog_color[i] = (float)(int32_t)ReadMacInt32(mac_ptr + i * 4);
+			ctx->fog_color[i] = (float)(int32_t)ReadMacInt32(mac_ptr + i * 4) / GL_INTEGER_COLOR_SCALE;
 	} else {
 		NativeGLFogi(ctx, pname, (int32_t)ReadMacInt32(mac_ptr));
 	}
@@ -1526,6 +1540,9 @@ void NativeGLTexEnviv(GLContext *ctx, uint32_t target, uint32_t pname, uint32_t 
 		count = 4;
 	for (int i = 0; i < count; i++)
 		vals[i] = (float)(int32_t)ReadMacInt32(mac_ptr + i * 4);
+	if (pname == GL_TEXTURE_ENV_COLOR)
+		for (int i = 0; i < count; i++)
+			vals[i] = vals[i] / GL_INTEGER_COLOR_SCALE;
 	gl_set_tex_env(ctx, target, pname, vals);
 }
 
@@ -1545,19 +1562,58 @@ static int gl_texgen_coord_index(uint32_t coord)
 	}
 }
 
+extern int GLInvertMatrix(const double *matrix, double *inverse);
+
+static int *GLTexGenModeOf(GLTextureUnit &unit, int coordinate)
+{
+	int *modes[4] = {&unit.texgen_s_mode, &unit.texgen_t_mode, &unit.texgen_r_mode, &unit.texgen_q_mode};
+	return modes[coordinate];
+}
+
+static void GLSetTexGenPlane(GLContext *ctx, uint32_t coord, uint32_t pname, const float *plane)
+{
+	GLTextureUnit &unit = ctx->tex_units[ctx->active_texture];
+	double modelview[16];
+	double inverse[16];
+	double dot;
+	int coordinate = gl_texgen_coord_index(coord);
+	if (coordinate < 0) { ctx->last_error = GL_INVALID_ENUM; return; }
+	if (pname == GL_OBJECT_PLANE) {
+		memcpy(unit.texgen_object_plane[coordinate], plane, sizeof(unit.texgen_object_plane[coordinate]));
+		return;
+	}
+	if (pname != GL_EYE_PLANE)
+		return;
+	for (int element = 0; element < 16; element++)
+		modelview[element] = ctx->modelview_stack[ctx->modelview_depth][element];
+	if (!GLInvertMatrix(modelview, inverse)) {
+		memcpy(unit.texgen_eye_plane[coordinate], plane, sizeof(unit.texgen_eye_plane[coordinate]));
+		return;
+	}
+	for (int column = 0; column < 4; column++) {
+		dot = 0.0;
+		for (int row = 0; row < 4; row++)
+			dot += plane[row] * inverse[column * 4 + row];
+		unit.texgen_eye_plane[coordinate][column] = (float)dot;
+	}
+}
+
+static const float *GLTexGenPlaneOf(GLContext *ctx, int coordinate, uint32_t pname)
+{
+	GLTextureUnit &unit = ctx->tex_units[ctx->active_texture];
+	if (pname == GL_OBJECT_PLANE)
+		return unit.texgen_object_plane[coordinate];
+	if (pname == GL_EYE_PLANE)
+		return unit.texgen_eye_plane[coordinate];
+	return NULL;
+}
+
 void NativeGLTexGeni(GLContext *ctx, uint32_t coord, uint32_t pname, int32_t param)
 {
-	int ci = gl_texgen_coord_index(coord);
-	if (ci < 0) { ctx->last_error = GL_INVALID_ENUM; return; }
-	if (pname == GL_TEXTURE_GEN_MODE) {
-		int *modes[] = {
-			&ctx->tex_units[ctx->active_texture].texgen_s_mode,
-			&ctx->tex_units[ctx->active_texture].texgen_t_mode,
-			&ctx->tex_units[ctx->active_texture].texgen_r_mode,
-			&ctx->tex_units[ctx->active_texture].texgen_q_mode,
-		};
-		*modes[ci] = param;
-	}
+	int coordinate = gl_texgen_coord_index(coord);
+	if (coordinate < 0) { ctx->last_error = GL_INVALID_ENUM; return; }
+	if (pname == GL_TEXTURE_GEN_MODE)
+		*GLTexGenModeOf(ctx->tex_units[ctx->active_texture], coordinate) = param;
 }
 
 void NativeGLTexGenf(GLContext *ctx, uint32_t coord, uint32_t pname, float param)
@@ -1572,29 +1628,45 @@ void NativeGLTexGend(GLContext *ctx, uint32_t coord, uint32_t pname, double para
 
 void NativeGLTexGenfv(GLContext *ctx, uint32_t coord, uint32_t pname, uint32_t mac_ptr)
 {
+	float plane[4];
 	if (pname == GL_TEXTURE_GEN_MODE) {
 		NativeGLTexGenf(ctx, coord, pname, ReadMacFloat(mac_ptr));
+		return;
 	}
-	// GL_OBJECT_PLANE and GL_EYE_PLANE store 4 coefficients -- tracked in context but minimal impl
+	for (int component = 0; component < 4; component++)
+		plane[component] = ReadMacFloat(mac_ptr + component * 4);
+	GLSetTexGenPlane(ctx, coord, pname, plane);
 }
 
 void NativeGLTexGeniv(GLContext *ctx, uint32_t coord, uint32_t pname, uint32_t mac_ptr)
 {
+	float plane[4];
 	if (pname == GL_TEXTURE_GEN_MODE) {
 		NativeGLTexGeni(ctx, coord, pname, (int32_t)ReadMacInt32(mac_ptr));
+		return;
 	}
+	for (int component = 0; component < 4; component++)
+		plane[component] = (float)(int32_t)ReadMacInt32(mac_ptr + component * 4);
+	GLSetTexGenPlane(ctx, coord, pname, plane);
 }
 
 void NativeGLTexGendv(GLContext *ctx, uint32_t coord, uint32_t pname, uint32_t mac_ptr)
 {
-	if (pname == GL_TEXTURE_GEN_MODE) {
-		uint32 hi = ReadMacInt32(mac_ptr);
-		uint32 lo = ReadMacInt32(mac_ptr + 4);
-		uint64_t bits = ((uint64_t)hi << 32) | lo;
-		double d;
-		memcpy(&d, &bits, sizeof(double));
-		NativeGLTexGend(ctx, coord, pname, d);
+	float plane[4];
+	double values[4];
+	int count = 4;
+	if (pname == GL_TEXTURE_GEN_MODE)
+		count = 1;
+	for (int component = 0; component < count; component++) {
+		uint64_t bits = ((uint64_t)ReadMacInt32(mac_ptr + component * 8) << 32) | ReadMacInt32(mac_ptr + component * 8 + 4);
+		memcpy(&values[component], &bits, sizeof(double));
+		plane[component] = (float)values[component];
 	}
+	if (pname == GL_TEXTURE_GEN_MODE) {
+		NativeGLTexGend(ctx, coord, pname, values[0]);
+		return;
+	}
+	GLSetTexGenPlane(ctx, coord, pname, plane);
 }
 
 
@@ -1947,7 +2019,7 @@ void NativeGLPushAttrib(GLContext *ctx, uint32_t mask)
 		memcpy(entry.light_model_ambient, ctx->light_model_ambient, 4 * sizeof(float));
 		entry.light_model_two_side    = ctx->light_model_two_side;
 		entry.light_model_local_viewer = ctx->light_model_local_viewer;
-		for (int i = 0; i < 8; i++) entry.light_enabled[i] = ctx->lights[i].enabled;
+		memcpy(entry.saved_lights, ctx->lights, sizeof(ctx->lights));
 	}
 	if (mask & GL_FOG_BIT) {
 		entry.fog_enabled = ctx->fog_enabled;
@@ -2058,7 +2130,7 @@ void NativeGLPopAttrib(GLContext *ctx)
 		memcpy(ctx->light_model_ambient, entry.light_model_ambient, 4 * sizeof(float));
 		ctx->light_model_two_side    = entry.light_model_two_side;
 		ctx->light_model_local_viewer = entry.light_model_local_viewer;
-		for (int i = 0; i < 8; i++) ctx->lights[i].enabled = entry.light_enabled[i];
+		memcpy(ctx->lights, entry.saved_lights, sizeof(ctx->lights));
 	}
 	if (mask & GL_FOG_BIT) {
 		ctx->fog_enabled = entry.fog_enabled;
@@ -3375,9 +3447,9 @@ void NativeGLTexImage2D(GLContext *ctx, uint32_t target, int32_t level,
 		tex.height = height;
 		tex.source_format = format;
 		tex.source_type = type;
-		tex.internal_format_opaque =
-			GLInternalFormatLacksAlpha(internalformat);
 	}
+	tex.internal_format_opaque =
+		GLInternalFormatLacksAlpha(internalformat);
 	const bool ignoreLegacyFallbackClientMip =
 		GLPixelLegacyUnsignedShortShouldIgnoreClientMipForFallback(
 			tex.legacy_ushort_bgr332_chain,
@@ -4674,6 +4746,7 @@ void NativeGLEnableClientState(GLContext *ctx, uint32_t array)
 	}
 	case GL_EDGE_FLAG_ARRAY:    ctx->edge_flag_array.enabled = true; break;
 	case GL_INDEX_ARRAY:        ctx->index_array.enabled = true; break;
+	case GL_SECONDARY_COLOR_ARRAY: ctx->secondary_color_array.enabled = true; break;
 	default: break;
 	}
 }
@@ -4704,6 +4777,7 @@ void NativeGLDisableClientState(GLContext *ctx, uint32_t array)
 	}
 	case GL_EDGE_FLAG_ARRAY:    ctx->edge_flag_array.enabled = false; break;
 	case GL_INDEX_ARRAY:        ctx->index_array.enabled = false; break;
+	case GL_SECONDARY_COLOR_ARRAY: ctx->secondary_color_array.enabled = false; break;
 	default: break;
 	}
 }
@@ -4735,9 +4809,46 @@ void NativeGLGetTexEnviv(GLContext *ctx, uint32_t target, uint32_t pname, uint32
 	if (pname == GL_TEXTURE_ENV_MODE) WriteMacInt32(mac_ptr, ctx->tex_units[ctx->active_texture].env_mode);
 }
 
-void NativeGLGetTexGendv(GLContext *ctx, uint32_t coord, uint32_t pname, uint32_t p) { (void)coord; (void)pname; WriteMacInt32(p, 0); WriteMacInt32(p+4, 0); }
-void NativeGLGetTexGenfv(GLContext *ctx, uint32_t coord, uint32_t pname, uint32_t p) { (void)coord; (void)pname; WriteMacFloat(p, 0.0f); }
-void NativeGLGetTexGeniv(GLContext *ctx, uint32_t coord, uint32_t pname, uint32_t p) { (void)coord; (void)pname; WriteMacInt32(p, 0); }
+static int GLGetTexGenValues(GLContext *ctx, uint32_t coord, uint32_t pname, double *values)
+{
+	const float *plane;
+	int coordinate = gl_texgen_coord_index(coord);
+	if (coordinate < 0) { ctx->last_error = GL_INVALID_ENUM; return 0; }
+	if (pname == GL_TEXTURE_GEN_MODE) {
+		values[0] = *GLTexGenModeOf(ctx->tex_units[ctx->active_texture], coordinate);
+		return 1;
+	}
+	plane = GLTexGenPlaneOf(ctx, coordinate, pname);
+	if (!plane) { ctx->last_error = GL_INVALID_ENUM; return 0; }
+	for (int component = 0; component < 4; component++)
+		values[component] = plane[component];
+	return 4;
+}
+void NativeGLGetTexGendv(GLContext *ctx, uint32_t coord, uint32_t pname, uint32_t p)
+{
+	double values[4];
+	uint64_t bits;
+	int count = GLGetTexGenValues(ctx, coord, pname, values);
+	for (int component = 0; component < count; component++) {
+		memcpy(&bits, &values[component], sizeof(bits));
+		WriteMacInt32(p + component * 8, (uint32)(bits >> 32));
+		WriteMacInt32(p + component * 8 + 4, (uint32)bits);
+	}
+}
+void NativeGLGetTexGenfv(GLContext *ctx, uint32_t coord, uint32_t pname, uint32_t p)
+{
+	double values[4];
+	int count = GLGetTexGenValues(ctx, coord, pname, values);
+	for (int component = 0; component < count; component++)
+		WriteMacFloat(p + component * 4, (float)values[component]);
+}
+void NativeGLGetTexGeniv(GLContext *ctx, uint32_t coord, uint32_t pname, uint32_t p)
+{
+	double values[4];
+	int count = GLGetTexGenValues(ctx, coord, pname, values);
+	for (int component = 0; component < count; component++)
+		WriteMacInt32(p + component * 4, (uint32)(int32_t)values[component]);
+}
 void NativeGLGetTexImage(GLContext *ctx, uint32_t target, int32_t level, uint32_t fmt, uint32_t type, uint32_t p)
 {
 	// Return zeroed data with warning - full Metal texture readback not yet implemented
@@ -5648,13 +5759,13 @@ void NativeGLSecondaryColor3fvEXT(GLContext *ctx, uint32_t mac_ptr) {
 }
 void NativeGLSecondaryColor3iEXT(GLContext *ctx, int32_t r, int32_t g, int32_t b) {
 	if (!ctx) return;
-	gl_set_secondary_color(ctx, r/2147483647.0f, g/2147483647.0f, b/2147483647.0f);
+	gl_set_secondary_color(ctx, r/GL_INTEGER_COLOR_SCALE, g/GL_INTEGER_COLOR_SCALE, b/GL_INTEGER_COLOR_SCALE);
 }
 void NativeGLSecondaryColor3ivEXT(GLContext *ctx, uint32_t mac_ptr) {
 	if (!ctx) return;
-	gl_set_secondary_color(ctx, (int32_t)ReadMacInt32(mac_ptr)/2147483647.0f,
-						   (int32_t)ReadMacInt32(mac_ptr+4)/2147483647.0f,
-						   (int32_t)ReadMacInt32(mac_ptr+8)/2147483647.0f);
+	gl_set_secondary_color(ctx, (int32_t)ReadMacInt32(mac_ptr)/GL_INTEGER_COLOR_SCALE,
+						   (int32_t)ReadMacInt32(mac_ptr+4)/GL_INTEGER_COLOR_SCALE,
+						   (int32_t)ReadMacInt32(mac_ptr+8)/GL_INTEGER_COLOR_SCALE);
 }
 void NativeGLSecondaryColor3sEXT(GLContext *ctx, int16_t r, int16_t g, int16_t b) {
 	if (!ctx) return;

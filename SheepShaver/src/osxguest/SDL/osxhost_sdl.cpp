@@ -43,11 +43,13 @@ typedef struct OsxKeyMapping {
 
 struct OsxHostVideo {
 	SDL_Surface *screen;
+	int captured;
 	int width;
 	int height;
 	int rowbytes;
 	OsxHostInput input;
 	void *context;
+	uint8 *capture;
 #ifdef ENABLE_EMULATOR_MONITOR
 	EmulatorMonitor *monitor;
 #endif
@@ -195,7 +197,7 @@ OsxHostVideo *OsxGuestHostOpen(int width, int height, OsxHostInput input, void *
 #if !SDL_VERSION_ATLEAST(2, 0, 0)
 	SDL_WM_SetCaption("SheepShaver - Mac OS X", "SheepShaver");
 #endif
-#if SDL_VERSION_ATLEAST(3, 0, 0) && defined(_WIN32)
+#if SDL_VERSION_ATLEAST(2, 0, 0)
 	SDL_SetHint(SDL_HINT_FRAMEBUFFER_ACCELERATION, "0");
 #endif
 	video->screen = SDLSetVideoModeQuietly(width, height, 32, OSXVIDEOFLAGS);
@@ -223,8 +225,27 @@ OsxHostVideo *OsxGuestHostOpen(int width, int height, OsxHostInput input, void *
 	return video;
 }
 
-void OsxGuestHostSuspendFrame(OsxHostVideo *video)
+void OsxGuestHostSuspendFrame(OsxHostVideo *video, uint8 *present)
 {
+	video->capture = present;
+}
+
+void OsxGuestHostCapturePointer(OsxHostVideo *video, int capture)
+{
+	video->captured = capture;
+#if SDL_VERSION_ATLEAST(3, 0, 0)
+	SDL_SetWindowRelativeMouseMode(sdl_window, capture != 0);
+#elif SDL_VERSION_ATLEAST(2, 0, 0)
+	if (capture)
+		SDL_SetRelativeMouseMode(SDL_TRUE);
+	else
+		SDL_SetRelativeMouseMode(SDL_FALSE);
+#else
+	if (capture)
+		SDL_WM_GrabInput(SDL_GRAB_ON);
+	else
+		SDL_WM_GrabInput(SDL_GRAB_OFF);
+#endif
 }
 
 void OsxGuestHostResize(OsxHostVideo *video, int width, int height)
@@ -343,6 +364,8 @@ void OsxGuestHostEvents(OsxHostVideo *video, const uint8 *vram)
 			view.inputfunction = OsxGuestMonitorInput;
 			view.inputcontext = video;
 			view.framebuffer = (uint8 *)vram;
+			if (video->capture)
+				view.framebuffer = video->capture;
 			view.palette = NULL;
 			view.window = NULL;
 			view.width = (int)video->width;
@@ -361,6 +384,10 @@ void OsxGuestHostEvents(OsxHostVideo *video, const uint8 *vram)
 			input(context, OSXHOSTQUIT, 0, 0);
 			break;
 		case OSXEVENTMOTION:
+			if (video->captured) {
+				input(context, OSXHOSTMOTION, (int)event.motion.xrel, (int)event.motion.yrel);
+				break;
+			}
 #if SDL_VERSION_ATLEAST(3, 0, 0)
 			SDL_GetWindowSize(sdl_window, &width, &height);
 			event.motion.x = event.motion.x * video->width / width;

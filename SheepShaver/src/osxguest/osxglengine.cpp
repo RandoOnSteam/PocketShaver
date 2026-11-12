@@ -102,6 +102,7 @@ namespace OsxGl {
 uint8 OsxGuestRead8(uint32 address);
 uint16 OsxGuestRead16(uint32 address);
 uint32 OsxGuestRead32(uint32 address);
+static uint8 *OsxGuestByte(uint32 address, int kind);
 void OsxGuestWrite8(uint32 address, uint32 value);
 void OsxGuestWrite16(uint32 address, uint32 value);
 void OsxGuestWrite32(uint32 address, uint32 value);
@@ -155,7 +156,6 @@ void OsxGuestApplyRectangleSampler(GLContext *context, GLTextureObject *textureo
 #define GUESTPROXYTEXTURE2D 0x8064u
 #define GUESTPROXYTEXTURERECTANGLE 0x84f7u
 #define GUESTTEXTURESTORAGEHINT 0x85bcu
-#define GUESTGENERATEMIPMAP 0x8191u
 #define GUESTPROGRAMLENGTH 0x8627u
 #define GUESTTEXTURERECTANGLE 0x84f5u
 #define GUESTPROGRAMERRORPOSITION 0x864bu
@@ -355,6 +355,12 @@ static void OsxGuestCaptureHostLimits(GLContext *context)
 	GfxAccelHostShadowTextureCreate(context, &OsxGuestStateOf(context)->guestrectangleshadowtexture);
 }
 
+static void OsxGuestEngineLeave(GLContext *context)
+{
+	OsxGuestDisableRectangleTextures(context);
+	GfxAccelHostTargetLeave(OsxGuestTargetOf(context));
+}
+
 void OsxGuestEngineBind(void *engine, OsxCpu *cpu)
 {
 	GLContext *next;
@@ -366,10 +372,8 @@ void OsxGuestEngineBind(void *engine, OsxCpu *cpu)
 		return;
 	if (!GfxAccelHostDeviceReady())
 		return;
-	if (gl_current_context) {
-		OsxGuestDisableRectangleTextures(gl_current_context);
-		GfxAccelHostTargetLeave(OsxGuestTargetOf(gl_current_context));
-	}
+	if (gl_current_context)
+		OsxGuestEngineLeave(gl_current_context);
 	GfxAccelHostTargetEnter(OsxGuestTargetOf(next));
 	gl_current_context = next;
 	if (!next->metal) {
@@ -397,6 +401,8 @@ void OsxGuestEngineDestroy(void *engine)
 		OsxGuestStateOf(context)->sharedtextures = new OsxGuestSharedTextures();
 		OsxGuestStateOf(context)->sharedtextures->referencecount = 1;
 	}
+	if (gl_current_context == context)
+		OsxGuestEngineLeave(context);
 	if (context->metal)
 		GfxAccelHostRelease(context);
 	delete OsxGuestStateOf(context)->sharedtextures;
@@ -675,6 +681,9 @@ static int OsxGuestReadPixels(GLContext *context, OsxCpu *cpu)
 	if (context->pixel_store.pack_row_length > 0)
 		guestrowbytes = (uint32)context->pixel_store.pack_row_length;
 	guestrowbytes = (guestrowbytes * pixelbytes + packalignment - 1) & ~(packalignment - 1);
+	for (row = 0; row < height; row++)
+		if (!OsxGuestByte(cpu->gpr[10] + (uint32)row * guestrowbytes, OSXTLBWRITE) || !OsxGuestByte(cpu->gpr[10] + (uint32)row * guestrowbytes + (uint32)width * pixelbytes - 1, OSXTLBWRITE))
+			return 1;
 	bytecount = 0;
 	framebufferpixels = GfxAccelHostReadFramebufferRect(context, (int)cpu->gpr[4], (int)cpu->gpr[5], width, height, &bytecount);
 	if (!framebufferpixels)
@@ -1156,76 +1165,6 @@ void OsxGuestEngineHostString(void *engine, OsxCpu *cpu, uint32 name, char *text
 	GfxAccelHostHostString(name, text, size);
 }
 
-int OsxGuestEngineFlurryCall(void *engine, OsxCpu *cpu, uint32 call)
-{
-	uint32 *a;
-	int sub;
-	double one;
-	OsxGuestEngineBind(engine, cpu);
-	OsxGuestStateOf(gl_current_context)->guestreadpage = 1;
-	a = cpu->gpr + 3;
-	switch (call) {
-	case 45: sub = GL_SUB_ALPHA_FUNC; break;
-	case 46: sub = GL_SUB_BEGIN; break;
-	case 47: sub = GL_SUB_BIND_TEXTURE; break;
-	case 48: sub = GL_SUB_BLEND_FUNC; break;
-	case 49: sub = GL_SUB_CLEAR; break;
-	case 50: sub = GL_SUB_CLEAR_COLOR; break;
-	case 51: sub = GL_SUB_COLOR4F; break;
-	case 52: sub = GL_SUB_COLOR4FV; break;
-	case 53: sub = GL_SUB_COLOR_POINTER; break;
-	case 54: sub = GL_SUB_DISABLE; break;
-	case 55: sub = GL_SUB_DRAW_ARRAYS; break;
-	case 56: sub = GL_SUB_DRAW_PIXELS; break;
-	case 57: sub = GL_SUB_ENABLE; break;
-	case 58: sub = GL_SUB_ENABLE_CLIENT_STATE; break;
-	case 59: sub = GL_SUB_END; break;
-	case 61: sub = GL_SUB_GEN_TEXTURES; break;
-	case 62: sub = GL_SUB_GET_ERROR; break;
-	case 64: sub = GL_SUB_LOAD_IDENTITY; break;
-	case 65: sub = GL_SUB_MATRIX_MODE; break;
-	case 66: return 1;
-	case 67: sub = GL_SUB_PIXEL_ZOOM; break;
-	case 68: sub = GL_SUB_POP_MATRIX; break;
-	case 69: sub = GL_SUB_PUSH_MATRIX; break;
-	case 70: sub = GL_SUB_RASTER_POS2I; break;
-	case 71: sub = GL_SUB_RECTD; break;
-	case 72: sub = GL_SUB_ROTATEF; break;
-	case 73: sub = GL_SUB_SCALEF; break;
-	case 74: sub = GL_SUB_SCISSOR; break;
-	case 75: sub = GL_SUB_SHADE_MODEL; break;
-	case 76: sub = GL_SUB_TEX_COORD_POINTER; break;
-	case 77: sub = GL_SUB_TEX_ENVF; break;
-	case 78: sub = GL_SUB_TEX_PARAMETERI; break;
-	case 79: sub = GL_SUB_TRANSLATEF; break;
-	case 80: sub = GL_SUB_VERTEX2F; break;
-	case 81: sub = GL_SUB_VERTEX_POINTER; break;
-	case 82: sub = GL_SUB_VIEWPORT; break;
-	case 83:
-		OsxGuestWrite32(gl_scratch_addr, GL_SUB_TEX_PARAMETERI);
-		gl_ppc_sp = 0;
-		gl_ppc_stack_arg_offset = 0;
-		GLDispatch(a[0], GUESTGENERATEMIPMAP, 1, 0, 0, 0, 0, 0, NULL, 0);
-		OsxGuestWrite32(OSXGLSCRATCHBASE + OSXGLSTACKSCRATCH + 24 + 32, a[6]);
-		gl_ppc_sp = OSXGLSCRATCHBASE + OSXGLSTACKSCRATCH;
-		OsxGuestWrite32(gl_scratch_addr, GL_SUB_TEX_IMAGE2D);
-		GLDispatch(a[0], 0, a[1], a[2], a[3], 0, a[4], a[5], NULL, 0);
-		a[0] = 0;
-		return 1;
-	case 85:
-		one = -1.0;
-		memcpy(&cpu->fpr[5], &one, sizeof(one));
-		one = 1.0;
-		memcpy(&cpu->fpr[6], &one, sizeof(one));
-		sub = GL_SUB_ORTHO;
-		break;
-	default:
-		return 0;
-	}
-	OsxGuestEngineDispatch(cpu, (uint32)sub, 3);
-	return 1;
-}
-
 void OsxGuestEngineAfterPresent(void)
 {
 	if (!gl_current_context || !GfxAccelHostTargetFrameActive())
@@ -1348,6 +1287,40 @@ static void OsxGuestWriteDouble(uint32 address, double value)
 	OsxGuestWrite32(address + 4, (uint32)bits);
 }
 
+static void OsxGuestProgramDeclarations(std::vector<uint8_t> &text)
+{
+	static const char alias[] = "ALIAS";
+	static const char *const bindings[] = { "result.", "OUTPUT", "vertex.", "ATTRIB", "program.", "PARAM", "state.", "PARAM" };
+	std::vector<uint8_t> output;
+	const char *keyword;
+	size_t position;
+	size_t binding;
+	size_t index;
+	position = 0;
+	while (position < text.size()) {
+		keyword = NULL;
+		if (text.size() - position >= sizeof(alias) && memcmp(&text[position], alias, sizeof(alias) - 1) == 0 && text[position + sizeof(alias) - 1] <= ' ' &&
+			(position == 0 || text[position - 1] <= ' ' || text[position - 1] == ';')) {
+			binding = position + sizeof(alias);
+			while (binding < text.size() && text[binding] != '=' && text[binding] != ';')
+				binding++;
+			if (binding < text.size() && text[binding] == '=')
+				binding++;
+			while (binding < text.size() && (text[binding] == ' ' || text[binding] == '\t'))
+				binding++;
+			for (index = 0; index < sizeof(bindings) / sizeof(bindings[0]); index += 2)
+				if (text.size() - binding >= strlen(bindings[index]) && memcmp(&text[binding], bindings[index], strlen(bindings[index])) == 0)
+					keyword = bindings[index + 1];
+		}
+		if (keyword) {
+			output.insert(output.end(), keyword, keyword + strlen(keyword));
+			position += sizeof(alias) - 1;
+		} else
+			output.push_back(text[position++]);
+	}
+	text.swap(output);
+}
+
 int OsxGuestEngineProgramCall(void *engine, OsxCpu *cpu, uint32 call)
 {
 	void *target;
@@ -1429,9 +1402,10 @@ int OsxGuestEngineProgramCall(void *engine, OsxCpu *cpu, uint32 call)
 		}
 		break;
 	case 531:
-		buffer.resize((size_t)arguments[2] + 1);
+		buffer.resize((size_t)arguments[2]);
 		OsxGuestCopyIn(vec_data(buffer), arguments[3], arguments[2]);
-		OsxGuestStateOf((GLContext *)engine)->guestprogramerrorposition = GfxAccelHostProgramString(target, arguments[0], arguments[1], arguments[2], vec_data(buffer));
+		OsxGuestProgramDeclarations(buffer);
+		OsxGuestStateOf((GLContext *)engine)->guestprogramerrorposition = GfxAccelHostProgramString(target, arguments[0], arguments[1], (uint32_t)buffer.size(), vec_data(buffer));
 		break;
 	case 532:
 		length = GfxAccelHostProgramQuery(target, arguments[0], GUESTPROGRAMLENGTH);
@@ -1464,8 +1438,10 @@ static uint8 *OsxGuestByte(uint32 address, int kind)
 	scratch = OsxGuestScratch(address);
 	if (scratch)
 		return scratch;
+	if (OsxGuestStateOf(gl_current_context)->guestfaultraised)
+		return NULL;
 	cpu = (OsxCpu *)OsxGuestStateOf(gl_current_context)->guestcpu;
-	if (!OsxGuestCpuTranslate(cpu, address, kind, kind == OSXTLBREAD, &physical) || physical >= cpu->ramsize) {
+	if (!OsxGuestCpuTranslate(cpu, address, kind, 1, &physical) || physical >= cpu->ramsize) {
 		OsxGuestStateOf(gl_current_context)->guestfaultraised = true;
 		return NULL;
 	}
@@ -1480,6 +1456,8 @@ static uint8 *OsxGuestReadPage(uint32 address)
 	context = gl_current_context;
 	if ((address & ~4095u) == OsxGuestStateOf(context)->guestreadpage)
 		return OsxGuestStateOf(context)->guestreadhost;
+	if (OsxGuestStateOf(context)->guestfaultraised)
+		return NULL;
 	cpu = (OsxCpu *)OsxGuestStateOf(context)->guestcpu;
 	if (!OsxGuestCpuTranslate(cpu, address, OSXTLBREAD, 1, &physical) || physical >= cpu->ramsize) {
 		OsxGuestStateOf(context)->guestfaultraised = true;
@@ -1550,14 +1528,8 @@ void OsxGuestWrite16(uint32 address, uint32 value)
 
 void OsxGuestWrite32(uint32 address, uint32 value)
 {
-	uint8 *scratch;
-	scratch = OsxGuestScratch(address);
-	if (scratch) {
-		value = bswap_32(value);
-		memcpy(scratch, &value, sizeof(value));
-		return;
-	}
-	OsxGuestCpuWriteVirtual((OsxCpu *)OsxGuestStateOf(gl_current_context)->guestcpu, address, value);
+	value = bswap_32(value);
+	OsxGuestCopyOut(address, &value, sizeof(value));
 }
 
 uint8 *OsxGuestHostAddress(uint32 address)
@@ -1597,9 +1569,17 @@ void *OsxGuestCopyIn(void *destination, uint32 source, size_t length)
 
 void *OsxGuestCopyOut(uint32 destination, const void *source, size_t length)
 {
+	uint8 *page;
 	size_t index;
-	for (index = 0; index < length; index++)
-		OsxGuestWrite8(destination + (uint32)index, ((const uint8 *)source)[index]);
+	size_t count;
+	for (index = 0; index < length; index += count) {
+		count = 4096 - ((destination + (uint32)index) & 4095);
+		if (count > length - index)
+			count = length - index;
+		page = OsxGuestByte(destination + (uint32)index, OSXTLBWRITE);
+		if (page)
+			memcpy(page, (const uint8 *)source + index, count);
+	}
 	return OsxGuestHostAddress(destination);
 }
 

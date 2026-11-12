@@ -44,16 +44,38 @@
 #define OSXFRAMERATE 60
 #define OSXSETTLEMS 3000
 #define OSXAMPSETTLEMS 225
+#define PMAPDESTROYSCAN 16
+#define PMAPADDRESSOFR3 0x38600000u
+#define PMAPADDRESSOFMASK 0xffe00000u
+#define PMAPLOADONEINTOR4 0x38800001u
+#define PMAPFLATREFERENCES 0x14
+#define PMAPFLATSPACE 0x0c
+#define PMAPHASHEDSPACEBEFORE 4
+#define PROCESSSCAN 512
+#define PROCESSTASKSCAN 64
+#define LOADWORDOPCODE 32
+#define RESULTREGISTER 3
+#define PMAPFLATSPACEMASK 0x000fffffu
+#define PMAPHASHEDSPACEMASK 0x00003fffu
+
+typedef struct OsxProcessLayout {
+	uint32 allproc;
+	uint32 taskoffset;
+	uint32 mapoffset;
+	uint32 pmapoffset;
+	uint32 spaceoffset;
+	uint32 pidoffset;
+	uint32 bsdinfo;
+	uint32 mask;
+} OsxProcessLayout;
 
 typedef struct OsxSession {
 	OsxMachine *machine;
 	OsxHostVideo *video;
 #if OSXGLBRIDGE
-	OsxGlBridge *gl;
 	OsxQuartzBridge *quartz;
+	OsxProcessLayout layout;
 	uint8 *glpresent;
-	uint32 glbase;
-	uint32 glsegment;
 #endif
 	uint8 *shadow;
 	int nvramready;
@@ -84,6 +106,7 @@ typedef struct OsxSession {
 	int kextstates[16];
 	int kextcount;
 	int pointerhooked;
+	int pointercaptured;
 	int powerhooked;
 	uint32 pointeroffset;
 	uint32 absoluteoffset;
@@ -286,6 +309,7 @@ static void OsxGuestAllowStalledClassLookup(OsxMachine *machine)
 		if ((code[index - 4] >> 2) == 16 && memcmp(code + index, "\x3b\xa0\x00\x00", 4) == 0)
 			memcpy(code + index, "\x60\x00\x00\x00", 4);
 }
+
 
 static void OsxGuestHookKernelSymbol(OsxMachine *machine, const char *name, OsxHookFunction function)
 {
@@ -552,6 +576,8 @@ static void OsxGuestInstallPointerHook(OsxSession *session)
 		session->pointer.wheeladdress = text + session->wheeloffset;
 	OsxGuestCpuAddHook(cpu, physical, OsxGuestPointerHook, &session->pointer);
 	machine->cuda.mouseabsolute = 1;
+	machine->cuda.mousedx = 0;
+	machine->cuda.mousedy = 0;
 	session->pointerhooked = 1;
 	if (machine->log)
 		fprintf(machine->log, "pointer hook at %08x physical %08x\n", text + session->pointeroffset, physical);
@@ -586,7 +612,7 @@ static void OsxGuestInstallPowerHook(OsxSession *session)
 
 static void OsxGuestMovePointer(OsxSession *session, int x, int y)
 {
-	OsxGuestCudaMouse(session->machine, x - session->hostx, y - session->hosty, session->buttons & 1);
+	OsxGuestCudaMouse(session->machine, x - session->hostx, y - session->hosty, session->buttons);
 	session->hostx = x;
 	session->hosty = y;
 }
@@ -619,6 +645,9 @@ static void OsxGuestHostInput(void *context, int operation, int first, int secon
 	case OSXHOSTMOUSE:
 		OsxGuestMovePointer(session, first, second);
 		break;
+	case OSXHOSTMOTION:
+		OsxGuestCudaMouse(session->machine, first, second, session->buttons);
+		break;
 	case OSXHOSTBUTTON:
 		OsxGuestPressButton(session, first, second);
 		break;
@@ -650,7 +679,7 @@ static OSXSSSE3 uint32 OsxGuestShufflePixels(uint32 *target, const uint8 *source
 }
 #endif
 
-static void OsxGuestConvertPixels(uint32 *target, const uint8 *source, uint32 width, int shuffle)
+static void OsxGuestConvertPixels(uint32 *target, const uint8 *source, uint32 width, int shuffle, const uint8 *gamma)
 {
 	uint32 column;
 	column = 0;
@@ -659,7 +688,29 @@ static void OsxGuestConvertPixels(uint32 *target, const uint8 *source, uint32 wi
 		column = OsxGuestShufflePixels(target, source, width);
 #endif
 	for (; column < width; column++)
-		target[column] = ((uint32)source[column * 4 + 1] << 16) | ((uint32)source[column * 4 + 2] << 8) | source[column * 4 + 3];
+		target[column] = ((uint32)gamma[source[column * 4 + 1]] << 16) | ((uint32)gamma[OSXGAMMAENTRIES + source[column * 4 + 2]] << 8) |
+			gamma[OSXGAMMAENTRIES * 2 + source[column * 4 + 3]];
+}
+
+static int OsxGuestGammaIdentity(const uint8 *gamma)
+{
+	uint32 index;
+	for (index = 0; index < OSXGAMMAENTRIES * OSXGAMMACHANNELS; index++) {
+		if (gamma[index] != (uint8)(index % OSXGAMMAENTRIES))
+			return 0;
+	}
+	return 1;
+}
+
+static void OsxGuestGammaPixels(uint8 *target, const uint8 *source, uint32 count, const uint8 *gamma)
+{
+	uint32 index;
+	for (index = 0; index < count; index++) {
+		target[index * 4] = source[index * 4];
+		target[index * 4 + 1] = gamma[source[index * 4 + 1]];
+		target[index * 4 + 2] = gamma[OSXGAMMAENTRIES + source[index * 4 + 2]];
+		target[index * 4 + 3] = gamma[OSXGAMMAENTRIES * 2 + source[index * 4 + 3]];
+	}
 }
 
 static void OsxGuestPresentFrame(OsxSession *session)
@@ -670,6 +721,7 @@ static void OsxGuestPresentFrame(OsxSession *session)
 	uint32 *target;
 	uint32 row;
 	uint32 rowbytes;
+	uint32 rowsize;
 	uint32 runstart[OSXHOSTRUNS];
 	uint32 runend[OSXHOSTRUNS];
 	uint8 *pixels;
@@ -677,13 +729,26 @@ static void OsxGuestPresentFrame(OsxSession *session)
 	int raw;
 	int runs;
 	int open;
+	int identity;
 	uint32 openrow;
 	int presented;
 	machine = session->machine;
 	rowbytes = machine->rowbytes;
+	rowsize = machine->width * machine->depth / 8;
+	identity = OsxGuestGammaIdentity(machine->gamma);
 #if OSXGLBRIDGE && defined(GFXACCEL_USE_OPENGL)
 	if (MetalCompositorIsInitialized()) {
-		OsxGuestQuartzComposeWindows(session->quartz, machine->vram, session->glpresent, rowbytes * machine->height);
+		if (machine->depth == OSXDEPTHTHOUSANDS) {
+			for (row = 0; row < machine->height; row++)
+				OsxGuestDisplayExpandPixels(session->glpresent + row * rowbytes, machine->vram + row * rowbytes, machine->width);
+		} else
+			memcpy(session->glpresent, machine->vram, rowbytes * machine->height);
+		OsxGuestQuartzComposeWindows(session->quartz, session->glpresent, machine->depth);
+		if (memcmp(session->glpresent, session->shadow, rowbytes * machine->height) == 0)
+			return;
+		memcpy(session->shadow, session->glpresent, rowbytes * machine->height);
+		if (!identity)
+			OsxGuestGammaPixels(session->glpresent, session->glpresent, rowbytes * machine->height / 4, machine->gamma);
 		OsxGl::OsxGuestEngineBeforePresent();
 		MetalCompositorPresentWithoutVBL();
 		OsxGl::OsxGuestEngineAfterPresent();
@@ -699,7 +764,7 @@ static void OsxGuestPresentFrame(OsxSession *session)
 	for (row = 0; row < machine->height; row++) {
 		source = machine->vram + row * rowbytes;
 		shadowrow = session->shadow + row * rowbytes;
-		if (memcmp(source, shadowrow, machine->width * 4) == 0) {
+		if (memcmp(source, shadowrow, rowsize) == 0) {
 			if (open) {
 				if (runs < OSXHOSTRUNS) {
 					runstart[runs] = openrow;
@@ -711,15 +776,21 @@ static void OsxGuestPresentFrame(OsxSession *session)
 			}
 			continue;
 		}
-		memcpy(shadowrow, source, machine->width * 4);
+		memcpy(shadowrow, source, rowsize);
 #if OSXPROFILE
 		session->tmprows++;
 #endif
 		target = (uint32 *)(pixels + row * pitch);
-		if (raw)
+		if (machine->depth == OSXDEPTHTHOUSANDS) {
+			OsxGuestDisplayExpandPixels((uint8 *)target, source, machine->width);
+			source = (const uint8 *)target;
+		}
+		if (!raw)
+			OsxGuestConvertPixels(target, source, machine->width, session->pixelshuffle && identity, machine->gamma);
+		else if (!identity)
+			OsxGuestGammaPixels((uint8 *)target, source, machine->width, machine->gamma);
+		else if (source != (const uint8 *)target)
 			memcpy(target, source, machine->width * 4);
-		else
-			OsxGuestConvertPixels(target, source, machine->width, session->pixelshuffle);
 		if (!open) {
 			openrow = row;
 			open = 1;
@@ -791,6 +862,166 @@ static void OsxGuestAttachDisks(OsxMachine *machine, const char **bootimage, int
 	}
 }
 
+static int OsxGuestKernelRead32(OsxCpu *cpu, uint32 address, uint32 *value)
+{
+	uint32 savedmsr;
+	uint32 savedsr[16];
+	int index;
+	int result;
+	savedmsr = cpu->msr;
+	memcpy(savedsr, cpu->sr, sizeof(savedsr));
+	for (index = 0; index < 16; index++)
+		cpu->sr[index] = 0x20000000u | ((uint32)index << 20);
+	cpu->msr = OSXMSRDR | OSXMSRIR;
+	result = OsxGuestCpuReadVirtual(cpu, address, value);
+	cpu->msr = savedmsr;
+	memcpy(cpu->sr, savedsr, sizeof(savedsr));
+	return result;
+}
+
+static uint32 OsxGuestAccessorOffset(OsxCpu *cpu, uint32 address, uint32 opcode, uint32 target)
+{
+	uint32 word;
+	int index;
+	for (index = 0; address != 0 && index < 48; index++) {
+		if (!OsxGuestKernelRead32(cpu, address + index * 4, &word))
+			return 0;
+		if ((word >> 26) == opcode && ((word >> 21) & 31) == target)
+			return word & 0xffff;
+	}
+	return 0;
+}
+
+#if OSXGLBRIDGE
+static uint32 OsxGuestPmapReferences(OsxCpu *cpu, uint32 entry)
+{
+	uint32 word;
+	uint32 next;
+	int index;
+	for (index = 0; entry && index < PMAPDESTROYSCAN; index++) {
+		if (!OsxGuestKernelRead32(cpu, entry + index * 4, &word) || !OsxGuestKernelRead32(cpu, entry + index * 4 + 4, &next))
+			return 0;
+		if ((word & PMAPADDRESSOFMASK) == PMAPADDRESSOFR3 && next == PMAPLOADONEINTOR4)
+			return word & 0xffff;
+	}
+	return 0;
+}
+
+static uint32 OsxGuestProcessTaskOffset(OsxCpu *cpu, uint32 proc, uint32 bsdinfo)
+{
+	uint32 task;
+	uint32 back;
+	uint32 index;
+	for (index = 1; index < PROCESSTASKSCAN; index++)
+		if (OsxGuestKernelRead32(cpu, proc + index * 4, &task) && task && OsxGuestKernelRead32(cpu, task + bsdinfo, &back) && back == proc)
+			return index * 4;
+	return 0;
+}
+
+static int OsxGuestResolveProcessLayout(OsxSession *session, OsxCpu *cpu)
+{
+	OsxMachine *machine;
+	OsxProcessLayout *layout;
+	uint32 references;
+	uint32 proc;
+	machine = session->machine;
+	layout = &session->layout;
+	if (layout->taskoffset)
+		return 1;
+	if (!layout->allproc) {
+		references = OsxGuestPmapReferences(cpu, OsxGuestFindKernelSymbol(machine, "_pmap_destroy"));
+		layout->mapoffset = OsxGuestAccessorOffset(cpu, OsxGuestFindKernelSymbol(machine, "_get_task_map"), LOADWORDOPCODE, RESULTREGISTER);
+		layout->pmapoffset = OsxGuestAccessorOffset(cpu, OsxGuestFindKernelSymbol(machine, "_get_map_pmap"), LOADWORDOPCODE, RESULTREGISTER);
+		layout->bsdinfo = OsxGuestAccessorOffset(cpu, OsxGuestFindKernelSymbol(machine, "_get_bsdtask_info"), LOADWORDOPCODE, RESULTREGISTER);
+		layout->pidoffset = OsxGuestAccessorOffset(cpu, OsxGuestFindKernelSymbol(machine, "_getpid"), LOADWORDOPCODE, 0);
+		if (!references || !layout->mapoffset || !layout->pmapoffset || !layout->bsdinfo || !layout->pidoffset)
+			return 0;
+		layout->spaceoffset = references - PMAPHASHEDSPACEBEFORE;
+		layout->mask = PMAPHASHEDSPACEMASK;
+		if (references == PMAPFLATREFERENCES) {
+			layout->spaceoffset = PMAPFLATSPACE;
+			layout->mask = PMAPFLATSPACEMASK;
+		}
+		layout->allproc = OsxGuestFindKernelSymbol(machine, "_allproc");
+	}
+	if (!layout->allproc || !OsxGuestKernelRead32(cpu, layout->allproc, &proc))
+		return 0;
+	layout->taskoffset = OsxGuestProcessTaskOffset(cpu, proc, layout->bsdinfo);
+	return layout->taskoffset != 0;
+}
+
+static int OsxGuestWalkProcesses(OsxSession *session, uint32 *processes, uint32 *spaces, uint32 *count)
+{
+	OsxCpu *cpu;
+	OsxProcessLayout *layout;
+	uint32 proc;
+	uint32 task;
+	uint32 map;
+	uint32 pmap;
+	cpu = session->machine->cpu;
+	layout = &session->layout;
+	if (!OsxGuestResolveProcessLayout(session, cpu) || !OsxGuestKernelRead32(cpu, layout->allproc, &proc))
+		return 0;
+	for (*count = 0; proc && *count < PROCESSSCAN; (*count)++) {
+		if (!OsxGuestKernelRead32(cpu, proc + layout->taskoffset, &task) || !OsxGuestKernelRead32(cpu, proc + layout->pidoffset, &processes[*count]))
+			return 0;
+		spaces[*count] = ~0u;
+		if (task && OsxGuestKernelRead32(cpu, task + layout->mapoffset, &map) && map && OsxGuestKernelRead32(cpu, map + layout->pmapoffset, &pmap) && pmap)
+			OsxGuestKernelRead32(cpu, pmap + layout->spaceoffset, &spaces[*count]);
+		if (!OsxGuestKernelRead32(cpu, proc, &proc))
+			return 0;
+	}
+	return proc == 0;
+}
+
+static int OsxGuestQuartzEventLoop(void *owner, OsxCpu *cpu)
+{
+	return OsxGuestClipEventLoop(((OsxSession *)owner)->machine, cpu);
+}
+
+static uint32 OsxGuestQuartzProcess(void *owner, OsxCpu *cpu)
+{
+	uint32 processes[PROCESSSCAN];
+	uint32 spaces[PROCESSSCAN];
+	uint32 count;
+	uint32 index;
+	OsxSession *session;
+	session = (OsxSession *)owner;
+	if (!OsxGuestWalkProcesses(session, processes, spaces, &count))
+		return 0;
+	for (index = 0; index < count; index++)
+		if (spaces[index] == (cpu->sr[0] & session->layout.mask))
+			return processes[index];
+	return 0;
+}
+
+static void OsxGuestUpdatePointerCapture(OsxSession *session)
+{
+	int capture;
+	capture = session->quartz != NULL && OsxGuestQuartzFullScreen(session->quartz);
+	if (capture == session->pointercaptured)
+		return;
+	session->pointercaptured = capture;
+	if (!capture) {
+		session->machine->cuda.mousex = session->hostx;
+		session->machine->cuda.mousey = session->hosty;
+	}
+	session->machine->cuda.mouseabsolute = session->pointerhooked == 1 && !capture;
+	session->machine->cuda.mousedx = 0;
+	session->machine->cuda.mousedy = 0;
+	OsxGuestHostCapturePointer(session->video, capture);
+}
+
+static void OsxGuestReleaseDeadContexts(OsxSession *session)
+{
+	uint32 processes[PROCESSSCAN];
+	uint32 spaces[PROCESSSCAN];
+	uint32 count;
+	if (session->quartz && OsxGuestWalkProcesses(session, processes, spaces, &count))
+		OsxGuestQuartzKeepProcesses(session->quartz, processes, spaces, count, session->layout.mask);
+}
+#endif
+
 static int OsxGuestSyscallObserver(OsxCpu *cpu, void *context, uint32 instruction)
 {
 	OsxSession *session;
@@ -799,14 +1030,17 @@ static int OsxGuestSyscallObserver(OsxCpu *cpu, void *context, uint32 instructio
 	uint32 frame;
 	char text[160];
 	int index;
+	int change;
 #if OSXMSGTRACE
 	uint32 header[6];
 #endif
 	session = (OsxSession *)context;
 	if (instruction == OSXDISPLAYTRAP) {
-		if (OsxGuestDisplayDriverCall(session->machine, cpu)) {
-			OsxGuestHostResize(session->video, (int)session->machine->width, (int)session->machine->height);
+		change = OsxGuestDisplayDriverCall(session->machine, cpu);
+		if (change)
 			memset(session->shadow, 0xff, session->machine->rowbytes * session->machine->maxheight);
+		if (change == OSXDISPLAYRESIZED) {
+			OsxGuestHostResize(session->video, (int)session->machine->width, (int)session->machine->height);
 #if OSXGLBRIDGE
 			if (session->quartz)
 				OsxGuestQuartzResize(session->quartz, session->machine->width, session->machine->height);
@@ -821,57 +1055,14 @@ static int OsxGuestSyscallObserver(OsxCpu *cpu, void *context, uint32 instructio
 			session->quartz = OsxGuestCreateQuartzBridge(session->machine->width, session->machine->height,
 				session->machine->quartzbase, session->machine->quartzstrings, session->machine->quartzextensions, session->machine->quartzallocatedextensions,
 				session->machine->clip.functions[OSXCLIPMALLOC],
-				session->machine->clip.functions[OSXCLIPBZERO], session->machine->vram, session->machine->rowbytes, session->video, &session->glpresent, session->machine->quartzwindow);
+				session->machine->clip.functions[OSXCLIPBZERO], session->machine->vram, session->machine->rowbytes, session->video, &session->glpresent, session->machine->quartzwindow,
+				OsxGuestQuartzProcess, session);
 		if (session->quartz && OsxGuestQuartzBridgeCall(session->quartz, cpu,
-			session->machine->quartztails, (instruction >> 8) & 1023, session->machine->log))
+			session->machine->quartztails, (instruction >> 8) & 1023, session->machine->depth, session->machine->log))
 			return 1;
 	}
-	if (session->machine->flurry && (cpu->msr & OSXMSRPR) &&
-		(instruction & 0xffff00ffu) == OSXFLURRYTRAP) {
-		uint32 call;
-		uint32 stub;
-		uint32 base;
-		uint32 segment;
-		uint32 next;
-		int handled;
-		call = (instruction >> 8) & 255;
-		segment = cpu->sr[cpu->pc >> 28];
-		if (!call) {
-			float width;
-			float height;
-			base = cpu->pc - session->machine->flurryinit;
-			memcpy(&width, &cpu->gpr[7], sizeof(width));
-			memcpy(&height, &cpu->gpr[8], sizeof(height));
-			if (!(base & 4095)) {
-				if (width == session->machine->width && height == session->machine->height) {
-					if (session->gl)
-						OsxGuestDestroyGlBridge(session->gl);
-					session->gl = OsxGuestCreateGlBridge(cpu, session->machine->width, session->machine->height, session->machine->vram, session->machine->rowbytes, session->video, &session->glpresent);
-					session->glbase = base;
-					session->glsegment = segment;
-				}
-				cpu->gpr[0] = cpu->lr;
-				return 1;
-			}
-		} else if (call < sizeof(session->machine->flurrystubs) / sizeof(uint32)) {
-			stub = session->machine->flurrystubs[call];
-			base = cpu->pc - stub;
-			if (stub && !(base & 4095)) {
-				next = cpu->nextpc;
-				handled = session->gl && base == session->glbase && segment == session->glsegment &&
-					OsxGuestGlBridgeCall(session->gl, cpu, call);
-				if (cpu->nextpc != next)
-					return 1;
-				if (handled) {
-					cpu->nextpc = cpu->lr & ~3u;
-					if (call == OSXFLURRYFLUSH)
-						OsxGuestPresentFrame(session);
-				} else
-					cpu->nextpc = cpu->ctr & ~3u;
-				return 1;
-			}
-		}
-	}
+	if (session->quartz && (cpu->msr & OSXMSRPR) && OsxGuestQuartzIdleGeometry(session->quartz, cpu, OsxGuestQuartzEventLoop, session))
+		return 1;
 #endif
 	if (OsxGuestClipSyscall(session->machine, cpu))
 		return 1;
@@ -1051,36 +1242,6 @@ static void OsxGuestParseDiskPatches(OsxMachine *machine)
 	}
 }
 
-static int OsxGuestKernelRead32(OsxCpu *cpu, uint32 address, uint32 *value)
-{
-	uint32 savedmsr;
-	uint32 savedsr[16];
-	int index;
-	int result;
-	savedmsr = cpu->msr;
-	memcpy(savedsr, cpu->sr, sizeof(savedsr));
-	for (index = 0; index < 16; index++)
-		cpu->sr[index] = 0x20000000u | ((uint32)index << 20);
-	cpu->msr = OSXMSRDR | OSXMSRIR;
-	result = OsxGuestCpuReadVirtual(cpu, address, value);
-	cpu->msr = savedmsr;
-	memcpy(cpu->sr, savedsr, sizeof(savedsr));
-	return result;
-}
-
-static uint32 OsxGuestAccessorOffset(OsxCpu *cpu, uint32 address, uint32 opcode, uint32 target)
-{
-	uint32 word;
-	int index;
-	for (index = 0; address != 0 && index < 48; index++) {
-		if (!OsxGuestKernelRead32(cpu, address + index * 4, &word))
-			return 0;
-		if ((word >> 26) == opcode && ((word >> 21) & 31) == target)
-			return word & 0xffff;
-	}
-	return 0;
-}
-
 static void OsxGuestDumpProcesses(OsxSession *session)
 {
 	OsxMachine *machine;
@@ -1130,10 +1291,14 @@ static void OsxGuestSaveScreenPixelsAsImage(OsxMachine *machine, const uint8 *so
 	file = fopen(path, "wb");
 	if (file == NULL)
 		return;
-	pixels = (uint8 *)malloc(machine->width * 3);
+	pixels = (uint8 *)malloc(machine->width * 7);
 	fprintf(file, "P6\n%u %u\n255\n", machine->width, machine->height);
 	for (y = 0; y < machine->height; y++) {
 		row = source + y * machine->rowbytes;
+		if (source == machine->vram && machine->depth == OSXDEPTHTHOUSANDS) {
+			OsxGuestDisplayExpandPixels(pixels + machine->width * 3, row, machine->width);
+			row = pixels + machine->width * 3;
+		}
 		for (x = 0; x < machine->width; x++) {
 			pixels[x * 3] = row[x * 4 + 1];
 			pixels[x * 3 + 1] = row[x * 4 + 2];
@@ -1144,6 +1309,8 @@ static void OsxGuestSaveScreenPixelsAsImage(OsxMachine *machine, const uint8 *so
 	free(pixels);
 	fclose(file);
 }
+
+#define OSXSCRIPTPOLLTICKS (OSXTIMEBASEFREQUENCY / 100)
 
 static int OsxGuestNextScriptLine(OsxSession *session)
 {
@@ -1224,7 +1391,13 @@ static void OsxGuestExecuteScriptCommand(OsxSession *session, const char *comman
 
 static void OsxGuestRunScript(OsxSession *session, uint64 now)
 {
-	while (session->script && (session->scriptcommand || OsxGuestNextScriptLine(session)) && now >= session->scriptticks) {
+	while (session->script && now >= session->scriptticks) {
+		if (!session->scriptcommand && !OsxGuestNextScriptLine(session)) {
+			session->scriptticks = now + OSXSCRIPTPOLLTICKS;
+			return;
+		}
+		if (now < session->scriptticks)
+			return;
 		OsxGuestExecuteScriptCommand(session, session->scriptcommand);
 		session->scriptcommand = NULL;
 	}
@@ -1372,6 +1545,8 @@ static void OsxGuestRunMachine(OsxSession *session)
 				cpu->virtualticks += waitticks + 1;
 			else if (milliseconds > 0)
 				OsxGuestHostSleep(milliseconds);
+			else
+				OsxGuestHostShortSleep((uint32)(waitticks * 1000000 / OSXTIMEBASEFREQUENCY));
 			now = OsxGuestCpuTimebase(cpu);
 		} else {
 			runstart = now;
@@ -1425,6 +1600,10 @@ static void OsxGuestRunMachine(OsxSession *session)
 				nextframe = now + frameticks - (now - nextframe) % frameticks;
 			else
 				nextframe = now + frameticks;
+#if OSXGLBRIDGE
+			OsxGuestReleaseDeadContexts(session);
+			OsxGuestUpdatePointerCapture(session);
+#endif
 			OsxGuestPresentFrame(session);
 		}
 		if (now >= nextstatus) {
@@ -1512,8 +1691,6 @@ static void OsxGuestDestroySession(OsxSession *session)
 #endif
 	free(session->shadow);
 #if OSXGLBRIDGE
-	if (session->gl)
-		OsxGuestDestroyGlBridge(session->gl);
 	if (session->quartz)
 		OsxGuestDestroyQuartzBridge(session->quartz);
 	OsxGuestGlShutdownHost();
@@ -1558,8 +1735,10 @@ static int OsxGuestRunSession(OsxSession *session)
 		machine->g5state.highsize = (uint32)(PrefsFindInt32("ramsize") - 2048) << 20;
 	}
 	machine->ram = (uint8 *)calloc(1, (size_t)machine->ramsize + machine->g5state.highsize);
+	OsxGuestHostHugePages(machine->ram, (size_t)machine->ramsize + machine->g5state.highsize);
 #else
 	machine->ram = (uint8 *)calloc(1, machine->ramsize);
+	OsxGuestHostHugePages(machine->ram, machine->ramsize);
 #endif
 	machine->vram = (uint8 *)calloc(1, OSXVRAMSIZE);
 	if (machine->ram == NULL || machine->vram == NULL) {
@@ -1567,7 +1746,7 @@ static int OsxGuestRunSession(OsxSession *session)
 		return 1;
 	}
 	OsxGuestParseScreen(machine);
-	OsxGuestCpuReset(cpu, OSXPVR, OSXTIMEBASEFREQUENCY);
+	OsxGuestCpuReset(cpu, OSXPVRG4, OSXTIMEBASEFREQUENCY);
 	if (PrefsFindInt32("osxdeterministic") > 0) {
 		cpu->deterministic = (uint32)PrefsFindInt32("osxdeterministic");
 		session->slicelog = fopen("osxslices.log", "w");
@@ -1606,10 +1785,7 @@ static int OsxGuestRunSession(OsxSession *session)
 	OsxGuestAttachDisks(machine, &bootimage, &bootbus, &bootunit);
 	OsxGuestParseDiskPatches(machine);
 #if OSXGLBRIDGE
-#if OSXGLBRIDGE
-	machine->flurry = PrefsFindBool("osxflurry");
 	machine->quartz = PrefsFindBool("osxquartz");
-#endif
 #endif
 	if (bootimage == NULL) {
 		ErrorAlert("No Mac OS X boot disc or disk image is configured.");

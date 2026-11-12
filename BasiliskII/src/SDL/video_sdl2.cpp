@@ -803,6 +803,16 @@ static float get_mag_rate()
 	return m < 1 ? 1 : m > 4 ? 4 : m;
 }
 
+static Uint32 SDLGfxAccelWindowFlags(void)
+{
+#if defined(ENABLE_GFXACCEL) && defined(SHEEPSHAVER) \
+		&& (!defined(TARGET_OS_IPHONE) || !TARGET_OS_IPHONE)
+	return SDL_WINDOW_OPENGL;
+#else
+	return 0;
+#endif
+}
+
 static SDL_Surface *init_sdl_video(int width, int height, int depth, Uint32 flags, int pitch)
 {
     if (guest_surface) {
@@ -853,11 +863,7 @@ static SDL_Surface *init_sdl_video(int width, int height, int depth, Uint32 flag
 #if defined(__MACOSX__) && SDL_VERSION_ATLEAST(2,0,14)
 	if (MetalIsAvailable()) window_flags |= SDL_WINDOW_METAL;
 #endif
-#if defined(ENABLE_GFXACCEL) && defined(SHEEPSHAVER) \
-		&& (!defined(TARGET_OS_IPHONE) || !TARGET_OS_IPHONE)
-	/* Compositor presents via its own OpenGL context. */
-	window_flags |= SDL_WINDOW_OPENGL;
-#endif
+	window_flags |= SDLGfxAccelWindowFlags();
 
 	if (!sdl_window) {
 		float m = get_mag_rate();
@@ -1753,7 +1759,7 @@ static void DMCModeDescFromVModesIndex(int idx, DMCModeDesc *out)
 SDL_Surface *SDLSetVideoModeQuietly(int width, int height, int depth, Uint32 flags)
 {
 	SDL_SetHint(SDL_HINT_WINDOW_NO_ACTIVATION_WHEN_SHOWN, "1");
-	sdl_window = SDL_CreateWindow("", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, width, height, flags);
+	sdl_window = SDL_CreateWindow("", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, width, height, flags | SDLGfxAccelWindowFlags());
 	if (sdl_window == NULL)
 		return NULL;
 	return SDL_GetWindowSurface(sdl_window);

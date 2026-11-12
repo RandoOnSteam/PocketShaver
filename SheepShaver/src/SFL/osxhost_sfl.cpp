@@ -43,6 +43,9 @@ static void OsxGuestSflInput(void *context, int operation, int first, int second
 	case SFLUIINPUTBUTTON:
 		video->input(video->context, OSXHOSTBUTTON, first, second);
 		break;
+	case SFLUIINPUTMOTION:
+		video->input(video->context, OSXHOSTMOTION, first, second);
+		break;
 	case SFLUIINPUTWHEEL:
 		video->input(video->context, OSXHOSTWHEEL, first, 0);
 		break;
@@ -73,15 +76,16 @@ OsxHostVideo *OsxGuestHostOpen(int width, int height, OsxHostInput input, void *
 	return video;
 }
 
-void OsxGuestHostSuspendFrame(OsxHostVideo *video)
+void OsxGuestHostSuspendFrame(OsxHostVideo *video, uint8 *present)
 {
-	int width;
-	int height;
-	int depth;
-	int hostwidth;
-	int hostheight;
-	SflUiGetStatus(&width, &height, &depth, &hostwidth, &hostheight);
-	SflUiSetFrame(NULL, width, height, video->pitch, 32);
+	(void)video;
+	SflUiSuspendFrame(present);
+}
+
+void OsxGuestHostCapturePointer(OsxHostVideo *video, int capture)
+{
+	(void)video;
+	SflUiSetPointerCapture(capture);
 }
 
 void OsxGuestHostResize(OsxHostVideo *video, int width, int height)
