@@ -763,6 +763,8 @@ static bool init_sdl()
 
 	// Make SDL pass through command-clicks and option-clicks unaltered
 	setenv("SDL_HAS3BUTTONMOUSE", "1", true);
+
+	setenv("vblank_mode", "0", false);
 #endif
 
 	if (SDL_Init(sdl_flags) == -1) {

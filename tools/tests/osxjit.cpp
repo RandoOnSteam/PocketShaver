@@ -58,14 +58,14 @@ static void Reset(OsxJitTest *test)
 			cpu = test->reference;
 		else
 			cpu = test->native;
-		OsxCpuReset(cpu, 0x00080202, 16666666);
+		OsxGuestCpuReset(cpu, 0x00080202, 16666666);
 		cpu->ramsize = TESTRAMSIZE;
 		cpu->pc = TESTENTRY;
 		cpu->msr = OSXMSRFP;
 		cpu->buscontext = cpu;
 		cpu->busread = BusRead;
 		cpu->buswrite = BusWrite;
-		OsxCpuUpdateModes(cpu);
+		OsxGuestCpuUpdateModes(cpu);
 	}
 	test->native->nativejit = jit;
 	for (reg = 0; reg < 32; reg++) {
@@ -92,8 +92,8 @@ static void Check(OsxJitTest *test, int matches, const char *name, uint32 instru
 		test->failures++;
 		if (test->failures <= 16) {
 			printf("FAIL %s instruction %08x\n", name, instruction);
-			OsxCpuDump(test->reference, stdout);
-			OsxCpuDump(test->native, stdout);
+			OsxGuestCpuDump(test->reference, stdout);
+			OsxGuestCpuDump(test->native, stdout);
 		}
 	}
 }
@@ -130,9 +130,9 @@ static void Run(OsxJitTest *test, uint32 instruction, int count, const char *nam
 	Put(test->native, TESTENTRY, instruction);
 	Put(test->reference, TESTENTRY + 4, 0);
 	Put(test->native, TESTENTRY + 4, 0);
-	OsxJitInvalidate(test->native, TESTENTRY, 4096);
-	OsxCpuRun(test->reference, count);
-	OsxJitRun(test->native, count);
+	OsxGuestJitInvalidate(test->native, TESTENTRY, 4096);
+	OsxGuestCpuRun(test->reference, count);
+	OsxGuestJitRun(test->native, count);
 	Compare(test, name, instruction);
 }
 
@@ -314,7 +314,7 @@ static void FloatVectorMemory(OsxJitTest *test)
 					cpu->tlb[OSXMODEREAL][kind][(address >> 12) & OSXTLBMASK].host = cpu->ram + (address & 0xfffff000);
 				}
 			}
-			OsxCpuUpdateModes(cpu);
+			OsxGuestCpuUpdateModes(cpu);
 		}
 		Run(test, instruction, 1, "float/vector memory");
 	}
@@ -371,7 +371,7 @@ static void FloatArithmetic(OsxJitTest *test)
 			cpu->fpscr = fpscr;
 			if ((iteration % 23) == 0)
 				cpu->msr = 0;
-			OsxCpuUpdateModes(cpu);
+			OsxGuestCpuUpdateModes(cpu);
 		}
 		Run(test, instruction, 1, "float arithmetic");
 	}
@@ -427,7 +427,7 @@ static void SingleMultiplyAdd(OsxJitTest *test)
 			else
 				cpu = test->native;
 			cpu->fpscr = fpscr;
-			OsxCpuUpdateModes(cpu);
+			OsxGuestCpuUpdateModes(cpu);
 		}
 		Run(test, instruction, 1, "single multiply add");
 	}
@@ -516,7 +516,7 @@ static void DoubleMultiplyAdd(OsxJitTest *test)
 			cpu->fpr[2].bits = right;
 			cpu->fpr[3].bits = multiplier;
 			cpu->fpscr = fpscr;
-			OsxCpuUpdateModes(cpu);
+			OsxGuestCpuUpdateModes(cpu);
 		}
 		Run(test, instruction, 1, "double multiply add");
 	}
@@ -564,7 +564,7 @@ static void VectorInstructions(OsxJitTest *test)
 			cpu->msr = OSXMSRFP | OSXMSRVEC;
 			if ((iteration % 23) == 0)
 				cpu->msr = OSXMSRFP;
-			OsxCpuUpdateModes(cpu);
+			OsxGuestCpuUpdateModes(cpu);
 		}
 		Run(test, instruction, 1, "vector");
 	}
@@ -713,9 +713,9 @@ static void MachineState(OsxJitTest *test)
 		Put(test->native, TESTENTRY + 8, 0);
 		Put(test->reference, TESTENTRY, instruction);
 		Put(test->native, TESTENTRY, instruction);
-		OsxJitInvalidate(test->native, TESTENTRY, 4096);
-		OsxCpuRun(test->reference, 2);
-		OsxJitRun(test->native, 2);
+		OsxGuestJitInvalidate(test->native, TESTENTRY, 4096);
+		OsxGuestCpuRun(test->reference, 2);
+		OsxGuestJitRun(test->native, 2);
 		Compare(test, "machine state", instruction);
 	}
 }
@@ -754,9 +754,9 @@ static void InlineStops(OsxJitTest *test)
 				Put(cpu, TESTENTRY + (uint32)(prefix + 1) * 4, 0x38c60001);
 				Put(cpu, TESTENTRY + (uint32)(prefix + 2) * 4, 0);
 			}
-			OsxJitInvalidate(test->native, TESTENTRY, 4096);
-			OsxCpuRun(test->reference, prefix + 3);
-			OsxJitRun(test->native, prefix + 3);
+			OsxGuestJitInvalidate(test->native, TESTENTRY, 4096);
+			OsxGuestCpuRun(test->reference, prefix + 3);
+			OsxGuestJitRun(test->native, prefix + 3);
 			Compare(test, "inline CPU stop", instruction);
 		}
 	}
@@ -822,9 +822,9 @@ static void Sequences(OsxJitTest *test)
 				cpu = test->native;
 			Put(cpu, TESTENTRY + 256, 0x4bffff00);
 		}
-		OsxJitInvalidate(test->native, TESTENTRY, 4096);
-		OsxCpuRun(test->reference, count);
-		OsxJitRun(test->native, count);
+		OsxGuestJitInvalidate(test->native, TESTENTRY, 4096);
+		OsxGuestCpuRun(test->reference, count);
+		OsxGuestJitRun(test->native, count);
 		Compare(test, "sequence/slice", 0);
 	}
 }
@@ -893,11 +893,11 @@ static void Mmu(OsxJitTest *test)
 			Put(cpu, TESTENTRY, (14u << 26) | (3u << 21) | (3u << 16) | 1);
 			Put(cpu, TESTENTRY + 4, instruction);
 			Put(cpu, TESTENTRY + 8, 0);
-			OsxCpuUpdateModes(cpu);
+			OsxGuestCpuUpdateModes(cpu);
 		}
-		OsxJitInvalidate(test->native, TESTENTRY, 4096);
-		OsxCpuRun(test->reference, 2);
-		OsxJitRun(test->native, 2);
+		OsxGuestJitInvalidate(test->native, TESTENTRY, 4096);
+		OsxGuestCpuRun(test->reference, 2);
+		OsxGuestJitRun(test->native, 2);
 		Compare(test, "hashed MMU/fault", instruction);
 		Check(test, memcmp(test->reference->ram + 0x80000, test->native->ram + 0x80000, 65536) == 0, "MMU R/C", instruction);
 	}
@@ -925,11 +925,11 @@ static void Mmu(OsxJitTest *test)
 			cpu->gpr[4] = 0x80000000 + TESTDATA;
 			Put(cpu, TESTENTRY, (37u << 26) | (5u << 21) | (4u << 16));
 			Put(cpu, TESTENTRY + 4, 0);
-			OsxCpuUpdateModes(cpu);
+			OsxGuestCpuUpdateModes(cpu);
 		}
-		OsxJitInvalidate(test->native, TESTENTRY, 4096);
-		OsxCpuRun(test->reference, 1);
-		OsxJitRun(test->native, 1);
+		OsxGuestJitInvalidate(test->native, TESTENTRY, 4096);
+		OsxGuestCpuRun(test->reference, 1);
+		OsxGuestJitRun(test->native, 1);
 		Compare(test, "BAT/protection", 0);
 	}
 }
@@ -952,9 +952,9 @@ static void Invalidation(OsxJitTest *test)
 			cpu->pc = TESTENTRY;
 			Put(cpu, TESTENTRY, instruction ^ 0xffff);
 		}
-		OsxJitInvalidate(test->native, TESTENTRY, 4);
-		OsxCpuRun(test->reference, 1);
-		OsxJitRun(test->native, 1);
+		OsxGuestJitInvalidate(test->native, TESTENTRY, 4);
+		OsxGuestCpuRun(test->reference, 1);
+		OsxGuestJitRun(test->native, 1);
 		Compare(test, "DMA invalidate", instruction);
 		for (index = 0; index < 2; index++) {
 			if (index == 0)
@@ -967,12 +967,12 @@ static void Invalidation(OsxJitTest *test)
 			cpu->gpr[4] = TESTENTRY;
 			cpu->pc = TESTENTRY + 16;
 		}
-		OsxCpuRun(test->reference, 1);
-		OsxJitRun(test->native, 1);
+		OsxGuestCpuRun(test->reference, 1);
+		OsxGuestJitRun(test->native, 1);
 		test->reference->pc = TESTENTRY;
 		test->native->pc = TESTENTRY;
-		OsxCpuRun(test->reference, 1);
-		OsxJitRun(test->native, 1);
+		OsxGuestCpuRun(test->reference, 1);
+		OsxGuestJitRun(test->native, 1);
 		Compare(test, "icbi invalidate", instruction);
 	}
 }
@@ -982,7 +982,7 @@ static void ReplaceCode(void *context, uint32 address, int size, uint32 value)
 	OsxCpu *cpu;
 	cpu = (OsxCpu *)context;
 	Put(cpu, TESTENTRY + 8, value);
-	OsxJitInvalidate(cpu, TESTENTRY + 8, 4);
+	OsxGuestJitInvalidate(cpu, TESTENTRY + 8, 4);
 }
 
 static void InlineInvalidation(OsxJitTest *test)
@@ -1003,9 +1003,9 @@ static void InlineInvalidation(OsxJitTest *test)
 		Put(cpu, TESTENTRY + 8, 0x38a00003);
 		Put(cpu, TESTENTRY + 12, 0x48000000);
 	}
-	OsxJitInvalidate(test->native, TESTENTRY, 4096);
-	OsxCpuRun(test->reference, 3);
-	OsxJitRun(test->native, 3);
+	OsxGuestJitInvalidate(test->native, TESTENTRY, 4096);
+	OsxGuestCpuRun(test->reference, 3);
+	OsxGuestJitRun(test->native, 3);
 	Compare(test, "inline DMA code replacement", 0x90640000);
 	Check(test, test->native->gpr[5] == 7, "replacement instruction executed", 0);
 }
@@ -1022,7 +1022,7 @@ static void Contexts(OsxJitTest *test)
 	instruction = 0x48000010;
 	Put(test->reference, TESTENTRY, instruction);
 	Put(test->native, TESTENTRY, instruction);
-	OsxJitInvalidate(test->native, TESTENTRY, 4096);
+	OsxGuestJitInvalidate(test->native, TESTENTRY, 4096);
 	for (scenario = 0; scenario < 64; scenario++) {
 		virtualbase = (uint32)(scenario % 16) << 28;
 		for (index = 0; index < 2; index++) {
@@ -1036,11 +1036,11 @@ static void Contexts(OsxJitTest *test)
 			cpu->ibat[0] = virtualbase | 0x1f;
 			cpu->ibat[1] = 2;
 			cpu->pc = virtualbase + TESTENTRY;
-			OsxCpuFlushTlb(cpu);
-			OsxCpuUpdateModes(cpu);
+			OsxGuestCpuFlushTlb(cpu);
+			OsxGuestCpuUpdateModes(cpu);
 		}
-		OsxCpuRun(test->reference, 1);
-		OsxJitRun(test->native, 1);
+		OsxGuestCpuRun(test->reference, 1);
+		OsxGuestJitRun(test->native, 1);
 		Compare(test, "physical code aliases", instruction);
 	}
 	Reset(test);
@@ -1049,7 +1049,7 @@ static void Contexts(OsxJitTest *test)
 	Put(test->native, TESTENTRY, instruction);
 	Put(test->reference, TESTENTRY + 4, 0);
 	Put(test->native, TESTENTRY + 4, 0);
-	OsxJitInvalidate(test->native, TESTENTRY, 4096);
+	OsxGuestJitInvalidate(test->native, TESTENTRY, 4096);
 	for (scenario = 0; scenario < 32; scenario++) {
 		physical = TESTDATA;
 		if (scenario & 1)
@@ -1067,10 +1067,10 @@ static void Contexts(OsxJitTest *test)
 			memset(cpu->ram + 0x80000, 0, 65536);
 			MapPage(cpu, cpu->gpr[4], physical, 2);
 			Put(cpu, physical, (uint32)scenario);
-			OsxCpuUpdateModes(cpu);
+			OsxGuestCpuUpdateModes(cpu);
 		}
-		OsxCpuRun(test->reference, 1);
-		OsxJitRun(test->native, 1);
+		OsxGuestCpuRun(test->reference, 1);
+		OsxGuestJitRun(test->native, 1);
 		Compare(test, "segment TLB tags", instruction);
 		Check(test, test->native->gpr[5] == (uint32)scenario, "remapped data", instruction);
 	}
@@ -1091,7 +1091,7 @@ static void Contexts(OsxJitTest *test)
 			cpu->srr1 = OSXMSREE;
 			if (scenario & 1)
 				cpu->msr |= OSXMSRPR;
-			OsxCpuUpdateModes(cpu);
+			OsxGuestCpuUpdateModes(cpu);
 		}
 		Run(test, instruction, 4, "privilege/exception exits");
 	}
@@ -1190,9 +1190,9 @@ static void Floating(OsxJitTest *test)
 			if (iteration & 1)
 				cpu->msr |= OSXMSRFP;
 		}
-		OsxJitInvalidate(test->native, TESTENTRY, 4096);
-		OsxCpuRun(test->reference, iteration % 64 + 1);
-		OsxJitRun(test->native, iteration % 64 + 1);
+		OsxGuestJitInvalidate(test->native, TESTENTRY, 4096);
+		OsxGuestCpuRun(test->reference, iteration % 64 + 1);
+		OsxGuestJitRun(test->native, iteration % 64 + 1);
 		Compare(test, "floating slices and disabled FPU", instruction);
 	}
 }
@@ -1244,9 +1244,9 @@ static void VectorSequences(OsxJitTest *test)
 			cpu->msr = OSXMSRVEC | OSXMSRFP;
 			cpu->gpr[5] = OSXMSRFP;
 		}
-		OsxJitInvalidate(test->native, TESTENTRY, 4096);
-		OsxCpuRun(test->reference, 32);
-		OsxJitRun(test->native, 32);
+		OsxGuestJitInvalidate(test->native, TESTENTRY, 4096);
+		OsxGuestCpuRun(test->reference, 32);
+		OsxGuestJitRun(test->native, 32);
 		Compare(test, "vector sequences and enable changes", 0);
 	}
 }
@@ -1278,9 +1278,9 @@ static void JitSlices(OsxJitTest *test)
 				Put(cpu, TESTENTRY + 124, (31u << 26) | (4u << 21) | (12u << 16) | (8u << 11) | (371u << 1));
 				Put(cpu, TESTENTRY + 128, 0x4bffff80);
 			}
-			OsxJitInvalidate(test->native, TESTENTRY, 4096);
-			OsxCpuRun(test->reference, count);
-			OsxJitRun(test->native, count);
+			OsxGuestJitInvalidate(test->native, TESTENTRY, 4096);
+			OsxGuestCpuRun(test->reference, count);
+			OsxGuestJitRun(test->native, count);
 			Compare(test, "slice limits, counter carry and tracing", 0);
 		}
 	}
@@ -1304,15 +1304,15 @@ static void Benchmark(OsxJitTest *test)
 		for (step = 0; step < 31; step++)
 			Put(cpu, TESTENTRY + (uint32)step * 4, (14u << 26) | (3u << 21) | (3u << 16) | 1);
 		Put(cpu, TESTENTRY + 124, 0x4bffff84);
-		OsxJitInvalidate(cpu, TESTENTRY, 4096);
-		start = OsxHostNanoseconds();
+		OsxGuestJitInvalidate(cpu, TESTENTRY, 4096);
+		start = OsxGuestHostNanoseconds();
 		for (slice = 0; slice < 10000; slice++) {
 			if (mode == 0)
-				OsxCpuRun(cpu, 20000);
+				OsxGuestCpuRun(cpu, 20000);
 			else
-				OsxJitRun(cpu, 20000);
+				OsxGuestJitRun(cpu, 20000);
 		}
-		elapsed = OsxHostNanoseconds() - start;
+		elapsed = OsxGuestHostNanoseconds() - start;
 		printf("benchmark mode %d instructions 200000000 ns %llu\n", mode, (unsigned long long)elapsed);
 	}
 	Compare(test, "benchmark", 0);
@@ -1334,22 +1334,22 @@ static void FloatBenchmarkForm(OsxJitTest *test, uint32 form)
 			cpu = test->native;
 		cpu->fpscr = 0;
 		cpu->msr |= OSXMSRFP;
-		OsxCpuUpdateModes(cpu);
+		OsxGuestCpuUpdateModes(cpu);
 		cpu->fpr[2].value = 0.5;
 		cpu->fpr[3].value = 0.25;
 		cpu->fpr[4].value = 1.0;
 		for (step = 0; step < 31; step++)
 			Put(cpu, TESTENTRY + (uint32)step * 4, (59u << 26) | ((form >> 31) << 28) | ((uint32)(5 + step % 3) << 21) | (2u << 16) | (4u << 11) | (form & 0xffff));
 		Put(cpu, TESTENTRY + 124, 0x4bffff84);
-		OsxJitInvalidate(cpu, TESTENTRY, 4096);
-		start = OsxHostNanoseconds();
+		OsxGuestJitInvalidate(cpu, TESTENTRY, 4096);
+		start = OsxGuestHostNanoseconds();
 		for (slice = 0; slice < 2000; slice++) {
 			if (mode == 0)
-				OsxCpuRun(cpu, 20000);
+				OsxGuestCpuRun(cpu, 20000);
 			else
-				OsxJitRun(cpu, 20000);
+				OsxGuestJitRun(cpu, 20000);
 		}
-		elapsed = OsxHostNanoseconds() - start;
+		elapsed = OsxGuestHostNanoseconds() - start;
 		printf("float benchmark form %03x mode %d instructions 40000000 ns %llu\n", form, mode, (unsigned long long)elapsed);
 	}
 	Compare(test, "float benchmark", 0);
@@ -1457,7 +1457,7 @@ static void Differential970(OsxJitTest *test, Osx970 *core)
 		index = (int)(Random(test) % (sizeof(templates) / sizeof(templates[0])));
 		instruction = templates[index].opcode | (Random(test) & templates[index].mask);
 		Put(reference, TESTENTRY, instruction);
-		OsxCpuRun(reference, 1);
+		OsxGuestCpuRun(reference, 1);
 		Put970(core, TESTENTRY, 4, instruction);
 		Osx970Run(core, 1);
 		matches = 1;
@@ -1471,7 +1471,7 @@ static void Differential970(OsxJitTest *test, Osx970 *core)
 			test->failures++;
 			if (test->failures <= 16) {
 				printf("FAIL 970 differential instruction %08x\n", instruction);
-				OsxCpuDump(reference, stdout);
+				OsxGuestCpuDump(reference, stdout);
 				for (reg = 0; reg < 32; reg += 4)
 					printf("970 r%-2d %016llx %016llx %016llx %016llx\n", reg, (unsigned long long)core->gpr[reg], (unsigned long long)core->gpr[reg + 1], (unsigned long long)core->gpr[reg + 2], (unsigned long long)core->gpr[reg + 3]);
 				printf("970 pc %016llx cr %08x xer %08x lr %016llx ctr %016llx\n", (unsigned long long)core->pc, core->cpu->cr, core->cpu->xer, (unsigned long long)core->lr, (unsigned long long)core->ctr);
@@ -1845,7 +1845,7 @@ int main(void)
 	test.native->ram = (uint8 *)calloc(1, TESTRAMSIZE);
 	test.native->ramsize = TESTRAMSIZE;
 	test.native->jithot = 1;
-	if (!OsxJitCreate(test.native))
+	if (!OsxGuestJitCreate(test.native))
 		return 2;
 	RandomInstructions(&test);
 	MemoryInstructions(&test);
@@ -1875,7 +1875,7 @@ int main(void)
 	printf("checks %d failures %d\n", test.checks, test.failures);
 	result = test.failures != 0;
 	test.native->logfile = stdout;
-	OsxJitDestroy(test.native);
+	OsxGuestJitDestroy(test.native);
 	free(test.reference->ram);
 	free(test.native->ram);
 	free(test.reference);

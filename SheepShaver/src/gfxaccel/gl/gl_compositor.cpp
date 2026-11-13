@@ -57,9 +57,9 @@
 
 #if defined(USE_SDL1)
 #include "glcontext.h"
-extern void *video_get_gl_handle(void);
+extern void *video_get_native_window(void);
 extern void video_get_host_window_size(int *width, int *height);
-#define GL_HOST_WINDOW video_get_gl_handle()
+#define GL_HOST_WINDOW video_get_native_window()
 static GLCONTEXT s_gl_ctx;
 static bool s_gl_ctx_created = false;
 #else
@@ -141,8 +141,8 @@ static bool HostGLCreateContext(void *window)
 	GLContextAttributes_CompatibilityProfile(&contextattributes);
 	GLContextAttributes_EndList(&contextattributes);
 	memset(&s_gl_ctx, 0, sizeof(s_gl_ctx));
-	s_gl_ctx_created = GLContext_Create(&s_gl_ctx,
-		(GLDRAWABLEHANDLE)(uintptr_t)window, &contextattributes, &pixelattributes) != 0;
+	s_gl_ctx_created = GLContext_CreateWithWindow(&s_gl_ctx,
+		(GLWINDOWHANDLE)window, &contextattributes, &pixelattributes) != 0;
 	return s_gl_ctx_created;
 }
 
@@ -170,7 +170,7 @@ static void HostGLSetSwapInterval(int interval)
 
 static void HostGLSwap(void)
 {
-GLContext_SwapBuffers(&s_gl_ctx);
+	GLContext_SwapBuffers(&s_gl_ctx);
 }
 
 static void HostGLDrawableSize(int *width, int *height)

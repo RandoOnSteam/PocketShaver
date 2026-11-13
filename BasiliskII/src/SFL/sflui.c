@@ -62,7 +62,6 @@ typedef struct SFLUIAPP
 {
 	WSAPP super;
 	WSWINDOW window;
-	void *glhandle;
 	WSWNDCLASS wc;
 	WSTICKER ticker;
 	WSOC oc;
@@ -1000,13 +999,6 @@ void *SflUiGetWindowHandle(void)
 	return WSWindow_GetHandle(&SflUiApp->window);
 }
 
-void *SflUiGetGLHandle(void)
-{
-	if (SflUiApp->glhandle == NULL)
-		SflUiApp->glhandle = WSWindow_AllocGLHandle(&SflUiApp->window);
-	return SflUiApp->glhandle;
-}
-
 int SflUiOpen(const char *title, int width, int height, int fullscreen, int frameskip)
 {
 	WSRECT bounds;
@@ -1061,9 +1053,6 @@ void SflUiClose(void)
 	}
 	if (pThis->fullscreen)
 		SflUiLeaveFullScreen(pThis);
-	if (pThis->glhandle != NULL)
-		WSWindow_FreeGLHandle(&pThis->window, pThis->glhandle);
-	pThis->glhandle = NULL;
 	WSWindow_Destroy(&pThis->window);
 	WSWndClass_Destroy(&pThis->wc, &pThis->super);
 	pThis->windowopen = FALSE;
@@ -1335,7 +1324,6 @@ static wsbool SflUiOnInit(SFLUIAPP *pThis)
 #endif
 	WSMemoryClear(pThis->palette, sizeof(pThis->palette));
 	WSMemoryClear(pThis->keys, sizeof(pThis->keys));
-	pThis->glhandle = NULL;
 	pThis->capture = 0;
 	wsatomicintstore(&pThis->quit, 0);
 	wsatomicintstore(&pThis->resize, 0);
@@ -1350,6 +1338,9 @@ static wsbool SflUiOnInit(SFLUIAPP *pThis)
 	setenv("GSK_RENDERER", "cairo", 0);
 #elif defined(WSKDE)
 	setenv("QT_QPA_PLATFORM", "xcb", 0);
+#endif
+#if defined(WSNONOSXUNIX)
+	setenv("vblank_mode", "0", 0);
 #endif
 #if defined(WSGTK) && defined(GDK_WINDOWING_X11)
 	XInitThreads();

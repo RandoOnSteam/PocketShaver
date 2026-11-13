@@ -34,6 +34,7 @@
 #define OSXHUGEPAGEBYTES 0x200000
 #define OSXSHORTSLEEPSLACK 150
 #define OSXHIGHRESOLUTIONTIMER 0x00000002
+#define OSXCPUIDFMA 0x1000
 
 #define OSXPAGEMASK 0xfffff000
 #define OSXACCESSFAULT 0
@@ -240,8 +241,14 @@ void OsxGuestHostShortSleep(uint32 microseconds)
 
 int OsxGuestHostFeature(int feature)
 {
-#if defined(_WIN32)
-	return IsProcessorFeaturePresent(feature) != 0;
+#if defined(_MSC_VER) && (OSXHOSTX64 || OSXHOSTX86)
+	int info[4];
+	if (!IsProcessorFeaturePresent(feature))
+		return 0;
+	if (feature != OSXFEATUREFMA)
+		return 1;
+	__cpuid(info, 1);
+	return (info[2] & OSXCPUIDFMA) != 0;
 #elif OSXHOSTX64 || OSXHOSTX86
 	if (feature == OSXFEATURESSE2)
 		return __builtin_cpu_supports("sse2") != 0;
@@ -249,7 +256,9 @@ int OsxGuestHostFeature(int feature)
 		return __builtin_cpu_supports("ssse3") != 0;
 	if (feature == OSXFEATURESSE41)
 		return __builtin_cpu_supports("sse4.1") != 0;
-	return __builtin_cpu_supports("avx2") != 0;
+	return __builtin_cpu_supports("fma") != 0;
+#elif defined(_WIN32)
+	return IsProcessorFeaturePresent(feature) != 0;
 #else
 	return 0;
 #endif

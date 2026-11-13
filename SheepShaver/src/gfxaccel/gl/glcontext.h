@@ -4015,6 +4015,7 @@ int GLContext_CreateWithWindow(GLCONTEXT* pThis, GLWINDOWHANDLE window,
 #endif
 #if defined(HAVE_QT) && defined(__cplusplus)
 	#include <QGuiApplication>
+	#include <QWidget>
 	#include <qpa/qplatformnativeinterface.h>
 #elif !defined(HAVE_QT)
 	#include <gdk/gdk.h>
@@ -4029,6 +4030,7 @@ int GLContext_CreateWithWindow(GLCONTEXT* pThis, GLWINDOWHANDLE window,
 	#endif
 	#if GDK_CHECK_VERSION(4, 0, 0) /* req for getting X11 handle */
 		#include <gdk/x11/gdkx.h>
+		#include <gtk/gtk.h>
 	#else
 		#include <gdk/gdkx.h>
 	#endif
@@ -4907,14 +4909,39 @@ GLContextEmptyProc GLContext_GetProc(GLCONTEXT* pThis, const char* proc)
 { return glXGetProcAddress((const GLubyte*)proc); }
 void GLContext_ResizeDrawable(GLCONTEXT* pThis, int width, int height)
 { (void)(pThis);(void)(width);(void)(height); }
+GLDRAWABLEHANDLE GLGetWindowDrawable(GLWINDOWHANDLE window)
+{
+#if defined(HAVE_QT) && defined(__cplusplus)
+	return (GLDRAWABLEHANDLE)((QWidget*)window)->winId();
+#elif defined(GDK_CHECK_VERSION)
+	#if GDK_CHECK_VERSION(4,0,0)
+		if (!GLGetXDisplay())
+			return window;
+		return (GLDRAWABLEHANDLE)gdk_x11_surface_get_xid(
+			gtk_native_get_surface(GTK_NATIVE((GtkWidget*)window)));
+	#else
+		GdkWindow* gdkwindow;
+		GLDRAWABLEHANDLE drawable;
+		if (!GLGetXDisplay())
+			return window;
+		g_object_get((gpointer)window, "window", &gdkwindow, NULL);
+		drawable = (GLDRAWABLEHANDLE)GDK_WINDOW_XID(gdkwindow);
+		g_object_unref(gdkwindow);
+		return drawable;
+	#endif
+#else
+	return window;
+#endif
+}
 int GLContext_CreateCloneWithWindow(GLCONTEXT* pThis, GLCONTEXTHANDLE clone,
 	GLWINDOWHANDLE drawable,
 	GLCONTEXTATTRIBUTES* contextattribs, GLPIXELATTRIBUTES* pixelattribs)
-{ return GLContext_CreateClone(pThis, clone, drawable,
+{ return GLContext_CreateClone(pThis, clone, GLGetWindowDrawable(drawable),
 		contextattribs, pixelattribs); }
 int GLContext_CreateWithWindow(GLCONTEXT* pThis, GLWINDOWHANDLE drawable,
 	GLCONTEXTATTRIBUTES* contextattribs, GLPIXELATTRIBUTES* pixelattribs)
-{ return GLContext_Create(pThis, drawable, contextattribs, pixelattribs); }
+{ return GLContext_Create(pThis, GLGetWindowDrawable(drawable),
+	contextattribs, pixelattribs); }
 
 #if defined(HAVE_QT) /* Clear up global namespace for later QT includes */
 	#undef CursorShape

@@ -21,7 +21,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "osxcpu.h"
-/* OSXJITNOFUSED forces off AVX2 ops for testing. Don't release with it on! */
+/* OSXJITNOFUSED forces off FMA ops for testing. Don't release with it on! */
 #if !defined(OSXJITNOFUSED)
 #define OSXJITNOFUSED 0
 #endif
@@ -2874,7 +2874,7 @@ int OsxGuestJitCreate(OsxCpu *cpu)
 		return 0;
 	state->pagecount = (cpu->ramsize + 4095) >> 12;
 	state->shuffle = OsxGuestHostFeature(OSXFEATURESSSE3);
-	state->fused = !OSXJITNOFUSED && OsxGuestHostFeature(OSXFEATUREAVX2);
+	state->fused = !OSXJITNOFUSED && OsxGuestHostFeature(OSXFEATUREFMA);
 	state->rounding = OsxGuestHostFeature(OSXFEATURESSE41);
 	for (index = 0; index < 4; index++) {
 		state->vectorconstants[0][index] = 0x00010203u + (uint32)index * 0x04040404u;
@@ -3450,6 +3450,9 @@ typedef struct OsxNativeEmitter {
 	uint8 *misses[OSXJITMISSES];
 	int misscounts[OSXJITMISSES];
 	int misscount;
+	uint8 *stored;
+	uint32 storedoffset;
+	int storedreg;
 } OsxNativeEmitter;
 
 static void OsxGuestJitByte(OsxNativeEmitter *emitter, uint32 value)
@@ -3469,8 +3472,23 @@ static void OsxGuestRegisterOp(OsxNativeEmitter *emitter, uint32 opcode, int tar
 	OsxGuestJitByte(emitter, 0xc0 | (source << 3) | target);
 }
 
+static int OsxGuestReadsOperand(uint32 opcode)
+{
+	switch (opcode) {
+	case 0x03: case 0x0b: case 0x13: case 0x1b: case 0x23: case 0x2b:
+	case 0x33: case 0x39: case 0x3b: case 0x85: case 0x8b:
+		return 1;
+	}
+	return 0;
+}
+
 static void OsxGuestCpuMemory(OsxNativeEmitter *emitter, uint32 opcode, int reg, uint32 offset)
 {
+	if (emitter->cursor == emitter->stored && offset == emitter->storedoffset && OsxGuestReadsOperand(opcode)) {
+		if (opcode != 0x8b || reg != emitter->storedreg)
+			OsxGuestRegisterOp(emitter, opcode, emitter->storedreg, reg);
+		return;
+	}
 	OsxGuestJitByte(emitter, opcode);
 	if (offset < 128) {
 		OsxGuestJitByte(emitter, 0x43 | (reg << 3));
@@ -3478,6 +3496,11 @@ static void OsxGuestCpuMemory(OsxNativeEmitter *emitter, uint32 opcode, int reg,
 	} else {
 		OsxGuestJitByte(emitter, 0x83 | (reg << 3));
 		OsxGuestWord(emitter, offset);
+	}
+	if (opcode == 0x89 && offset >= OSXJITGPR(0) && offset < OSXJITGPR(32)) {
+		emitter->stored = emitter->cursor;
+		emitter->storedoffset = offset;
+		emitter->storedreg = reg;
 	}
 }
 
@@ -3675,6 +3698,7 @@ static void OsxGuestEmitThunks(OsxNativeState *state)
 	emitter.state = state;
 	emitter.cursor = state->code;
 	emitter.misscount = 0;
+	emitter.stored = NULL;
 	state->checkthunk = emitter.cursor;
 	OsxGuestJitByte(&emitter, 0x3b); OsxGuestJitByte(&emitter, 0x75); OsxGuestJitByte(&emitter, OSXJITRECORD(address));
 	misses[0] = OsxGuestJump(&emitter, 5);
@@ -5309,7 +5333,7 @@ int OsxGuestJitCreate(OsxCpu *cpu)
 	if (state == NULL)
 		return 0;
 	state->pagecount = (cpu->ramsize + 4095) >> 12;
-	state->fused = !OSXJITNOFUSED && OsxGuestHostFeature(OSXFEATUREAVX2);
+	state->fused = !OSXJITNOFUSED && OsxGuestHostFeature(OSXFEATUREFMA);
 	state->versions = (uint32 *)calloc(state->pagecount, sizeof(uint32));
 	state->compiledpages = (uint8 *)calloc(state->pagecount, 1);
 	state->records = (OsxNativeRecord *)malloc(OSXJITRECORDS * sizeof(OsxNativeRecord));
@@ -5416,6 +5440,7 @@ static void OsxGuestCompile(OsxCpu *cpu, OsxNativeState *state, OsxNativeBlock *
 	emitter.deterministic = cpu->deterministic != 0;
 	emitter.enabled = 0;
 	emitter.misscount = 0;
+	emitter.stored = NULL;
 	OsxGuestJitByte(&emitter, 0x53);
 	OsxGuestJitByte(&emitter, 0x56);
 	OsxGuestJitByte(&emitter, 0x57);
