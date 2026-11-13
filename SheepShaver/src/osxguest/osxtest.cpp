@@ -332,8 +332,8 @@ static void OsxGuestLoadMine(OsxCpu *cpu, const OsxReferenceState *state, uint32
 		cpu->gpr[index] = state->gpr[index];
 		cpu->fpr[index].bits = state->fpr[index];
 	}
-	cpu->cr = state->cr;
-	cpu->xer = state->xer;
+	OsxGuestCpuSetCr(cpu, state->cr, OSXCRALLFIELDS);
+	OsxGuestCpuSetXer(cpu, state->xer);
 	cpu->lr = state->lr;
 	cpu->ctr = state->ctr;
 	cpu->fpscr = state->fpscr;
@@ -350,8 +350,8 @@ static void OsxGuestSaveMine(OsxCpu *cpu, OsxReferenceState *state)
 		state->gpr[index] = cpu->gpr[index];
 		state->fpr[index] = cpu->fpr[index].bits;
 	}
-	state->cr = cpu->cr;
-	state->xer = cpu->xer;
+	state->cr = OsxGuestCpuCr(cpu);
+	state->xer = OsxGuestCpuXer(cpu);
 	state->lr = cpu->lr;
 	state->ctr = cpu->ctr;
 	state->fpscr = cpu->fpscr;

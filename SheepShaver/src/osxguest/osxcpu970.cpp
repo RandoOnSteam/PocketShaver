@@ -31,14 +31,6 @@
 
 #if OSXG5
 
-#if defined(_MSC_VER)
-#define OSXFORCEINLINE __forceinline
-#elif defined(__GNUC__)
-#define OSXFORCEINLINE inline __attribute__((always_inline))
-#else
-#define OSXFORCEINLINE inline
-#endif
-
 static void OsxGuestUpdateModes(Osx970 *core);
 
 static uint64 OsxGuestLoadBig(const uint8 *host, int size)
@@ -170,13 +162,6 @@ static int OsxGuestCountLeadingZeros64(uint64 value)
 	return count;
 }
 
-static void OsxGuestSetCrField(OsxCpu *cpu, int field, uint32 value)
-{
-	uint32 shift;
-	shift = (uint32)(7 - field) * 4;
-	cpu->cr = (cpu->cr & ~(0xfu << shift)) | ((value & 0xf) << shift);
-}
-
 static void OsxGuestCompareSigned(Osx970 *core, int field, int64 left, int64 right)
 {
 	uint32 value;
@@ -211,10 +196,7 @@ static void OsxGuestSetCr0(Osx970 *core, uint64 result)
 
 static void OsxGuestSetCarry(Osx970 *core, int carry)
 {
-	if (carry)
-		core->cpu->xer |= OSXXERCA;
-	else
-		core->cpu->xer &= ~OSXXERCA;
+	OsxGuestCpuSetCarry(core->cpu, carry);
 }
 
 static void OsxGuestSetOverflow(Osx970 *core, int overflow)
@@ -748,7 +730,7 @@ static int OsxGuestReadSpr(Osx970 *core, uint32 number, uint64 *value)
 	OsxCpu *cpu;
 	cpu = core->cpu;
 	switch (number) {
-	case 1: *value = cpu->xer; return 1;
+	case 1: *value = OsxGuestCpuXer(cpu); return 1;
 	case 8: *value = core->lr; return 1;
 	case 9: *value = core->ctr; return 1;
 	case 18: *value = core->dsisr; return 1;
@@ -789,7 +771,7 @@ static int OsxGuestWriteSpr(Osx970 *core, uint32 number, uint64 value)
 	OsxCpu *cpu;
 	cpu = core->cpu;
 	switch (number) {
-	case 1: cpu->xer = (uint32)value & 0xe000007f; return 1;
+	case 1: OsxGuestCpuSetXer(cpu, (uint32)value & 0xe000007f); return 1;
 	case 8: core->lr = value; return 1;
 	case 9: core->ctr = value; return 1;
 	case 18: core->dsisr = (uint32)value; return 1;
@@ -894,16 +876,8 @@ static int OsxGuestBranchTaken(Osx970 *core, uint32 options, uint32 bit, int dec
 	}
 	conditionok = 1;
 	if (!(options & 16))
-		conditionok = ((core->cpu->cr >> (31 - bit)) & 1) == ((options >> 3) & 1);
+		conditionok = OsxGuestCrBit(core->cpu, (int)bit) == ((options >> 3) & 1);
 	return counterok && conditionok;
-}
-
-static void OsxGuestSetCrBit(OsxCpu *cpu, uint32 bit, uint32 value)
-{
-	if (value)
-		cpu->cr |= 0x80000000u >> bit;
-	else
-		cpu->cr &= ~(0x80000000u >> bit);
 }
 
 static void OsxGuestExecuteGroup19(Osx970 *core, uint32 instruction)
@@ -918,7 +892,7 @@ static void OsxGuestExecuteGroup19(Osx970 *core, uint32 instruction)
 	extended = (instruction >> 1) & 0x3ff;
 	switch (extended) {
 	case 0:
-		OsxGuestSetCrField(cpu, (int)((instruction >> 23) & 7), (cpu->cr >> ((7 - ((instruction >> 18) & 7)) * 4)) & 0xf);
+		OsxGuestSetCrField(cpu, (int)((instruction >> 23) & 7), OsxGuestCrField(cpu, (int)((instruction >> 18) & 7)));
 		return;
 	case 16:
 	case 528:
@@ -955,8 +929,8 @@ static void OsxGuestExecuteGroup19(Osx970 *core, uint32 instruction)
 		core->fetchpage = OSX970TLBINVALID;
 		return;
 	}
-	a = (cpu->cr >> (31 - ((instruction >> 16) & 31))) & 1;
-	b = (cpu->cr >> (31 - ((instruction >> 11) & 31))) & 1;
+	a = OsxGuestCrBit(cpu, (int)((instruction >> 16) & 31));
+	b = OsxGuestCrBit(cpu, (int)((instruction >> 11) & 31));
 	switch (extended) {
 	case 33: result = !(a | b); break;
 	case 129: result = a & !b; break;
@@ -970,7 +944,7 @@ static void OsxGuestExecuteGroup19(Osx970 *core, uint32 instruction)
 		OsxGuestIllegal(core);
 		return;
 	}
-	OsxGuestSetCrBit(cpu, (instruction >> 21) & 31, result);
+	OsxGuestSetCrBit(cpu, (int)((instruction >> 21) & 31), result);
 }
 
 static void OsxGuestExecuteRotate(Osx970 *core, uint32 instruction)
@@ -1204,7 +1178,7 @@ static void OsxGuestArithmetic(Osx970 *core, uint32 instruction, uint32 kind)
 	a = core->gpr[(instruction >> 16) & 31];
 	b = core->gpr[(instruction >> 11) & 31];
 	oe = (instruction >> 10) & 1;
-	carry = (cpu->xer >> 29) & 1;
+	carry = OsxGuestCpuCarry(cpu);
 	result = 0;
 	switch (kind) {
 	case 8: result = OsxGuestAddExtended(core, ~a, b, 1, 1, oe); break;
@@ -1362,21 +1336,16 @@ static void OsxGuestExecuteGroup31(Osx970 *core, uint32 instruction)
 			for (index = 0; index < 8; index++)
 				if (field & (0x80u >> index))
 					mask |= 0xf0000000u >> (index * 4);
-			core->gpr[rt] = cpu->cr & mask;
+			core->gpr[rt] = OsxGuestCpuCr(cpu) & mask;
 		} else
-			core->gpr[rt] = cpu->cr;
+			core->gpr[rt] = OsxGuestCpuCr(cpu);
 		return;
 	case 144:
-		field = (instruction >> 12) & 0xff;
-		mask = 0;
-		for (index = 0; index < 8; index++)
-			if (field & (0x80u >> index))
-				mask |= 0xf0000000u >> (index * 4);
-		cpu->cr = (cpu->cr & ~mask) | ((uint32)rs & mask);
+		OsxGuestCpuSetCr(cpu, (uint32)rs, (instruction >> 12) & 0xff);
 		return;
 	case 512:
-		OsxGuestSetCrField(cpu, (int)((instruction >> 23) & 7), cpu->xer >> 28);
-		cpu->xer &= 0x0fffffffu;
+		OsxGuestSetCrField(cpu, (int)((instruction >> 23) & 7), OsxGuestCpuXer(cpu) >> 28);
+		OsxGuestCpuSetXer(cpu, OsxGuestCpuXer(cpu) & 0x0fffffffu);
 		return;
 	case 83:
 		if (OsxGuestSupervisor(core))
@@ -1696,7 +1665,7 @@ static void OsxGuestExecuteFloat64(Osx970 *core, uint32 instruction)
 		cpu->fpr[target].bits = (uint64)integer;
 	}
 	if (instruction & 1)
-		cpu->cr = (cpu->cr & 0xf0ffffffu) | ((cpu->fpscr >> 4) & 0x0f000000u);
+		OsxGuestSetCrField(cpu, 1, cpu->fpscr >> 28);
 }
 
 static void OsxGuestExecute(Osx970 *core, uint32 instruction);
@@ -2106,6 +2075,7 @@ void OsxGuest970CheckInterrupts(Osx970 *core, uint64 now)
 #define OSX970GPR(reg) ((uint32)(offsetof(Osx970, gpr) + (uint32)(reg) * 8) - OSX970BASE)
 #define OSX970FIELD(member) ((uint32)offsetof(Osx970, member) - OSX970BASE)
 #define OSX970CPUFIELD(member) ((uint32)offsetof(OsxCpu, member))
+#define OSX970CRF(field) (OSX970CPUFIELD(crf) + (uint32)(field))
 
 typedef int (OSXJITABI *Osx970Code)(Osx970 *core);
 
@@ -2473,8 +2443,10 @@ static void OsxGuestEmitStep(Osx970Emitter *emitter, uint64 pc, uint32 instructi
 
 static void OsxGuestEmitCrFromFlags(Osx970Emitter *emitter, int field, int issigned)
 {
+#if !OSXJITCRFIELDS
 	uint32 shift;
 	shift = (uint32)(7 - field) * 4;
+#endif
 	OsxGuestEmitImmediate32(emitter, OSX970RDX, 4);
 	OsxGuestEmitImmediate32(emitter, OSX970RCX, 8);
 	if (issigned)
@@ -2488,6 +2460,9 @@ static void OsxGuestEmitCrFromFlags(Osx970Emitter *emitter, int field, int issig
 	OsxGuestEmitByte(emitter, 0xe9);
 	OsxGuestEmitByte(emitter, 31);
 	OsxGuestEmitRegister(emitter, 0, 0x09, OSX970RCX, OSX970RDX);
+#if OSXJITCRFIELDS
+	OsxGuestEmitMemory(emitter, 0, 0x88, OSX970RDX, OSX970RSI, OSX970CRF(field));
+#else
 	OsxGuestEmitMemory(emitter, 0, 0x8b, OSX970RAX, OSX970RSI, OSX970CPUFIELD(cr));
 	OsxGuestEmitByte(emitter, 0x25);
 	OsxGuestEmitDword(emitter, ~(0xfu << shift));
@@ -2498,6 +2473,7 @@ static void OsxGuestEmitCrFromFlags(Osx970Emitter *emitter, int field, int issig
 	}
 	OsxGuestEmitRegister(emitter, 0, 0x09, OSX970RDX, OSX970RAX);
 	OsxGuestEmitMemory(emitter, 0, 0x89, OSX970RAX, OSX970RSI, OSX970CPUFIELD(cr));
+#endif
 }
 
 static void OsxGuestEmitRecord(Osx970Emitter *emitter, int sixtyfour)
@@ -2722,6 +2698,9 @@ static int OsxGuestEmitSpecialMemory(Osx970Emitter *emitter, uint32 instruction,
 		OsxGuestEmitByte(emitter, 0xe9);
 		OsxGuestEmitByte(emitter, 31);
 		OsxGuestEmitRegister(emitter, 0, 0x09, OSX970RCX, OSX970RDX);
+#if OSXJITCRFIELDS
+		OsxGuestEmitMemory(emitter, 0, 0x88, OSX970RDX, OSX970RSI, OSX970CRF(0));
+#else
 		OsxGuestEmitMemory(emitter, 0, 0x8b, OSX970RAX, OSX970RSI, OSX970CPUFIELD(cr));
 		OsxGuestEmitByte(emitter, 0x25);
 		OsxGuestEmitDword(emitter, 0x0fffffffu);
@@ -2730,6 +2709,7 @@ static int OsxGuestEmitSpecialMemory(Osx970Emitter *emitter, uint32 instruction,
 		OsxGuestEmitByte(emitter, 28);
 		OsxGuestEmitRegister(emitter, 0, 0x09, OSX970RDX, OSX970RAX);
 		OsxGuestEmitMemory(emitter, 0, 0x89, OSX970RAX, OSX970RSI, OSX970CPUFIELD(cr));
+#endif
 		OsxGuestEmitResume(emitter, first);
 		return 1;
 	}
@@ -2972,6 +2952,14 @@ static int OsxGuestEmitBranch(Osx970Emitter *emitter, Osx970 *core, uint32 instr
 			skips[skipcount++] = OsxGuestEmitJump(emitter, 0x84);
 	}
 	if (!(options & 16)) {
+#if OSXJITCRFIELDS
+		OsxGuestEmitMemory(emitter, 0, 0xf6, 0, OSX970RSI, OSX970CRF(bit >> 2));
+		OsxGuestEmitByte(emitter, 8u >> (bit & 3));
+		if (options & 8)
+			skips[skipcount++] = OsxGuestEmitJump(emitter, 0x84);
+		else
+			skips[skipcount++] = OsxGuestEmitJump(emitter, 0x85);
+#else
 		OsxGuestEmitMemory(emitter, 0, 0x8b, OSX970RAX, OSX970RSI, OSX970CPUFIELD(cr));
 		OsxGuestEmitByte(emitter, 0x0f);
 		OsxGuestEmitByte(emitter, 0xba);
@@ -2981,6 +2969,7 @@ static int OsxGuestEmitBranch(Osx970Emitter *emitter, Osx970 *core, uint32 instr
 			skips[skipcount++] = OsxGuestEmitJump(emitter, 0x83);
 		else
 			skips[skipcount++] = OsxGuestEmitJump(emitter, 0x82);
+#endif
 	}
 	if (registertarget) {
 		OsxGuestEmitMemory(emitter, 1, 0x89, OSX970RDX, OSX970RBX, OSX970FIELD(pc));
@@ -2994,6 +2983,9 @@ static int OsxGuestEmitBranch(Osx970Emitter *emitter, Osx970 *core, uint32 instr
 
 static void OsxGuestEmitCarryFromCl(Osx970Emitter *emitter)
 {
+#if OSXJITCAFIELD
+	OsxGuestEmitMemory(emitter, 0, 0x88, OSX970RCX, OSX970RSI, OSX970CPUFIELD(ca));
+#else
 	OsxGuestEmitByte(emitter, 0x0f);
 	OsxGuestEmitByte(emitter, 0xb6);
 	OsxGuestEmitByte(emitter, 0xc9);
@@ -3006,12 +2998,18 @@ static void OsxGuestEmitCarryFromCl(Osx970Emitter *emitter)
 	OsxGuestEmitDword(emitter, ~(uint32)OSXXERCA);
 	OsxGuestEmitRegister(emitter, 0, 0x09, OSX970RCX, OSX970RDX);
 	OsxGuestEmitMemory(emitter, 0, 0x89, OSX970RDX, OSX970RSI, OSX970CPUFIELD(xer));
+#endif
 }
 
 static void OsxGuestEmitCarryIn(Osx970Emitter *emitter)
 {
+#if OSXJITCAFIELD
+	OsxGuestEmitMemory(emitter, 0, 0x0fba, 4, OSX970RSI, OSX970CPUFIELD(ca));
+	OsxGuestEmitByte(emitter, 0);
+#else
 	OsxGuestEmitMemory(emitter, 0, 0x0fba, 4, OSX970RSI, OSX970CPUFIELD(xer));
 	OsxGuestEmitByte(emitter, 29);
+#endif
 }
 
 static int OsxGuestEmitCarry(Osx970Emitter *emitter, uint32 instruction, int sixtyfour)
@@ -3217,17 +3215,28 @@ static int OsxGuestEmitConditionLogic(Osx970Emitter *emitter, uint32 instruction
 	default:
 		return 0;
 	}
+#if OSXJITCRFIELDS
+	target = 3 - ((instruction >> 21) & 3);
+	first = 3 - ((instruction >> 16) & 3);
+	second = 3 - ((instruction >> 11) & 3);
+	OsxGuestEmitMemory(emitter, 0, 0x0fb6, OSX970RCX, OSX970RSI, OSX970CRF((instruction >> 18) & 7));
+#else
 	target = 31 - ((instruction >> 21) & 31);
 	first = 31 - ((instruction >> 16) & 31);
 	second = 31 - ((instruction >> 11) & 31);
 	OsxGuestEmitMemory(emitter, 0, 0x8b, OSX970RAX, OSX970RSI, OSX970CPUFIELD(cr));
 	OsxGuestEmitRegister(emitter, 0, 0x89, OSX970RAX, OSX970RCX);
+#endif
 	if (first) {
 		OsxGuestEmitByte(emitter, 0xc1);
 		OsxGuestEmitByte(emitter, 0xe9);
 		OsxGuestEmitByte(emitter, first);
 	}
+#if OSXJITCRFIELDS
+	OsxGuestEmitMemory(emitter, 0, 0x0fb6, OSX970RDX, OSX970RSI, OSX970CRF((instruction >> 13) & 7));
+#else
 	OsxGuestEmitRegister(emitter, 0, 0x89, OSX970RAX, OSX970RDX);
+#endif
 	if (second) {
 		OsxGuestEmitByte(emitter, 0xc1);
 		OsxGuestEmitByte(emitter, 0xea);
@@ -3255,10 +3264,17 @@ static int OsxGuestEmitConditionLogic(Osx970Emitter *emitter, uint32 instruction
 		OsxGuestEmitByte(emitter, 0xe1);
 		OsxGuestEmitByte(emitter, target);
 	}
+#if OSXJITCRFIELDS
+	OsxGuestEmitMemory(emitter, 0, 0x0fb6, OSX970RAX, OSX970RSI, OSX970CRF((instruction >> 23) & 7));
+#endif
 	OsxGuestEmitByte(emitter, 0x25);
 	OsxGuestEmitDword(emitter, ~(1u << target));
 	OsxGuestEmitRegister(emitter, 0, 0x09, OSX970RCX, OSX970RAX);
+#if OSXJITCRFIELDS
+	OsxGuestEmitMemory(emitter, 0, 0x88, OSX970RAX, OSX970RSI, OSX970CRF((instruction >> 23) & 7));
+#else
 	OsxGuestEmitMemory(emitter, 0, 0x89, OSX970RAX, OSX970RSI, OSX970CPUFIELD(cr));
+#endif
 	return 1;
 }
 
@@ -3468,6 +3484,7 @@ static int OsxGuestEmitNative(Osx970Emitter *emitter, uint32 instruction, uint64
 		OsxGuestEmitMemory(emitter, wide, 0x3b, OSX970RAX, OSX970RBX, OSX970GPR(rb));
 		OsxGuestEmitCrFromFlags(emitter, (int)((instruction >> 23) & 7), extended == 0);
 		return 1;
+#if !OSXJITCRFIELDS
 	case 19:
 		if (instruction & 0x00100000)
 			return 0;
@@ -3489,6 +3506,7 @@ static int OsxGuestEmitNative(Osx970Emitter *emitter, uint32 instruction, uint64
 		OsxGuestEmitRegister(emitter, 0, 0x09, OSX970RCX, OSX970RAX);
 		OsxGuestEmitMemory(emitter, 0, 0x89, OSX970RAX, OSX970RSI, OSX970CPUFIELD(cr));
 		return 1;
+#endif
 	case 339: case 467:
 		number = ((instruction >> 16) & 31) | (((instruction >> 11) & 31) << 5);
 		if (extended == 339 && (number == 259 || (number >= 272 && number <= 275))) {

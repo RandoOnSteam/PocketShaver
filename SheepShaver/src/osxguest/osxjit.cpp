@@ -25,6 +25,27 @@
 #if !defined(OSXJITNOFUSED)
 #define OSXJITNOFUSED 0
 #endif
+#if !defined(OSXJITINLINETLB)
+#define OSXJITINLINETLB 1
+#endif
+#if !defined(OSXJITFORWARD)
+#define OSXJITFORWARD 1
+#endif
+#if !defined(OSXJITSELECT)
+#define OSXJITSELECT 1
+#endif
+
+#if OSXHOSTX86 || (OSXHOSTX64 && OSXJITFORWARD)
+static int OsxGuestReadsOperand(uint32 opcode)
+{
+	switch (opcode) {
+	case 0x03: case 0x0b: case 0x13: case 0x1b: case 0x23: case 0x2b:
+	case 0x33: case 0x39: case 0x3b: case 0x85: case 0x8b:
+		return 1;
+	}
+	return 0;
+}
+#endif
 /*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 							x64 OSX JIT
@@ -51,6 +72,8 @@
 #define OSXJITOFFSET(member) ((uint32)offsetof(OsxCpu, member))
 #define OSXJITGPR(reg) (OSXJITOFFSET(gpr) + (uint32)(reg) * 4)
 #define OSXJITFPR(reg) (OSXJITOFFSET(fpr) + (uint32)(reg) * 8)
+#define OSXJITCRF(field) (OSXJITOFFSET(crf) + (uint32)(field))
+#define OSXJITCRMASK(bit) (8u >> ((bit) & 3))
 
 typedef int (OSXJITABI *OsxNativeFunction)(OsxCpu *cpu);
 
@@ -138,6 +161,18 @@ typedef struct OsxNativeEmitter {
 	uint8 *slowresumes[OSXJITLIMIT];
 	int slowcount;
 #endif
+#if OSXJITINLINETLB
+	uint8 *tlbjumps[OSXJITLIMIT][2];
+	uint8 *tlbthunks[OSXJITLIMIT];
+	uint8 *tlbresumes[OSXJITLIMIT];
+	int tlbcounts[OSXJITLIMIT];
+	int tlbsites;
+#endif
+#if OSXJITFORWARD
+	uint8 *stored;
+	uint32 storedoffset;
+	int storedreg;
+#endif
 } OsxNativeEmitter;
 
 static void OsxGuestJitByte(OsxNativeEmitter *emitter, uint32 value)
@@ -170,6 +205,13 @@ static void OsxGuestRegisterOp(OsxNativeEmitter *emitter, uint32 opcode, int tar
 static void OsxGuestCpuMemory(OsxNativeEmitter *emitter, uint32 opcode, int reg, uint32 offset, int wide)
 {
 	uint32 prefix;
+#if OSXJITFORWARD
+	if (!wide && emitter->cursor == emitter->stored && offset == emitter->storedoffset && OsxGuestReadsOperand(opcode)) {
+		if (opcode != 0x8b || reg != emitter->storedreg)
+			OsxGuestRegisterOp(emitter, opcode, emitter->storedreg, reg, 0);
+		return;
+	}
+#endif
 	prefix = 0x40;
 	if (wide)
 		prefix |= 8;
@@ -185,6 +227,13 @@ static void OsxGuestCpuMemory(OsxNativeEmitter *emitter, uint32 opcode, int reg,
 		OsxGuestJitByte(emitter, 0x83 | ((reg & 7) << 3));
 		OsxGuestWord(emitter, offset);
 	}
+#if OSXJITFORWARD
+	if (opcode == 0x89 && !wide && offset >= OSXJITGPR(0) && offset < OSXJITGPR(32)) {
+		emitter->stored = emitter->cursor;
+		emitter->storedoffset = offset;
+		emitter->storedreg = reg;
+	}
+#endif
 }
 
 static void OsxGuestImmediate(OsxNativeEmitter *emitter, int reg, uint32 value)
@@ -316,14 +365,8 @@ static void OsxGuestDynamicExit(OsxNativeEmitter *emitter, int count)
 	OsxGuestJumpTo(emitter, emitter->dynamicthunk);
 }
 
-static void OsxGuestTranslateThunk(OsxNativeEmitter *emitter, uint8 *fillthunk, int store, uint32 limit)
+static void OsxGuestTranslateHit(OsxNativeEmitter *emitter, int store, uint32 limit, uint8 **mismatches)
 {
-	uint8 *retry;
-	uint8 *slow;
-	uint8 *segment;
-	uint8 *page;
-	uint8 *again;
-	retry = emitter->cursor;
 	if (limit == 0xfff) {
 		OsxGuestRegisterOp(emitter, 0x89, 1, 0, 0);
 	} else {
@@ -339,18 +382,32 @@ static void OsxGuestTranslateThunk(OsxNativeEmitter *emitter, uint8 *fillthunk, 
 		OsxGuestCpuMemory(emitter, 0x8b, 8, OSXJITOFFSET(readtlb), 1);
 	OsxGuestRegisterOp(emitter, 0x01, 8, 2, 1);
 	OsxGuestJitByte(emitter, 0x41); OsxGuestJitByte(emitter, 0x39); OsxGuestJitByte(emitter, 0x08);
-	slow = OsxGuestJump(emitter, 5);
+	mismatches[0] = OsxGuestJump(emitter, 5);
+#if OSXJITSEGMENTFLUSH
+	mismatches[1] = NULL;
+#else
 	OsxGuestRegisterOp(emitter, 0x89, 2, 0, 0);
 	OsxGuestShift(emitter, 5, 2, 28);
 	OsxGuestCpuMemory(emitter, 0x8b, 9, OSXJITOFFSET(datasr), 1);
 	OsxGuestJitByte(emitter, 0x41); OsxGuestJitByte(emitter, 0x8b); OsxGuestJitByte(emitter, 0x14); OsxGuestJitByte(emitter, 0x91);
 	OsxGuestJitByte(emitter, 0x41); OsxGuestJitByte(emitter, 0x39); OsxGuestJitByte(emitter, 0x50); OsxGuestJitByte(emitter, 4);
-	segment = OsxGuestJump(emitter, 5);
+	mismatches[1] = OsxGuestJump(emitter, 5);
+#endif
 	OsxGuestJitByte(emitter, 0x4d); OsxGuestJitByte(emitter, 0x8b); OsxGuestJitByte(emitter, 0x40); OsxGuestJitByte(emitter, 8);
 	OsxGuestImmediateOp(emitter, 4, 0, 0xfff);
+}
+
+static void OsxGuestTranslateThunk(OsxNativeEmitter *emitter, uint8 *fillthunk, int store, uint32 limit)
+{
+	uint8 *retry;
+	uint8 *mismatches[2];
+	uint8 *page;
+	uint8 *again;
+	retry = emitter->cursor;
+	OsxGuestTranslateHit(emitter, store, limit, mismatches);
 	OsxGuestRegisterOp(emitter, 0x31, 1, 1, 0);
 	OsxGuestJitByte(emitter, 0xc3);
-	OsxGuestPatch(slow, emitter->cursor);
+	OsxGuestPatch(mismatches[0], emitter->cursor);
 	OsxGuestRegisterOp(emitter, 0x89, 1, 0, 0);
 	OsxGuestImmediateOp(emitter, 4, 1, 0xfffff000);
 	OsxGuestJitByte(emitter, 0x41); OsxGuestJitByte(emitter, 0x39); OsxGuestJitByte(emitter, 0x08);
@@ -358,7 +415,8 @@ static void OsxGuestTranslateThunk(OsxNativeEmitter *emitter, uint8 *fillthunk, 
 	OsxGuestImmediateOp(emitter, 1, 1, 1);
 	OsxGuestJitByte(emitter, 0xc3);
 	OsxGuestPatch(page, emitter->cursor);
-	OsxGuestPatch(segment, emitter->cursor);
+	if (mismatches[1])
+		OsxGuestPatch(mismatches[1], emitter->cursor);
 	if (store)
 		OsxGuestImmediate(emitter, 9, OSXTLBWRITE);
 	else
@@ -387,6 +445,9 @@ static void OsxGuestEmitThunks(OsxNativeState *state)
 	emitter.cursor = emitter.start;
 	emitter.executestart = state->executebase;
 	emitter.misscount = 0;
+#if OSXJITFORWARD
+	emitter.stored = NULL;
+#endif
 #if OSXJITSLOWPATH
 	emitter.slowactive = 0;
 	emitter.slowjumpcount = 0;
@@ -522,7 +583,9 @@ static void OsxGuestAdvance(OsxNativeEmitter *emitter)
 
 static void OsxGuestCondition(OsxNativeEmitter *emitter, int field, int issigned)
 {
+#if !OSXJITCRFIELDS
 	uint32 shift;
+#endif
 	OsxGuestImmediate(emitter, 0, 2);
 	OsxGuestImmediate(emitter, 1, 4);
 	OsxGuestImmediate(emitter, 2, 8);
@@ -541,12 +604,16 @@ static void OsxGuestCondition(OsxNativeEmitter *emitter, int field, int issigned
 	OsxGuestCpuMemory(emitter, 0x8b, 2, OSXJITOFFSET(xer), 0);
 	OsxGuestShift(emitter, 5, 2, 31);
 	OsxGuestRegisterOp(emitter, 0x09, 0, 2, 0);
+#if OSXJITCRFIELDS
+	OsxGuestCpuMemory(emitter, 0x88, 0, OSXJITCRF(field), 0);
+#else
 	shift = (uint32)(7 - field) * 4;
 	OsxGuestShift(emitter, 4, 0, shift);
 	OsxGuestCpuMemory(emitter, 0x8b, 1, OSXJITOFFSET(cr), 0);
 	OsxGuestImmediateOp(emitter, 4, 1, ~(15u << shift));
 	OsxGuestRegisterOp(emitter, 0x09, 0, 1, 0);
 	OsxGuestCpuMemory(emitter, 0x89, 0, OSXJITOFFSET(cr), 0);
+#endif
 }
 
 static void OsxGuestRecord(OsxNativeEmitter *emitter, uint32 instruction)
@@ -572,12 +639,17 @@ static void OsxGuestRecordFloat(OsxNativeEmitter *emitter, uint32 instruction)
 {
 	if (instruction & 1) {
 		OsxGuestCpuMemory(emitter, 0x8b, 0, OSXJITOFFSET(fpscr), 0);
+#if OSXJITCRFIELDS
+		OsxGuestShift(emitter, 5, 0, 28);
+		OsxGuestCpuMemory(emitter, 0x88, 0, OSXJITCRF(1), 0);
+#else
 		OsxGuestShift(emitter, 5, 0, 4);
 		OsxGuestImmediateOp(emitter, 4, 0, 0x0f000000);
 		OsxGuestCpuMemory(emitter, 0x8b, 1, OSXJITOFFSET(cr), 0);
 		OsxGuestImmediateOp(emitter, 4, 1, 0xf0ffffff);
 		OsxGuestRegisterOp(emitter, 0x09, 0, 1, 0);
 		OsxGuestCpuMemory(emitter, 0x89, 0, OSXJITOFFSET(cr), 0);
+#endif
 	}
 }
 
@@ -658,7 +730,9 @@ static void OsxGuestFloatNarrow(OsxNativeEmitter *emitter)
 
 static void OsxGuestFloatCompare(OsxNativeEmitter *emitter, int field, int left, int right, int count)
 {
+#if !OSXJITCRFIELDS
 	uint32 shift;
+#endif
 	OsxGuestCpuMemory(emitter, 0x8b, 0, OSXJITFPR(left), 1);
 	OsxGuestFloatExponent(emitter, 0, count, 0);
 	OsxGuestCpuMemory(emitter, 0x8b, 0, OSXJITFPR(right), 1);
@@ -683,12 +757,16 @@ static void OsxGuestFloatCompare(OsxNativeEmitter *emitter, int field, int left,
 	OsxGuestImmediateOp(emitter, 4, 2, ~0xf000u);
 	OsxGuestRegisterOp(emitter, 0x09, 2, 1, 0);
 	OsxGuestCpuMemory(emitter, 0x89, 2, OSXJITOFFSET(fpscr), 0);
+#if OSXJITCRFIELDS
+	OsxGuestCpuMemory(emitter, 0x88, 0, OSXJITCRF(field), 0);
+#else
 	shift = (uint32)(7 - field) * 4;
 	OsxGuestShift(emitter, 4, 0, shift);
 	OsxGuestCpuMemory(emitter, 0x8b, 1, OSXJITOFFSET(cr), 0);
 	OsxGuestImmediateOp(emitter, 4, 1, ~(0xfu << shift));
 	OsxGuestRegisterOp(emitter, 0x09, 1, 0, 0);
 	OsxGuestCpuMemory(emitter, 0x89, 1, OSXJITOFFSET(cr), 0);
+#endif
 }
 
 static void OsxGuestFloatTruncate(OsxNativeEmitter *emitter, int target, int right, int count)
@@ -1042,6 +1120,40 @@ static void OsxGuestTranslate(OsxNativeEmitter *emitter, int store, uint32 limit
 	OsxGuestJumpTo(emitter, emitter->translatethunks[store != 0][OsxGuestLimitIndex(limit)]);
 	OsxGuestMiss(emitter, 5, count);
 }
+
+#if OSXJITINLINETLB
+static void OsxGuestTranslateInline(OsxNativeEmitter *emitter, int store, uint32 limit, int count)
+{
+	int site;
+	if (emitter->tlbsites == OSXJITLIMIT) {
+		OsxGuestTranslate(emitter, store, limit, count);
+		return;
+	}
+	site = emitter->tlbsites++;
+	OsxGuestTranslateHit(emitter, store, limit, emitter->tlbjumps[site]);
+	emitter->tlbthunks[site] = emitter->translatethunks[store != 0][OsxGuestLimitIndex(limit)];
+	emitter->tlbcounts[site] = count;
+	emitter->tlbresumes[site] = emitter->cursor;
+}
+
+static void OsxGuestTranslateStubs(OsxNativeEmitter *emitter)
+{
+	int site;
+	uint8 *resume;
+	for (site = 0; site < emitter->tlbsites; site++) {
+		OsxGuestPatch(emitter->tlbjumps[site][0], emitter->cursor);
+		if (emitter->tlbjumps[site][1])
+			OsxGuestPatch(emitter->tlbjumps[site][1], emitter->cursor);
+		OsxGuestJitByte(emitter, 0xe8);
+		OsxGuestJumpTo(emitter, emitter->tlbthunks[site]);
+		OsxGuestMiss(emitter, 5, emitter->tlbcounts[site]);
+		OsxGuestJitByte(emitter, 0xe9);
+		resume = emitter->cursor;
+		OsxGuestWord(emitter, 0);
+		OsxGuestPatch(resume, emitter->tlbresumes[site]);
+	}
+}
+#endif
 
 static int OsxGuestMultiple(OsxNativeEmitter *emitter, uint32 instruction, uint32 opcode, int count)
 {
@@ -1510,6 +1622,14 @@ static int OsxGuestVectorFloat(OsxNativeEmitter *emitter, uint32 instruction, in
 			OsxGuestImmediateOp(emitter, 7, 0, 15);
 			OsxGuestSetcc(emitter, 4, 1);
 			OsxGuestJitByte(emitter, 0x0f); OsxGuestJitByte(emitter, 0xb6); OsxGuestJitByte(emitter, 0xc9);
+#if OSXJITCRFIELDS
+			OsxGuestShift(emitter, 4, 1, 3);
+			OsxGuestRegisterOp(emitter, 0x85, 0, 0, 0);
+			OsxGuestSetcc(emitter, 4, 0);
+			OsxGuestShift(emitter, 4, 0, 1);
+			OsxGuestRegisterOp(emitter, 0x09, 0, 1, 0);
+			OsxGuestCpuMemory(emitter, 0x88, 0, OSXJITCRF(6), 0);
+#else
 			OsxGuestShift(emitter, 4, 1, 7);
 			OsxGuestRegisterOp(emitter, 0x85, 0, 0, 0);
 			OsxGuestSetcc(emitter, 4, 0);
@@ -1519,6 +1639,7 @@ static int OsxGuestVectorFloat(OsxNativeEmitter *emitter, uint32 instruction, in
 			OsxGuestImmediateOp(emitter, 4, 1, ~0xf0u);
 			OsxGuestRegisterOp(emitter, 0x09, 0, 1, 0);
 			OsxGuestCpuMemory(emitter, 0x89, 0, OSXJITOFFSET(cr), 0);
+#endif
 		}
 	}
 	OsxGuestVectorMemory(emitter, 1, 0, target);
@@ -1927,7 +2048,11 @@ static void OsxGuestMemory(OsxNativeEmitter *emitter, uint32 instruction, uint32
 	OsxGuestAddress(emitter, base, index, immediate, update && index < 0);
 	if (update && index >= 0)
 		OsxGuestRegisterOp(emitter, 0x89, 10, 0, 0);
+#if OSXJITINLINETLB
+	OsxGuestTranslateInline(emitter, store, limit, count);
+#else
 	OsxGuestTranslate(emitter, store, limit, count);
+#endif
 	if (store) {
 		if (wide) {
 			OsxGuestCpuMemory(emitter, 0x8b, 2, OSXJITFPR(target), 1);
@@ -2044,9 +2169,14 @@ static int OsxGuestBranch(OsxNativeEmitter *emitter, uint32 instruction, int cou
 			counterpatch = OsxGuestJump(emitter, 4);
 	}
 	if (!(options & 16)) {
+#if OSXJITCRFIELDS
+		OsxGuestCpuMemory(emitter, 0xf6, 0, OSXJITCRF((instruction >> 18) & 7), 0);
+		OsxGuestJitByte(emitter, OSXJITCRMASK(instruction >> 16));
+#else
 		OsxGuestCpuMemory(emitter, 0x8b, 2, OSXJITOFFSET(cr), 0);
 		OsxGuestJitByte(emitter, 0xf7); OsxGuestJitByte(emitter, 0xc2);
 		OsxGuestWord(emitter, 1u << (31 - ((instruction >> 16) & 31)));
+#endif
 		if (options & 8)
 			conditionpatch = OsxGuestJump(emitter, 4);
 		else
@@ -2067,18 +2197,27 @@ static int OsxGuestBranch(OsxNativeEmitter *emitter, uint32 instruction, int cou
 static void OsxGuestLoadCarry(OsxNativeEmitter *emitter)
 {
 	OsxGuestJitByte(emitter, 0x0f); OsxGuestJitByte(emitter, 0xba); OsxGuestJitByte(emitter, 0xa3);
+#if OSXJITCAFIELD
+	OsxGuestWord(emitter, OSXJITOFFSET(ca));
+	OsxGuestJitByte(emitter, 0);
+#else
 	OsxGuestWord(emitter, OSXJITOFFSET(xer));
 	OsxGuestJitByte(emitter, 29);
+#endif
 }
 
 static void OsxGuestStoreCarry(OsxNativeEmitter *emitter)
 {
+#if OSXJITCAFIELD
+	OsxGuestCpuMemory(emitter, 0x88, 2, OSXJITOFFSET(ca), 0);
+#else
 	OsxGuestJitByte(emitter, 0x0f); OsxGuestJitByte(emitter, 0xb6); OsxGuestJitByte(emitter, 0xd2);
 	OsxGuestShift(emitter, 4, 2, 29);
 	OsxGuestCpuMemory(emitter, 0x8b, 1, OSXJITOFFSET(xer), 0);
 	OsxGuestImmediateOp(emitter, 4, 1, 0xdfffffff);
 	OsxGuestRegisterOp(emitter, 0x09, 1, 2, 0);
 	OsxGuestCpuMemory(emitter, 0x89, 1, OSXJITOFFSET(xer), 0);
+#endif
 }
 
 static void OsxGuestRequireSupervisorMode(OsxNativeEmitter *emitter, int count)
@@ -2296,6 +2435,16 @@ static int OsxGuestSystem(OsxNativeEmitter *emitter, uint32 instruction, uint32 
 	case 54: case 86: case 246: case 278: case 598: case 854:
 		return 1;
 	case 144:
+#if OSXJITCRFIELDS
+		OsxGuestCpuMemory(emitter, 0x8b, 0, OSXJITGPR(target), 0);
+		for (field = 0; field < 8; field++)
+			if (instruction & (0x80000u >> field)) {
+				OsxGuestRegisterOp(emitter, 0x89, 1, 0, 0);
+				OsxGuestShift(emitter, 5, 1, (7 - field) * 4);
+				OsxGuestImmediateOp(emitter, 4, 1, 15);
+				OsxGuestCpuMemory(emitter, 0x88, 1, OSXJITCRF(field), 0);
+			}
+#else
 		mask = 0;
 		for (field = 0; field < 8; field++)
 			if (instruction & (0x80000u >> field))
@@ -2308,6 +2457,7 @@ static int OsxGuestSystem(OsxNativeEmitter *emitter, uint32 instruction, uint32 
 			OsxGuestRegisterOp(emitter, 0x09, 0, 1, 0);
 		}
 		OsxGuestCpuMemory(emitter, 0x89, 0, OSXJITOFFSET(cr), 0);
+#endif
 		return 1;
 	case 83:
 		OsxGuestRequireSupervisorMode(emitter, count);
@@ -2368,6 +2518,9 @@ static int OsxGuestSystem(OsxNativeEmitter *emitter, uint32 instruction, uint32 
 		return 1;
 	case 210:
 	case 242:
+#if OSXJITSEGMENTFLUSH
+		OsxGuestCallout(emitter, instruction, count);
+#else
 #if OSXJITSLOWPATH
 		emitter->slowactive = 1;
 #endif
@@ -2391,6 +2544,7 @@ static int OsxGuestSystem(OsxNativeEmitter *emitter, uint32 instruction, uint32 
 		OsxGuestJitByte(emitter, 0xc7); OsxGuestJitByte(emitter, 0x83);
 		OsxGuestWord(emitter, OSXJITOFFSET(fetchtag));
 		OsxGuestWord(emitter, 0);
+#endif
 		return 1;
 	case 339:
 	case 467:
@@ -2422,11 +2576,15 @@ static void OsxGuestConditionZero(OsxNativeEmitter *emitter)
 
 static void OsxGuestStoreConditionZero(OsxNativeEmitter *emitter)
 {
+#if OSXJITCRFIELDS
+	OsxGuestCpuMemory(emitter, 0x88, 0, OSXJITCRF(0), 0);
+#else
 	OsxGuestShift(emitter, 4, 0, 28);
 	OsxGuestCpuMemory(emitter, 0x8b, 1, OSXJITOFFSET(cr), 0);
 	OsxGuestImmediateOp(emitter, 4, 1, 0x0fffffff);
 	OsxGuestRegisterOp(emitter, 0x09, 0, 1, 0);
 	OsxGuestCpuMemory(emitter, 0x89, 0, OSXJITOFFSET(cr), 0);
+#endif
 }
 
 static int OsxGuestReserved(OsxNativeEmitter *emitter, uint32 instruction, uint32 extended, int count)
@@ -2487,6 +2645,21 @@ static int OsxGuestZeroBlock(OsxNativeEmitter *emitter, uint32 instruction, int 
 	return 1;
 }
 
+#if OSXJITCRFIELDS
+static void OsxGuestCrHalf(OsxNativeEmitter *emitter, uint32 offset)
+{
+	OsxGuestCpuMemory(emitter, 0x8b, 0, offset, 0);
+	OsxGuestJitByte(emitter, 0x0f); OsxGuestJitByte(emitter, 0xc8);
+	OsxGuestRegisterOp(emitter, 0x89, 1, 0, 0);
+	OsxGuestShift(emitter, 5, 1, 4);
+	OsxGuestRegisterOp(emitter, 0x09, 0, 1, 0);
+	OsxGuestImmediateOp(emitter, 4, 0, 0x00ff00ffu);
+	OsxGuestRegisterOp(emitter, 0x89, 1, 0, 0);
+	OsxGuestShift(emitter, 5, 1, 8);
+	OsxGuestRegisterOp(emitter, 0x09, 0, 1, 0);
+}
+#endif
+
 static int OsxGuestConditionLogical(OsxNativeEmitter *emitter, uint32 instruction)
 {
 	uint32 extended;
@@ -2498,6 +2671,11 @@ static int OsxGuestConditionLogical(OsxNativeEmitter *emitter, uint32 instructio
 	bita = (instruction >> 16) & 31;
 	bitb = (instruction >> 11) & 31;
 	if (extended == 0) {
+#if OSXJITCRFIELDS
+		OsxGuestJitByte(emitter, 0x0f);
+		OsxGuestCpuMemory(emitter, 0xb6, 0, OSXJITCRF(bita >> 2), 0);
+		OsxGuestCpuMemory(emitter, 0x88, 0, OSXJITCRF(bitd >> 2), 0);
+#else
 		OsxGuestCpuMemory(emitter, 0x8b, 0, OSXJITOFFSET(cr), 0);
 		OsxGuestRegisterOp(emitter, 0x89, 1, 0, 0);
 		OsxGuestShift(emitter, 5, 1, (7 - (bita >> 2)) * 4);
@@ -2506,16 +2684,27 @@ static int OsxGuestConditionLogical(OsxNativeEmitter *emitter, uint32 instructio
 		OsxGuestImmediateOp(emitter, 4, 0, ~(0xfu << ((7 - (bitd >> 2)) * 4)));
 		OsxGuestRegisterOp(emitter, 0x09, 0, 1, 0);
 		OsxGuestCpuMemory(emitter, 0x89, 0, OSXJITOFFSET(cr), 0);
+#endif
 		return 1;
 	}
 	if (extended != 33 && extended != 129 && extended != 193 && extended != 225 && extended != 257 && extended != 289 && extended != 417 && extended != 449)
 		return 0;
+#if OSXJITCRFIELDS
+	OsxGuestJitByte(emitter, 0x0f);
+	OsxGuestCpuMemory(emitter, 0xb6, 1, OSXJITCRF(bita >> 2), 0);
+	OsxGuestShift(emitter, 5, 1, 3 - (bita & 3));
+	OsxGuestImmediateOp(emitter, 4, 1, 1);
+	OsxGuestJitByte(emitter, 0x0f);
+	OsxGuestCpuMemory(emitter, 0xb6, 2, OSXJITCRF(bitb >> 2), 0);
+	OsxGuestShift(emitter, 5, 2, 3 - (bitb & 3));
+#else
 	OsxGuestCpuMemory(emitter, 0x8b, 0, OSXJITOFFSET(cr), 0);
 	OsxGuestRegisterOp(emitter, 0x89, 1, 0, 0);
 	OsxGuestShift(emitter, 5, 1, 31 - bita);
 	OsxGuestImmediateOp(emitter, 4, 1, 1);
 	OsxGuestRegisterOp(emitter, 0x89, 2, 0, 0);
 	OsxGuestShift(emitter, 5, 2, 31 - bitb);
+#endif
 	OsxGuestImmediateOp(emitter, 4, 2, 1);
 	if (extended == 129 || extended == 417)
 		OsxGuestImmediateOp(emitter, 6, 2, 1);
@@ -2527,10 +2716,19 @@ static int OsxGuestConditionLogical(OsxNativeEmitter *emitter, uint32 instructio
 		OsxGuestRegisterOp(emitter, 0x31, 1, 2, 0);
 	if (extended == 33 || extended == 225 || extended == 289)
 		OsxGuestImmediateOp(emitter, 6, 1, 1);
+#if OSXJITCRFIELDS
+	OsxGuestShift(emitter, 4, 1, 3 - (bitd & 3));
+	OsxGuestJitByte(emitter, 0x0f);
+	OsxGuestCpuMemory(emitter, 0xb6, 0, OSXJITCRF(bitd >> 2), 0);
+	OsxGuestImmediateOp(emitter, 4, 0, ~OSXJITCRMASK(bitd));
+	OsxGuestRegisterOp(emitter, 0x09, 0, 1, 0);
+	OsxGuestCpuMemory(emitter, 0x88, 0, OSXJITCRF(bitd >> 2), 0);
+#else
 	OsxGuestShift(emitter, 4, 1, 31 - bitd);
 	OsxGuestImmediateOp(emitter, 4, 0, ~(1u << (31 - bitd)));
 	OsxGuestRegisterOp(emitter, 0x09, 0, 1, 0);
 	OsxGuestCpuMemory(emitter, 0x89, 0, OSXJITOFFSET(cr), 0);
+#endif
 	return 1;
 }
 
@@ -2707,14 +2905,27 @@ static int OsxGuestEmit(OsxNativeEmitter *emitter, uint32 instruction, int count
 		return 1;
 	case 20: case 21: case 23:
 		OsxGuestCpuMemory(emitter, 0x8b, 0, OSXJITGPR(target), 0);
+		mask = OsxGuestRotateMask((instruction >> 6) & 31, (instruction >> 1) & 31);
 		if (opcode == 23) {
 			OsxGuestCpuMemory(emitter, 0x8b, 1, OSXJITGPR(index), 0);
 			OsxGuestJitByte(emitter, 0xd3); OsxGuestJitByte(emitter, 0xc0);
-		} else {
+		}
+#if OSXJITSELECT
+		else if (opcode == 21 && index && mask == 0xffffffffu >> (32 - index)) {
+			OsxGuestShift(emitter, 5, 0, (uint32)(32 - index));
+			mask = 0xffffffffu;
+		} else if (opcode == 21 && mask == 0xffffffffu << index) {
+			OsxGuestShift(emitter, 4, 0, (uint32)index);
+			mask = 0xffffffffu;
+		}
+#endif
+		else {
 			OsxGuestShift(emitter, 0, 0, (uint32)index);
 		}
-		mask = OsxGuestRotateMask((instruction >> 6) & 31, (instruction >> 1) & 31);
-		OsxGuestImmediateOp(emitter, 4, 0, mask);
+#if OSXJITSELECT
+		if (mask != 0xffffffffu)
+#endif
+			OsxGuestImmediateOp(emitter, 4, 0, mask);
 		if (opcode == 20) {
 			OsxGuestCpuMemory(emitter, 0x8b, 1, OSXJITGPR(base), 0);
 			OsxGuestImmediateOp(emitter, 4, 1, ~mask);
@@ -2762,6 +2973,12 @@ static int OsxGuestEmit(OsxNativeEmitter *emitter, uint32 instruction, int count
 		}
 		if (extended == 339 || extended == 467) {
 			number = ((instruction >> 16) & 31) | ((instruction >> 6) & 0x3e0);
+#if OSXJITCAFIELD
+			if (number == 1) {
+				OsxGuestCallout(emitter, instruction, count);
+				return 1;
+			}
+#endif
 			if (number == 1)
 				offset = OSXJITOFFSET(xer);
 			else if (number == 8)
@@ -2784,7 +3001,15 @@ static int OsxGuestEmit(OsxNativeEmitter *emitter, uint32 instruction, int count
 			return 1;
 		}
 		if (extended == 19) {
+#if OSXJITCRFIELDS
+			OsxGuestCrHalf(emitter, OSXJITCRF(4));
+			OsxGuestJitByte(emitter, 0x0f); OsxGuestJitByte(emitter, 0xb7); OsxGuestJitByte(emitter, 0xd0);
+			OsxGuestCrHalf(emitter, OSXJITCRF(0));
+			OsxGuestShift(emitter, 4, 0, 16);
+			OsxGuestRegisterOp(emitter, 0x09, 0, 2, 0);
+#else
 			OsxGuestCpuMemory(emitter, 0x8b, 0, OSXJITOFFSET(cr), 0);
+#endif
 			OsxGuestCpuMemory(emitter, 0x89, 0, OSXJITGPR(target), 0);
 			return 1;
 		}
@@ -2805,6 +3030,13 @@ static int OsxGuestEmit(OsxNativeEmitter *emitter, uint32 instruction, int count
 		}
 		if (extended == 28 || extended == 60 || extended == 124 || extended == 284 || extended == 316 || extended == 412 || extended == 444 || extended == 476) {
 			OsxGuestCpuMemory(emitter, 0x8b, 0, OSXJITGPR(target), 0);
+#if OSXJITSELECT
+			if ((extended == 28 || extended == 444) && target == index) {
+				OsxGuestCpuMemory(emitter, 0x89, 0, OSXJITGPR(base), 0);
+				OsxGuestRecord(emitter, instruction);
+				return 1;
+			}
+#endif
 			OsxGuestCpuMemory(emitter, 0x8b, 1, OSXJITGPR(index), 0);
 			if (extended == 60 || extended == 412) {
 				OsxGuestJitByte(emitter, 0xf7); OsxGuestJitByte(emitter, 0xd1);
@@ -3033,6 +3265,12 @@ static void OsxGuestCompile(OsxCpu *cpu, OsxNativeState *state, OsxNativeBlock *
 	emitter.bytemask = 0;
 	emitter.vectorconstants = state->vectorconstants;
 	emitter.misscount = 0;
+#if OSXJITINLINETLB
+	emitter.tlbsites = 0;
+#endif
+#if OSXJITFORWARD
+	emitter.stored = NULL;
+#endif
 #if OSXJITSLOWPATH
 	emitter.slowactive = 0;
 	emitter.slowjumpcount = 0;
@@ -3077,6 +3315,9 @@ static void OsxGuestCompile(OsxCpu *cpu, OsxNativeState *state, OsxNativeBlock *
 			emitter.slowresumes[emitter.slowcount] = emitter.cursor;
 			emitter.slowcount++;
 			emitter.bytemask = 0;
+#if OSXJITFORWARD
+			emitter.stored = NULL;
+#endif
 		}
 #else
 		status = OsxGuestEmit(&emitter, instruction, count);
@@ -3112,6 +3353,9 @@ static void OsxGuestCompile(OsxCpu *cpu, OsxNativeState *state, OsxNativeBlock *
 		OsxGuestWord(&emitter, 0);
 		OsxGuestPatch(resume, emitter.slowresumes[index]);
 	}
+#endif
+#if OSXJITINLINETLB
+	OsxGuestTranslateStubs(&emitter);
 #endif
 	for (index = 0; index < emitter.misscount; index++) {
 		shared = 0;
@@ -3395,6 +3639,8 @@ void OsxGuestJitTmpStats(OsxCpu *cpu, FILE *log)
 #define OSXJITOFFSET(member) ((uint32)offsetof(OsxCpu, member))
 #define OSXJITGPR(reg) (OSXJITOFFSET(gpr) + (uint32)(reg) * 4)
 #define OSXJITFPR(reg) (OSXJITOFFSET(fpr) + (uint32)(reg) * 8)
+#define OSXJITCRF(field) (OSXJITOFFSET(crf) + (uint32)(field))
+#define OSXJITCRMASK(bit) (8u >> ((bit) & 3))
 #define OSXJITRECORD(member) ((uint32)offsetof(OsxNativeRecord, member))
 
 typedef int (*OsxNativeFunction)(OsxCpu *cpu);
@@ -3453,6 +3699,13 @@ typedef struct OsxNativeEmitter {
 	uint8 *stored;
 	uint32 storedoffset;
 	int storedreg;
+#if OSXJITINLINETLB
+	uint8 *tlbjumps[OSXJITLIMIT][2];
+	uint8 *tlbthunks[OSXJITLIMIT];
+	uint8 *tlbresumes[OSXJITLIMIT];
+	int tlbcounts[OSXJITLIMIT];
+	int tlbsites;
+#endif
 } OsxNativeEmitter;
 
 static void OsxGuestJitByte(OsxNativeEmitter *emitter, uint32 value)
@@ -3470,16 +3723,6 @@ static void OsxGuestRegisterOp(OsxNativeEmitter *emitter, uint32 opcode, int tar
 {
 	OsxGuestJitByte(emitter, opcode);
 	OsxGuestJitByte(emitter, 0xc0 | (source << 3) | target);
-}
-
-static int OsxGuestReadsOperand(uint32 opcode)
-{
-	switch (opcode) {
-	case 0x03: case 0x0b: case 0x13: case 0x1b: case 0x23: case 0x2b:
-	case 0x33: case 0x39: case 0x3b: case 0x85: case 0x8b:
-		return 1;
-	}
-	return 0;
 }
 
 static void OsxGuestCpuMemory(OsxNativeEmitter *emitter, uint32 opcode, int reg, uint32 offset)
@@ -3632,14 +3875,8 @@ static void OsxGuestDynamicExit(OsxNativeEmitter *emitter, int count)
 	OsxGuestJumpTo(emitter, emitter->state->dynamicthunk);
 }
 
-static void OsxGuestTranslateThunk(OsxNativeEmitter *emitter, int store, uint32 limit)
+static void OsxGuestTranslateHit(OsxNativeEmitter *emitter, int store, uint32 limit, uint8 **mismatches)
 {
-	uint8 *retry;
-	uint8 *slow;
-	uint8 *segment;
-	uint8 *page;
-	uint8 *again;
-	retry = emitter->cursor;
 	if (limit == 0xfff) {
 		OsxGuestRegisterOp(emitter, 0x89, 1, 0);
 	} else {
@@ -3647,28 +3884,47 @@ static void OsxGuestTranslateThunk(OsxNativeEmitter *emitter, int store, uint32 
 	}
 	OsxGuestImmediateOp(emitter, 4, 1, 0xfffff000);
 	OsxGuestRegisterOp(emitter, 0x89, 2, 0);
+#if OSXJITTLBWIDE
+	OsxGuestShift(emitter, 5, 2, 8);
+	OsxGuestImmediateOp(emitter, 4, 2, OSXTLBMASK << 4);
+#else
 	OsxGuestShift(emitter, 5, 2, 12);
 	OsxGuestImmediateOp(emitter, 4, 2, OSXTLBMASK);
 	OsxGuestJitByte(emitter, 0x8d); OsxGuestJitByte(emitter, 0x14); OsxGuestJitByte(emitter, 0x52);
 	OsxGuestShift(emitter, 4, 2, 2);
+#endif
 	if (store)
 		OsxGuestCpuMemory(emitter, 0x03, 2, OSXJITOFFSET(writetlb));
 	else
 		OsxGuestCpuMemory(emitter, 0x03, 2, OSXJITOFFSET(readtlb));
 	OsxGuestJitByte(emitter, 0x39); OsxGuestJitByte(emitter, 0x0a);
-	slow = OsxGuestJump(emitter, 5);
+	mismatches[0] = OsxGuestJump(emitter, 5);
+#if OSXJITSEGMENTFLUSH
+	mismatches[1] = NULL;
+#else
 	OsxGuestRegisterOp(emitter, 0x89, 1, 0);
 	OsxGuestShift(emitter, 5, 1, 28);
 	OsxGuestShift(emitter, 4, 1, 2);
 	OsxGuestCpuMemory(emitter, 0x03, 1, OSXJITOFFSET(datasr));
 	OsxGuestJitByte(emitter, 0x8b); OsxGuestJitByte(emitter, 0x09);
 	OsxGuestJitByte(emitter, 0x39); OsxGuestJitByte(emitter, 0x4a); OsxGuestJitByte(emitter, 4);
-	segment = OsxGuestJump(emitter, 5);
+	mismatches[1] = OsxGuestJump(emitter, 5);
+#endif
 	OsxGuestImmediateOp(emitter, 4, 0, 0xfff);
 	OsxGuestJitByte(emitter, 0x03); OsxGuestJitByte(emitter, 0x42); OsxGuestJitByte(emitter, 8);
+}
+
+static void OsxGuestTranslateThunk(OsxNativeEmitter *emitter, int store, uint32 limit)
+{
+	uint8 *retry;
+	uint8 *mismatches[2];
+	uint8 *page;
+	uint8 *again;
+	retry = emitter->cursor;
+	OsxGuestTranslateHit(emitter, store, limit, mismatches);
 	OsxGuestRegisterOp(emitter, 0x31, 1, 1);
 	OsxGuestJitByte(emitter, 0xc3);
-	OsxGuestPatch(slow, emitter->cursor);
+	OsxGuestPatch(mismatches[0], emitter->cursor);
 	OsxGuestRegisterOp(emitter, 0x89, 1, 0);
 	OsxGuestImmediateOp(emitter, 4, 1, 0xfffff000);
 	OsxGuestJitByte(emitter, 0x39); OsxGuestJitByte(emitter, 0x0a);
@@ -3676,7 +3932,8 @@ static void OsxGuestTranslateThunk(OsxNativeEmitter *emitter, int store, uint32 
 	OsxGuestImmediateOp(emitter, 1, 1, 1);
 	OsxGuestJitByte(emitter, 0xc3);
 	OsxGuestPatch(page, emitter->cursor);
-	OsxGuestPatch(segment, emitter->cursor);
+	if (mismatches[1])
+		OsxGuestPatch(mismatches[1], emitter->cursor);
 	if (store)
 		OsxGuestImmediate(emitter, 1, OSXTLBWRITE);
 	else
@@ -3704,10 +3961,16 @@ static void OsxGuestEmitThunks(OsxNativeState *state)
 	misses[0] = OsxGuestJump(&emitter, 5);
 	OsxGuestCpuMemory(&emitter, 0x8b, 0, OSXJITOFFSET(fetchtlb));
 	OsxGuestRegisterOp(&emitter, 0x89, 2, OSXJITPC);
+#if OSXJITTLBWIDE
+	OsxGuestShift(&emitter, 5, 2, 8);
+	OsxGuestImmediateOp(&emitter, 4, 2, OSXTLBMASK << 4);
+	OsxGuestJitByte(&emitter, 0x8d); OsxGuestJitByte(&emitter, 0x04); OsxGuestJitByte(&emitter, 0x10);
+#else
 	OsxGuestShift(&emitter, 5, 2, 12);
 	OsxGuestImmediateOp(&emitter, 4, 2, OSXTLBMASK);
 	OsxGuestJitByte(&emitter, 0x8d); OsxGuestJitByte(&emitter, 0x14); OsxGuestJitByte(&emitter, 0x52);
 	OsxGuestJitByte(&emitter, 0x8d); OsxGuestJitByte(&emitter, 0x04); OsxGuestJitByte(&emitter, 0x90);
+#endif
 	OsxGuestRegisterOp(&emitter, 0x89, 1, OSXJITPC);
 	OsxGuestImmediateOp(&emitter, 4, 1, 0xfffff000);
 	OsxGuestJitByte(&emitter, 0x39); OsxGuestJitByte(&emitter, 0x08);
@@ -3803,7 +4066,9 @@ static void OsxGuestAdvance(OsxNativeEmitter *emitter)
 
 static void OsxGuestCondition(OsxNativeEmitter *emitter, int field, int issigned)
 {
+#if !OSXJITCRFIELDS
 	uint32 shift;
+#endif
 	OsxGuestImmediate(emitter, 0, 2);
 	OsxGuestImmediate(emitter, 1, 4);
 	OsxGuestImmediate(emitter, 2, 8);
@@ -3822,12 +4087,16 @@ static void OsxGuestCondition(OsxNativeEmitter *emitter, int field, int issigned
 	OsxGuestCpuMemory(emitter, 0x8b, 2, OSXJITOFFSET(xer));
 	OsxGuestShift(emitter, 5, 2, 31);
 	OsxGuestRegisterOp(emitter, 0x09, 0, 2);
+#if OSXJITCRFIELDS
+	OsxGuestCpuMemory(emitter, 0x88, 0, OSXJITCRF(field));
+#else
 	shift = (uint32)(7 - field) * 4;
 	OsxGuestShift(emitter, 4, 0, shift);
 	OsxGuestCpuMemory(emitter, 0x8b, 1, OSXJITOFFSET(cr));
 	OsxGuestImmediateOp(emitter, 4, 1, ~(15u << shift));
 	OsxGuestRegisterOp(emitter, 0x09, 0, 1);
 	OsxGuestCpuMemory(emitter, 0x89, 0, OSXJITOFFSET(cr));
+#endif
 }
 
 static void OsxGuestRecord(OsxNativeEmitter *emitter, uint32 instruction)
@@ -3853,12 +4122,17 @@ static void OsxGuestRecordFloat(OsxNativeEmitter *emitter, uint32 instruction)
 {
 	if (instruction & 1) {
 		OsxGuestCpuMemory(emitter, 0x8b, 0, OSXJITOFFSET(fpscr));
+#if OSXJITCRFIELDS
+		OsxGuestShift(emitter, 5, 0, 28);
+		OsxGuestCpuMemory(emitter, 0x88, 0, OSXJITCRF(1));
+#else
 		OsxGuestShift(emitter, 5, 0, 4);
 		OsxGuestImmediateOp(emitter, 4, 0, 0x0f000000);
 		OsxGuestCpuMemory(emitter, 0x8b, 1, OSXJITOFFSET(cr));
 		OsxGuestImmediateOp(emitter, 4, 1, 0xf0ffffff);
 		OsxGuestRegisterOp(emitter, 0x09, 0, 1);
 		OsxGuestCpuMemory(emitter, 0x89, 0, OSXJITOFFSET(cr));
+#endif
 	}
 }
 
@@ -3948,7 +4222,9 @@ static void OsxGuestFloatNarrow(OsxNativeEmitter *emitter)
 
 static void OsxGuestFloatCompare(OsxNativeEmitter *emitter, int field, int left, int right, int count)
 {
+#if !OSXJITCRFIELDS
 	uint32 shift;
+#endif
 	OsxGuestFloatExponent(emitter, left, count, 0);
 	OsxGuestFloatExponent(emitter, right, count, 0);
 	OsxGuestRegisterOp(emitter, 0x31, 0, 0);
@@ -3971,12 +4247,16 @@ static void OsxGuestFloatCompare(OsxNativeEmitter *emitter, int field, int left,
 	OsxGuestImmediateOp(emitter, 4, 2, ~0xf000u);
 	OsxGuestRegisterOp(emitter, 0x09, 2, 1);
 	OsxGuestCpuMemory(emitter, 0x89, 2, OSXJITOFFSET(fpscr));
+#if OSXJITCRFIELDS
+	OsxGuestCpuMemory(emitter, 0x88, 0, OSXJITCRF(field));
+#else
 	shift = (uint32)(7 - field) * 4;
 	OsxGuestShift(emitter, 4, 0, shift);
 	OsxGuestCpuMemory(emitter, 0x8b, 1, OSXJITOFFSET(cr));
 	OsxGuestImmediateOp(emitter, 4, 1, ~(0xfu << shift));
 	OsxGuestRegisterOp(emitter, 0x09, 1, 0);
 	OsxGuestCpuMemory(emitter, 0x89, 1, OSXJITOFFSET(cr));
+#endif
 }
 
 static void OsxGuestFloatTruncate(OsxNativeEmitter *emitter, int target, int right, int count)
@@ -4326,6 +4606,36 @@ static void OsxGuestTranslate(OsxNativeEmitter *emitter, int store, uint32 limit
 	OsxGuestMiss(emitter, 5, count);
 }
 
+#if OSXJITINLINETLB
+static void OsxGuestTranslateInline(OsxNativeEmitter *emitter, int store, uint32 limit, int count)
+{
+	int site;
+	if (emitter->tlbsites == OSXJITLIMIT) {
+		OsxGuestTranslate(emitter, store, limit, count);
+		return;
+	}
+	site = emitter->tlbsites++;
+	OsxGuestTranslateHit(emitter, store, limit, emitter->tlbjumps[site]);
+	emitter->tlbthunks[site] = emitter->state->translatethunks[store != 0][OsxGuestLimitIndex(limit)];
+	emitter->tlbcounts[site] = count;
+	emitter->tlbresumes[site] = emitter->cursor;
+}
+
+static void OsxGuestTranslateStubs(OsxNativeEmitter *emitter)
+{
+	int site;
+	for (site = 0; site < emitter->tlbsites; site++) {
+		OsxGuestPatch(emitter->tlbjumps[site][0], emitter->cursor);
+		if (emitter->tlbjumps[site][1])
+			OsxGuestPatch(emitter->tlbjumps[site][1], emitter->cursor);
+		OsxGuestCall(emitter, emitter->tlbthunks[site]);
+		OsxGuestMiss(emitter, 5, emitter->tlbcounts[site]);
+		OsxGuestJitByte(emitter, 0xe9);
+		OsxGuestJumpTo(emitter, emitter->tlbresumes[site]);
+	}
+}
+#endif
+
 static int OsxGuestMultiple(OsxNativeEmitter *emitter, uint32 instruction, uint32 opcode, int count)
 {
 	int first;
@@ -4435,7 +4745,11 @@ static void OsxGuestMemory(OsxNativeEmitter *emitter, uint32 instruction, uint32
 	OsxGuestAddress(emitter, base, index, immediate, update && index < 0);
 	if (update && index >= 0)
 		OsxGuestRegisterOp(emitter, 0x89, OSXJITUPDATE, 0);
+#if OSXJITINLINETLB
+	OsxGuestTranslateInline(emitter, store, limit, count);
+#else
 	OsxGuestTranslate(emitter, store, limit, count);
+#endif
 	if (store) {
 		if (wide) {
 			OsxGuestCpuMemory(emitter, 0x8b, 1, OSXJITFPR(target) + 4);
@@ -4556,9 +4870,14 @@ static int OsxGuestBranch(OsxNativeEmitter *emitter, uint32 instruction, int cou
 			counterpatch = OsxGuestJump(emitter, 4);
 	}
 	if (!(options & 16)) {
+#if OSXJITCRFIELDS
+		OsxGuestCpuMemory(emitter, 0xf6, 0, OSXJITCRF((instruction >> 18) & 7));
+		OsxGuestJitByte(emitter, OSXJITCRMASK(instruction >> 16));
+#else
 		OsxGuestCpuMemory(emitter, 0x8b, 2, OSXJITOFFSET(cr));
 		OsxGuestJitByte(emitter, 0xf7); OsxGuestJitByte(emitter, 0xc2);
 		OsxGuestWord(emitter, 1u << (31 - ((instruction >> 16) & 31)));
+#endif
 		if (options & 8)
 			conditionpatch = OsxGuestJump(emitter, 4);
 		else
@@ -4579,18 +4898,27 @@ static int OsxGuestBranch(OsxNativeEmitter *emitter, uint32 instruction, int cou
 static void OsxGuestLoadCarry(OsxNativeEmitter *emitter)
 {
 	OsxGuestJitByte(emitter, 0x0f); OsxGuestJitByte(emitter, 0xba); OsxGuestJitByte(emitter, 0xa3);
+#if OSXJITCAFIELD
+	OsxGuestWord(emitter, OSXJITOFFSET(ca));
+	OsxGuestJitByte(emitter, 0);
+#else
 	OsxGuestWord(emitter, OSXJITOFFSET(xer));
 	OsxGuestJitByte(emitter, 29);
+#endif
 }
 
 static void OsxGuestStoreCarry(OsxNativeEmitter *emitter)
 {
+#if OSXJITCAFIELD
+	OsxGuestCpuMemory(emitter, 0x88, 2, OSXJITOFFSET(ca));
+#else
 	OsxGuestJitByte(emitter, 0x0f); OsxGuestJitByte(emitter, 0xb6); OsxGuestJitByte(emitter, 0xd2);
 	OsxGuestShift(emitter, 4, 2, 29);
 	OsxGuestCpuMemory(emitter, 0x8b, 1, OSXJITOFFSET(xer));
 	OsxGuestImmediateOp(emitter, 4, 1, 0xdfffffff);
 	OsxGuestRegisterOp(emitter, 0x09, 1, 2);
 	OsxGuestCpuMemory(emitter, 0x89, 1, OSXJITOFFSET(xer));
+#endif
 }
 
 static void OsxGuestRequireSupervisorMode(OsxNativeEmitter *emitter, int count)
@@ -4847,6 +5175,16 @@ static int OsxGuestSystem(OsxNativeEmitter *emitter, uint32 instruction, uint32 
 	case 54: case 86: case 246: case 278: case 598: case 854:
 		return 1;
 	case 144:
+#if OSXJITCRFIELDS
+		OsxGuestCpuMemory(emitter, 0x8b, 0, OSXJITGPR(target));
+		for (field = 0; field < 8; field++)
+			if (instruction & (0x80000u >> field)) {
+				OsxGuestRegisterOp(emitter, 0x89, 1, 0);
+				OsxGuestShift(emitter, 5, 1, (7 - field) * 4);
+				OsxGuestImmediateOp(emitter, 4, 1, 15);
+				OsxGuestCpuMemory(emitter, 0x88, 1, OSXJITCRF(field));
+			}
+#else
 		mask = 0;
 		for (field = 0; field < 8; field++)
 			if (instruction & (0x80000u >> field))
@@ -4859,6 +5197,7 @@ static int OsxGuestSystem(OsxNativeEmitter *emitter, uint32 instruction, uint32 
 			OsxGuestRegisterOp(emitter, 0x09, 0, 1);
 		}
 		OsxGuestCpuMemory(emitter, 0x89, 0, OSXJITOFFSET(cr));
+#endif
 		return 1;
 	case 83:
 		OsxGuestRequireSupervisorMode(emitter, count);
@@ -4916,6 +5255,9 @@ static int OsxGuestSystem(OsxNativeEmitter *emitter, uint32 instruction, uint32 
 		return 1;
 	case 210:
 	case 242:
+#if OSXJITSEGMENTFLUSH
+		OsxGuestCallout(emitter, instruction, count);
+#else
 		OsxGuestRequireSupervisorMode(emitter, count);
 		if (extended == 210)
 			OsxGuestImmediate(emitter, 0, (instruction >> 16) & 15);
@@ -4933,6 +5275,7 @@ static int OsxGuestSystem(OsxNativeEmitter *emitter, uint32 instruction, uint32 
 		OsxGuestJitByte(emitter, 0xc7); OsxGuestJitByte(emitter, 0x83);
 		OsxGuestWord(emitter, OSXJITOFFSET(fetchtag));
 		OsxGuestWord(emitter, 0);
+#endif
 		return 1;
 	case 339:
 	case 467:
@@ -4964,11 +5307,15 @@ static void OsxGuestConditionZero(OsxNativeEmitter *emitter)
 
 static void OsxGuestStoreConditionZero(OsxNativeEmitter *emitter)
 {
+#if OSXJITCRFIELDS
+	OsxGuestCpuMemory(emitter, 0x88, 0, OSXJITCRF(0));
+#else
 	OsxGuestShift(emitter, 4, 0, 28);
 	OsxGuestCpuMemory(emitter, 0x8b, 1, OSXJITOFFSET(cr));
 	OsxGuestImmediateOp(emitter, 4, 1, 0x0fffffff);
 	OsxGuestRegisterOp(emitter, 0x09, 0, 1);
 	OsxGuestCpuMemory(emitter, 0x89, 0, OSXJITOFFSET(cr));
+#endif
 }
 
 static int OsxGuestReserved(OsxNativeEmitter *emitter, uint32 instruction, uint32 extended, int count)
@@ -5029,6 +5376,21 @@ static int OsxGuestZeroBlock(OsxNativeEmitter *emitter, uint32 instruction, int 
 	return 1;
 }
 
+#if OSXJITCRFIELDS
+static void OsxGuestCrHalf(OsxNativeEmitter *emitter, uint32 offset)
+{
+	OsxGuestCpuMemory(emitter, 0x8b, 0, offset);
+	OsxGuestJitByte(emitter, 0x0f); OsxGuestJitByte(emitter, 0xc8);
+	OsxGuestRegisterOp(emitter, 0x89, 1, 0);
+	OsxGuestShift(emitter, 5, 1, 4);
+	OsxGuestRegisterOp(emitter, 0x09, 0, 1);
+	OsxGuestImmediateOp(emitter, 4, 0, 0x00ff00ffu);
+	OsxGuestRegisterOp(emitter, 0x89, 1, 0);
+	OsxGuestShift(emitter, 5, 1, 8);
+	OsxGuestRegisterOp(emitter, 0x09, 0, 1);
+}
+#endif
+
 static int OsxGuestConditionLogical(OsxNativeEmitter *emitter, uint32 instruction)
 {
 	uint32 extended;
@@ -5040,6 +5402,11 @@ static int OsxGuestConditionLogical(OsxNativeEmitter *emitter, uint32 instructio
 	bita = (instruction >> 16) & 31;
 	bitb = (instruction >> 11) & 31;
 	if (extended == 0) {
+#if OSXJITCRFIELDS
+		OsxGuestJitByte(emitter, 0x0f);
+		OsxGuestCpuMemory(emitter, 0xb6, 0, OSXJITCRF(bita >> 2));
+		OsxGuestCpuMemory(emitter, 0x88, 0, OSXJITCRF(bitd >> 2));
+#else
 		OsxGuestCpuMemory(emitter, 0x8b, 0, OSXJITOFFSET(cr));
 		OsxGuestRegisterOp(emitter, 0x89, 1, 0);
 		OsxGuestShift(emitter, 5, 1, (7 - (bita >> 2)) * 4);
@@ -5048,16 +5415,27 @@ static int OsxGuestConditionLogical(OsxNativeEmitter *emitter, uint32 instructio
 		OsxGuestImmediateOp(emitter, 4, 0, ~(0xfu << ((7 - (bitd >> 2)) * 4)));
 		OsxGuestRegisterOp(emitter, 0x09, 0, 1);
 		OsxGuestCpuMemory(emitter, 0x89, 0, OSXJITOFFSET(cr));
+#endif
 		return 1;
 	}
 	if (extended != 33 && extended != 129 && extended != 193 && extended != 225 && extended != 257 && extended != 289 && extended != 417 && extended != 449)
 		return 0;
+#if OSXJITCRFIELDS
+	OsxGuestJitByte(emitter, 0x0f);
+	OsxGuestCpuMemory(emitter, 0xb6, 1, OSXJITCRF(bita >> 2));
+	OsxGuestShift(emitter, 5, 1, 3 - (bita & 3));
+	OsxGuestImmediateOp(emitter, 4, 1, 1);
+	OsxGuestJitByte(emitter, 0x0f);
+	OsxGuestCpuMemory(emitter, 0xb6, 2, OSXJITCRF(bitb >> 2));
+	OsxGuestShift(emitter, 5, 2, 3 - (bitb & 3));
+#else
 	OsxGuestCpuMemory(emitter, 0x8b, 0, OSXJITOFFSET(cr));
 	OsxGuestRegisterOp(emitter, 0x89, 1, 0);
 	OsxGuestShift(emitter, 5, 1, 31 - bita);
 	OsxGuestImmediateOp(emitter, 4, 1, 1);
 	OsxGuestRegisterOp(emitter, 0x89, 2, 0);
 	OsxGuestShift(emitter, 5, 2, 31 - bitb);
+#endif
 	OsxGuestImmediateOp(emitter, 4, 2, 1);
 	if (extended == 129 || extended == 417)
 		OsxGuestImmediateOp(emitter, 6, 2, 1);
@@ -5069,10 +5447,19 @@ static int OsxGuestConditionLogical(OsxNativeEmitter *emitter, uint32 instructio
 		OsxGuestRegisterOp(emitter, 0x31, 1, 2);
 	if (extended == 33 || extended == 225 || extended == 289)
 		OsxGuestImmediateOp(emitter, 6, 1, 1);
+#if OSXJITCRFIELDS
+	OsxGuestShift(emitter, 4, 1, 3 - (bitd & 3));
+	OsxGuestJitByte(emitter, 0x0f);
+	OsxGuestCpuMemory(emitter, 0xb6, 0, OSXJITCRF(bitd >> 2));
+	OsxGuestImmediateOp(emitter, 4, 0, ~OSXJITCRMASK(bitd));
+	OsxGuestRegisterOp(emitter, 0x09, 0, 1);
+	OsxGuestCpuMemory(emitter, 0x88, 0, OSXJITCRF(bitd >> 2));
+#else
 	OsxGuestShift(emitter, 4, 1, 31 - bitd);
 	OsxGuestImmediateOp(emitter, 4, 0, ~(1u << (31 - bitd)));
 	OsxGuestRegisterOp(emitter, 0x09, 0, 1);
 	OsxGuestCpuMemory(emitter, 0x89, 0, OSXJITOFFSET(cr));
+#endif
 	return 1;
 }
 
@@ -5186,14 +5573,27 @@ static int OsxGuestEmit(OsxNativeEmitter *emitter, uint32 instruction, int count
 		return 1;
 	case 20: case 21: case 23:
 		OsxGuestCpuMemory(emitter, 0x8b, 0, OSXJITGPR(target));
+		mask = OsxGuestRotateMask((instruction >> 6) & 31, (instruction >> 1) & 31);
 		if (opcode == 23) {
 			OsxGuestCpuMemory(emitter, 0x8b, 1, OSXJITGPR(index));
 			OsxGuestJitByte(emitter, 0xd3); OsxGuestJitByte(emitter, 0xc0);
-		} else {
+		}
+#if OSXJITSELECT
+		else if (opcode == 21 && index && mask == 0xffffffffu >> (32 - index)) {
+			OsxGuestShift(emitter, 5, 0, (uint32)(32 - index));
+			mask = 0xffffffffu;
+		} else if (opcode == 21 && mask == 0xffffffffu << index) {
+			OsxGuestShift(emitter, 4, 0, (uint32)index);
+			mask = 0xffffffffu;
+		}
+#endif
+		else {
 			OsxGuestShift(emitter, 0, 0, (uint32)index);
 		}
-		mask = OsxGuestRotateMask((instruction >> 6) & 31, (instruction >> 1) & 31);
-		OsxGuestImmediateOp(emitter, 4, 0, mask);
+#if OSXJITSELECT
+		if (mask != 0xffffffffu)
+#endif
+			OsxGuestImmediateOp(emitter, 4, 0, mask);
 		if (opcode == 20) {
 			OsxGuestCpuMemory(emitter, 0x8b, 1, OSXJITGPR(base));
 			OsxGuestImmediateOp(emitter, 4, 1, ~mask);
@@ -5241,6 +5641,12 @@ static int OsxGuestEmit(OsxNativeEmitter *emitter, uint32 instruction, int count
 		}
 		if (extended == 339 || extended == 467) {
 			number = ((instruction >> 16) & 31) | ((instruction >> 6) & 0x3e0);
+#if OSXJITCAFIELD
+			if (number == 1) {
+				OsxGuestCallout(emitter, instruction, count);
+				return 1;
+			}
+#endif
 			if (number == 1)
 				offset = OSXJITOFFSET(xer);
 			else if (number == 8)
@@ -5263,7 +5669,15 @@ static int OsxGuestEmit(OsxNativeEmitter *emitter, uint32 instruction, int count
 			return 1;
 		}
 		if (extended == 19) {
+#if OSXJITCRFIELDS
+			OsxGuestCrHalf(emitter, OSXJITCRF(4));
+			OsxGuestJitByte(emitter, 0x0f); OsxGuestJitByte(emitter, 0xb7); OsxGuestJitByte(emitter, 0xd0);
+			OsxGuestCrHalf(emitter, OSXJITCRF(0));
+			OsxGuestShift(emitter, 4, 0, 16);
+			OsxGuestRegisterOp(emitter, 0x09, 0, 2);
+#else
 			OsxGuestCpuMemory(emitter, 0x8b, 0, OSXJITOFFSET(cr));
+#endif
 			OsxGuestCpuMemory(emitter, 0x89, 0, OSXJITGPR(target));
 			return 1;
 		}
@@ -5284,6 +5698,13 @@ static int OsxGuestEmit(OsxNativeEmitter *emitter, uint32 instruction, int count
 		}
 		if (extended == 28 || extended == 60 || extended == 124 || extended == 284 || extended == 316 || extended == 412 || extended == 444 || extended == 476) {
 			OsxGuestCpuMemory(emitter, 0x8b, 0, OSXJITGPR(target));
+#if OSXJITSELECT
+			if ((extended == 28 || extended == 444) && target == index) {
+				OsxGuestCpuMemory(emitter, 0x89, 0, OSXJITGPR(base));
+				OsxGuestRecord(emitter, instruction);
+				return 1;
+			}
+#endif
 			OsxGuestCpuMemory(emitter, 0x8b, 1, OSXJITGPR(index));
 			if (extended == 60 || extended == 412) {
 				OsxGuestJitByte(emitter, 0xf7); OsxGuestJitByte(emitter, 0xd1);
@@ -5441,6 +5862,9 @@ static void OsxGuestCompile(OsxCpu *cpu, OsxNativeState *state, OsxNativeBlock *
 	emitter.enabled = 0;
 	emitter.misscount = 0;
 	emitter.stored = NULL;
+#if OSXJITINLINETLB
+	emitter.tlbsites = 0;
+#endif
 	OsxGuestJitByte(&emitter, 0x53);
 	OsxGuestJitByte(&emitter, 0x56);
 	OsxGuestJitByte(&emitter, 0x57);
@@ -5482,6 +5906,9 @@ static void OsxGuestCompile(OsxCpu *cpu, OsxNativeState *state, OsxNativeBlock *
 		OsxGuestReturn(&emitter, count);
 	else if (status == 1)
 		OsxGuestExit(&emitter, count, (physical & 4095) + (uint32)count * 4);
+#if OSXJITINLINETLB
+	OsxGuestTranslateStubs(&emitter);
+#endif
 	for (index = 0; index < emitter.misscount; index++) {
 		shared = 0;
 		while (shared < index && emitter.misscounts[shared] != emitter.misscounts[index])
@@ -5722,6 +6149,12 @@ void OsxGuestJitTmpStats(OsxCpu *cpu, FILE *log)
 #define OSXA64STRX 0xf9000000u
 #define OSXA64LDRD 0xfd400000u
 #define OSXA64STRD 0xfd000000u
+#define OSXA64LDRB 0x39400000u
+#define OSXA64STRB 0x39000000u
+#define OSXA64REVX 0xdac00c00u
+#define OSXA64ORRLSR 0xaa400000u
+#define OSXA64ANDBYTES 0x92009c00u
+#define OSXA64ANDHALVES 0x92003c00u
 #define OSXA64B 0x14000000u
 #define OSXA64BL 0x94000000u
 #define OSXA64BCOND 0x54000000u
@@ -5733,6 +6166,8 @@ void OsxGuestJitTmpStats(OsxCpu *cpu, FILE *log)
 #define OSXJITOFFSET(member) ((uint32)offsetof(OsxCpu, member))
 #define OSXJITGPR(reg) (OSXJITOFFSET(gpr) + (uint32)(reg) * 4)
 #define OSXJITFPR(reg) (OSXJITOFFSET(fpr) + (uint32)(reg) * 8)
+#define OSXJITCRF(field) (OSXJITOFFSET(crf) + (uint32)(field))
+#define OSXJITCRMASK(bit) (8u >> ((bit) & 3))
 #define OSXJITRECORD(member) ((uint32)offsetof(OsxNativeRecord, member))
 
 typedef int (*OsxNativeFunction)(OsxCpu *cpu);
@@ -5788,6 +6223,13 @@ typedef struct OsxNativeEmitter {
 	uint8 *misses[OSXJITMISSES];
 	int misscounts[OSXJITMISSES];
 	int misscount;
+#if OSXJITINLINETLB
+	uint8 *tlbjumps[OSXJITLIMIT][2];
+	uint8 *tlbthunks[OSXJITLIMIT];
+	uint8 *tlbresumes[OSXJITLIMIT];
+	int tlbcounts[OSXJITLIMIT];
+	int tlbsites;
+#endif
 } OsxNativeEmitter;
 
 static void OsxGuestOp(OsxNativeEmitter *emitter, uint32 word)
@@ -5988,9 +6430,7 @@ static void OsxGuestJitSet(OsxNativeEmitter *emitter, int reg, int condition)
 static void OsxGuestField(OsxNativeEmitter *emitter, uint32 opcode, int reg, uint32 offset)
 {
 	uint32 scale;
-	scale = 4;
-	if (opcode & 0x40000000u)
-		scale = 8;
+	scale = 1u << (opcode >> 30);
 	if (offset % scale == 0 && offset / scale < 4096) {
 		OsxGuestOp(emitter, opcode | ((offset / scale) << 10) | (OSXJITCPU << 5) | (uint32)reg);
 		return;
@@ -6063,13 +6503,8 @@ static void OsxGuestDynamicExit(OsxNativeEmitter *emitter, int count)
 	OsxGuestBranchTo(emitter, OSXA64B, emitter->state->dynamicthunk);
 }
 
-static void OsxGuestTranslateThunk(OsxNativeEmitter *emitter, int store, uint32 limit)
+static void OsxGuestTranslateHit(OsxNativeEmitter *emitter, int store, uint32 limit, uint8 **mismatches)
 {
-	uint8 *retry;
-	uint8 *slow;
-	uint8 *segment;
-	uint8 *page;
-	retry = emitter->cursor;
 	OsxGuestAddImmediate(emitter, OSXA64ADD, 1, 0, 0xfff - limit);
 	OsxGuestLogicImmediate(emitter, OSXA64AND, 1, 1, 0xfffff000u);
 	OsxGuestExtract(emitter, 2, 0, 12, OSXTLBBITS);
@@ -6080,18 +6515,31 @@ static void OsxGuestTranslateThunk(OsxNativeEmitter *emitter, int store, uint32 
 	OsxGuestReg3(emitter, 0x8b001000u, 3, 3, 2);
 	OsxGuestOp(emitter, 0xb9400062u);
 	OsxGuestReg3(emitter, 0x6b000000u, OSXJITZERO, 2, 1);
-	slow = OsxGuestForward(emitter, OsxGuestConditional(OSXCONDNE));
+	mismatches[0] = OsxGuestForward(emitter, OsxGuestConditional(OSXCONDNE));
+#if OSXJITSEGMENTFLUSH
+	mismatches[1] = NULL;
+#else
 	OsxGuestShiftRight(emitter, 1, 0, 28);
 	OsxGuestField(emitter, OSXA64LDRX, 2, OSXJITOFFSET(datasr));
 	OsxGuestOp(emitter, 0xb8617841u);
 	OsxGuestOp(emitter, 0xb9400462u);
 	OsxGuestReg3(emitter, 0x6b000000u, OSXJITZERO, 2, 1);
-	segment = OsxGuestForward(emitter, OsxGuestConditional(OSXCONDNE));
+	mismatches[1] = OsxGuestForward(emitter, OsxGuestConditional(OSXCONDNE));
+#endif
 	OsxGuestOp(emitter, 0xf9400461u);
 	OsxGuestLogicImmediate(emitter, OSXA64AND, 2, 0, 0xfff);
 	OsxGuestReg3(emitter, 0x8b000000u, 1, 1, 2);
+}
+
+static void OsxGuestTranslateThunk(OsxNativeEmitter *emitter, int store, uint32 limit)
+{
+	uint8 *retry;
+	uint8 *mismatches[2];
+	uint8 *page;
+	retry = emitter->cursor;
+	OsxGuestTranslateHit(emitter, store, limit, mismatches);
 	OsxGuestOp(emitter, OSXA64RET);
-	OsxGuestPatch(slow, emitter->cursor);
+	OsxGuestPatch(mismatches[0], emitter->cursor);
 	OsxGuestLogicImmediate(emitter, OSXA64AND, 1, 0, 0xfffff000u);
 	OsxGuestOp(emitter, 0xb9400062u);
 	OsxGuestReg3(emitter, 0x6b000000u, OSXJITZERO, 2, 1);
@@ -6099,7 +6547,8 @@ static void OsxGuestTranslateThunk(OsxNativeEmitter *emitter, int store, uint32 
 	OsxGuestOp(emitter, 0xd2800001u);
 	OsxGuestOp(emitter, OSXA64RET);
 	OsxGuestPatch(page, emitter->cursor);
-	OsxGuestPatch(segment, emitter->cursor);
+	if (mismatches[1])
+		OsxGuestPatch(mismatches[1], emitter->cursor);
 	OsxGuestOp(emitter, 0xa9bf03feu);
 	OsxGuestMove(emitter, 1, 0);
 	OsxGuestReg3(emitter, 0xaa000000u, 0, OSXJITZERO, OSXJITCPU);
@@ -6227,9 +6676,13 @@ static void OsxGuestCondition(OsxNativeEmitter *emitter, int field, int issigned
 	OsxGuestCombine(emitter);
 	OsxGuestLoad(emitter, 1, OSXJITOFFSET(xer));
 	OsxGuestOp(emitter, 0x2a417c00u);
+#if OSXJITCRFIELDS
+	OsxGuestField(emitter, OSXA64STRB, 0, OSXJITCRF(field));
+#else
 	OsxGuestLoad(emitter, 1, OSXJITOFFSET(cr));
 	OsxGuestInsert(emitter, 1, 0, (uint32)(7 - field) * 4, 4);
 	OsxGuestStore(emitter, 1, OSXJITOFFSET(cr));
+#endif
 }
 
 static void OsxGuestRecord(OsxNativeEmitter *emitter, uint32 instruction)
@@ -6253,10 +6706,15 @@ static void OsxGuestRecordFloat(OsxNativeEmitter *emitter, uint32 instruction)
 {
 	if (instruction & 1) {
 		OsxGuestLoad(emitter, 0, OSXJITOFFSET(fpscr));
+#if OSXJITCRFIELDS
+		OsxGuestExtract(emitter, 0, 0, 28, 4);
+		OsxGuestField(emitter, OSXA64STRB, 0, OSXJITCRF(1));
+#else
 		OsxGuestLoad(emitter, 1, OSXJITOFFSET(cr));
 		OsxGuestExtract(emitter, 0, 0, 28, 4);
 		OsxGuestInsert(emitter, 1, 0, 24, 4);
 		OsxGuestStore(emitter, 1, OSXJITOFFSET(cr));
+#endif
 	}
 }
 
@@ -6333,9 +6791,13 @@ static void OsxGuestFloatCompare(OsxNativeEmitter *emitter, int field, int left,
 	OsxGuestLoad(emitter, 1, OSXJITOFFSET(fpscr));
 	OsxGuestInsert(emitter, 1, 0, 12, 4);
 	OsxGuestStore(emitter, 1, OSXJITOFFSET(fpscr));
+#if OSXJITCRFIELDS
+	OsxGuestField(emitter, OSXA64STRB, 0, OSXJITCRF(field));
+#else
 	OsxGuestLoad(emitter, 1, OSXJITOFFSET(cr));
 	OsxGuestInsert(emitter, 1, 0, (uint32)(7 - field) * 4, 4);
 	OsxGuestStore(emitter, 1, OSXJITOFFSET(cr));
+#endif
 }
 
 static void OsxGuestFloatTruncate(OsxNativeEmitter *emitter, int target, int right, int count)
@@ -6502,6 +6964,35 @@ static void OsxGuestTranslate(OsxNativeEmitter *emitter, int store, uint32 limit
 	OsxGuestMiss(emitter, 0xb4000001u, count);
 }
 
+#if OSXJITINLINETLB
+static void OsxGuestTranslateInline(OsxNativeEmitter *emitter, int store, uint32 limit, int count)
+{
+	int site;
+	if (emitter->tlbsites == OSXJITLIMIT) {
+		OsxGuestTranslate(emitter, store, limit, count);
+		return;
+	}
+	site = emitter->tlbsites++;
+	OsxGuestTranslateHit(emitter, store, limit, emitter->tlbjumps[site]);
+	emitter->tlbthunks[site] = emitter->state->translatethunks[store != 0][OsxGuestLimitIndex(limit)];
+	emitter->tlbcounts[site] = count;
+	emitter->tlbresumes[site] = emitter->cursor;
+}
+
+static void OsxGuestTranslateStubs(OsxNativeEmitter *emitter)
+{
+	int site;
+	for (site = 0; site < emitter->tlbsites; site++) {
+		OsxGuestPatch(emitter->tlbjumps[site][0], emitter->cursor);
+		if (emitter->tlbjumps[site][1])
+			OsxGuestPatch(emitter->tlbjumps[site][1], emitter->cursor);
+		OsxGuestBranchTo(emitter, OSXA64BL, emitter->tlbthunks[site]);
+		OsxGuestMiss(emitter, 0xb4000001u, emitter->tlbcounts[site]);
+		OsxGuestPatch(OsxGuestForward(emitter, OSXA64B), emitter->tlbresumes[site]);
+	}
+}
+#endif
+
 static int OsxGuestMultiple(OsxNativeEmitter *emitter, uint32 instruction, uint32 opcode, int count)
 {
 	int first;
@@ -6599,7 +7090,11 @@ static void OsxGuestMemory(OsxNativeEmitter *emitter, uint32 instruction, uint32
 	OsxGuestAddress(emitter, base, index, immediate, update && index < 0);
 	if (update && index >= 0)
 		OsxGuestMove(emitter, OSXJITUPDATE, 0);
+#if OSXJITINLINETLB
+	OsxGuestTranslateInline(emitter, store, limit, count);
+#else
 	OsxGuestTranslate(emitter, store, limit, count);
+#endif
 	if (store) {
 		if (wide) {
 			OsxGuestField(emitter, OSXA64LDRX, 2, OSXJITFPR(target));
@@ -6704,11 +7199,19 @@ static int OsxGuestBranch(OsxNativeEmitter *emitter, uint32 instruction, int cou
 			counterpatch = OsxGuestForward(emitter, OsxGuestConditional(OSXCONDEQ));
 	}
 	if (!(options & 16)) {
+#if OSXJITCRFIELDS
+		OsxGuestField(emitter, OSXA64LDRB, 2, OSXJITCRF((instruction >> 18) & 7));
+		if (options & 8)
+			conditionpatch = OsxGuestForward(emitter, OsxGuestBitTest(OSXA64TBZ, 2, 3 - ((instruction >> 16) & 3)));
+		else
+			conditionpatch = OsxGuestForward(emitter, OsxGuestBitTest(OSXA64TBNZ, 2, 3 - ((instruction >> 16) & 3)));
+#else
 		OsxGuestLoad(emitter, 2, OSXJITOFFSET(cr));
 		if (options & 8)
 			conditionpatch = OsxGuestForward(emitter, OsxGuestBitTest(OSXA64TBZ, 2, 31 - ((instruction >> 16) & 31)));
 		else
 			conditionpatch = OsxGuestForward(emitter, OsxGuestBitTest(OSXA64TBNZ, 2, 31 - ((instruction >> 16) & 31)));
+#endif
 	}
 	OsxGuestMove(emitter, OSXJITPC, 1);
 	OsxGuestExit(emitter, count + 1, targetoffset);
@@ -6724,16 +7227,24 @@ static int OsxGuestBranch(OsxNativeEmitter *emitter, uint32 instruction, int cou
 
 static void OsxGuestLoadCarry(OsxNativeEmitter *emitter)
 {
+#if OSXJITCAFIELD
+	OsxGuestField(emitter, OSXA64LDRB, 1, OSXJITOFFSET(ca));
+#else
 	OsxGuestLoad(emitter, 1, OSXJITOFFSET(xer));
 	OsxGuestExtract(emitter, 1, 1, 29, 1);
+#endif
 	OsxGuestAddImmediate(emitter, OSXA64SUBS, OSXJITZERO, 1, 1);
 }
 
 static void OsxGuestStoreCarry(OsxNativeEmitter *emitter)
 {
+#if OSXJITCAFIELD
+	OsxGuestField(emitter, OSXA64STRB, 2, OSXJITOFFSET(ca));
+#else
 	OsxGuestLoad(emitter, 1, OSXJITOFFSET(xer));
 	OsxGuestInsert(emitter, 1, 2, 29, 1);
 	OsxGuestStore(emitter, 1, OSXJITOFFSET(xer));
+#endif
 }
 
 static void OsxGuestRequireSupervisorMode(OsxNativeEmitter *emitter, int count)
@@ -6973,6 +7484,14 @@ static int OsxGuestSystem(OsxNativeEmitter *emitter, uint32 instruction, uint32 
 	case 54: case 86: case 246: case 278: case 598: case 854:
 		return 1;
 	case 144:
+#if OSXJITCRFIELDS
+		OsxGuestLoad(emitter, 0, OSXJITGPR(target));
+		for (field = 0; field < 8; field++)
+			if (instruction & (0x80000u >> field)) {
+				OsxGuestExtract(emitter, 1, 0, (7 - field) * 4, 4);
+				OsxGuestField(emitter, OSXA64STRB, 1, OSXJITCRF(field));
+			}
+#else
 		mask = 0;
 		for (field = 0; field < 8; field++)
 			if (instruction & (0x80000u >> field))
@@ -6985,6 +7504,7 @@ static int OsxGuestSystem(OsxNativeEmitter *emitter, uint32 instruction, uint32 
 			OsxGuestReg3(emitter, 0x2a000000u, 0, 0, 1);
 		}
 		OsxGuestStore(emitter, 0, OSXJITOFFSET(cr));
+#endif
 		return 1;
 	case 83:
 		OsxGuestRequireSupervisorMode(emitter, count);
@@ -7037,6 +7557,9 @@ static int OsxGuestSystem(OsxNativeEmitter *emitter, uint32 instruction, uint32 
 		return 1;
 	case 210:
 	case 242:
+#if OSXJITSEGMENTFLUSH
+		OsxGuestCallout(emitter, instruction, count);
+#else
 		OsxGuestRequireSupervisorMode(emitter, count);
 		if (extended == 210) {
 			OsxGuestConstant(emitter, 0, (instruction >> 16) & 15);
@@ -7052,6 +7575,7 @@ static int OsxGuestSystem(OsxNativeEmitter *emitter, uint32 instruction, uint32 
 		OsxGuestReg3(emitter, 0x8b000000u, OSXJITSCRATCH, OSXJITCPU, OSXJITSCRATCH);
 		OsxGuestOp(emitter, 0xb8207800u | (OSXJITSCRATCH << 5) | 2);
 		OsxGuestStore(emitter, OSXJITZERO, OSXJITOFFSET(fetchtag));
+#endif
 		return 1;
 	case 339:
 	case 467:
@@ -7083,9 +7607,13 @@ static void OsxGuestConditionZero(OsxNativeEmitter *emitter)
 
 static void OsxGuestStoreConditionZero(OsxNativeEmitter *emitter)
 {
+#if OSXJITCRFIELDS
+	OsxGuestField(emitter, OSXA64STRB, 0, OSXJITCRF(0));
+#else
 	OsxGuestLoad(emitter, 1, OSXJITOFFSET(cr));
 	OsxGuestInsert(emitter, 1, 0, 28, 4);
 	OsxGuestStore(emitter, 1, OSXJITOFFSET(cr));
+#endif
 }
 
 static int OsxGuestReserved(OsxNativeEmitter *emitter, uint32 instruction, uint32 extended, int count)
@@ -7147,17 +7675,29 @@ static int OsxGuestConditionLogical(OsxNativeEmitter *emitter, uint32 instructio
 	bita = (instruction >> 16) & 31;
 	bitb = (instruction >> 11) & 31;
 	if (extended == 0) {
+#if OSXJITCRFIELDS
+		OsxGuestField(emitter, OSXA64LDRB, 0, OSXJITCRF(bita >> 2));
+		OsxGuestField(emitter, OSXA64STRB, 0, OSXJITCRF(bitd >> 2));
+#else
 		OsxGuestLoad(emitter, 0, OSXJITOFFSET(cr));
 		OsxGuestExtract(emitter, 1, 0, (7 - (bita >> 2)) * 4, 4);
 		OsxGuestInsert(emitter, 0, 1, (7 - (bitd >> 2)) * 4, 4);
 		OsxGuestStore(emitter, 0, OSXJITOFFSET(cr));
+#endif
 		return 1;
 	}
 	if (extended != 33 && extended != 129 && extended != 193 && extended != 225 && extended != 257 && extended != 289 && extended != 417 && extended != 449)
 		return 0;
+#if OSXJITCRFIELDS
+	OsxGuestField(emitter, OSXA64LDRB, 1, OSXJITCRF(bita >> 2));
+	OsxGuestExtract(emitter, 1, 1, 3 - (bita & 3), 1);
+	OsxGuestField(emitter, OSXA64LDRB, 2, OSXJITCRF(bitb >> 2));
+	OsxGuestExtract(emitter, 2, 2, 3 - (bitb & 3), 1);
+#else
 	OsxGuestLoad(emitter, 0, OSXJITOFFSET(cr));
 	OsxGuestExtract(emitter, 1, 0, 31 - bita, 1);
 	OsxGuestExtract(emitter, 2, 0, 31 - bitb, 1);
+#endif
 	if (extended == 129 || extended == 417)
 		OsxGuestLogicImmediate(emitter, OSXA64EOR, 2, 2, 1);
 	if (extended == 33 || extended == 417 || extended == 449)
@@ -7168,8 +7708,14 @@ static int OsxGuestConditionLogical(OsxNativeEmitter *emitter, uint32 instructio
 		OsxGuestReg3(emitter, 0x4a000000u, 1, 1, 2);
 	if (extended == 33 || extended == 225 || extended == 289)
 		OsxGuestLogicImmediate(emitter, OSXA64EOR, 1, 1, 1);
+#if OSXJITCRFIELDS
+	OsxGuestField(emitter, OSXA64LDRB, 0, OSXJITCRF(bitd >> 2));
+	OsxGuestInsert(emitter, 0, 1, 3 - (bitd & 3), 1);
+	OsxGuestField(emitter, OSXA64STRB, 0, OSXJITCRF(bitd >> 2));
+#else
 	OsxGuestInsert(emitter, 0, 1, 31 - bitd, 1);
 	OsxGuestStore(emitter, 0, OSXJITOFFSET(cr));
+#endif
 	return 1;
 }
 
@@ -7284,14 +7830,24 @@ static int OsxGuestEmit(OsxNativeEmitter *emitter, uint32 instruction, int count
 		return 1;
 	case 20: case 21: case 23:
 		OsxGuestLoad(emitter, 0, OSXJITGPR(target));
+		mask = OsxGuestRotateMask((instruction >> 6) & 31, (instruction >> 1) & 31);
 		if (opcode == 23) {
 			OsxGuestLoad(emitter, 1, OSXJITGPR(index));
 			OsxGuestReg3(emitter, 0x4b000000u, 1, OSXJITZERO, 1);
 			OsxGuestReg3(emitter, 0x1ac02c00u, 0, 0, 1);
-		} else if (index) {
+		}
+#if OSXJITSELECT
+		else if (opcode == 21 && index && mask == 0xffffffffu >> (32 - index)) {
+			OsxGuestShiftRight(emitter, 0, 0, (uint32)(32 - index));
+			mask = 0xffffffffu;
+		} else if (opcode == 21 && index && mask == 0xffffffffu << index) {
+			OsxGuestShiftLeft(emitter, 0, 0, (uint32)index);
+			mask = 0xffffffffu;
+		}
+#endif
+		else if (index) {
 			OsxGuestOp(emitter, 0x13800000u | ((32 - (uint32)index) << 10));
 		}
-		mask = OsxGuestRotateMask((instruction >> 6) & 31, (instruction >> 1) & 31);
 		if (mask != 0xffffffffu)
 			OsxGuestLogicImmediate(emitter, OSXA64AND, 0, 0, mask);
 		if (opcode == 20) {
@@ -7345,6 +7901,12 @@ static int OsxGuestEmit(OsxNativeEmitter *emitter, uint32 instruction, int count
 		}
 		if (extended == 339 || extended == 467) {
 			number = ((instruction >> 16) & 31) | ((instruction >> 6) & 0x3e0);
+#if OSXJITCAFIELD
+			if (number == 1) {
+				OsxGuestCallout(emitter, instruction, count);
+				return 1;
+			}
+#endif
 			if (number == 1)
 				offset = OSXJITOFFSET(xer);
 			else if (number == 8)
@@ -7367,7 +7929,17 @@ static int OsxGuestEmit(OsxNativeEmitter *emitter, uint32 instruction, int count
 			return 1;
 		}
 		if (extended == 19) {
+#if OSXJITCRFIELDS
+			OsxGuestField(emitter, OSXA64LDRX, 0, OSXJITCRF(0));
+			OsxGuestOp(emitter, OSXA64REVX);
+			OsxGuestOp(emitter, OSXA64ORRLSR | (4 << 10));
+			OsxGuestOp(emitter, OSXA64ANDBYTES);
+			OsxGuestOp(emitter, OSXA64ORRLSR | (8 << 10));
+			OsxGuestOp(emitter, OSXA64ANDHALVES);
+			OsxGuestOp(emitter, OSXA64ORRLSR | (16 << 10));
+#else
 			OsxGuestLoad(emitter, 0, OSXJITOFFSET(cr));
+#endif
 			OsxGuestStore(emitter, 0, OSXJITGPR(target));
 			return 1;
 		}
@@ -7386,6 +7958,13 @@ static int OsxGuestEmit(OsxNativeEmitter *emitter, uint32 instruction, int count
 		}
 		if (extended == 28 || extended == 60 || extended == 124 || extended == 284 || extended == 316 || extended == 412 || extended == 444 || extended == 476) {
 			OsxGuestLoad(emitter, 0, OSXJITGPR(target));
+#if OSXJITSELECT
+			if ((extended == 28 || extended == 444) && target == index) {
+				OsxGuestStore(emitter, 0, OSXJITGPR(base));
+				OsxGuestRecord(emitter, instruction);
+				return 1;
+			}
+#endif
 			OsxGuestLoad(emitter, 1, OSXJITGPR(index));
 			if (extended == 28 || extended == 476)
 				OsxGuestReg3(emitter, 0x0a000000u, 0, 0, 1);
@@ -7551,6 +8130,9 @@ static void OsxGuestCompile(OsxCpu *cpu, OsxNativeState *state, OsxNativeBlock *
 	emitter.deterministic = cpu->deterministic != 0;
 	emitter.enabled = 0;
 	emitter.misscount = 0;
+#if OSXJITINLINETLB
+	emitter.tlbsites = 0;
+#endif
 	OsxGuestOp(&emitter, 0xa9bc7bfdu);
 	OsxGuestOp(&emitter, 0x910003fdu);
 	OsxGuestOp(&emitter, 0xa90153f3u);
@@ -7590,6 +8172,9 @@ static void OsxGuestCompile(OsxCpu *cpu, OsxNativeState *state, OsxNativeBlock *
 		OsxGuestReturn(&emitter, count);
 	else if (status == 1)
 		OsxGuestExit(&emitter, count, (physical & 4095) + (uint32)count * 4);
+#if OSXJITINLINETLB
+	OsxGuestTranslateStubs(&emitter);
+#endif
 	for (index = 0; index < emitter.misscount; index++) {
 		shared = 0;
 		while (shared < index && emitter.misscounts[shared] != emitter.misscounts[index])

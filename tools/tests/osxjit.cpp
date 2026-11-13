@@ -73,10 +73,10 @@ static void Reset(OsxJitTest *test)
 		test->reference->gpr[reg] = value;
 		test->native->gpr[reg] = value;
 	}
-	test->reference->cr = Random(test);
-	test->native->cr = test->reference->cr;
-	test->reference->xer = Random(test) & 0xe000007f;
-	test->native->xer = test->reference->xer;
+	OsxGuestCpuSetCr(test->reference, Random(test), OSXCRALLFIELDS);
+	OsxGuestCpuSetCr(test->native, OsxGuestCpuCr(test->reference), OSXCRALLFIELDS);
+	OsxGuestCpuSetXer(test->reference, Random(test) & 0xe000007f);
+	OsxGuestCpuSetXer(test->native, OsxGuestCpuXer(test->reference));
 	test->reference->lr = Random(test);
 	test->native->lr = test->reference->lr;
 	test->reference->ctr = Random(test);
@@ -111,7 +111,7 @@ static void Compare(OsxJitTest *test, const char *name, uint32 instruction)
 	matches &= reference->vscr == native->vscr && reference->vrsave == native->vrsave;
 	matches &= memcmp(reference->sr, native->sr, sizeof(reference->sr)) == 0;
 	matches &= reference->pc == native->pc && reference->nextpc == native->nextpc;
-	matches &= reference->cr == native->cr && reference->xer == native->xer;
+	matches &= OsxGuestCpuCr(reference) == OsxGuestCpuCr(native) && OsxGuestCpuXer(reference) == OsxGuestCpuXer(native);
 	matches &= reference->lr == native->lr && reference->ctr == native->ctr;
 	matches &= reference->msr == native->msr && reference->fpscr == native->fpscr;
 	matches &= reference->srr0 == native->srr0 && reference->srr1 == native->srr1;
@@ -1068,6 +1068,9 @@ static void Contexts(OsxJitTest *test)
 			MapPage(cpu, cpu->gpr[4], physical, 2);
 			Put(cpu, physical, (uint32)scenario);
 			OsxGuestCpuUpdateModes(cpu);
+#if OSXJITSEGMENTFLUSH
+			OsxGuestCpuSegmentsChanged(cpu);
+#endif
 		}
 		OsxGuestCpuRun(test->reference, 1);
 		OsxGuestJitRun(test->native, 1);
@@ -1379,9 +1382,9 @@ static void Reset970(Osx970 *core, OsxCpu *cpu)
 	cpu->buscontext = cpu;
 	cpu->busread = BusRead;
 	cpu->buswrite = BusWrite;
-	Osx970Reset(core, cpu, OSX970PVR);
-	cpu->xer = 0;
-	cpu->cr = 0;
+	OsxGuest970Reset(core, cpu, OSX970PVR);
+	OsxGuestCpuSetXer(cpu, 0);
+	OsxGuestCpuSetCr(cpu, 0, OSXCRALLFIELDS);
 	core->msr = OSX970MSRHV | OSXMSRFP;
 	core->pc = TESTENTRY;
 }
@@ -1389,7 +1392,7 @@ static void Reset970(Osx970 *core, OsxCpu *cpu)
 static uint64 Step970(Osx970 *core, uint32 instruction)
 {
 	Put970(core, core->pc, 4, instruction);
-	Osx970Run(core, 1);
+	OsxGuest970Run(core, 1);
 	return core->gpr[3];
 }
 
@@ -1450,8 +1453,8 @@ static void Differential970(OsxJitTest *test, Osx970 *core)
 		Reset970(core, core->cpu);
 		for (reg = 0; reg < 32; reg++)
 			core->gpr[reg] = ((uint64)Random(test) << 32) | reference->gpr[reg];
-		core->cpu->cr = reference->cr;
-		core->cpu->xer = reference->xer;
+		OsxGuestCpuSetCr(core->cpu, OsxGuestCpuCr(reference), OSXCRALLFIELDS);
+		OsxGuestCpuSetXer(core->cpu, OsxGuestCpuXer(reference));
 		core->lr = ((uint64)Random(test) << 32) | reference->lr;
 		core->ctr = ((uint64)Random(test) << 32) | reference->ctr;
 		index = (int)(Random(test) % (sizeof(templates) / sizeof(templates[0])));
@@ -1459,11 +1462,11 @@ static void Differential970(OsxJitTest *test, Osx970 *core)
 		Put(reference, TESTENTRY, instruction);
 		OsxGuestCpuRun(reference, 1);
 		Put970(core, TESTENTRY, 4, instruction);
-		Osx970Run(core, 1);
+		OsxGuest970Run(core, 1);
 		matches = 1;
 		for (reg = 0; reg < 32; reg++)
 			matches &= (uint32)core->gpr[reg] == reference->gpr[reg];
-		matches &= core->cpu->cr == reference->cr && core->cpu->xer == reference->xer;
+		matches &= OsxGuestCpuCr(core->cpu) == OsxGuestCpuCr(reference) && OsxGuestCpuXer(core->cpu) == OsxGuestCpuXer(reference);
 		matches &= (uint32)core->lr == reference->lr && (uint32)core->ctr == reference->ctr;
 		matches &= (uint32)core->pc == reference->pc && core->pc <= 0xffffffffULL;
 		test->checks++;
@@ -1474,7 +1477,7 @@ static void Differential970(OsxJitTest *test, Osx970 *core)
 				OsxGuestCpuDump(reference, stdout);
 				for (reg = 0; reg < 32; reg += 4)
 					printf("970 r%-2d %016llx %016llx %016llx %016llx\n", reg, (unsigned long long)core->gpr[reg], (unsigned long long)core->gpr[reg + 1], (unsigned long long)core->gpr[reg + 2], (unsigned long long)core->gpr[reg + 3]);
-				printf("970 pc %016llx cr %08x xer %08x lr %016llx ctr %016llx\n", (unsigned long long)core->pc, core->cpu->cr, core->cpu->xer, (unsigned long long)core->lr, (unsigned long long)core->ctr);
+				printf("970 pc %016llx cr %08x xer %08x lr %016llx ctr %016llx\n", (unsigned long long)core->pc, OsxGuestCpuCr(core->cpu), OsxGuestCpuXer(core->cpu), (unsigned long long)core->lr, (unsigned long long)core->ctr);
 			}
 		}
 	}
@@ -1493,9 +1496,9 @@ static void Wide970(OsxJitTest *test, Osx970 *core)
 	Expect970(test, "srd", Step970(core, 0x7c000436 | (4u << 21) | (3u << 16) | (5u << 11)), 0x00123456789abcdeULL);
 	core->gpr[4] = 0xf000000000000010ULL;
 	Expect970(test, "srad", Step970(core, 0x7c000634 | (4u << 21) | (3u << 16) | (5u << 11)), 0xfff0000000000000ULL);
-	Expect970(test, "srad carry", (core->cpu->xer >> 29) & 1, 1);
+	Expect970(test, "srad carry", OsxGuestCpuCarry(core->cpu), 1);
 	Expect970(test, "sradi", Step970(core, 0x7c000674 | (4u << 21) | (3u << 16) | (4u << 11)), 0xff00000000000001ULL);
-	Expect970(test, "sradi carry", (core->cpu->xer >> 29) & 1, 0);
+	Expect970(test, "sradi carry", OsxGuestCpuCarry(core->cpu), 0);
 	core->gpr[4] = 0x0000000080000000ULL;
 	Expect970(test, "extsw", Step970(core, 0x7c0007b4 | (4u << 21) | (3u << 16)), 0xffffffff80000000ULL);
 	Expect970(test, "cntlzd", Step970(core, 0x7c000074 | (4u << 21) | (3u << 16)), 32);
@@ -1516,19 +1519,19 @@ static void Wide970(OsxJitTest *test, Osx970 *core)
 	core->gpr[4] = 0x0000000100000000ULL;
 	core->gpr[5] = 1;
 	Step970(core, 0x7c200000 | (4u << 16) | (5u << 11));
-	Expect970(test, "cmpd", core->cpu->cr >> 28, 4);
+	Expect970(test, "cmpd", OsxGuestCpuCr(core->cpu) >> 28, 4);
 	Step970(core, 0x7c000000 | (4u << 16) | (5u << 11));
-	Expect970(test, "cmpw", core->cpu->cr >> 28, 8);
+	Expect970(test, "cmpw", OsxGuestCpuCr(core->cpu) >> 28, 8);
 	core->gpr[4] = 0xffffffffffffffffULL;
 	core->gpr[5] = 1;
 	Expect970(test, "add carry 64", Step970(core, 0x7c000014 | (3u << 21) | (4u << 16) | (5u << 11)), 0);
-	Expect970(test, "add carry 64 ca", (core->cpu->xer >> 29) & 1, 1);
+	Expect970(test, "add carry 64 ca", OsxGuestCpuCarry(core->cpu), 1);
 	core->gpr[4] = 0x00000000ffffffffULL;
 	Expect970(test, "add carry 64 no ca", Step970(core, 0x7c000014 | (3u << 21) | (4u << 16) | (5u << 11)), 0x100000000ULL);
-	Expect970(test, "add carry 64 no ca flag", (core->cpu->xer >> 29) & 1, 0);
+	Expect970(test, "add carry 64 no ca flag", OsxGuestCpuCarry(core->cpu), 0);
 	core->msr &= ~OSX970MSRSF;
 	Step970(core, 0x7c000014 | (3u << 21) | (4u << 16) | (5u << 11));
-	Expect970(test, "add carry 32 ca flag", (core->cpu->xer >> 29) & 1, 1);
+	Expect970(test, "add carry 32 ca flag", OsxGuestCpuCarry(core->cpu), 1);
 	Expect970(test, "add carry 32 result", core->gpr[3], 0x100000000ULL);
 	core->msr |= OSX970MSRSF;
 	core->gpr[4] = TESTDATA;
@@ -1543,11 +1546,11 @@ static void Wide970(OsxJitTest *test, Osx970 *core)
 	Step970(core, 0x7c0000a8 | (3u << 21) | (4u << 11));
 	Expect970(test, "ldarx", core->gpr[3], 0);
 	core->gpr[6] = 0x1111222233334444ULL;
-	core->cpu->xer = 0;
+	OsxGuestCpuSetXer(core->cpu, 0);
 	Step970(core, 0x7c0001ad | (6u << 21) | (4u << 11));
-	Expect970(test, "stdcx success", core->cpu->cr >> 28, 2);
+	Expect970(test, "stdcx success", OsxGuestCpuCr(core->cpu) >> 28, 2);
 	Step970(core, 0x7c0001ad | (6u << 21) | (4u << 11));
-	Expect970(test, "stdcx fail", core->cpu->cr >> 28, 0);
+	Expect970(test, "stdcx fail", OsxGuestCpuCr(core->cpu) >> 28, 0);
 	core->gpr[3] = 0;
 	core->gpr[4] = 0xffffffff00000000ULL;
 	core->gpr[5] = 0x0000000012345678ULL;
@@ -1597,22 +1600,22 @@ static void Mmu970(OsxJitTest *test, Osx970 *core)
 	Put970(core, pteg + 16 * 3, 8, (vsid << 12) | ((address >> 16) & 0xf80) | 1);
 	Put970(core, pteg + 16 * 3 + 8, 8, 0x60000 | 2);
 	core->msr |= OSXMSRDR;
-	Expect970(test, "translate hit", (uint64)Osx970Translate(core, address + 0x123, OSXTLBREAD, 0, &physical), 1);
+	Expect970(test, "translate hit", (uint64)OsxGuest970Translate(core, address + 0x123, OSXTLBREAD, 0, &physical), 1);
 	Expect970(test, "translate address", physical, 0x60123);
 	Expect970(test, "translate referenced", core->cpu->ram[pteg + 16 * 3 + 14] & 1, 1);
-	Expect970(test, "translate segment miss", (uint64)Osx970Translate(core, 0x0000000220005000ULL, OSXTLBREAD, 0, &physical), 0);
+	Expect970(test, "translate segment miss", (uint64)OsxGuest970Translate(core, 0x0000000220005000ULL, OSXTLBREAD, 0, &physical), 0);
 	core->pc = TESTENTRY;
 	core->msr &= ~(uint64)OSXMSRDR;
 	core->gpr[5] = 0xdeadbeefcafef00dULL;
 	core->gpr[4] = address + 0x40;
 	core->msr |= OSXMSRDR;
 	Put970(core, TESTENTRY, 4, 0xf8000000 | (5u << 21) | (4u << 16));
-	Osx970Run(core, 1);
+	OsxGuest970Run(core, 1);
 	Expect970(test, "store through mmu", ((uint64)core->cpu->ram[0x60040] << 24) | ((uint64)core->cpu->ram[0x60041] << 16) | ((uint64)core->cpu->ram[0x60042] << 8) | core->cpu->ram[0x60043], 0xdeadbeef);
 	Expect970(test, "store changed bit", (core->cpu->ram[pteg + 16 * 3 + 15] >> 7) & 1, 1);
 	core->gpr[4] = 0x0000000220005000ULL;
 	core->pc = TESTENTRY;
-	Osx970Run(core, 1);
+	OsxGuest970Run(core, 1);
 	Expect970(test, "data segment vector", core->pc, 0x380);
 	Expect970(test, "data segment dar", core->dar, 0x0000000220005000ULL);
 }
@@ -1690,7 +1693,7 @@ static void Jit970(OsxJitTest *test, Osx970 *interpreted)
 	cpu->ram = (uint8 *)calloc(1, TESTRAMSIZE);
 	Reset970(compiled, cpu);
 	compiled->jithot = 1;
-	if (!Osx970JitCreate(compiled)) {
+	if (!OsxGuest970JitCreate(compiled)) {
 		printf("970 jit unavailable\n");
 		free(cpu->ram);
 		free(compiled);
@@ -1730,8 +1733,8 @@ static void Jit970(OsxJitTest *test, Osx970 *interpreted)
 			else {
 				core->msr = OSX970MSRHV | OSXMSRFP;
 				core->pc = TESTENTRY;
-				core->cpu->cr = 0;
-				core->cpu->xer = 0;
+				OsxGuestCpuSetCr(core->cpu, 0, OSXCRALLFIELDS);
+				OsxGuestCpuSetXer(core->cpu, 0);
 			}
 			if (iteration & 1)
 				core->msr |= OSX970MSRSF;
@@ -1757,10 +1760,10 @@ static void Jit970(OsxJitTest *test, Osx970 *interpreted)
 		memcpy(compiled->cpu->vr, interpreted->cpu->vr, sizeof(interpreted->cpu->vr));
 		interpreted->reservationvalid = 0;
 		compiled->reservationvalid = 0;
-		interpreted->cpu->cr = Random(test);
-		interpreted->cpu->xer = Random(test) & 0xe000007f;
-		compiled->cpu->cr = interpreted->cpu->cr;
-		compiled->cpu->xer = interpreted->cpu->xer;
+		OsxGuestCpuSetCr(interpreted->cpu, Random(test), OSXCRALLFIELDS);
+		OsxGuestCpuSetXer(interpreted->cpu, Random(test) & 0xe000007f);
+		OsxGuestCpuSetCr(compiled->cpu, OsxGuestCpuCr(interpreted->cpu), OSXCRALLFIELDS);
+		OsxGuestCpuSetXer(compiled->cpu, OsxGuestCpuXer(interpreted->cpu));
 		interpreted->lr = TESTENTRY + 96;
 		interpreted->ctr = ((uint64)Random(test) << 32) | (TESTENTRY + 96);
 		if (smallctr)
@@ -1780,15 +1783,15 @@ static void Jit970(OsxJitTest *test, Osx970 *interpreted)
 		}
 		Put970(interpreted, TESTENTRY + 96, 4, 0x48000000);
 		Put970(compiled, TESTENTRY + 96, 4, 0x48000000);
-		Osx970InvalidatePhysical(compiled, TESTENTRY, 4096);
-		Osx970Run(interpreted, 24);
-		Osx970Run(compiled, 24);
+		OsxGuest970InvalidatePhysical(compiled, TESTENTRY, 4096);
+		OsxGuest970Run(interpreted, 24);
+		OsxGuest970Run(compiled, 24);
 		if (compiled->cpu->slice < 0)
-			Osx970Run(interpreted, -compiled->cpu->slice);
+			OsxGuest970Run(interpreted, -compiled->cpu->slice);
 		matches = 1;
 		for (reg = 0; reg < 32; reg++)
 			matches &= interpreted->gpr[reg] == compiled->gpr[reg];
-		matches &= interpreted->cpu->cr == compiled->cpu->cr && interpreted->cpu->xer == compiled->cpu->xer;
+		matches &= OsxGuestCpuCr(interpreted->cpu) == OsxGuestCpuCr(compiled->cpu) && OsxGuestCpuXer(interpreted->cpu) == OsxGuestCpuXer(compiled->cpu);
 		matches &= interpreted->lr == compiled->lr && interpreted->ctr == compiled->ctr && interpreted->pc == compiled->pc;
 		matches &= memcmp(interpreted->cpu->ram + TESTDATA, compiled->cpu->ram + TESTDATA, TESTBYTES) == 0;
 		matches &= memcmp(interpreted->cpu->vr, compiled->cpu->vr, sizeof(interpreted->cpu->vr)) == 0;
@@ -1803,11 +1806,11 @@ static void Jit970(OsxJitTest *test, Osx970 *interpreted)
 				for (reg = 0; reg < 32; reg++)
 					if (interpreted->gpr[reg] != compiled->gpr[reg])
 						printf("  r%d %016llx jit %016llx\n", reg, (unsigned long long)interpreted->gpr[reg], (unsigned long long)compiled->gpr[reg]);
-				printf("  cr %08x jit %08x xer %08x jit %08x pc %llx jit %llx\n", interpreted->cpu->cr, compiled->cpu->cr, interpreted->cpu->xer, compiled->cpu->xer, (unsigned long long)interpreted->pc, (unsigned long long)compiled->pc);
+				printf("  cr %08x jit %08x xer %08x jit %08x pc %llx jit %llx\n", OsxGuestCpuCr(interpreted->cpu), OsxGuestCpuCr(compiled->cpu), OsxGuestCpuXer(interpreted->cpu), OsxGuestCpuXer(compiled->cpu), (unsigned long long)interpreted->pc, (unsigned long long)compiled->pc);
 			}
 		}
 	}
-	Osx970JitDestroy(compiled);
+	OsxGuest970JitDestroy(compiled);
 	free(cpu->ram);
 	free(compiled);
 	free(cpu);

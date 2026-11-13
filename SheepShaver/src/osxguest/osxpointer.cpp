@@ -25,8 +25,8 @@ static void OsxGuestCallGuest(OsxCpu *cpu, OsxPointer *pointer, uint32 stack, ui
 	memcpy(pointer->registers, cpu->gpr, sizeof(pointer->registers));
 	pointer->lr = cpu->lr;
 	pointer->ctr = cpu->ctr;
-	pointer->cr = cpu->cr;
-	pointer->xer = cpu->xer;
+	pointer->cr = OsxGuestCpuCr(cpu);
+	pointer->xer = OsxGuestCpuXer(cpu);
 	pointer->callstack = stack;
 	cpu->gpr[1] = stack;
 	cpu->lr = cpu->pc;
@@ -110,8 +110,8 @@ void OsxGuestPointerHook(OsxCpu *cpu, void *context, uint32 address)
 		memcpy(cpu->gpr, pointer->registers, sizeof(pointer->registers));
 		cpu->lr = pointer->lr;
 		cpu->ctr = pointer->ctr;
-		cpu->cr = pointer->cr;
-		cpu->xer = pointer->xer;
+		OsxGuestCpuSetCr(cpu, pointer->cr, OSXCRALLFIELDS);
+		OsxGuestCpuSetXer(cpu, pointer->xer);
 		cpu->nextpc = pointer->lr;
 		pointer->callstack = 0;
 		return;

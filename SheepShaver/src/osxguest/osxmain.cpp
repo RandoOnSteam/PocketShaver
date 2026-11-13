@@ -876,6 +876,9 @@ static int OsxGuestKernelRead32(OsxCpu *cpu, uint32 address, uint32 *value)
 	result = OsxGuestCpuReadVirtual(cpu, address, value);
 	cpu->msr = savedmsr;
 	memcpy(cpu->sr, savedsr, sizeof(savedsr));
+#if OSXJITSEGMENTFLUSH
+	OsxGuestCpuSegmentsChanged(cpu);
+#endif
 	return result;
 }
 
@@ -1407,7 +1410,7 @@ static void OsxGuestLogSlice(FILE *slicelog, OsxCpu *cpu)
 {
 	uint32 hash;
 	int index;
-	hash = cpu->cr ^ cpu->lr ^ cpu->ctr ^ cpu->xer;
+	hash = OsxGuestCpuCr(cpu) ^ cpu->lr ^ cpu->ctr ^ OsxGuestCpuXer(cpu);
 	for (index = 0; index < 32; index++)
 		hash = hash * 31 + cpu->gpr[index] + (uint32)cpu->fpr[index].bits;
 	fprintf(slicelog, "%llu %08x %08x\n", (unsigned long long)cpu->instructions, cpu->pc, hash);

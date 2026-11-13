@@ -41,14 +41,6 @@
 #define OSXACCESSHOST 1
 #define OSXACCESSBUS 2
 
-#if defined(_MSC_VER)
-#define OSXFORCEINLINE __forceinline
-#elif defined(__GNUC__)
-#define OSXFORCEINLINE inline __attribute__((always_inline))
-#else
-#define OSXFORCEINLINE inline
-#endif
-
 static inline uint32 OsxGuestLoadHost32(const uint8 *host)
 {
 	uint32 value;
@@ -334,6 +326,23 @@ void OsxGuestCpuFlushTlb(OsxCpu *cpu)
 	cpu->fetchtag = 0;
 }
 
+#if OSXJITSEGMENTFLUSH
+void OsxGuestCpuSegmentsChanged(OsxCpu *cpu)
+{
+	OsxTlbEntry *entry;
+	int mode;
+	int kind;
+	int index;
+	for (mode = 0; mode < OSXMODEREAL; mode++)
+		for (kind = OSXTLBREAD; kind <= OSXTLBWRITE; kind++)
+			for (index = 0; index < OSXTLBSIZE; index++) {
+				entry = &cpu->tlb[mode][kind][index];
+				if (entry->segment != cpu->sr[entry->page >> 28])
+					entry->page = OSXTLBINVALID;
+			}
+}
+#endif
+
 static void OsxGuestInvalidateTlbPage(OsxCpu *cpu, uint32 address)
 {
 	int mode;
@@ -434,8 +443,8 @@ void OsxGuestCpuReset(OsxCpu *cpu, uint32 pvr, uint64 tbfrequency)
 	memset(cpu->pmc, 0, sizeof(cpu->pmc));
 	cpu->pc = 0xfff00100;
 	cpu->nextpc = cpu->pc;
-	cpu->cr = 0;
-	cpu->xer = 0;
+	OsxGuestCpuSetCr(cpu, 0, OSXCRALLFIELDS);
+	OsxGuestCpuSetXer(cpu, 0);
 	cpu->lr = 0;
 	cpu->ctr = 0;
 	cpu->msr = OSXMSRIP;
@@ -1094,38 +1103,7 @@ static OSXFORCEINLINE void OsxGuestSetCr0(OsxCpu *cpu, uint32 result)
 		field = 4;
 	else
 		field = 2;
-	field |= cpu->xer >> 31;
-	cpu->cr = (cpu->cr & 0x0fffffff) | (field << 28);
-}
-
-static OSXFORCEINLINE void OsxGuestSetCrField(OsxCpu *cpu, int field, uint32 value)
-{
-	int shift;
-	shift = (7 - field) * 4;
-	cpu->cr = (cpu->cr & ~(0xfu << shift)) | (value << shift);
-}
-
-static OSXFORCEINLINE uint32 OsxGuestCrBit(OsxCpu *cpu, int bit)
-{
-	return (cpu->cr >> (31 - bit)) & 1;
-}
-
-static OSXFORCEINLINE void OsxGuestSetCrBit(OsxCpu *cpu, int bit, uint32 value)
-{
-	uint32 mask;
-	mask = 0x80000000u >> bit;
-	if (value)
-		cpu->cr |= mask;
-	else
-		cpu->cr &= ~mask;
-}
-
-static OSXFORCEINLINE void OsxGuestSetCarry(OsxCpu *cpu, int carry)
-{
-	if (carry)
-		cpu->xer |= OSXXERCA;
-	else
-		cpu->xer &= ~OSXXERCA;
+	OsxGuestSetCrField(cpu, 0, field | (cpu->xer >> 31));
 }
 
 static OSXFORCEINLINE void OsxGuestSetOverflow(OsxCpu *cpu, int overflow)
@@ -1204,7 +1182,7 @@ static uint32 OsxGuestAddExtended(OsxCpu *cpu, uint32 left, uint32 right, uint32
 	uint32 result;
 	sum = (uint64)left + right + carryin;
 	result = (uint32)sum;
-	OsxGuestSetCarry(cpu, (int)(sum >> 32));
+	OsxGuestCpuSetCarry(cpu, (int)(sum >> 32));
 	if (instruction & 0x400)
 		OsxGuestSetOverflow(cpu, (int)((~(left ^ right) & (left ^ result)) >> 31));
 	return result;
@@ -1300,7 +1278,7 @@ static void OsxGuestWriteDecrementer(OsxCpu *cpu, uint32 value)
 static int OsxGuestReadSpr(OsxCpu *cpu, uint32 number, uint32 *value)
 {
 	switch (number) {
-	case 1: *value = cpu->xer; return 1;
+	case 1: *value = OsxGuestCpuXer(cpu); return 1;
 	case 8: *value = cpu->lr; return 1;
 	case 9: *value = cpu->ctr; return 1;
 	case 18: *value = cpu->dsisr; return 1;
@@ -1347,7 +1325,7 @@ static int OsxGuestReadSpr(OsxCpu *cpu, uint32 number, uint32 *value)
 static int OsxGuestWriteSpr(OsxCpu *cpu, uint32 number, uint32 value)
 {
 	switch (number) {
-	case 1: cpu->xer = value & 0xe000007f; return 1;
+	case 1: OsxGuestCpuSetXer(cpu, value & 0xe000007f); return 1;
 	case 8: cpu->lr = value; return 1;
 	case 9: cpu->ctr = value; return 1;
 	case 18: cpu->dsisr = value; return 1;
@@ -1652,7 +1630,7 @@ static void OsxGuestExecuteGroup19(OsxCpu *cpu, uint32 instruction)
 	right = OsxGuestCrBit(cpu, bitb);
 	switch (extended) {
 	case 0:
-		OsxGuestSetCrField(cpu, bitd >> 2, (cpu->cr >> ((7 - (bita >> 2)) * 4)) & 0xf);
+		OsxGuestSetCrField(cpu, bitd >> 2, OsxGuestCrField(cpu, bita >> 2));
 		return;
 	case 16:
 		target = cpu->lr & ~3u;
@@ -1757,27 +1735,27 @@ static void OsxGuestExecuteGroup31(OsxCpu *cpu, uint32 instruction)
 		cpu->gpr[rd] = result;
 		break;
 	case 136: case 648:
-		result = OsxGuestAddExtended(cpu, ~cpu->gpr[ra], operand, (cpu->xer >> 29) & 1, (int)instruction);
+		result = OsxGuestAddExtended(cpu, ~cpu->gpr[ra], operand, OsxGuestCpuCarry(cpu), (int)instruction);
 		cpu->gpr[rd] = result;
 		break;
 	case 138: case 650:
-		result = OsxGuestAddExtended(cpu, cpu->gpr[ra], operand, (cpu->xer >> 29) & 1, (int)instruction);
+		result = OsxGuestAddExtended(cpu, cpu->gpr[ra], operand, OsxGuestCpuCarry(cpu), (int)instruction);
 		cpu->gpr[rd] = result;
 		break;
 	case 200: case 712:
-		result = OsxGuestAddExtended(cpu, ~cpu->gpr[ra], 0, (cpu->xer >> 29) & 1, (int)instruction);
+		result = OsxGuestAddExtended(cpu, ~cpu->gpr[ra], 0, OsxGuestCpuCarry(cpu), (int)instruction);
 		cpu->gpr[rd] = result;
 		break;
 	case 202: case 714:
-		result = OsxGuestAddExtended(cpu, cpu->gpr[ra], 0, (cpu->xer >> 29) & 1, (int)instruction);
+		result = OsxGuestAddExtended(cpu, cpu->gpr[ra], 0, OsxGuestCpuCarry(cpu), (int)instruction);
 		cpu->gpr[rd] = result;
 		break;
 	case 232: case 744:
-		result = OsxGuestAddExtended(cpu, ~cpu->gpr[ra], 0xffffffffu, (cpu->xer >> 29) & 1, (int)instruction);
+		result = OsxGuestAddExtended(cpu, ~cpu->gpr[ra], 0xffffffffu, OsxGuestCpuCarry(cpu), (int)instruction);
 		cpu->gpr[rd] = result;
 		break;
 	case 234: case 746:
-		result = OsxGuestAddExtended(cpu, cpu->gpr[ra], 0xffffffffu, (cpu->xer >> 29) & 1, (int)instruction);
+		result = OsxGuestAddExtended(cpu, cpu->gpr[ra], 0xffffffffu, OsxGuestCpuCarry(cpu), (int)instruction);
 		cpu->gpr[rd] = result;
 		break;
 	case 40: case 552:
@@ -1874,13 +1852,13 @@ static void OsxGuestExecuteGroup31(OsxCpu *cpu, uint32 instruction)
 				result = 0xffffffffu;
 			else
 				result = 0;
-			OsxGuestSetCarry(cpu, (int32)source < 0);
+			OsxGuestCpuSetCarry(cpu, (int32)source < 0);
 		} else if (shift == 0) {
 			result = source;
-			OsxGuestSetCarry(cpu, 0);
+			OsxGuestCpuSetCarry(cpu, 0);
 		} else {
 			result = (uint32)((int32)source >> shift);
-			OsxGuestSetCarry(cpu, (int32)source < 0 && (source & ((1u << shift) - 1)) != 0);
+			OsxGuestCpuSetCarry(cpu, (int32)source < 0 && (source & ((1u << shift) - 1)) != 0);
 		}
 		cpu->gpr[ra] = result;
 		break;
@@ -1888,26 +1866,22 @@ static void OsxGuestExecuteGroup31(OsxCpu *cpu, uint32 instruction)
 		shift = (uint32)rb;
 		if (shift == 0) {
 			result = source;
-			OsxGuestSetCarry(cpu, 0);
+			OsxGuestCpuSetCarry(cpu, 0);
 		} else {
 			result = (uint32)((int32)source >> shift);
-			OsxGuestSetCarry(cpu, (int32)source < 0 && (source & ((1u << shift) - 1)) != 0);
+			OsxGuestCpuSetCarry(cpu, (int32)source < 0 && (source & ((1u << shift) - 1)) != 0);
 		}
 		cpu->gpr[ra] = result;
 		break;
 	case 19:
-		cpu->gpr[rd] = cpu->cr;
+		cpu->gpr[rd] = OsxGuestCpuCr(cpu);
 		return;
 	case 144:
-		mask = (instruction >> 12) & 0xff;
-		mask = (mask | (mask << 12)) & 0x000f000fu;
-		mask = (mask | (mask << 6)) & 0x03030303u;
-		mask = ((mask | (mask << 3)) & 0x11111111u) * 0xf;
-		cpu->cr = (cpu->cr & ~mask) | (source & mask);
+		OsxGuestCpuSetCr(cpu, source, (instruction >> 12) & 0xff);
 		return;
 	case 512:
-		OsxGuestSetCrField(cpu, rd >> 2, cpu->xer >> 28);
-		cpu->xer &= 0x0fffffffu;
+		OsxGuestSetCrField(cpu, rd >> 2, OsxGuestCpuXer(cpu) >> 28);
+		OsxGuestCpuSetXer(cpu, OsxGuestCpuXer(cpu) & 0x0fffffffu);
 		return;
 	case 83:
 		if (!OsxGuestRequireSupervisor(cpu))
@@ -1941,7 +1915,14 @@ static void OsxGuestExecuteGroup31(OsxCpu *cpu, uint32 instruction)
 	case 210:
 		if (!OsxGuestRequireSupervisor(cpu))
 			return;
+#if OSXJITSEGMENTFLUSH
+		if (cpu->sr[ra & 15] != source) {
+			cpu->sr[ra & 15] = source;
+			OsxGuestCpuSegmentsChanged(cpu);
+		}
+#else
 		cpu->sr[ra & 15] = source;
+#endif
 		cpu->fetchtag = 0;
 		if ((uint32)(ra & 15) == cpu->pc >> 28)
 			cpu->jitflush = 1;
@@ -1949,7 +1930,14 @@ static void OsxGuestExecuteGroup31(OsxCpu *cpu, uint32 instruction)
 	case 242:
 		if (!OsxGuestRequireSupervisor(cpu))
 			return;
+#if OSXJITSEGMENTFLUSH
+		if (cpu->sr[operand >> 28] != source) {
+			cpu->sr[operand >> 28] = source;
+			OsxGuestCpuSegmentsChanged(cpu);
+		}
+#else
 		cpu->sr[operand >> 28] = source;
+#endif
 		cpu->fetchtag = 0;
 		if (operand >> 28 == cpu->pc >> 28)
 			cpu->jitflush = 1;
@@ -2241,7 +2229,7 @@ static OSXFORCEINLINE void OsxGuestExecute(OsxCpu *cpu, uint32 instruction)
 	case 8:
 		sum = (uint64)(uint32)~cpu->gpr[ra] + signedimmediate + 1;
 		cpu->gpr[rd] = (uint32)sum;
-		OsxGuestSetCarry(cpu, (int)(sum >> 32));
+		OsxGuestCpuSetCarry(cpu, (int)(sum >> 32));
 		return;
 	case 10:
 		OsxGuestCompareUnsigned(cpu, rd >> 2, cpu->gpr[ra], immediate);
@@ -2253,7 +2241,7 @@ static OSXFORCEINLINE void OsxGuestExecute(OsxCpu *cpu, uint32 instruction)
 	case 13:
 		sum = (uint64)cpu->gpr[ra] + signedimmediate;
 		cpu->gpr[rd] = (uint32)sum;
-		OsxGuestSetCarry(cpu, (int)(sum >> 32));
+		OsxGuestCpuSetCarry(cpu, (int)(sum >> 32));
 		if (opcode == 13)
 			OsxGuestSetCr0(cpu, (uint32)sum);
 		return;
@@ -2504,7 +2492,7 @@ void OsxGuestCpuRun(OsxCpu *cpu, int32 count)
 void OsxGuestCpuDump(OsxCpu *cpu, FILE *output)
 {
 	int index;
-	fprintf(output, "pc %08x msr %08x lr %08x ctr %08x cr %08x xer %08x\n", cpu->pc, cpu->msr, cpu->lr, cpu->ctr, cpu->cr, cpu->xer);
+	fprintf(output, "pc %08x msr %08x lr %08x ctr %08x cr %08x xer %08x\n", cpu->pc, cpu->msr, cpu->lr, cpu->ctr, OsxGuestCpuCr(cpu), OsxGuestCpuXer(cpu));
 	fprintf(output, "srr0 %08x srr1 %08x dar %08x dsisr %08x sdr1 %08x dec %08x\n", cpu->srr0, cpu->srr1, cpu->dar, cpu->dsisr, cpu->sdr1, cpu->decvalue);
 	for (index = 0; index < 32; index += 4)
 		fprintf(output, "r%-2d %08x %08x %08x %08x\n", index, cpu->gpr[index], cpu->gpr[index + 1], cpu->gpr[index + 2], cpu->gpr[index + 3]);
@@ -2680,7 +2668,6 @@ void OsxGuestCpuSetFloatCompare(OsxCpu *cpu, int field, double left, double righ
 	uint32 value;
 	uint64 leftbits;
 	uint64 rightbits;
-	int shift;
 	leftbits = OsxGuestDoubleToBits(left);
 	rightbits = OsxGuestDoubleToBits(right);
 	if (OsxGuestIsNan(leftbits) || OsxGuestIsNan(rightbits)) {
@@ -2701,8 +2688,7 @@ void OsxGuestCpuSetFloatCompare(OsxCpu *cpu, int field, double left, double righ
 		value = 2;
 	}
 	cpu->fpscr = (cpu->fpscr & ~0x0000f000u) | (value << 12);
-	shift = (7 - field) * 4;
-	cpu->cr = (cpu->cr & ~(0xfu << shift)) | (value << shift);
+	OsxGuestSetCrField(cpu, field, value);
 }
 
 static uint64 OsxGuestConvertToInteger(OsxCpu *cpu, uint64 bits, int truncate)
@@ -2826,7 +2812,7 @@ static void OsxGuestExecuteArithmetic(OsxCpu *cpu, uint32 instruction, int singl
 			result = b;
 		cpu->fpr[target].bits = result;
 		if (instruction & 1)
-			cpu->cr = (cpu->cr & 0xf0ffffffu) | ((cpu->fpscr >> 4) & 0x0f000000u);
+			OsxGuestSetCrField(cpu, 1, cpu->fpscr >> 28);
 		return;
 	case 24:
 		finite = 0;
@@ -2885,7 +2871,7 @@ static void OsxGuestExecuteArithmetic(OsxCpu *cpu, uint32 instruction, int singl
 	}
 	OsxGuestFinishResult(cpu, target, result, single, finite);
 	if (instruction & 1)
-		cpu->cr = (cpu->cr & 0xf0ffffffu) | ((cpu->fpscr >> 4) & 0x0f000000u);
+		OsxGuestSetCrField(cpu, 1, cpu->fpscr >> 28);
 }
 
 static void OsxGuestExecuteControl(OsxCpu *cpu, uint32 instruction)
@@ -2935,7 +2921,7 @@ static void OsxGuestExecuteControl(OsxCpu *cpu, uint32 instruction)
 	case 64:
 		sourcefield = ((instruction >> 18) & 7);
 		value = (cpu->fpscr >> ((7 - sourcefield) * 4)) & 0xf;
-		cpu->cr = (cpu->cr & ~(0xfu << ((7 - (target >> 2)) * 4))) | (value << ((7 - (target >> 2)) * 4));
+		OsxGuestSetCrField(cpu, target >> 2, value);
 		cpu->fpscr &= ~((0xfu << ((7 - sourcefield) * 4)) & FPSCRSTICKY);
 		OsxGuestUpdateSummary(cpu);
 		return;
@@ -2969,7 +2955,7 @@ static void OsxGuestExecuteControl(OsxCpu *cpu, uint32 instruction)
 		return;
 	}
 	if (instruction & 1)
-		cpu->cr = (cpu->cr & 0xf0ffffffu) | ((cpu->fpscr >> 4) & 0x0f000000u);
+		OsxGuestSetCrField(cpu, 1, cpu->fpscr >> 28);
 }
 
 static void OsxGuestExecuteFloat(OsxCpu *cpu, uint32 instruction)
@@ -3468,7 +3454,7 @@ static void OsxGuestCompareVector(OsxCpu *cpu, uint32 *result, const uint32 *lef
 	}
 	OsxGuestPack(result, size, r);
 	if (record)
-		cpu->cr = (cpu->cr & ~0xf0u) | (alltrue << 7) | (allfalse << 5);
+		OsxGuestSetCrField(cpu, 6, (alltrue << 3) | (allfalse << 1));
 }
 
 static void OsxGuestCompareFloat(OsxCpu *cpu, uint32 *result, const uint32 *left, const uint32 *right, uint32 kind, int record)
@@ -3510,9 +3496,9 @@ static void OsxGuestCompareFloat(OsxCpu *cpu, uint32 *result, const uint32 *left
 	if (!record)
 		return;
 	if (kind == 966)
-		cpu->cr = (cpu->cr & ~0xf0u) | (allfalse << 5);
+		OsxGuestSetCrField(cpu, 6, allfalse << 1);
 	else
-		cpu->cr = (cpu->cr & ~0xf0u) | (alltrue << 7) | (allfalse << 5);
+		OsxGuestSetCrField(cpu, 6, (alltrue << 3) | (allfalse << 1));
 }
 
 static float OsxGuestRoundFloat(float value, uint32 kind)

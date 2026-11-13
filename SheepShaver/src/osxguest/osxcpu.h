@@ -53,8 +53,31 @@
 #define OSXFEATUREFMA 39
 #define OSXFEATURESSE41 37
 #define OSXFEATURESSE2 10
+#if !defined(OSXJITSEGMENTFLUSH)
+#define OSXJITSEGMENTFLUSH 0
+#endif
+#if !defined(OSXJITTLBWIDE)
+#define OSXJITTLBWIDE 1
+#endif
+#if !defined(OSXJITCAFIELD)
+#define OSXJITCAFIELD 1
+#endif
+#if !defined(OSXJITCRFIELDS)
+#define OSXJITCRFIELDS 1
+#endif
 
+#define OSXCRALLFIELDS 0xffu
+#if defined(_MSC_VER)
+#define OSXFORCEINLINE __forceinline
+#elif defined(__GNUC__)
+#define OSXFORCEINLINE inline __attribute__((always_inline))
+#else
+#define OSXFORCEINLINE inline
+#endif
+
+#if !defined(OSXTLBBITS)
 #define OSXTLBBITS 10
+#endif
 #define OSXTLBSIZE (1 << OSXTLBBITS)
 #define OSXTLBMASK (OSXTLBSIZE - 1)
 #define OSXTLBINVALID 1
@@ -130,6 +153,9 @@ typedef struct OsxTlbEntry {
 	uint32 page;
 	uint32 segment;
 	uint8 *host;
+#if OSXJITTLBWIDE && OSXHOSTX86
+	uint32 spare;
+#endif
 } OsxTlbEntry;
 
 typedef union OsxFloat {
@@ -174,8 +200,15 @@ struct OsxCpu {
 	OsxFloat fpr[32];
 	uint32 pc;
 	uint32 nextpc;
+#if OSXJITCRFIELDS
+	uint8 crf[8];
+#else
 	uint32 cr;
+#endif
 	uint32 xer;
+#if OSXJITCAFIELD
+	uint8 ca;
+#endif
 	uint32 lr;
 	uint32 ctr;
 	uint32 msr;
@@ -279,6 +312,111 @@ struct OsxCpu {
 	OsxTlbEntry tlb[OSXMODES][OSXTLBKINDS][OSXTLBSIZE];
 };
 
+static OSXFORCEINLINE uint32 OsxGuestCpuCarry(OsxCpu *cpu)
+{
+#if OSXJITCAFIELD
+	return cpu->ca;
+#else
+	return (cpu->xer >> 29) & 1;
+#endif
+}
+
+static OSXFORCEINLINE void OsxGuestCpuSetCarry(OsxCpu *cpu, int carry)
+{
+#if OSXJITCAFIELD
+	cpu->ca = (uint8)(carry != 0);
+#else
+	if (carry)
+		cpu->xer |= OSXXERCA;
+	else
+		cpu->xer &= ~OSXXERCA;
+#endif
+}
+
+static OSXFORCEINLINE uint32 OsxGuestCpuXer(OsxCpu *cpu)
+{
+#if OSXJITCAFIELD
+	return cpu->xer | ((uint32)cpu->ca << 29);
+#else
+	return cpu->xer;
+#endif
+}
+
+static OSXFORCEINLINE void OsxGuestCpuSetXer(OsxCpu *cpu, uint32 value)
+{
+#if OSXJITCAFIELD
+	cpu->xer = value & ~OSXXERCA;
+	cpu->ca = (uint8)((value >> 29) & 1);
+#else
+	cpu->xer = value;
+#endif
+}
+
+static OSXFORCEINLINE uint32 OsxGuestCrField(OsxCpu *cpu, int field)
+{
+#if OSXJITCRFIELDS
+	return cpu->crf[field];
+#else
+	return (cpu->cr >> ((7 - field) * 4)) & 0xf;
+#endif
+}
+
+static OSXFORCEINLINE void OsxGuestSetCrField(OsxCpu *cpu, int field, uint32 value)
+{
+#if OSXJITCRFIELDS
+	cpu->crf[field] = (uint8)value;
+#else
+	int shift;
+	shift = (7 - field) * 4;
+	cpu->cr = (cpu->cr & ~(0xfu << shift)) | (value << shift);
+#endif
+}
+
+static OSXFORCEINLINE uint32 OsxGuestCrBit(OsxCpu *cpu, int bit)
+{
+	return (OsxGuestCrField(cpu, bit >> 2) >> (3 - (bit & 3))) & 1;
+}
+
+static OSXFORCEINLINE void OsxGuestSetCrBit(OsxCpu *cpu, int bit, uint32 value)
+{
+	uint32 mask;
+	mask = 8u >> (bit & 3);
+	if (value)
+		OsxGuestSetCrField(cpu, bit >> 2, OsxGuestCrField(cpu, bit >> 2) | mask);
+	else
+		OsxGuestSetCrField(cpu, bit >> 2, OsxGuestCrField(cpu, bit >> 2) & ~mask);
+}
+
+static OSXFORCEINLINE uint32 OsxGuestCpuCr(OsxCpu *cpu)
+{
+#if OSXJITCRFIELDS
+	uint32 value;
+	int field;
+	value = 0;
+	for (field = 0; field < 8; field++)
+		value = (value << 4) | cpu->crf[field];
+	return value;
+#else
+	return cpu->cr;
+#endif
+}
+
+static OSXFORCEINLINE void OsxGuestCpuSetCr(OsxCpu *cpu, uint32 value, uint32 fields)
+{
+#if OSXJITCRFIELDS
+	int field;
+	for (field = 0; field < 8; field++)
+		if (fields & (0x80u >> field))
+			cpu->crf[field] = (uint8)((value >> ((7 - field) * 4)) & 0xf);
+#else
+	uint32 mask;
+	mask = (fields | (fields << 12)) & 0x000f000fu;
+	mask = (mask | (mask << 6)) & 0x03030303u;
+	mask = ((mask | (mask << 3)) & 0x11111111u) * 0xf;
+	cpu->cr = (cpu->cr & ~mask) | (value & mask);
+#endif
+}
+
 void OsxGuestCpuReset(OsxCpu *cpu, uint32 pvr, uint64 tbfrequency);
 void OsxGuestCpuSetModel(OsxCpu *cpu, uint32 pvr);
 int OsxGuestCpuReadData(OsxCpu *cpu, uint32 address, int size, uint32 *value);
@@ -312,6 +450,9 @@ void OsxGuestCpuCheckInterrupts(OsxCpu *cpu, uint64 now);
 void OsxGuestCpuRaiseException(OsxCpu *cpu, uint32 vector, uint32 srr1bits, uint32 srr0);
 void OsxGuestCpuUpdateModes(OsxCpu *cpu);
 void OsxGuestCpuFlushTlb(OsxCpu *cpu);
+#if OSXJITSEGMENTFLUSH
+void OsxGuestCpuSegmentsChanged(OsxCpu *cpu);
+#endif
 void OsxGuestCpuWatch(OsxCpu *cpu, FILE *file, uint32 rowbytes, uint32 left, uint32 top, uint32 right, uint32 bottom);
 OSXJITABI uint64 OsxGuestCpuTimebase(OsxCpu *cpu);
 uint64 OsxCpuHostTicks(void);
