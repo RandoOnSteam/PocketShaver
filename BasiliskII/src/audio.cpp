@@ -77,14 +77,32 @@ void AudioReset(void)
  *  Classic SoundBase buffer
  */
 
+static uint32 AudioSoundBasePort(void)
+{
+	uint32 base;
+	base = ReadMacInt32(AUDIO_SOUNDBASE_VIA);
+	if (base < MACIO_VIA_BASE || base > MACIO_VIA_BASE + MACIO_VIA_SIZE - AUDIO_SOUNDBASE_PORTA - 1)
+		return 0;
+	return base + AUDIO_SOUNDBASE_PORTA;
+}
+
 void AudioSoundBaseInstall(void)
 {
 	M68kRegisters r;
-	r.d[0] = AUDIO_SOUNDBASE_BYTES;
+	uint32 port;
+	memset(&r, 0, sizeof(r));
+	r.d[0] = AUDIO_SOUNDBASE_ALTERNATE + AUDIO_SOUNDBASE_BYTES;
 	Execute68kTrap(0xa71e, &r);
-	AudioStatus.soundbuffer = r.a[0];
-	if (r.a[0])
-		WriteMacInt32(0x266, r.a[0]);
+	AudioStatus.soundbuffer = 0;
+	if (r.a[0] == 0)
+		return;
+	AudioStatus.soundbuffer = r.a[0] + AUDIO_SOUNDBASE_ALTERNATE;
+	memset(Mac2HostAddr(r.a[0]), 0x80, AUDIO_SOUNDBASE_BYTES);
+	memset(Mac2HostAddr(AudioStatus.soundbuffer), 0x80, AUDIO_SOUNDBASE_BYTES);
+	WriteMacInt32(0x266, AudioStatus.soundbuffer);
+	port = AudioSoundBasePort();
+	if (port)
+		WriteMacInt8(port, ReadMacInt8(port) | AUDIO_SOUNDBASE_MAINPAGE);
 }
 
 void AudioSoundBaseTick(void)
@@ -95,14 +113,21 @@ void AudioSoundBaseTick(void)
 	uint32 frames;
 	uint32 sample;
 	uint32 audible;
+	uint32 port;
 	base = ReadMacInt32(0x266);
-	source = Mac2HostAddr(base);
-	if (source < RAMBaseHost || source + AUDIO_SOUNDBASE_BYTES > RAMBaseHost + RAMSize) {
+	if (base - RAMBase > RAMSize - AUDIO_SOUNDBASE_BYTES) {
 		if (AudioStatus.soundbuffer == 0)
 			return;
-		WriteMacInt32(0x266, AudioStatus.soundbuffer);
-		source = Mac2HostAddr(AudioStatus.soundbuffer);
+		base = AudioStatus.soundbuffer;
+		WriteMacInt32(0x266, base);
 	}
+	port = AudioSoundBasePort();
+	if (port && !(ReadMacInt8(port) & AUDIO_SOUNDBASE_MAINPAGE)) {
+		if (base - RAMBase < AUDIO_SOUNDBASE_ALTERNATE)
+			return;
+		base -= AUDIO_SOUNDBASE_ALTERNATE;
+	}
+	source = Mac2HostAddr(base);
 	frames = atomic_load32_explicit(&AudioStatus.soundframes, memory_order_relaxed);
 	if (frames - atomic_load32_explicit(&AudioStatus.soundread, memory_order_acquire) > AUDIO_SOUNDBASE_RING - 2)
 		return;

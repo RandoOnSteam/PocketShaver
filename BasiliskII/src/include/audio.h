@@ -23,7 +23,9 @@
 
 #include <vector>
 
-//#define MACEMU_USEVIASOUNDBASE
+#if defined(SHEEPSHAVER) && (defined(USE_SFL) || defined(USE_SDL1) || defined(USE_SDL2) || defined(USE_SDL3))
+#define MACEMU_USEVIASOUNDBASE
+#endif
 
 #ifdef MACEMU_USEVIASOUNDBASE
 #include "atomic.h"
@@ -85,6 +87,10 @@ extern void AudioCaptureClose(void *capture);
 #define AUDIO_SOUNDBASE_PHASE 44
 #define AUDIO_SOUNDBASE_RING 16
 #define AUDIO_SOUNDBASE_UNITY 256
+#define AUDIO_SOUNDBASE_ALTERNATE 0x5c00
+#define AUDIO_SOUNDBASE_VIA 0x1d4
+#define AUDIO_SOUNDBASE_PORTA 0x1e00
+#define AUDIO_SOUNDBASE_MAINPAGE 0x08
 #endif
 
 // Current audio status

@@ -338,11 +338,11 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 			// Install drivers
 			InstallDrivers();
 #ifdef MACEMU_USEVIASOUNDBASE
-			AudioSoundBaseInstall();
 #if !defined(USE_SFL)
 			InstallViaWindow(LMGVIA1BASE);
 			InstallViaWindow(LMGVIA2BASE);
 #endif
+			AudioSoundBaseInstall();
 #endif
 
 			// Patch MakeExecutable()
