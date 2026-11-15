@@ -1384,7 +1384,9 @@ static int OsxGuestQuartzFrameworkPatches(OsxQuartzImage *image)
 {
 	static const char *const hooks[QUARTZHOOKS] = { "_CGLGetParameter", "_CGLSetPBuffer", "_CGLTexImagePBuffer", "_CGLFlushDrawable", "_CGLDescribeRenderer",
 		"_CGLChoosePixelFormat", "_CGLDestroyContext", "_CGLSetOffScreen", "_CGLSetSurface", "_CGLDescribePixelFormat", "_CGLSetFullScreen" };
-	static const uint32 calls[QUARTZHOOKS] = { 1023, 1019, 1020, 1018, 1017, 1016, 1015, 1014, 1013, 1012, 1011 };
+	static const uint32 calls[QUARTZHOOKS] = { OSXQUARTZCALLGETPARAMETER, OSXQUARTZCALLSETPBUFFER, OSXQUARTZCALLTEXIMAGEPBUFFER, OSXQUARTZCALLFLUSHDRAWABLE,
+		OSXQUARTZCALLDESCRIBERENDERER, OSXQUARTZCALLCHOOSEPIXELFORMAT, OSXQUARTZCALLDESTROYCONTEXT, OSXQUARTZCALLSETOFFSCREEN, OSXQUARTZCALLSETSURFACE,
+		OSXQUARTZCALLDESCRIBEPIXELFORMAT, OSXQUARTZCALLSETFULLSCREEN };
 	uint32 entry;
 	uint32 position;
 	uint32 word;
@@ -1407,7 +1409,7 @@ static int OsxGuestQuartzFrameworkPatches(OsxQuartzImage *image)
 			stepped = 1;
 		if (word == QUARTZBRANCHLINK) {
 			if (stepped)
-				result &= OsxGuestQuartzAddPatch(image, position, OSXQUARTZTRAP | (1022u << 8));
+				result &= OsxGuestQuartzAddPatch(image, position, OSXQUARTZTRAP | (OSXQUARTZCALLASSIGNDISPATCH << 8));
 			break;
 		}
 	}

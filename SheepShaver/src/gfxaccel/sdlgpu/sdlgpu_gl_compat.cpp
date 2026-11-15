@@ -176,17 +176,26 @@ struct CompatVertex {
 #define SDLGPUPROGRAMLIMITTEMPORARIES 4096
 #define SDLGPUPROGRAMLIMITPARAMETERS 1024
 #define SDLGPUPROGRAMLIMITATTRIBUTES 16
+#define SDLGPUFIXEDUNITS 4
+#define SDLGPUADDSIGNED 0x8574
+#define SDLGPUSUBTRACT 0x84e7
+#define SDLGPUDOT3RGB 0x86ae
+#define SDLGPUDOT3RGBA 0x86af
+#define SDLGPUCUBEFACES 6
 
 struct ArbProgram {
 	GLenum target;
+	Uint32 id;
 	std::string text;
 	float local[SDLGPUPROGRAMLOCALS][4];
+	uint32_t targets[GFXACCELHOSTPROGRAMUNITS];
 	SDL_GPUShader *shader;
 	bool failed;
 
-	ArbProgram() : target(0), shader(NULL), failed(false)
+	ArbProgram() : target(0), id(0), shader(NULL), failed(false)
 	{
 		std::memset(local, 0, sizeof(local));
+		std::memset(targets, 0, sizeof(targets));
 	}
 };
 
@@ -198,10 +207,13 @@ struct ArbProgramState {
 	GLuint bound_program[2];
 	bool program_enabled[2];
 	float program_env[2][SDLGPUPROGRAMLOCALS][4];
-	SDL_GPUShader *passthrough_vertex_program;
+	ArbProgram *passthrough;
 	TextureObject *unbound_texture;
+	TextureObject *unbound_cube;
+	std::map<std::string, ArbProgram *> generated;
+	Uint32 next_id;
 
-	ArbProgramState() : next_program(1), passthrough_vertex_program(NULL), unbound_texture(NULL)
+	ArbProgramState() : next_program(1), passthrough(NULL), unbound_texture(NULL), unbound_cube(NULL), next_id(0)
 	{
 		bound_program[0] = 0;
 		bound_program[1] = 0;
@@ -369,6 +381,10 @@ struct FixedState {
 	GLuint bound_texture_2d[SDLGPUTEXTUREUNITS];
 	GLuint bound_texture_3d[SDLGPUTEXTUREUNITS];
 	GLuint bound_texture_rectangle[SDLGPUTEXTUREUNITS];
+	GLuint bound_texture_cube[SDLGPUTEXTUREUNITS];
+	bool texture_cube_enabled[SDLGPUTEXTUREUNITS];
+	float current_attributes[GFXACCELHOSTPROGRAMATTRIBUTES][4];
+	bool generic_vertices;
 	GLuint read_framebuffer;
 	ArbProgramState *arb;
 	bool texture_2d_enabled[SDLGPUTEXTUREUNITS];
@@ -488,16 +504,24 @@ struct FragmentUniforms {
 	float data[24][4];
 };
 
+struct VertexProgramUniforms {
+	float env[SDLGPUPROGRAMLOCALS][4];
+	float local[SDLGPUPROGRAMLOCALS][4];
+	float state[GFXACCELHOSTSTATEVERTEXCOUNT][4];
+};
+
 struct ProgramUniforms {
+	float env[SDLGPUPROGRAMLOCALS][4];
 	float local[SDLGPUPROGRAMLOCALS][4];
 	float size[SDLGPUTEXTUREUNITS][4];
+	float state[GFXACCELHOSTSTATEFRAGMENTCOUNT][4];
 };
 
 struct PendingDraw {
 	std::vector<CompatVertex> vertices;
 	bool uses_program;
 	ProgramUniforms fragment_program;
-	float vertex_program[SDLGPUPROGRAMLOCALS][4];
+	VertexProgramUniforms vertex_program;
 	TextureObject *program_textures[SDLGPUTEXTUREUNITS];
 	SDL_GPUSampler *program_samplers[SDLGPUTEXTUREUNITS];
 	FixedState state;
@@ -816,6 +840,33 @@ static void SDLGPUSetIdentityMatrix(Matrix4 &matrix)
 	matrix.m[15] = 1.0f;
 }
 
+static void SDLGPUInvertMatrix(const Matrix4 &matrix, Matrix4 &inverse)
+{
+	static const int cofactors[16][3][3] = {
+		{{5, 6, 7}, {9, 10, 11}, {13, 14, 15}}, {{4, 6, 7}, {8, 10, 11}, {12, 14, 15}}, {{4, 5, 7}, {8, 9, 11}, {12, 13, 15}}, {{4, 5, 6}, {8, 9, 10}, {12, 13, 14}},
+		{{1, 2, 3}, {9, 10, 11}, {13, 14, 15}}, {{0, 2, 3}, {8, 10, 11}, {12, 14, 15}}, {{0, 1, 3}, {8, 9, 11}, {12, 13, 15}}, {{0, 1, 2}, {8, 9, 10}, {12, 13, 14}},
+		{{1, 2, 3}, {5, 6, 7}, {13, 14, 15}}, {{0, 2, 3}, {4, 6, 7}, {12, 14, 15}}, {{0, 1, 3}, {4, 5, 7}, {12, 13, 15}}, {{0, 1, 2}, {4, 5, 6}, {12, 13, 14}},
+		{{1, 2, 3}, {5, 6, 7}, {9, 10, 11}}, {{0, 2, 3}, {4, 6, 7}, {8, 10, 11}}, {{0, 1, 3}, {4, 5, 7}, {8, 9, 11}}, {{0, 1, 2}, {4, 5, 6}, {8, 9, 10}}
+	};
+	float minor[16];
+	float determinant;
+	int element;
+	for (element = 0; element < 16; element++) {
+		const int (*rows)[3] = cofactors[element];
+		minor[element] = matrix.m[rows[0][0]] * (matrix.m[rows[1][1]] * matrix.m[rows[2][2]] - matrix.m[rows[1][2]] * matrix.m[rows[2][1]]) -
+			matrix.m[rows[0][1]] * (matrix.m[rows[1][0]] * matrix.m[rows[2][2]] - matrix.m[rows[1][2]] * matrix.m[rows[2][0]]) +
+			matrix.m[rows[0][2]] * (matrix.m[rows[1][0]] * matrix.m[rows[2][1]] - matrix.m[rows[1][1]] * matrix.m[rows[2][0]]);
+		if ((element / 4 + element % 4) % 2)
+			minor[element] = -minor[element];
+	}
+	determinant = matrix.m[0] * minor[0] + matrix.m[1] * minor[1] + matrix.m[2] * minor[2] + matrix.m[3] * minor[3];
+	SDLGPUSetIdentityMatrix(inverse);
+	if (determinant == 0.0f)
+		return;
+	for (element = 0; element < 16; element++)
+		inverse.m[(element % 4) * 4 + element / 4] = minor[element] / determinant;
+}
+
 static Matrix4 SDLGPUMultiplyMatrices(const Matrix4 &left, const Matrix4 &right)
 {
 	Matrix4 result;
@@ -892,11 +943,17 @@ FixedState::FixedState()
 {
 	SDLGPUSetIdentityMatrix(modelview);
 	SDLGPUSetIdentityMatrix(projection);
+	std::memset(current_attributes, 0, sizeof(current_attributes));
+	for (int attribute = 0; attribute < GFXACCELHOSTPROGRAMATTRIBUTES; attribute++)
+		current_attributes[attribute][3] = 1.0f;
+	generic_vertices = false;
 	for (int unit = 0; unit < SDLGPUTEXTUREUNITS; unit++) {
 		SDLGPUSetIdentityMatrix(texture_matrix[unit]);
 		bound_texture_2d[unit] = 0;
 		bound_texture_3d[unit] = 0;
 		bound_texture_rectangle[unit] = 0;
+		bound_texture_cube[unit] = 0;
+		texture_cube_enabled[unit] = false;
 		read_framebuffer = 0;
 		arb = NULL;
 		texture_2d_enabled[unit] = false;
@@ -1063,11 +1120,20 @@ static TextureObject *SDLGPUFindTexture(GLuint name)
 	return found->second;
 }
 
+static int SDLGPUCubeFace(GLenum target)
+{
+	if (target >= GFXACCELHOSTCUBEMAPFIRSTFACE && target <= GFXACCELHOSTCUBEMAPLASTFACE)
+		return (int)(target - GFXACCELHOSTCUBEMAPFIRSTFACE);
+	return -1;
+}
+
 static TextureObject *SDLGPUGetBoundTexture(GLenum target)
 {
 	GLuint name = 0;
 	if (target == GL_TEXTURE_3D)
 		name = s_state.bound_texture_3d[s_state.active_texture];
+	else if (target == GFXACCELHOSTCUBEMAP || SDLGPUCubeFace(target) >= 0)
+		name = s_state.bound_texture_cube[s_state.active_texture];
 	else if (target == GFXACCELHOSTTEXTURERECTANGLE)
 		name = s_state.bound_texture_rectangle[s_state.active_texture];
 	else
@@ -1107,11 +1173,14 @@ static SDL_GPUTexture *SDLGPUCreateTexture(GLenum target, int width, int height,
 	std::memset(&info, 0, sizeof(info));
 	if (target == GL_TEXTURE_3D)
 		info.type = SDL_GPU_TEXTURETYPE_3D;
-	else
+	else if (target == GFXACCELHOSTCUBEMAP) {
+		info.type = SDL_GPU_TEXTURETYPE_CUBE;
+		depth = SDLGPUCUBEFACES;
+	} else
 		info.type = SDL_GPU_TEXTURETYPE_2D;
 	info.format = format;
 	info.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER;
-	if (target != GL_TEXTURE_3D)
+	if (target != GL_TEXTURE_3D && target != GFXACCELHOSTCUBEMAP)
 		info.usage |= SDL_GPU_TEXTUREUSAGE_COLOR_TARGET;
 	info.width = (Uint32)width;
 	info.height = (Uint32)height;
@@ -1321,6 +1390,10 @@ static bool SDLGPUUploadTextureRegion(TextureObject *object, int level, int x, i
 	destination.x = (Uint32)x;
 	destination.y = (Uint32)destination_y;
 	destination.z = (Uint32)z;
+	if (object->target == GFXACCELHOSTCUBEMAP) {
+		destination.layer = (Uint32)z;
+		destination.z = 0;
+	}
 	destination.w = (Uint32)width;
 	destination.h = (Uint32)height;
 	destination.d = (Uint32)depth;
@@ -1585,13 +1658,56 @@ static SDL_GPUShader *SDLGPUCompileProgramText(int fragment, const char *program
 	return shader;
 }
 
-static SDL_GPUShader *SDLGPUProgramShader(ArbProgram *program, int fragment)
+static bool SDLGPUCreateSolidTexture(GLenum target, TextureObject **output, unsigned char value);
+
+static void SDLGPUReleaseProgramShader(ArbProgram *program)
 {
+	if (!program)
+		return;
+	if (program->shader)
+		SDL_ReleaseGPUShader(s_device, program->shader);
+	program->shader = NULL;
+}
+
+static void SDLGPUReleaseSolidTexture(TextureObject **object)
+{
+	if (!*object)
+		return;
+	SDLGPUReleaseTextureResources(*object);
+	delete *object;
+	*object = NULL;
+}
+
+static ArbProgram *SDLGPUNewProgram(GLenum target)
+{
+	ArbProgram *program = new ArbProgram;
+	program->target = target;
+	program->id = ++SDLGPUArbState()->next_id;
+	return program;
+}
+
+static bool SDLGPUEnsureUnboundTextures(void)
+{
+	if (!SDLGPUArbState()->unbound_texture && !SDLGPUCreateSolidTexture(GL_TEXTURE_2D, &SDLGPUArbState()->unbound_texture, 0))
+		return false;
+	if (!SDLGPUArbState()->unbound_cube && !SDLGPUCreateSolidTexture(GFXACCELHOSTCUBEMAP, &SDLGPUArbState()->unbound_cube, 0))
+		return false;
+	return true;
+}
+
+static SDL_GPUShader *SDLGPUProgramShader(ArbProgram *program)
+{
+	int fragment = 0;
 	if (!program || program->failed)
 		return NULL;
 	if (program->shader)
 		return program->shader;
-	program->shader = SDLGPUCompileProgramText(fragment, program->text.c_str(), (uint32_t)program->text.size());
+	if (program->target == GFXACCELHOSTFRAGMENTPROGRAM)
+		fragment = 1;
+	if (fragment && !GfxAccelHostProgramTextureTargets(program->text.c_str(), (uint32_t)program->text.size(), program->targets))
+		std::memset(program->targets, 0, sizeof(program->targets));
+	if (SDLGPUEnsureUnboundTextures())
+		program->shader = SDLGPUCompileProgramText(fragment, program->text.c_str(), (uint32_t)program->text.size());
 	if (!program->shader)
 		program->failed = true;
 	return program->shader;
@@ -1608,29 +1724,165 @@ static ArbProgram *SDLGPUBoundProgram(int type)
 	return found->second;
 }
 
-static SDL_GPUShader *SDLGPUPassthroughVertexProgram(void)
+static ArbProgram *SDLGPUPassthroughVertexProgram(void)
 {
-	static const char passthrough[] = "!!ARBvp1.0\nEND\n";
-	if (!SDLGPUArbState()->passthrough_vertex_program)
-		SDLGPUArbState()->passthrough_vertex_program = SDLGPUCompileProgramText(0, passthrough, (uint32_t)sizeof(passthrough) - 1);
-	return SDLGPUArbState()->passthrough_vertex_program;
+	if (!SDLGPUArbState()->passthrough) {
+		SDLGPUArbState()->passthrough = SDLGPUNewProgram(GFXACCELHOSTVERTEXPROGRAM);
+		SDLGPUArbState()->passthrough->text = "!!ARBvp1.0\nEND\n";
+	}
+	return SDLGPUArbState()->passthrough;
 }
 
-static bool SDLGPUActivePrograms(SDL_GPUShader **vertex, SDL_GPUShader **fragment)
+static std::string SDLGPUFixedSource(GLint source, int unit)
 {
+	char text[64];
+	if (source == GL_TEXTURE)
+		snprintf(text, sizeof(text), "t%d", unit);
+	else if (source >= GL_TEXTURE0 && source < GL_TEXTURE0 + SDLGPUFIXEDUNITS)
+		snprintf(text, sizeof(text), "t%d", (int)(source - GL_TEXTURE0));
+	else if (source == GL_CONSTANT)
+		snprintf(text, sizeof(text), "state.texenv[%d].color", unit);
+	else if (source == GL_PRIMARY_COLOR)
+		snprintf(text, sizeof(text), "fragment.color");
+	else
+		snprintf(text, sizeof(text), "previous");
+	return std::string(text);
+}
+
+static std::string SDLGPUFixedOperand(const char *name, GLint source, GLint operand, int unit)
+{
+	std::string value = SDLGPUFixedSource(source, unit);
+	if (operand == GL_SRC_ALPHA)
+		return std::string("MOV ") + name + ", " + value + ".w;\n";
+	if (operand == GL_ONE_MINUS_SRC_ALPHA)
+		return std::string("SUB ") + name + ", one, " + value + ".w;\n";
+	if (operand == GL_ONE_MINUS_SRC_COLOR)
+		return std::string("SUB ") + name + ", one, " + value + ";\n";
+	return std::string("MOV ") + name + ", " + value + ";\n";
+}
+
+static std::string SDLGPUFixedOperation(GLint operation, const char *mask)
+{
+	std::string target = std::string("combined") + mask;
+	if (operation == GL_REPLACE)
+		return "MOV " + target + ", a0;\n";
+	if (operation == GL_ADD)
+		return "ADD " + target + ", a0, a1;\n";
+	if (operation == SDLGPUADDSIGNED)
+		return "ADD " + target + ", a0, a1;\nSUB " + target + ", combined, half;\n";
+	if (operation == GL_INTERPOLATE)
+		return "LRP " + target + ", a2, a0, a1;\n";
+	if (operation == SDLGPUSUBTRACT)
+		return "SUB " + target + ", a0, a1;\n";
+	if (operation == SDLGPUDOT3RGB || operation == SDLGPUDOT3RGBA)
+		return "SUB a0, a0, half;\nSUB a1, a1, half;\nDP3 a0, a0, a1;\nMUL " + target + ", a0, four;\n";
+	return "MUL " + target + ", a0, a1;\n";
+}
+
+static std::string SDLGPUFixedCombine(const TextureEnvironment &environment, int unit)
+{
+	char scale[96];
+	std::string text;
+	int argument;
+	char name[4] = {'a', '0', 0, 0};
+	for (argument = 0; argument < 3; argument++) {
+		name[1] = (char)('0' + argument);
+		text += SDLGPUFixedOperand(name, environment.source_rgb[argument], environment.operand_rgb[argument], unit);
+	}
+	if (environment.combine_rgb == SDLGPUDOT3RGBA)
+		text += SDLGPUFixedOperation(environment.combine_rgb, "");
+	else
+		text += SDLGPUFixedOperation(environment.combine_rgb, ".xyz");
+	if (environment.combine_rgb != SDLGPUDOT3RGBA) {
+		for (argument = 0; argument < 3; argument++) {
+			name[1] = (char)('0' + argument);
+			text += SDLGPUFixedOperand(name, environment.source_alpha[argument], environment.operand_alpha[argument], unit);
+		}
+		text += SDLGPUFixedOperation(environment.combine_alpha, ".w");
+	}
+	snprintf(scale, sizeof(scale), "MUL_SAT previous, combined, {%f, %f, %f, %f};\n", environment.rgb_scale, environment.rgb_scale, environment.rgb_scale, environment.alpha_scale);
+	return text + scale;
+}
+
+static std::string SDLGPUFixedUnit(int unit, std::string *sample)
+{
+	char text[160];
+	const char *target = NULL;
+	const char *instruction = "TXP";
+	if (s_state.texture_cube_enabled[unit]) {
+		target = "CUBE";
+		instruction = "TEX";
+	} else if (s_state.texture_3d_enabled[unit])
+		target = "3D";
+	else if (s_state.texture_rectangle_enabled[unit])
+		target = "RECT";
+	else if (s_state.texture_2d_enabled[unit])
+		target = "2D";
+	if (!target)
+		return std::string();
+	snprintf(text, sizeof(text), "%s t%d, fragment.texcoord[%d], texture[%d], %s;\n", instruction, unit, unit, unit, target);
+	*sample += text;
+	const TextureEnvironment &environment = s_state.texenv[unit];
+	snprintf(text, sizeof(text), "%d", unit);
+	std::string texel = std::string("t") + text;
+	std::string constant = std::string("state.texenv[") + text + "].color";
+	if (environment.mode == GL_REPLACE)
+		return "MOV previous, " + texel + ";\n";
+	if (environment.mode == GL_DECAL)
+		return "LRP previous.xyz, " + texel + ".w, " + texel + ", previous;\n";
+	if (environment.mode == GL_BLEND)
+		return "LRP previous.xyz, " + texel + ", " + constant + ", previous;\nMUL previous.w, previous, " + texel + ";\n";
+	if (environment.mode == GL_ADD)
+		return "ADD_SAT previous.xyz, previous, " + texel + ";\nMUL previous.w, previous, " + texel + ";\n";
+	if (environment.mode == GL_COMBINE)
+		return SDLGPUFixedCombine(environment, unit);
+	return "MUL previous, previous, " + texel + ";\n";
+}
+
+static ArbProgram *SDLGPUFixedFragmentProgram(void)
+{
+	std::map<std::string, ArbProgram *>::iterator found;
+	std::string text = "!!ARBfp1.0\n";
+	std::string sample;
+	std::string combine;
 	ArbProgram *program;
-	if (!SDLGPUArbState()->program_enabled[1])
-		return false;
-	program = SDLGPUBoundProgram(1);
-	*fragment = SDLGPUProgramShader(program, 1);
-	if (!*fragment)
-		return false;
+	if (s_state.fog_enabled && s_state.fog_mode == GL_LINEAR)
+		text += "OPTION ARB_fog_linear;\n";
+	else if (s_state.fog_enabled && s_state.fog_mode == GL_EXP2)
+		text += "OPTION ARB_fog_exp2;\n";
+	else if (s_state.fog_enabled)
+		text += "OPTION ARB_fog_exp;\n";
+	text += "TEMP previous, combined, a0, a1, a2, t0, t1, t2, t3;\nPARAM one = {1.0, 1.0, 1.0, 1.0};\nPARAM half = {0.5, 0.5, 0.5, 0.5};\nPARAM four = {4.0, 4.0, 4.0, 4.0};\n";
+	for (int unit = 0; unit < SDLGPUFIXEDUNITS; unit++)
+		combine += SDLGPUFixedUnit(unit, &sample);
+	text += sample + "MOV previous, fragment.color;\n" + combine;
+	if (s_state.color_sum_enabled)
+		text += "ADD_SAT previous.xyz, previous, fragment.color.secondary;\n";
+	text += "MOV result.color, previous;\nEND\n";
+	found = SDLGPUArbState()->generated.find(text);
+	if (found != SDLGPUArbState()->generated.end())
+		return found->second;
+	program = SDLGPUNewProgram(GFXACCELHOSTFRAGMENTPROGRAM);
+	program->text = text;
+	SDLGPUArbState()->generated[text] = program;
+	return program;
+}
+
+static bool SDLGPUActivePrograms(ArbProgram **vertex, ArbProgram **fragment)
+{
 	*vertex = NULL;
-	if (SDLGPUArbState()->program_enabled[0])
-		*vertex = SDLGPUProgramShader(SDLGPUBoundProgram(0), 0);
+	*fragment = NULL;
+	if (SDLGPUArbState()->program_enabled[0] && SDLGPUProgramShader(SDLGPUBoundProgram(0)))
+		*vertex = SDLGPUBoundProgram(0);
+	if (SDLGPUArbState()->program_enabled[1] && SDLGPUProgramShader(SDLGPUBoundProgram(1)))
+		*fragment = SDLGPUBoundProgram(1);
+	if (!*vertex && !*fragment)
+		return false;
 	if (!*vertex)
 		*vertex = SDLGPUPassthroughVertexProgram();
-	return *vertex != NULL;
+	if (!*fragment)
+		*fragment = SDLGPUFixedFragmentProgram();
+	return SDLGPUProgramShader(*vertex) && SDLGPUProgramShader(*fragment);
 }
 
 static SDL_GPUShader *SDLGPUCompileShader(SDL_GPUShaderStage stage,
@@ -1756,36 +2008,36 @@ static void SDLGPUReleaseAllResources()
 	s_white_3d = NULL;
 	if (s_state.arb) {
 		std::map<GLuint, ArbProgram *>::iterator program;
-		for (program = s_state.arb->programs.begin(); program != s_state.arb->programs.end(); ++program) {
-			if (program->second->shader)
-				SDL_ReleaseGPUShader(s_device, program->second->shader);
-			program->second->shader = NULL;
-		}
-		if (s_state.arb->passthrough_vertex_program)
-			SDL_ReleaseGPUShader(s_device, s_state.arb->passthrough_vertex_program);
-		s_state.arb->passthrough_vertex_program = NULL;
-		if (s_state.arb->unbound_texture) {
-			SDLGPUReleaseTextureResources(s_state.arb->unbound_texture);
-			delete s_state.arb->unbound_texture;
-			s_state.arb->unbound_texture = NULL;
-		}
+		std::map<std::string, ArbProgram *>::iterator generated;
+		for (program = s_state.arb->programs.begin(); program != s_state.arb->programs.end(); ++program)
+			SDLGPUReleaseProgramShader(program->second);
+		for (generated = s_state.arb->generated.begin(); generated != s_state.arb->generated.end(); ++generated)
+			SDLGPUReleaseProgramShader(generated->second);
+		SDLGPUReleaseProgramShader(s_state.arb->passthrough);
+		SDLGPUReleaseSolidTexture(&s_state.arb->unbound_texture);
+		SDLGPUReleaseSolidTexture(&s_state.arb->unbound_cube);
 	}
 }
 
 static bool SDLGPUCreateSolidTexture(GLenum target, TextureObject **output, unsigned char value)
 {
 	TextureObject *object = new TextureObject;
+	int layers = 1;
 	object->target = target;
+	if (target == GFXACCELHOSTCUBEMAP)
+		layers = SDLGPUCUBEFACES;
 	if (!SDLGPUAllocateTexture(object, target, 1, 1, 1, GL_RGBA8)) {
 		delete object;
 		return false;
 	}
 	unsigned char solid[4] = {value, value, value, 255};
-	if (!SDLGPUUploadTextureRegion(object, 0, 0, 0, 0, 1, 1, 1, solid,
-		GL_BGRA, GL_UNSIGNED_BYTE, 4, GL_RGBA8)) {
-		SDLGPUReleaseTextureResources(object);
-		delete object;
-		return false;
+	for (int layer = 0; layer < layers; layer++) {
+		if (!SDLGPUUploadTextureRegion(object, 0, 0, 0, layer, 1, 1, 1, solid,
+			GL_BGRA, GL_UNSIGNED_BYTE, 4, GL_RGBA8)) {
+			SDLGPUReleaseTextureResources(object);
+			delete object;
+			return false;
+		}
 	}
 	*output = object;
 	return true;
@@ -2052,11 +2304,11 @@ static void SDLGPUBuildPipelineKey(PipelineKey &key, GLenum mode, bool has_depth
 	key.primitive = (Uint32)SDLGPUMapPrimitive(mode);
 	key.blend_enabled = s_state.blend_enabled;
 	key.color_format = (Uint32)SDLGPUFramebufferColorFormat(s_bound_framebuffer);
-	SDL_GPUShader *program_vertex_shader = NULL;
-	SDL_GPUShader *program_fragment_shader = NULL;
-	if (SDLGPUActivePrograms(&program_vertex_shader, &program_fragment_shader)) {
-		key.program_vertex = SDLGPUArbState()->bound_program[0] + 1;
-		key.program_fragment = SDLGPUArbState()->bound_program[1];
+	ArbProgram *program_vertex = NULL;
+	ArbProgram *program_fragment = NULL;
+	if (SDLGPUActivePrograms(&program_vertex, &program_fragment)) {
+		key.program_vertex = program_vertex->id;
+		key.program_fragment = program_fragment->id;
 	}
 	key.blend_src_rgb = (Uint32)s_state.blend_src_rgb;
 	key.blend_dst_rgb = (Uint32)s_state.blend_dst_rgb;
@@ -2128,11 +2380,12 @@ static SDL_GPUGraphicsPipeline *SDLGPUGetPipeline(GLenum mode, bool has_depth)
 	std::memset(&info, 0, sizeof(info));
 	info.vertex_shader = s_vertex_shader;
 	info.fragment_shader = s_fragment_shader;
-	SDL_GPUShader *program_vertex_shader = NULL;
-	SDL_GPUShader *program_fragment_shader = NULL;
-	if (SDLGPUActivePrograms(&program_vertex_shader, &program_fragment_shader)) {
-		info.vertex_shader = program_vertex_shader;
-		info.fragment_shader = program_fragment_shader;
+	ArbProgram *program_vertex = NULL;
+	ArbProgram *program_fragment = NULL;
+	if (SDLGPUActivePrograms(&program_vertex, &program_fragment)) {
+		info.vertex_shader = program_vertex->shader;
+		info.fragment_shader = program_fragment->shader;
+		attributes[5].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4;
 	}
 	info.vertex_input_state.vertex_buffer_descriptions = &buffer_description;
 	info.vertex_input_state.num_vertex_buffers = 1;
@@ -2437,7 +2690,7 @@ static bool SDLGPUFlushPendingDraws()
 		for (size_t index = first; index < last; index++) {
 			const PendingDraw &draw = s_pending_draws[index];
 			if (draw.uses_program) {
-				SDL_PushGPUVertexUniformData(command, 0, draw.vertex_program, sizeof(draw.vertex_program));
+				SDL_PushGPUVertexUniformData(command, 0, &draw.vertex_program, sizeof(draw.vertex_program));
 				SDL_PushGPUFragmentUniformData(command, 0, &draw.fragment_program, sizeof(draw.fragment_program));
 			} else {
 				SDL_PushGPUFragmentUniformData(command, 0, &draw.uniforms,
@@ -2506,6 +2759,84 @@ static bool SDLGPUFlushPendingDraws()
 	return true;
 }
 
+static void SDLGPUStateRows(float (*rows)[4], const Matrix4 &matrix)
+{
+	for (int row = 0; row < 4; row++) {
+		for (int column = 0; column < 4; column++)
+			rows[row][column] = matrix.m[column * 4 + row];
+	}
+}
+
+static void SDLGPUStateMatrix(float (*state)[4], int slot, const Matrix4 &matrix)
+{
+	Matrix4 inverse;
+	SDLGPUInvertMatrix(matrix, inverse);
+	SDLGPUStateRows(state + GFXACCELHOSTSTATEMATRICES + slot * 4, matrix);
+	SDLGPUStateRows(state + GFXACCELHOSTSTATEMATRICES + GFXACCELHOSTSTATEINVERSE + slot * 4, inverse);
+}
+
+static void SDLGPUStateFog(float (*state)[4])
+{
+	std::memcpy(state[0], s_state.fog_color, sizeof(state[0]));
+	state[1][0] = s_state.fog_density;
+	state[1][1] = s_state.fog_start;
+	state[1][2] = s_state.fog_end;
+	state[1][3] = 0.0f;
+	if (s_state.fog_end != s_state.fog_start)
+		state[1][3] = 1.0f / (s_state.fog_end - s_state.fog_start);
+}
+
+static TextureObject *SDLGPUProgramTexture(uint32_t target, int unit)
+{
+	TextureObject *fallback = SDLGPUArbState()->unbound_texture;
+	GLuint name = 0;
+	if (target == GFXACCELHOSTTEXTURE2D)
+		name = s_state.bound_texture_2d[unit];
+	else if (target == GFXACCELHOSTTEXTURERECTANGLE)
+		name = s_state.bound_texture_rectangle[unit];
+	else if (target == GFXACCELHOSTCUBEMAP) {
+		name = s_state.bound_texture_cube[unit];
+		fallback = SDLGPUArbState()->unbound_cube;
+	} else if (target == GFXACCELHOSTTEXTURE3D) {
+		name = s_state.bound_texture_3d[unit];
+		fallback = s_white_3d;
+	}
+	TextureObject *object = SDLGPUFindTexture(name);
+	if (!object || !object->texture || (target == GFXACCELHOSTCUBEMAP && object->target != GFXACCELHOSTCUBEMAP) ||
+		(target == GFXACCELHOSTTEXTURE3D && object->target != GL_TEXTURE_3D))
+		return fallback;
+	return object;
+}
+
+static void SDLGPUFillProgramUniforms(PendingDraw &draw, ArbProgram *vertex_program, ArbProgram *fragment_program)
+{
+	std::memset(&draw.fragment_program, 0, sizeof(draw.fragment_program));
+	std::memset(&draw.vertex_program, 0, sizeof(draw.vertex_program));
+	std::memcpy(draw.vertex_program.env, SDLGPUArbState()->program_env[0], sizeof(draw.vertex_program.env));
+	std::memcpy(draw.vertex_program.local, vertex_program->local, sizeof(draw.vertex_program.local));
+	std::memcpy(draw.fragment_program.env, SDLGPUArbState()->program_env[1], sizeof(draw.fragment_program.env));
+	std::memcpy(draw.fragment_program.local, fragment_program->local, sizeof(draw.fragment_program.local));
+	SDLGPUStateMatrix(draw.vertex_program.state, 0, SDLGPUMultiplyMatrices(s_state.projection, s_state.modelview));
+	SDLGPUStateMatrix(draw.vertex_program.state, 1, s_state.modelview);
+	SDLGPUStateMatrix(draw.vertex_program.state, 2, s_state.projection);
+	for (int unit = 0; unit < GFXACCELHOSTSTATETEXTUREMATRICES; unit++)
+		SDLGPUStateMatrix(draw.vertex_program.state, 3 + unit, s_state.texture_matrix[unit]);
+	SDLGPUStateFog(draw.vertex_program.state + GFXACCELHOSTSTATEVERTEXFOG);
+	SDLGPUStateFog(draw.fragment_program.state + GFXACCELHOSTSTATEFRAGMENTFOG);
+	draw.fragment_program.state[GFXACCELHOSTSTATEALPHA][0] = (float)s_state.alpha_func;
+	draw.fragment_program.state[GFXACCELHOSTSTATEALPHA][1] = s_state.alpha_ref;
+	if (s_state.alpha_test_enabled)
+		draw.fragment_program.state[GFXACCELHOSTSTATEALPHA][2] = 1.0f;
+	for (int unit = 0; unit < SDLGPUTEXTUREUNITS; unit++) {
+		std::memcpy(draw.fragment_program.state[GFXACCELHOSTSTATETEXENV + unit], s_state.texenv[unit].color, sizeof(float) * 4);
+		TextureObject *object = SDLGPUProgramTexture(fragment_program->targets[unit], unit);
+		draw.program_textures[unit] = object;
+		draw.program_samplers[unit] = SDLGPUGetTextureSampler(object);
+		draw.fragment_program.size[unit][0] = (float)object->width;
+		draw.fragment_program.size[unit][1] = (float)object->height;
+	}
+}
+
 static bool SDLGPUQueueVertices(GLenum mode, std::vector<CompatVertex> &vertices)
 {
 	if (!s_device || vertices.empty())
@@ -2541,30 +2872,11 @@ static bool SDLGPUQueueVertices(GLenum mode, std::vector<CompatVertex> &vertices
 	draw.target_height = target_height;
 	draw.color_level = color_level;
 	SDLGPUFillFragmentUniforms(draw.uniforms);
-	SDL_GPUShader *active_vertex_program = NULL;
-	SDL_GPUShader *active_fragment_program = NULL;
-	draw.uses_program = SDLGPUActivePrograms(&active_vertex_program, &active_fragment_program);
-	if (draw.uses_program) {
-		ArbProgram *fragment_program = SDLGPUBoundProgram(1);
-		ArbProgram *vertex_program = SDLGPUBoundProgram(0);
-		std::memset(&draw.fragment_program, 0, sizeof(draw.fragment_program));
-		std::memset(draw.vertex_program, 0, sizeof(draw.vertex_program));
-		std::memcpy(draw.fragment_program.local, fragment_program->local, sizeof(draw.fragment_program.local));
-		if (vertex_program && SDLGPUArbState()->program_enabled[0])
-			std::memcpy(draw.vertex_program, vertex_program->local, sizeof(draw.vertex_program));
-		for (int unit = 0; unit < SDLGPUTEXTUREUNITS; unit++) {
-			GLuint name = s_state.bound_texture_rectangle[unit];
-			if (!name && fragment_program->text.find(", 2D") != std::string::npos)
-				name = s_state.bound_texture_2d[unit];
-			TextureObject *object = SDLGPUFindTexture(name);
-			if (!object || !object->texture)
-				object = SDLGPUArbState()->unbound_texture;
-			draw.program_textures[unit] = object;
-			draw.program_samplers[unit] = SDLGPUGetTextureSampler(object);
-			draw.fragment_program.size[unit][0] = (float)object->width;
-			draw.fragment_program.size[unit][1] = (float)object->height;
-		}
-	}
+	ArbProgram *vertex_program = NULL;
+	ArbProgram *fragment_program = NULL;
+	draw.uses_program = SDLGPUActivePrograms(&vertex_program, &fragment_program);
+	if (draw.uses_program)
+		SDLGPUFillProgramUniforms(draw, vertex_program, fragment_program);
 	draw.textures[0] = SDLGPUGetSelectedTexture(0, false);
 	draw.textures[1] = SDLGPUGetSelectedTexture(1, false);
 	draw.textures[2] = SDLGPUGetSelectedTexture(0, true);
@@ -2575,7 +2887,7 @@ static bool SDLGPUQueueVertices(GLenum mode, std::vector<CompatVertex> &vertices
 			return false;
 		}
 	}
-	for (int unit = 0; unit < 2; unit++) {
+	for (int unit = 0; unit < 2 && !draw.state.generic_vertices; unit++) {
 		if (!draw.textures[unit]->presentation_y_flip)
 			continue;
 		for (size_t index = 0; index < draw.vertices.size(); index++) {
@@ -2760,10 +3072,46 @@ static void SDLGPUNormalizeRectangleCoordinates(int unit, float *coordinates)
 	coordinates[1] /= (float)object->height;
 }
 
+static void SDLGPUAppendAttributes(void)
+{
+	CompatVertex vertex;
+	std::memcpy(vertex.position, s_state.current_attributes[GFXACCELHOSTATTRIBUTEPOSITION], sizeof(vertex.position));
+	std::memcpy(vertex.color, s_state.current_attributes[GFXACCELHOSTATTRIBUTECOLOR], sizeof(vertex.color));
+	std::memcpy(vertex.secondary, s_state.current_attributes[GFXACCELHOSTATTRIBUTESECONDARY], sizeof(vertex.secondary));
+	std::memcpy(vertex.texcoord0, s_state.current_attributes[GFXACCELHOSTATTRIBUTETEXCOORD], sizeof(vertex.texcoord0));
+	std::memcpy(vertex.texcoord1, s_state.current_attributes[GFXACCELHOSTATTRIBUTETEXCOORD + 1], sizeof(vertex.texcoord1));
+	vertex.fog_coord = s_state.current_attributes[GFXACCELHOSTATTRIBUTEFOG][0];
+	std::memcpy(vertex.padding, &s_state.current_attributes[GFXACCELHOSTATTRIBUTEFOG][1], sizeof(vertex.padding));
+	std::memcpy(vertex.eye_position, s_state.current_attributes[GFXACCELHOSTPROGRAMATTRIBUTES - 1], sizeof(vertex.eye_position));
+	s_vertices.push_back(vertex);
+}
+
+static void SDLGPUVertexAttribEntry(GLuint index, const GLfloat *value)
+{
+	if (index >= GFXACCELHOSTPROGRAMATTRIBUTES)
+		return;
+	std::memcpy(s_state.current_attributes[index], value, sizeof(s_state.current_attributes[index]));
+	if (index != GFXACCELHOSTATTRIBUTEPOSITION || s_begin_mode == 0)
+		return;
+	s_state.generic_vertices = true;
+	SDLGPUAppendAttributes();
+}
+
 static void SDLGPUAppendVertex(float x, float y, float z, float w)
 {
 	if (s_begin_mode == 0) {
 		SDLGPUSetError(GL_INVALID_OPERATION);
+		return;
+	}
+	if (SDLGPUArbState()->program_enabled[0]) {
+		float object_position[4] = {x, y, z, w};
+		std::memcpy(s_state.current_attributes[GFXACCELHOSTATTRIBUTEPOSITION], object_position, sizeof(object_position));
+		std::memcpy(s_state.current_attributes[GFXACCELHOSTATTRIBUTECOLOR], s_state.current_color, sizeof(s_state.current_color));
+		std::memcpy(s_state.current_attributes[GFXACCELHOSTATTRIBUTESECONDARY], s_state.current_secondary, sizeof(s_state.current_secondary));
+		std::memcpy(s_state.current_attributes[GFXACCELHOSTATTRIBUTETEXCOORD], s_state.current_texcoord[0], sizeof(s_state.current_texcoord[0]));
+		std::memcpy(s_state.current_attributes[GFXACCELHOSTATTRIBUTETEXCOORD + 1], s_state.current_texcoord[1], sizeof(s_state.current_texcoord[1]));
+		s_state.current_attributes[GFXACCELHOSTATTRIBUTEFOG][0] = s_state.current_fog_coord;
+		SDLGPUAppendAttributes();
 		return;
 	}
 	CompatVertex vertex;
@@ -2804,6 +3152,7 @@ static bool SDLGPUIsCapabilityEnabled(GLenum capability)
 	if (capability == GFXACCELHOSTVERTEXPROGRAM) return SDLGPUArbState()->program_enabled[0];
 	if (capability == GFXACCELHOSTFRAGMENTPROGRAM) return SDLGPUArbState()->program_enabled[1];
 	if (capability == GL_TEXTURE_3D) return s_state.texture_3d_enabled[s_state.active_texture];
+	if (capability == GFXACCELHOSTCUBEMAP) return s_state.texture_cube_enabled[s_state.active_texture];
 	if (capability >= GL_LIGHT0 && capability < GL_LIGHT0 + 8)
 		return s_state.lights[capability - GL_LIGHT0].enabled;
 	if (capability >= GL_CLIP_PLANE0 && capability < GL_CLIP_PLANE0 + 6)
@@ -2831,6 +3180,7 @@ static void SDLGPUSetCapability(GLenum capability, bool enabled)
 	else if (capability == GFXACCELHOSTVERTEXPROGRAM) SDLGPUArbState()->program_enabled[0] = enabled;
 	else if (capability == GFXACCELHOSTFRAGMENTPROGRAM) SDLGPUArbState()->program_enabled[1] = enabled;
 	else if (capability == GL_TEXTURE_3D) s_state.texture_3d_enabled[s_state.active_texture] = enabled;
+	else if (capability == GFXACCELHOSTCUBEMAP) s_state.texture_cube_enabled[s_state.active_texture] = enabled;
 	else if (capability >= GL_LIGHT0 && capability < GL_LIGHT0 + 8)
 		s_state.lights[capability - GL_LIGHT0].enabled = enabled;
 	else if (capability >= GL_CLIP_PLANE0 && capability < GL_CLIP_PLANE0 + 6)
@@ -3454,6 +3804,7 @@ extern "C" void SDLGPUglBegin(GLenum mode)
 		return;
 	}
 	s_begin_mode = mode;
+	s_state.generic_vertices = false;
 	s_vertices.clear();
 }
 
@@ -4026,6 +4377,8 @@ extern "C" void SDLGPUglDeleteTextures(GLsizei count, const GLuint *textures)
 				s_state.bound_texture_3d[unit] = 0;
 			if (s_state.bound_texture_rectangle[unit] == textures[index])
 				s_state.bound_texture_rectangle[unit] = 0;
+			if (s_state.bound_texture_cube[unit] == textures[index])
+				s_state.bound_texture_cube[unit] = 0;
 		}
 		SDLGPUReleaseTextureResources(found->second);
 		delete found->second;
@@ -4047,6 +4400,8 @@ extern "C" void SDLGPUglBindTexture(GLenum target, GLuint texture)
 		s_state.bound_texture_2d[s_state.active_texture] = texture;
 	else if (target == GFXACCELHOSTTEXTURERECTANGLE)
 		s_state.bound_texture_rectangle[s_state.active_texture] = texture;
+	else if (target == GFXACCELHOSTCUBEMAP)
+		s_state.bound_texture_cube[s_state.active_texture] = texture;
 	else
 		SDLGPUSetError(GL_INVALID_ENUM);
 }
@@ -4117,13 +4472,24 @@ extern "C" void SDLGPUglTexImage2D(GLenum target, GLint level, GLint internal_fo
 		return;
 	int base_width = width << level;
 	int base_height = height << level;
-	if (!SDLGPUAllocateTexture(object, target, base_width, base_height, 1, internal_format))
+	int face = SDLGPUCubeFace(target);
+	GLenum storage = target;
+	if (face >= 0)
+		storage = GFXACCELHOSTCUBEMAP;
+	else
+		face = 0;
+	if (level > 0 && object->texture && object->target == storage && level < object->levels &&
+		std::max(1, object->width >> level) == width && std::max(1, object->height >> level) == height) {
+		base_width = object->width;
+		base_height = object->height;
+	}
+	if (!SDLGPUAllocateTexture(object, storage, base_width, base_height, 1, internal_format))
 		return;
 	if (!pixels) {
 		SDLGPUDefineTextureLevel(object, level, width, height, 1);
 		return;
 	}
-	if (SDLGPUUploadTextureRegion(object, level, 0, 0, 0, width, height, 1,
+	if (SDLGPUUploadTextureRegion(object, level, 0, 0, face, width, height, 1,
 		pixels, format, type, s_state.unpack_alignment, internal_format))
 		SDLGPUDefineTextureLevel(object, level, width, height, 1);
 }
@@ -4179,7 +4545,10 @@ extern "C" void SDLGPUglTexSubImage2D(GLenum target, GLint level, GLint xoffset,
 		return;
 	if (!SDLGPUFlushPendingDraws())
 		return;
-	if (SDLGPUUploadTextureRegion(object, level, xoffset, yoffset, 0, width, height, 1,
+	int face = SDLGPUCubeFace(target);
+	if (face < 0)
+		face = 0;
+	if (SDLGPUUploadTextureRegion(object, level, xoffset, yoffset, face, width, height, 1,
 		pixels, format, type, s_state.unpack_alignment, object->internal_format))
 		SDLGPUDefineUpdatedTextureLevel(object, level);
 }
@@ -4875,13 +5244,8 @@ static int SDLGPUProgramType(GLenum target)
 
 static void SDLGPUBindProgramEntry(GLenum target, GLuint name)
 {
-	if (!SDLGPUFlushPendingDraws())
-		return;
-	if (name && SDLGPUArbState()->programs.find(name) == SDLGPUArbState()->programs.end()) {
-		ArbProgram *program = new ArbProgram;
-		program->target = target;
-		SDLGPUArbState()->programs[name] = program;
-	}
+	if (name && SDLGPUArbState()->programs.find(name) == SDLGPUArbState()->programs.end())
+		SDLGPUArbState()->programs[name] = SDLGPUNewProgram(target);
 	SDLGPUArbState()->bound_program[SDLGPUProgramType(target)] = name;
 }
 
@@ -4908,7 +5272,7 @@ static void SDLGPUGenProgramsEntry(GLsizei count, GLuint *names)
 	for (GLsizei index = 0; index < count; index++) {
 		while (SDLGPUArbState()->programs.find(SDLGPUArbState()->next_program) != SDLGPUArbState()->programs.end())
 			SDLGPUArbState()->next_program++;
-		SDLGPUArbState()->programs[SDLGPUArbState()->next_program] = new ArbProgram;
+		SDLGPUArbState()->programs[SDLGPUArbState()->next_program] = SDLGPUNewProgram(0);
 		names[index] = SDLGPUArbState()->next_program;
 		SDLGPUArbState()->next_program++;
 	}
@@ -4924,7 +5288,7 @@ static GLboolean SDLGPUIsProgramEntry(GLuint name)
 static void SDLGPUEnvDoublesEntry(GLenum target, GLuint slot, void *values)
 {
 	const double *source = static_cast<const double *>(values);
-	if (slot >= SDLGPUPROGRAMLOCALS || !SDLGPUFlushPendingDraws())
+	if (slot >= SDLGPUPROGRAMLOCALS)
 		return;
 	for (int index = 0; index < 4; index++)
 		SDLGPUArbState()->program_env[SDLGPUProgramType(target)][slot][index] = (float)source[index];
@@ -4932,7 +5296,7 @@ static void SDLGPUEnvDoublesEntry(GLenum target, GLuint slot, void *values)
 
 static void SDLGPUEnvFloatsEntry(GLenum target, GLuint slot, void *values)
 {
-	if (slot >= SDLGPUPROGRAMLOCALS || !SDLGPUFlushPendingDraws())
+	if (slot >= SDLGPUPROGRAMLOCALS)
 		return;
 	std::memcpy(SDLGPUArbState()->program_env[SDLGPUProgramType(target)][slot], values, 16);
 }
@@ -4941,7 +5305,7 @@ static void SDLGPULocalDoublesEntry(GLenum target, GLuint slot, void *values)
 {
 	const double *source = static_cast<const double *>(values);
 	ArbProgram *program = SDLGPUBoundProgram(SDLGPUProgramType(target));
-	if (!program || slot >= SDLGPUPROGRAMLOCALS || !SDLGPUFlushPendingDraws())
+	if (!program || slot >= SDLGPUPROGRAMLOCALS)
 		return;
 	for (int index = 0; index < 4; index++)
 		program->local[slot][index] = (float)source[index];
@@ -4950,7 +5314,7 @@ static void SDLGPULocalDoublesEntry(GLenum target, GLuint slot, void *values)
 static void SDLGPULocalFloatsEntry(GLenum target, GLuint slot, void *values)
 {
 	ArbProgram *program = SDLGPUBoundProgram(SDLGPUProgramType(target));
-	if (!program || slot >= SDLGPUPROGRAMLOCALS || !SDLGPUFlushPendingDraws())
+	if (!program || slot >= SDLGPUPROGRAMLOCALS)
 		return;
 	std::memcpy(program->local[slot], values, 16);
 }
@@ -4993,9 +5357,8 @@ static void SDLGPUProgramStringEntry(GLenum target, GLenum, GLsizei length, cons
 	if (!program || !SDLGPUFlushPendingDraws())
 		return;
 	program->target = target;
+	program->id = ++SDLGPUArbState()->next_id;
 	program->text.assign(static_cast<const char *>(text), (size_t)length);
-	if (!SDLGPUArbState()->unbound_texture && !SDLGPUCreateSolidTexture(GL_TEXTURE_2D, &SDLGPUArbState()->unbound_texture, 0))
-		return;
 	if (program->shader)
 		SDL_ReleaseGPUShader(s_device, program->shader);
 	program->shader = NULL;
@@ -5153,6 +5516,9 @@ void *SDLGPUGetProgramEntry(int index)
 	case 16: return (void *)SDLGPUProgramStringEntry;
 	case 17: return (void *)SDLGPUGetProgramStringEntry;
 	case 18: return (void *)SDLGPUGetProgramQueryEntry;
+	case 19: return (void *)SDLGPUVertexAttribEntry;
+	case 20: return (void *)SDLGPUglTexImage3D;
+	case 21: return (void *)SDLGPUglTexSubImage3D;
 	default: return NULL;
 	}
 }
@@ -5197,7 +5563,7 @@ extern "C" void SDLGPUglGetIntegerv(GLenum name, GLint *parameters)
 		return;
 	if (name == GL_MATRIX_MODE) *parameters = (GLint)s_state.matrix_mode;
 	else if (name == GL_ACTIVE_TEXTURE) *parameters = GL_TEXTURE0 + s_state.active_texture;
-	else if (name == GL_MAX_TEXTURE_UNITS_ARB) *parameters = 2;
+	else if (name == GL_MAX_TEXTURE_UNITS_ARB) *parameters = SDLGPUFIXEDUNITS;
 	else if (name == GFXACCELHOSTPROGRAMERRORPOSITION) *parameters = -1;
 	else if (name == GL_TEXTURE_BINDING_2D)
 		*parameters = (GLint)s_state.bound_texture_2d[s_state.active_texture];

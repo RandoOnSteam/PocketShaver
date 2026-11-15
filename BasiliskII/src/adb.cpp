@@ -739,18 +739,9 @@ static const uint8 joy_firebird_control[17][2] = {
 
 static uint8 joy_firebird_axis(JoyManagerDevice *dev, int axis)
 {
-	int v = JoyManagerAxis(dev, axis);
 	int r;
 
-	/* Treat a stick resting slightly off centre as centred. */
-	if (v > -JOY_FIREBIRD_REST && v < JOY_FIREBIRD_REST)
-		return 128;
-	/* Stretch what is left so pushing the stick fully still reaches the ends. */
-	if (v > 0)
-		v = (v - JOY_FIREBIRD_REST) * 32767 / (32767 - JOY_FIREBIRD_REST);
-	else
-		v = (v + JOY_FIREBIRD_REST) * 32768 / (32768 - JOY_FIREBIRD_REST);
-	r = (v + 32768) >> 8;
+	r = (JoyManagerAxisRest(JoyManagerAxis(dev, axis)) + 32768) >> 8;
 	/* Say centred rather than send a value the driver ignores anyway. */
 	if (r > 128 - JOY_FIREBIRD_NULL && r < 128 + JOY_FIREBIRD_NULL)
 		return 128;
@@ -896,7 +887,7 @@ static uint8 joy_thrustmaster_axis(JoyManagerDevice *dev, int axis)
 /* signed axes: -128..127, centred on 0 */
 static uint8 joy_thrustmaster_axis_signed(JoyManagerDevice *dev, int axis)
 {
-	return (uint8)(JoyManagerAxis(dev, axis) >> 8);
+	return (uint8)(JoyManagerAxisRest(JoyManagerAxis(dev, axis)) >> 8);
 }
 static const uint8 joy_adb_thrustmaster_button_bit[16] = {
 	5, /* trigger   */ 4, /* thumbHigh */ 6, /* thumbLow */ 7, /* pinkey */

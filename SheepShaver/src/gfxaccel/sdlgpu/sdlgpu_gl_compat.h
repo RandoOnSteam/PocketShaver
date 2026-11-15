@@ -248,9 +248,25 @@ struct GfxGLExt {
 	SDLGPU_PFN_BLEND_COLOR BlendColor;
 	SDLGPU_PFN_BLEND_EQUATION BlendEquation;
 	SDLGPU_PFN_FOG_COORD_F FogCoordf;
+	void (*BlitFramebuffer)(GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLbitfield, GLenum);
+	void (*RenderbufferStorageMultisample)(GLenum, GLsizei, GLenum, GLsizei, GLsizei);
 	bool fbo;
 	bool multitex;
 };
+
+#ifndef GL_DEPTH24_STENCIL8
+#define GL_DEPTH24_STENCIL8 0x88F0
+#endif
+#ifndef GL_STENCIL_ATTACHMENT
+#define GL_STENCIL_ATTACHMENT 0x8D20
+#endif
+#ifndef GL_READ_FRAMEBUFFER
+#define GL_READ_FRAMEBUFFER 0x8CA8
+#define GL_DRAW_FRAMEBUFFER 0x8CA9
+#endif
+#ifndef GL_MAX_SAMPLES
+#define GL_MAX_SAMPLES 0x8D57
+#endif
 
 inline GfxGLExt &gfx_gl_ext()
 {
@@ -264,7 +280,7 @@ inline GfxGLExt &gfx_gl_ext()
 		SDLGPUglClientActiveTexture, SDLGPUglMultiTexCoord2f,
 		SDLGPUglMultiTexCoord4f, SDLGPUglSecondaryColor3f,
 		SDLGPUglBlendFuncSeparate, SDLGPUglBlendColor,
-		SDLGPUglBlendEquation, SDLGPUglFogCoordf, true, true
+		SDLGPUglBlendEquation, SDLGPUglFogCoordf, NULL, NULL, true, true
 	};
 	return ext;
 }

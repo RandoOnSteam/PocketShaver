@@ -26,6 +26,19 @@
 #define OSXQUARTZVENDORSTRING 0x880u
 #define OSXQUARTZVERSIONSTRING 0x900u
 #define OSXQUARTZSTRINGEND 0x920u
+#define OSXQUARTZCALLFIRST 1000u
+#define OSXQUARTZCALLSETFULLSCREEN 1011u
+#define OSXQUARTZCALLDESCRIBEPIXELFORMAT 1012u
+#define OSXQUARTZCALLSETSURFACE 1013u
+#define OSXQUARTZCALLSETOFFSCREEN 1014u
+#define OSXQUARTZCALLDESTROYCONTEXT 1015u
+#define OSXQUARTZCALLCHOOSEPIXELFORMAT 1016u
+#define OSXQUARTZCALLDESCRIBERENDERER 1017u
+#define OSXQUARTZCALLFLUSHDRAWABLE 1018u
+#define OSXQUARTZCALLSETPBUFFER 1019u
+#define OSXQUARTZCALLTEXIMAGEPBUFFER 1020u
+#define OSXQUARTZCALLASSIGNDISPATCH 1022u
+#define OSXQUARTZCALLGETPARAMETER 1023u
 #define OSXQUARTZVERSION "1.3 APPLE-bridge"
 #define OSXQUARTZEXTENSIONS "GL_ARB_multitexture GL_ARB_texture_rectangle GL_EXT_texture_rectangle " \
 	"GL_ARB_texture_non_power_of_two GL_APPLE_client_storage GL_APPLE_packed_pixels GL_EXT_bgra GL_EXT_abgr " \
@@ -33,12 +46,18 @@
 	"GL_ARB_texture_env_add GL_ARB_texture_env_crossbar GL_ARB_texture_env_dot3 GL_ARB_texture_border_clamp " \
 	"GL_EXT_texture_edge_clamp GL_SGIS_texture_edge_clamp GL_ARB_texture_mirrored_repeat GL_EXT_texture_lod_bias " \
 	"GL_SGIS_generate_mipmap GL_EXT_texture_filter_anisotropic GL_ARB_texture_float GL_APPLE_float_pixels " \
-	"GL_ARB_fragment_program GL_APPLE_flush_render GL_APPLE_pixel_buffer"
+	"GL_ARB_fragment_program GL_ARB_vertex_program GL_ARB_texture_cube_map GL_EXT_texture_cube_map GL_EXT_texture3D " \
+	"GL_ARB_texture_compression GL_EXT_texture_compression_s3tc GL_APPLE_flush_render GL_APPLE_pixel_buffer"
 
 #ifndef OSXGLBRIDGE
 #define OSXGLBRIDGE 0
 #endif
 #if OSXGLBRIDGE
+
+#define OSXQUARTZADOPTNONE 0
+#define OSXQUARTZADOPTNEW 1
+#define OSXQUARTZADOPTSHOWN 2
+#define OSXQUARTZADOPTENDED 3
 
 typedef struct OsxQuartzBridge OsxQuartzBridge;
 typedef uint32 (*OsxQuartzProcessFunction)(void *owner, OsxCpu *cpu);
@@ -50,6 +69,8 @@ void OsxGuestQuartzComposeWindows(OsxQuartzBridge *bridge, uint8 *present, uint3
 void OsxGuestDestroyQuartzBridge(OsxQuartzBridge *bridge);
 void OsxGuestQuartzResize(OsxQuartzBridge *bridge, uint32 width, uint32 height);
 int OsxGuestQuartzFullScreen(OsxQuartzBridge *bridge);
+int OsxGuestQuartzTakeAdopted(OsxQuartzBridge *bridge, int allowed);
+int OsxGuestQuartzAdopting(OsxQuartzBridge *bridge);
 int OsxGuestQuartzIdleGeometry(OsxQuartzBridge *bridge, OsxCpu *cpu, OsxQuartzEventLoopFunction eventloop, void *owner);
 void OsxGuestQuartzKeepProcesses(OsxQuartzBridge *bridge, const uint32 *processes, const uint32 *spaces, uint32 count, uint32 mask);
 int OsxGuestQuartzBridgeCall(OsxQuartzBridge *bridge, OsxCpu *cpu, const uint32 *tails, uint32 call, uint32 depth, FILE *log);
@@ -65,6 +86,7 @@ void OsxGuestEngineResize(void *engine, OsxCpu *cpu, uint32 width, uint32 height
 void OsxGuestEngineCall(void *engine, OsxCpu *cpu, uint32 sub);
 void OsxGuestEngineFlush(void *engine, OsxCpu *cpu);
 void OsxGuestEngineReadPixels(void *engine, OsxCpu *cpu, uint32 width, uint32 height, void *pixels);
+int OsxGuestEngineAdoptFrame(void *engine, OsxCpu *cpu, uint32 width, uint32 height);
 void OsxGuestEngineHostString(void *engine, OsxCpu *cpu, uint32 name, char *text, uint32 size);
 void OsxGuestEngineBeforePresent(void);
 void OsxGuestEngineAfterPresent(void);
@@ -74,6 +96,8 @@ void OsxGuestEngineAttachTexture(void *engine, OsxCpu *cpu, unsigned texture, ui
 void OsxGuestEngineCopyTexture(void *engine, OsxCpu *cpu, unsigned texture, uint32 width, uint32 height, uint32 internalformat, uint32 texturetarget);
 void OsxGuestEngineBlendSeparate(void *engine, OsxCpu *cpu, int separate);
 int OsxGuestEngineProgramCall(void *engine, OsxCpu *cpu, uint32 call);
+void OsxGuestEngineSamples(void *engine, OsxCpu *cpu, uint32 samples);
+int OsxGuestEngineAttributeCall(void *engine, OsxCpu *cpu, uint32 call);
 void OsxGuestEngineProgramEnable(void *engine, OsxCpu *cpu, uint32 capability, int enable);
 }
 #endif

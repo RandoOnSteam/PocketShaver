@@ -5579,12 +5579,20 @@ static void dxt5_decompress_block(const uint8_t *src, uint8_t *dst)
 	}
 }
 
-// Decompress a full DXT image to BGRA8
+#define GLDXT1 0x83F0u
+#define GLDXT1ALPHA 0x83F1u
+#define GLDXT3 0x83F2u
+#define GLDXT5 0x83F3u
+#define GLDXTSMALLBLOCK 8
+#define GLDXTLARGEBLOCK 16
+
 static uint8_t *dxt_decompress_image(const uint8_t *src, int w, int h, uint32_t format, int *outLen)
 {
-	int bw = (w + 3) / 4;  // block width
-	int bh = (h + 3) / 4;  // block height
-	int block_size = (format == 0x83F0) ? 8 : 16; // DXT1=8, DXT3/5=16
+	int bw = (w + 3) / 4;
+	int bh = (h + 3) / 4;
+	int block_size = GLDXTLARGEBLOCK;
+	if (format <= GLDXT1ALPHA)
+		block_size = GLDXTSMALLBLOCK;
 
 	*outLen = w * h * 4;
 	uint8_t *dst = (uint8_t *)malloc(*outLen);
@@ -5596,11 +5604,11 @@ static uint8_t *dxt_decompress_image(const uint8_t *src, int w, int h, uint32_t 
 			uint8_t block_pixels[16 * 4]; // 4x4 BGRA
 			const uint8_t *block_src = src + (by * bw + bx) * block_size;
 
-			if (format == 0x83F0)      // GL_COMPRESSED_RGB_S3TC_DXT1_EXT
+			if (format <= GLDXT1ALPHA)
 				dxt1_decompress_block(block_src, block_pixels, true);
-			else if (format == 0x83F2) // GL_COMPRESSED_RGBA_S3TC_DXT3_EXT
+			else if (format == GLDXT3)
 				dxt3_decompress_block(block_src, block_pixels);
-			else if (format == 0x83F3) // GL_COMPRESSED_RGBA_S3TC_DXT5_EXT
+			else if (format == GLDXT5)
 				dxt5_decompress_block(block_src, block_pixels);
 
 			// Copy block pixels to destination image
@@ -5637,7 +5645,7 @@ void NativeGLCompressedTexImage2DARB(GLContext *ctx, uint32_t target, int32_t le
 	if (!ctx || data_ptr == 0) return;
 
 	// Only handle DXT formats
-	if (ifmt != 0x83F0 && ifmt != 0x83F2 && ifmt != 0x83F3) {
+	if (ifmt < GLDXT1 || ifmt > GLDXT5) {
 		GL_LOG("CompressedTexImage2D: unsupported format 0x%x", ifmt);
 		return;
 	}
@@ -5683,7 +5691,7 @@ void NativeGLCompressedTexSubImage2DARB(GLContext *ctx, uint32_t target, int32_t
 	GL_LOG("CompressedTexSubImage2D fmt=0x%x %dx%d at (%d,%d)", fmt, w, h, xoff, yoff);
 	if (!ctx || data_ptr == 0) return;
 
-	if (fmt != 0x83F0 && fmt != 0x83F2 && fmt != 0x83F3) {
+	if (fmt < GLDXT1 || fmt > GLDXT5) {
 		GL_LOG("CompressedTexSubImage2D: unsupported format 0x%x", fmt);
 		return;
 	}

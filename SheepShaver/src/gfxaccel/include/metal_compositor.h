@@ -195,6 +195,10 @@ void MetalCompositorPresent(void);
  */
 #if defined(GFXACCEL_USE_OPENGL)
 void MetalCompositorPresentWithoutVBL(void);
+void MetalCompositorPresentAdopted(void);
+int MetalCompositorAdoptFrame(unsigned int readframebuffer, int width, int height);
+int MetalCompositorReadFrame(uint8_t *pixels, int rowbytes);
+int MetalCompositorSetGamma(const uint8_t *table);
 #endif
 
 /*

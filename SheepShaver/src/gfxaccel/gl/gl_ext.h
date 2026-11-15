@@ -57,6 +57,29 @@ typedef void (APIENTRY *PFNGLBLENDFUNCSEPARATEPROC)(GLenum, GLenum, GLenum, GLen
 typedef void (APIENTRY *GFXPFNGLBLENDCOLORPROC)(GLclampf, GLclampf, GLclampf, GLclampf);
 typedef void (APIENTRY *GFXPFNGLBLENDEQUATIONPROC)(GLenum);
 typedef void (APIENTRY *PFNGLFOGCOORDFPROC)(GLfloat);
+typedef void (APIENTRY *GFXPFNGLBLITFRAMEBUFFERPROC)(GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLbitfield, GLenum);
+typedef void (APIENTRY *GFXPFNGLRENDERBUFFERSTORAGEMULTISAMPLEPROC)(GLenum, GLsizei, GLenum, GLsizei, GLsizei);
+typedef void (APIENTRY *GFXPFNGLGENPROGRAMSPROC)(GLsizei, GLuint *);
+typedef void (APIENTRY *GFXPFNGLBINDPROGRAMPROC)(GLenum, GLuint);
+typedef void (APIENTRY *GFXPFNGLPROGRAMSTRINGPROC)(GLenum, GLenum, GLsizei, const void *);
+#ifndef GL_FRAGMENT_PROGRAM_ARB
+#define GL_FRAGMENT_PROGRAM_ARB 0x8804
+#define GL_PROGRAM_FORMAT_ASCII_ARB 0x8875
+#define GL_PROGRAM_ERROR_POSITION_ARB 0x864B
+#endif
+#ifndef GL_DEPTH24_STENCIL8
+#define GL_DEPTH24_STENCIL8 0x88F0
+#endif
+#ifndef GL_STENCIL_ATTACHMENT
+#define GL_STENCIL_ATTACHMENT 0x8D20
+#endif
+#ifndef GL_READ_FRAMEBUFFER
+#define GL_READ_FRAMEBUFFER 0x8CA8
+#define GL_DRAW_FRAMEBUFFER 0x8CA9
+#endif
+#ifndef GL_MAX_SAMPLES
+#define GL_MAX_SAMPLES 0x8D57
+#endif
 
 #ifndef GL_TEXTURE0
 #define GL_TEXTURE0 0x84C0
@@ -121,9 +144,16 @@ struct GfxGLExt {
 	GFXPFNGLBLENDCOLORPROC BlendColor;
 	GFXPFNGLBLENDEQUATIONPROC BlendEquation;
 	PFNGLFOGCOORDFPROC FogCoordf;
+	GFXPFNGLBLITFRAMEBUFFERPROC BlitFramebuffer;
+	GFXPFNGLRENDERBUFFERSTORAGEMULTISAMPLEPROC RenderbufferStorageMultisample;
+	GFXPFNGLGENPROGRAMSPROC GenPrograms;
+	GFXPFNGLBINDPROGRAMPROC BindProgram;
+	GFXPFNGLPROGRAMSTRINGPROC ProgramString;
 	bool fbo;
 	bool multitex;
 };
+
+void GfxGLExtLoad(GfxGLExt &e);
 
 inline GfxGLExt &gfx_gl_ext()
 {
@@ -131,71 +161,7 @@ inline GfxGLExt &gfx_gl_ext()
 	static bool loaded = false;
 	if (!loaded) {
 		loaded = true;
-		e.GenFramebuffers = (PFNGLGENFRAMEBUFFERSPROC)GfxGLGetProcAddress("glGenFramebuffers");
-		if (!e.GenFramebuffers)
-			e.GenFramebuffers = (PFNGLGENFRAMEBUFFERSPROC)GfxGLGetProcAddress("glGenFramebuffersEXT");
-		e.DeleteFramebuffers = (PFNGLDELETEFRAMEBUFFERSPROC)GfxGLGetProcAddress("glDeleteFramebuffers");
-		if (!e.DeleteFramebuffers)
-			e.DeleteFramebuffers = (PFNGLDELETEFRAMEBUFFERSPROC)GfxGLGetProcAddress("glDeleteFramebuffersEXT");
-		e.BindFramebuffer = (PFNGLBINDFRAMEBUFFERPROC)GfxGLGetProcAddress("glBindFramebuffer");
-		if (!e.BindFramebuffer)
-			e.BindFramebuffer = (PFNGLBINDFRAMEBUFFERPROC)GfxGLGetProcAddress("glBindFramebufferEXT");
-		e.FramebufferTexture2D = (PFNGLFRAMEBUFFERTEXTURE2DPROC)GfxGLGetProcAddress("glFramebufferTexture2D");
-		if (!e.FramebufferTexture2D)
-			e.FramebufferTexture2D = (PFNGLFRAMEBUFFERTEXTURE2DPROC)GfxGLGetProcAddress("glFramebufferTexture2DEXT");
-		e.GenRenderbuffers = (PFNGLGENRENDERBUFFERSPROC)GfxGLGetProcAddress("glGenRenderbuffers");
-		if (!e.GenRenderbuffers)
-			e.GenRenderbuffers = (PFNGLGENRENDERBUFFERSPROC)GfxGLGetProcAddress("glGenRenderbuffersEXT");
-		e.DeleteRenderbuffers = (PFNGLDELETERENDERBUFFERSPROC)GfxGLGetProcAddress("glDeleteRenderbuffers");
-		if (!e.DeleteRenderbuffers)
-			e.DeleteRenderbuffers = (PFNGLDELETERENDERBUFFERSPROC)GfxGLGetProcAddress("glDeleteRenderbuffersEXT");
-		e.BindRenderbuffer = (PFNGLBINDRENDERBUFFERPROC)GfxGLGetProcAddress("glBindRenderbuffer");
-		if (!e.BindRenderbuffer)
-			e.BindRenderbuffer = (PFNGLBINDRENDERBUFFERPROC)GfxGLGetProcAddress("glBindRenderbufferEXT");
-		e.RenderbufferStorage = (PFNGLRENDERBUFFERSTORAGEPROC)GfxGLGetProcAddress("glRenderbufferStorage");
-		if (!e.RenderbufferStorage)
-			e.RenderbufferStorage = (PFNGLRENDERBUFFERSTORAGEPROC)GfxGLGetProcAddress("glRenderbufferStorageEXT");
-		e.FramebufferRenderbuffer = (PFNGLFRAMEBUFFERRENDERBUFFERPROC)GfxGLGetProcAddress("glFramebufferRenderbuffer");
-		if (!e.FramebufferRenderbuffer)
-			e.FramebufferRenderbuffer = (PFNGLFRAMEBUFFERRENDERBUFFERPROC)GfxGLGetProcAddress("glFramebufferRenderbufferEXT");
-		e.CheckFramebufferStatus = (PFNGLCHECKFRAMEBUFFERSTATUSPROC)GfxGLGetProcAddress("glCheckFramebufferStatus");
-		if (!e.CheckFramebufferStatus)
-			e.CheckFramebufferStatus = (PFNGLCHECKFRAMEBUFFERSTATUSPROC)GfxGLGetProcAddress("glCheckFramebufferStatusEXT");
-		e.GenerateMipmap = (PFNGLGENERATEMIPMAPPROC)GfxGLGetProcAddress("glGenerateMipmap");
-		if (!e.GenerateMipmap)
-			e.GenerateMipmap = (PFNGLGENERATEMIPMAPPROC)GfxGLGetProcAddress("glGenerateMipmapEXT");
-		e.ActiveTexture = (PFNGLACTIVETEXTUREPROC)GfxGLGetProcAddress("glActiveTexture");
-		if (!e.ActiveTexture)
-			e.ActiveTexture = (PFNGLACTIVETEXTUREPROC)GfxGLGetProcAddress("glActiveTextureARB");
-		e.ClientActiveTexture = (PFNGLCLIENTACTIVETEXTUREPROC)GfxGLGetProcAddress("glClientActiveTexture");
-		if (!e.ClientActiveTexture)
-			e.ClientActiveTexture = (PFNGLCLIENTACTIVETEXTUREPROC)GfxGLGetProcAddress("glClientActiveTextureARB");
-		e.MultiTexCoord2f = (PFNGLMULTITEXCOORD2FPROC)GfxGLGetProcAddress("glMultiTexCoord2f");
-		if (!e.MultiTexCoord2f)
-			e.MultiTexCoord2f = (PFNGLMULTITEXCOORD2FPROC)GfxGLGetProcAddress("glMultiTexCoord2fARB");
-		e.MultiTexCoord4f = (PFNGLMULTITEXCOORD4FPROC)GfxGLGetProcAddress("glMultiTexCoord4f");
-		if (!e.MultiTexCoord4f)
-			e.MultiTexCoord4f = (PFNGLMULTITEXCOORD4FPROC)GfxGLGetProcAddress("glMultiTexCoord4fARB");
-		e.SecondaryColor3f = (PFNGLSECONDARYCOLOR3FPROC)GfxGLGetProcAddress("glSecondaryColor3f");
-		if (!e.SecondaryColor3f)
-			e.SecondaryColor3f = (PFNGLSECONDARYCOLOR3FPROC)GfxGLGetProcAddress("glSecondaryColor3fEXT");
-		e.BlendFuncSeparate = (PFNGLBLENDFUNCSEPARATEPROC)GfxGLGetProcAddress("glBlendFuncSeparate");
-		if (!e.BlendFuncSeparate)
-			e.BlendFuncSeparate = (PFNGLBLENDFUNCSEPARATEPROC)GfxGLGetProcAddress("glBlendFuncSeparateEXT");
-		e.BlendColor = (GFXPFNGLBLENDCOLORPROC)GfxGLGetProcAddress("glBlendColor");
-		if (!e.BlendColor)
-			e.BlendColor = (GFXPFNGLBLENDCOLORPROC)GfxGLGetProcAddress("glBlendColorEXT");
-		e.BlendEquation = (GFXPFNGLBLENDEQUATIONPROC)GfxGLGetProcAddress("glBlendEquation");
-		if (!e.BlendEquation)
-			e.BlendEquation = (GFXPFNGLBLENDEQUATIONPROC)GfxGLGetProcAddress("glBlendEquationEXT");
-		e.FogCoordf = (PFNGLFOGCOORDFPROC)GfxGLGetProcAddress("glFogCoordf");
-		if (!e.FogCoordf)
-			e.FogCoordf = (PFNGLFOGCOORDFPROC)GfxGLGetProcAddress("glFogCoordfEXT");
-		e.fbo = e.GenFramebuffers && e.BindFramebuffer && e.FramebufferTexture2D &&
-		        e.GenRenderbuffers && e.BindRenderbuffer && e.RenderbufferStorage &&
-		        e.FramebufferRenderbuffer && e.CheckFramebufferStatus && e.DeleteFramebuffers;
-		e.multitex = e.ActiveTexture != NULL &&
-		             (e.MultiTexCoord2f != NULL || e.MultiTexCoord4f != NULL);
+		GfxGLExtLoad(e);
 	}
 	return e;
 }

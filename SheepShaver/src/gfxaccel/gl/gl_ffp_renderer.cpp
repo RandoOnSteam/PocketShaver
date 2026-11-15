@@ -150,6 +150,11 @@ struct GLMetalState {
 	int dumpSignatureRepeat;
 	int dumpCount;
 	int textureUnitCount;
+	int samples;
+	GLuint sampleFramebuffer;
+	GLuint sampleBuffers[2];
+	uint32_t sampleWidth;
+	uint32_t sampleHeight;
 };
 
 /* The real GL context can contain only one guest context's state at a time.
@@ -283,12 +288,17 @@ static bool GLMetalBoundChainComplete(const GLTextureObject &texture)
 	int size = texture.width;
 	GLint level = 0;
 	GLint width = 0;
+	GLint maxlevel;
 	if(texture.height > size)
 		size = texture.height;
 	while(size > 1) {
 		size >>= 1;
 		++level;
 	}
+	maxlevel = level;
+	glGetTexParameteriv(GL_TEXTURE_2D,GL_TEXTURE_MAX_LEVEL,&maxlevel);
+	if(maxlevel < level)
+		level = maxlevel;
 	glGetTexLevelParameteriv(GL_TEXTURE_2D,level,GL_TEXTURE_WIDTH,&width);
 	return width > 0;
 }
@@ -612,9 +622,11 @@ static bool GLMetalBindOverlayFBO(void)
 		ext.FramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,
 								 GL_TEXTURE_2D,s_cur,0);
 		ext.BindRenderbuffer(GL_RENDERBUFFER,s_depth);
-		ext.RenderbufferStorage(GL_RENDERBUFFER,GL_DEPTH_COMPONENT24,
+		ext.RenderbufferStorage(GL_RENDERBUFFER,GL_DEPTH24_STENCIL8,
 							  (GLsizei)s_ow,(GLsizei)s_oh);
 		ext.FramebufferRenderbuffer(GL_FRAMEBUFFER,GL_DEPTH_ATTACHMENT,
+								GL_RENDERBUFFER,s_depth);
+		ext.FramebufferRenderbuffer(GL_FRAMEBUFFER,GL_STENCIL_ATTACHMENT,
 								GL_RENDERBUFFER,s_depth);
 		const GLenum status = ext.CheckFramebufferStatus(GL_FRAMEBUFFER);
 		const GLenum error = glGetError();
@@ -633,6 +645,76 @@ static bool GLMetalBindOverlayFBO(void)
 		s_depth = 0;
 	}
 	return false;
+}
+
+static void GLMetalReleaseSamples(GLMetalState *ms)
+{
+	GfxGLExt &ext = gfx_gl_ext();
+	if(ms->sampleFramebuffer && ext.DeleteFramebuffers)
+		ext.DeleteFramebuffers(1,&ms->sampleFramebuffer);
+	if(ms->sampleBuffers[0] && ext.DeleteRenderbuffers)
+		ext.DeleteRenderbuffers(2,ms->sampleBuffers);
+	ms->sampleFramebuffer = 0;
+	ms->sampleBuffers[0] = 0;
+	ms->sampleBuffers[1] = 0;
+	ms->sampleWidth = 0;
+	ms->sampleHeight = 0;
+}
+
+static void GLMetalBindSamples(GLContext *ctx)
+{
+	static const GLenum formats[2] = {GL_RGBA8,GL_DEPTH24_STENCIL8};
+	static const GLenum attachments[3] = {GL_COLOR_ATTACHMENT0,GL_DEPTH_ATTACHMENT,GL_STENCIL_ATTACHMENT};
+	GLMetalState *ms = GLMetalGetState(ctx);
+	GfxGLExt &ext = gfx_gl_ext();
+	GLint limit = 0;
+	if(!ms || ms->samples < 2 || !s_frame_active || !ext.BlitFramebuffer || !ext.RenderbufferStorageMultisample)
+		return;
+	if(!ms->sampleFramebuffer || ms->sampleWidth != s_ow || ms->sampleHeight != s_oh) {
+		GLMetalReleaseSamples(ms);
+		glGetIntegerv(GL_MAX_SAMPLES,&limit);
+		if(ms->samples > limit)
+			ms->samples = limit;
+		if(ms->samples < 2)
+			return;
+		ext.GenFramebuffers(1,&ms->sampleFramebuffer);
+		ext.GenRenderbuffers(2,ms->sampleBuffers);
+		ext.BindFramebuffer(GL_DRAW_FRAMEBUFFER,ms->sampleFramebuffer);
+		for(int buffer = 0; buffer < 2; ++buffer) {
+			ext.BindRenderbuffer(GL_RENDERBUFFER,ms->sampleBuffers[buffer]);
+			ext.RenderbufferStorageMultisample(GL_RENDERBUFFER,ms->samples,formats[buffer],(GLsizei)s_ow,(GLsizei)s_oh);
+		}
+		for(int attachment = 0; attachment < 3; ++attachment)
+			ext.FramebufferRenderbuffer(GL_DRAW_FRAMEBUFFER,attachments[attachment],GL_RENDERBUFFER,ms->sampleBuffers[attachment > 0]);
+		ms->sampleWidth = s_ow;
+		ms->sampleHeight = s_oh;
+		if(ext.CheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+			ext.BindFramebuffer(GL_FRAMEBUFFER,s_fbo);
+			GLMetalReleaseSamples(ms);
+			ms->samples = 0;
+			return;
+		}
+	}
+	ext.BindFramebuffer(GL_READ_FRAMEBUFFER,s_fbo);
+	ext.BindFramebuffer(GL_DRAW_FRAMEBUFFER,ms->sampleFramebuffer);
+}
+
+static void GLMetalResolveSamples(GLContext *ctx)
+{
+	GLMetalState *ms = GLMetalGetState(ctx);
+	GfxGLExt &ext = gfx_gl_ext();
+	GLboolean scissor;
+	if(!ms || !ms->sampleFramebuffer || !s_frame_active)
+		return;
+	scissor = glIsEnabled(GL_SCISSOR_TEST);
+	glDisable(GL_SCISSOR_TEST);
+	ext.BindFramebuffer(GL_READ_FRAMEBUFFER,ms->sampleFramebuffer);
+	ext.BindFramebuffer(GL_DRAW_FRAMEBUFFER,s_fbo);
+	ext.BlitFramebuffer(0,0,(GLint)s_ow,(GLint)s_oh,0,0,(GLint)s_ow,(GLint)s_oh,GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT|GL_STENCIL_BUFFER_BIT,GL_NEAREST);
+	ext.BindFramebuffer(GL_READ_FRAMEBUFFER,s_fbo);
+	ext.BindFramebuffer(GL_DRAW_FRAMEBUFFER,ms->sampleFramebuffer);
+	if(scissor)
+		glEnable(GL_SCISSOR_TEST);
 }
 
 void GLMetalInit(GLContext *ctx)
@@ -699,6 +781,7 @@ void GLMetalBeginFrame(GLContext*ctx){
 	if(!s_frame_active){
 		if(!GLMetalBindOverlayFBO())return;
 		s_frame_active=true;
+		GLMetalBindSamples(ctx);
 		/* New frame on the shared context: whatever the compositor/other engine
 		 * left in GL state is unknown, so the FFP state cache is stale. */
 		GLMetalInvalidateStateCache(ctx);
@@ -738,8 +821,8 @@ void GLMetalClear(GLContext*ctx,uint32_t mask){
 	glClear(m);
 }
 void GLMetalEndFrame(GLContext*ctx){
-	(void)ctx;
 	if(!SharedMetalDevice()||!s_frame_active)return;
+	GLMetalResolveSamples(ctx);
 	glFlush();
 	GfxGLExt &ext=gfx_gl_ext();
 	if(ext.fbo)ext.BindFramebuffer(GL_FRAMEBUFFER,0);
@@ -749,17 +832,10 @@ void GLMetalEndFrame(GLContext*ctx){
 /* Expand GL_QUADS / fans / strips / polygons to triangle lists for host GL.
  * texture_unit_mask identifies the enabled, resident units for this flush;
  * inactive-unit coordinates are neither useful nor safe to replay. */
-static void GLMetalEmitVertex(const GLVertex &v,bool force_opaque,
+static void GLMetalEmitVertex(const GfxGLExt &ext,const GLVertex &v,
 							  unsigned texture_unit_mask){
-	if(force_opaque){
-		const GLfloat color[4]={v.color[0],v.color[1],v.color[2],1.f};
-		glColor4fv(color);
-	}
-	else{
-		glColor4fv(v.color);
-	}
+	glColor4fv(v.color);
 	glNormal3fv(v.normal);
-	GfxGLExt &ext = gfx_gl_ext();
 	if(ext.SecondaryColor3f)
 		ext.SecondaryColor3f(v.secondary_color[0],v.secondary_color[1],
 							 v.secondary_color[2]);
@@ -787,68 +863,67 @@ static void GLMetalEmitVertex(const GLVertex &v,bool force_opaque,
 	}
 	glVertex4fv(v.position);
 }
-static void GLMetalEmitTriangle(const GLVertex &a,const GLVertex &b,
-								const GLVertex &c,bool force_opaque,
+static void GLMetalEmitTriangle(const GfxGLExt &ext,const GLVertex &a,
+								const GLVertex &b,const GLVertex &c,
 								unsigned texture_unit_mask){
-	GLMetalEmitVertex(a,force_opaque,texture_unit_mask);
-	GLMetalEmitVertex(b,force_opaque,texture_unit_mask);
-	GLMetalEmitVertex(c,force_opaque,texture_unit_mask);
+	GLMetalEmitVertex(ext,a,texture_unit_mask);
+	GLMetalEmitVertex(ext,b,texture_unit_mask);
+	GLMetalEmitVertex(ext,c,texture_unit_mask);
 }
-static void GLMetalFlushQuads(const std::vector<GLVertex> &vertices,
-							  bool force_opaque,unsigned texture_unit_mask){
+static void GLMetalFlushQuads(const GfxGLExt &ext,const std::vector<GLVertex> &vertices,
+		unsigned texture_unit_mask){
 	if(vertices.size()<4)return;
 	glBegin(GL_TRIANGLES);
 	for(size_t i=0;i+3<vertices.size();i+=4){
-		GLMetalEmitTriangle(vertices[i],vertices[i+1],vertices[i+2],
-							force_opaque,texture_unit_mask);
-		GLMetalEmitTriangle(vertices[i],vertices[i+2],vertices[i+3],
-							force_opaque,texture_unit_mask);
+		GLMetalEmitTriangle(ext,vertices[i],vertices[i+1],vertices[i+2],
+							texture_unit_mask);
+		GLMetalEmitTriangle(ext,vertices[i],vertices[i+2],vertices[i+3],
+							texture_unit_mask);
 	}
 	glEnd();
 }
-static void GLMetalFlushTriangleFan(const std::vector<GLVertex> &vertices,
-								 bool force_opaque,unsigned texture_unit_mask){
+static void GLMetalFlushTriangleFan(const GfxGLExt &ext,const std::vector<GLVertex> &vertices,
+		unsigned texture_unit_mask){
 	if(vertices.size()<3)return;
 	glBegin(GL_TRIANGLES);
 	for(size_t i=1;i+1<vertices.size();i++)
-		GLMetalEmitTriangle(vertices[0],vertices[i],vertices[i+1],
-							force_opaque,texture_unit_mask);
+		GLMetalEmitTriangle(ext,vertices[0],vertices[i],vertices[i+1],
+							texture_unit_mask);
 	glEnd();
 }
-static void GLMetalFlushTriangleStrip(const std::vector<GLVertex> &vertices,
-								   bool force_opaque,unsigned texture_unit_mask){
+static void GLMetalFlushTriangleStrip(const GfxGLExt &ext,const std::vector<GLVertex> &vertices,
+		unsigned texture_unit_mask){
 	if(vertices.size()<3)return;
 	glBegin(GL_TRIANGLES);
 	for(size_t i=0;i+2<vertices.size();i++){
 		if(i&1)
-			GLMetalEmitTriangle(vertices[i+1],vertices[i],vertices[i+2],
-								force_opaque,texture_unit_mask);
+			GLMetalEmitTriangle(ext,vertices[i+1],vertices[i],vertices[i+2],
+								texture_unit_mask);
 		else
-			GLMetalEmitTriangle(vertices[i],vertices[i+1],vertices[i+2],
-								force_opaque,texture_unit_mask);
+			GLMetalEmitTriangle(ext,vertices[i],vertices[i+1],vertices[i+2],
+								texture_unit_mask);
 	}
 	glEnd();
 }
-static void GLMetalFlushQuadStrip(const std::vector<GLVertex> &vertices,
-								 bool force_opaque,unsigned texture_unit_mask){
+static void GLMetalFlushQuadStrip(const GfxGLExt &ext,const std::vector<GLVertex> &vertices,
+		unsigned texture_unit_mask){
 	if(vertices.size()<4)return;
 	glBegin(GL_TRIANGLES);
 	for(size_t i=0;i+3<vertices.size();i+=2){
 		/* One GL_QUAD_STRIP quad is ordered i, i+1, i+3, i+2. */
-		GLMetalEmitTriangle(vertices[i],vertices[i+1],vertices[i+3],
-							force_opaque,texture_unit_mask);
-		GLMetalEmitTriangle(vertices[i],vertices[i+3],vertices[i+2],
-							force_opaque,texture_unit_mask);
+		GLMetalEmitTriangle(ext,vertices[i],vertices[i+1],vertices[i+3],
+							texture_unit_mask);
+		GLMetalEmitTriangle(ext,vertices[i],vertices[i+3],vertices[i+2],
+							texture_unit_mask);
 	}
 	glEnd();
 }
-static void GLMetalFlushPrimitive(const std::vector<GLVertex> &vertices,
-							  GLenum mode,bool force_opaque,
-							  unsigned texture_unit_mask){
+static void GLMetalFlushPrimitive(const GfxGLExt &ext,const std::vector<GLVertex> &vertices,
+		GLenum mode,unsigned texture_unit_mask){
 	if(vertices.empty())return;
 	glBegin(mode);
 	for(size_t i=0;i<vertices.size();i++)
-		GLMetalEmitVertex(vertices[i],force_opaque,texture_unit_mask);
+		GLMetalEmitVertex(ext,vertices[i],texture_unit_mask);
 	glEnd();
 }
 /* ---------------------------------------------------------------------------
@@ -866,7 +941,7 @@ static void GLMetalFlushPrimitive(const std::vector<GLVertex> &vertices,
  * ------------------------------------------------------------------------- */
 static void GLMetalDumpDrawState(GLContext *ctx,const char *tag,
 								 uint32_t mode,size_t nverts,
-								 bool force_opaque,bool unit1_live)
+								 bool unit1_live)
 {
 	if(!gl_logging_enabled) return;
 	if(!ctx) return;
@@ -906,9 +981,8 @@ static void GLMetalDumpDrawState(GLContext *ctx,const char *tag,
 	const GLTextureObject *t0 = ctx->tex_units[0].bound_object_2d;
 	const bool have0 = (t0 != NULL);
 
-	GL_LOG("[drawdump #%d %s] mode=0x%x nverts=%d forceOpaque=%d unit1Live=%d",
-		   ms->dumpCount,tag,mode,(int)nverts,force_opaque ? 1 : 0,
-		   unit1_live ? 1 : 0);
+	GL_LOG("[drawdump #%d %s] mode=0x%x nverts=%d unit1Live=%d",
+		   ms->dumpCount,tag,mode,(int)nverts,unit1_live ? 1 : 0);
 
 	/* ---- guest texture-unit state ---- */
 	GL_LOG("  unit0: enabled2d=%d bound=%d envMode=0x%04x hostTex=%u | "
@@ -1371,7 +1445,7 @@ void GLMetalFlushImmediateMode(GLContext*ctx){
 	 * drawable is made opaque only when submitted to the compositor; modifying
 	 * fragment alpha here corrupts glReadPixels and later guest blending.
 	 */
-	const bool force_opaque=false;
+	const GfxGLExt &ext=gfx_gl_ext();
 	const bool unit1_live=(texture_unit_mask&(1u<<1))!=0;
 
 	const std::vector<GLVertex> &in=ctx->im_vertices;
@@ -1381,30 +1455,30 @@ void GLMetalFlushImmediateMode(GLContext*ctx){
 	 * GLMetalApplyState so the host readback reflects what this draw will
 	 * really use. Only textured draws are interesting for the colour bugs. */
 	if(ctx->tex_units[0].enabled_2d)
-		GLMetalDumpDrawState(ctx,"flush",mode,in.size(),force_opaque,unit1_live);
+		GLMetalDumpDrawState(ctx,"flush",mode,in.size(),unit1_live);
 
 	switch(mode){
 	case GL_QUADS:
-		GLMetalFlushQuads(in,force_opaque,texture_unit_mask);
+		GLMetalFlushQuads(ext,in,texture_unit_mask);
 		break;
 	case GL_TRIANGLE_FAN:
 	case GL_POLYGON:
 		/* A filled convex polygon is the same fan rooted at vertex zero.
 		 * Summoner uses four vertices here for its fullscreen texture pass. */
-		GLMetalFlushTriangleFan(in,force_opaque,texture_unit_mask);
+		GLMetalFlushTriangleFan(ext,in,texture_unit_mask);
 		break;
 	case GL_TRIANGLE_STRIP:
-		GLMetalFlushTriangleStrip(in,force_opaque,texture_unit_mask);
+		GLMetalFlushTriangleStrip(ext,in,texture_unit_mask);
 		break;
 	case GL_QUAD_STRIP:
-		GLMetalFlushQuadStrip(in,force_opaque,texture_unit_mask);
+		GLMetalFlushQuadStrip(ext,in,texture_unit_mask);
 		break;
 	case GL_POINTS:
 	case GL_LINES:
 	case GL_LINE_LOOP:
 	case GL_LINE_STRIP:
 	case GL_TRIANGLES:
-		GLMetalFlushPrimitive(in,(GLenum)mode,force_opaque,texture_unit_mask);
+		GLMetalFlushPrimitive(ext,in,(GLenum)mode,texture_unit_mask);
 		break;
 	default:
 		/* Do not turn an invalid primitive into triangles as the former catch-all
@@ -1437,6 +1511,8 @@ void GLMetalRelease(GLContext*ctx){
 		}
 		it->second.sampler_applied=false;
 	}
+	if(have_host && GLMetalGetState(ctx))
+		GLMetalReleaseSamples(GLMetalGetState(ctx));
 	delete GLMetalGetState(ctx);
 	ctx->metal=NULL;
 }
@@ -1542,6 +1618,7 @@ uint8_t* GLMetalReadFramebufferRect(GLContext*ctx,int x,int y,int w,int h,int*ou
 	if(!SharedMetalDevice())return NULL;
 	GLMetalBeginFrame(ctx);
 	if(!s_frame_active)return NULL;
+	GLMetalResolveSamples(ctx);
 	const int fbw=s_ow?(int)s_ow:ctx->viewport[2];
 	const int fbh=s_oh?(int)s_oh:ctx->viewport[3];
 	if(fbw<=0||fbh<=0||x>fbw-w||y>fbh-h)return NULL;

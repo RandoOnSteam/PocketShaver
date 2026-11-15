@@ -195,8 +195,6 @@ extern void video_set_dirty_area(int x, int y, int w, int h);
 extern uint32 video_abs_depth_from_rel(uint16 rel);
 extern uint16 video_rel_depth_from_abs(uint32 abs);
 
-void video_guest_hide_cursor(void);
-void video_guest_show_cursor(void);
 
 extern int16 VSLDoInterruptService(uint32 arg1);
 extern bool VideoDriverInitialized(void);

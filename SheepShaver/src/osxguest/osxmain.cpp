@@ -732,12 +732,28 @@ static void OsxGuestPresentFrame(OsxSession *session)
 	int identity;
 	uint32 openrow;
 	int presented;
+	int adopted;
+	int gpugamma;
 	machine = session->machine;
 	rowbytes = machine->rowbytes;
 	rowsize = machine->width * machine->depth / 8;
 	identity = OsxGuestGammaIdentity(machine->gamma);
 #if OSXGLBRIDGE && defined(GFXACCEL_USE_OPENGL)
 	if (MetalCompositorIsInitialized()) {
+		gpugamma = MetalCompositorSetGamma(identity ? NULL : machine->gamma);
+		adopted = OSXQUARTZADOPTNONE;
+		if (session->quartz)
+			adopted = OsxGuestQuartzTakeAdopted(session->quartz, gpugamma && machine->depth != OSXDEPTHTHOUSANDS);
+		if (adopted == OSXQUARTZADOPTSHOWN)
+			return;
+		if (adopted == OSXQUARTZADOPTNEW) {
+			OsxGl::OsxGuestEngineBeforePresent();
+			MetalCompositorPresentAdopted();
+			OsxGl::OsxGuestEngineAfterPresent();
+			return;
+		}
+		if (adopted == OSXQUARTZADOPTENDED)
+			memset(session->shadow, 0xff, rowbytes * machine->height);
 		if (machine->depth == OSXDEPTHTHOUSANDS) {
 			for (row = 0; row < machine->height; row++)
 				OsxGuestDisplayExpandPixels(session->glpresent + row * rowbytes, machine->vram + row * rowbytes, machine->width);
@@ -747,7 +763,7 @@ static void OsxGuestPresentFrame(OsxSession *session)
 		if (memcmp(session->glpresent, session->shadow, rowbytes * machine->height) == 0)
 			return;
 		memcpy(session->shadow, session->glpresent, rowbytes * machine->height);
-		if (!identity)
+		if (!gpugamma)
 			OsxGuestGammaPixels(session->glpresent, session->glpresent, rowbytes * machine->height / 4, machine->gamma);
 		OsxGl::OsxGuestEngineBeforePresent();
 		MetalCompositorPresentWithoutVBL();
@@ -1335,6 +1351,8 @@ static void OsxGuestSaveScriptScreenshot(OsxSession *session, const char *path)
 {
 #if OSXGLBRIDGE
 	if (session->glpresent) {
+		if (session->quartz && OsxGuestQuartzAdopting(session->quartz))
+			MetalCompositorReadFrame(session->glpresent, (int)session->machine->rowbytes);
 		OsxGuestSaveScreenPixelsAsImage(session->machine, session->glpresent, path);
 		return;
 	}

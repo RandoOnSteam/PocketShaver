@@ -123,11 +123,6 @@ bool RaveGetLastCL8ColorTableRGBSnapshot(unsigned char *table)
 
 #include "gl_engine.h"
 #include "gfxaccelhost.h"
-void OsxGuestCopyFramebufferToRectangleTexture(GLContext *context, int level, uint32 internalformat, int sourcex, int sourcey, int width, int height, int xoffset, int yoffset, int replacewholeimage);
-void OsxGuestBindRectangleTexture(GLContext *context);
-void OsxGuestEnableRectangleTexture(GLContext *context, bool enabled);
-void OsxGuestUploadRectangleTexture(GLContext *context, GLTextureObject *textureobject, int level, int xoffset, int yoffset, int width, int height, const uint8_t *pixels, int replacewholeimage);
-void OsxGuestApplyRectangleSampler(GLContext *context, GLTextureObject *textureobject);
 #define GUESTPIXELFORMATBGR 0x80e0u
 #define GUESTPIXELFORMATBGRA 0x80e1u
 #define GUESTPIXELFORMATLUMINANCE 0x1909u
@@ -142,6 +137,9 @@ void OsxGuestApplyRectangleSampler(GLContext *context, GLTextureObject *textureo
 #define GUESTPIXELTYPEHALFFLOAT 0x140bu
 #define GUESTHALFFLOATONE 0x3c00u
 #define GUESTHALFFLOATMANTISSAMASK 0x3ffu
+#define GUESTDEPTHMAXIMUMINT 4294967295.0
+#define GUESTDEPTHMAXIMUMSHORT 65535.0
+#define GUESTDEPTHMAXIMUMBYTE 255.0
 #define GUESTSTATEMATRIXMODE 0x0ba0u
 #define GUESTSTATEBLEND 0x0be2u
 #define GUESTSTATEDRAWBUFFER 0x0c01u
@@ -158,10 +156,32 @@ void OsxGuestApplyRectangleSampler(GLContext *context, GLTextureObject *textureo
 #define GUESTTEXTURESTORAGEHINT 0x85bcu
 #define GUESTPROGRAMLENGTH 0x8627u
 #define GUESTTEXTURERECTANGLE 0x84f5u
+#define GUESTTEXTURECUBEMAP GFXACCELHOSTCUBEMAP
+#define GUESTTEXTURE3D GFXACCELHOSTTEXTURE3D
+#define GUESTPROXYTEXTURECUBEMAP 0x851bu
+#define GUESTSTATECUBEMAPBINDING 0x8514u
+#define GUESTSTATE3DBINDING 0x806au
+#define GUESTSTATEMAXCUBEMAPTEXTURESIZE 0x851cu
+#define GUESTSTATEMAX3DTEXTURESIZE 0x8073u
+#define GUESTTEXTUREBORDERCOLOR 0x1004u
+#define GUESTTEXTUREKINDS 3
+#define GUESTKINDRECTANGLE 0
+#define GUESTKINDCUBEMAP 1
+#define GUESTKIND3D 2
+#define GUESTTEXTUREUNITS 8
+#define GUESTPROXYLIMIT 1024
 #define GUESTPROGRAMERRORPOSITION 0x864bu
 #define GUESTHOSTLIMITMAXIMUM 2048
 #define GUESTFIXEDTEXTURECOORDINATES 8
 #define GUESTFIXEDTEXTUREIMAGEUNITS 16
+#define GUESTATTRIBUTES 16
+#define GUESTREADPAGES 4
+#define GUESTATTRIBUTEPOINTER 512u
+#define GUESTATTRIBUTEENABLE 513u
+#define GUESTATTRIBUTEDISABLE 514u
+#define GUESTDRAWARRAYS 66u
+#define GUESTDRAWELEMENTS 68u
+#define GUESTDRAWRANGEELEMENTS 406u
 #include "../gfxaccel/gl_state.cpp"
 #include "../gfxaccel/gl_defer.cpp"
 #include "../gfxaccel/gl_dispatch.cpp"
@@ -217,23 +237,27 @@ struct OsxGuestState {
 	uint8_t guestscratch[1024];
 	uint32_t guestscratchused;
 	int32_t guestunpackrowbytes;
-	uint32_t guestreadpage;
-	uint8_t *guestreadhost;
+	uint32_t guestreadpages[GUESTREADPAGES];
+	uint8_t *guestreadhosts[GUESTREADPAGES];
+	uint32_t guestreadnext;
 	bool guestblendseparate;
 	uint32_t guestblendsrcalpha;
 	uint32_t guestblenddstalpha;
 	std::vector<uint8_t> guestbytes;
 	OsxGuestSharedTextures *sharedtextures;
-	uint32_t boundrectangletexture[8];
-	uint32_t guestrectangleenabledunits;
-	bool guesttexture2denabled[8];
-	bool rectangleshadowactive[8];
-	GLTextureObject guestrectangleshadowtexture;
+	uint32_t boundtextures[GUESTTEXTUREKINDS][GUESTTEXTUREUNITS];
+	uint32_t guestenabledunits[GUESTTEXTUREKINDS];
+	bool guesttexture2denabled[GUESTTEXTUREUNITS];
+	bool shadowactive[GUESTTEXTUREUNITS];
+	GLTextureObject guestshadowtexture;
 	int guestmaxviewportdimensions[2];
 	int guestmaxrectangletexturesize;
 	int guestmaxtexturecoordinates;
 	int guestmaxtextureimageunits;
 	int guestprogramerrorposition;
+	GLVertexArrayPointer guestattributes[GUESTATTRIBUTES];
+	uint32_t guestattributenormalized;
+	std::vector<float> guestattributevalues;
 	int guestproxywidth;
 	int guestproxyheight;
 	uint32_t guestproxyinternalformat;
@@ -247,6 +271,13 @@ struct OsxGuestContext : GLContext {
 static OsxGuestState *OsxGuestStateOf(GLContext *context)
 {
 	return &static_cast<OsxGuestContext *>(context)->state;
+}
+
+static void OsxGuestForgetReadPages(OsxGuestState *state)
+{
+	int index;
+	for (index = 0; index < GUESTREADPAGES; index++)
+		state->guestreadpages[index] = 1;
 }
 
 static void OsxGuestMatrixMode(GLenum mode)
@@ -341,8 +372,8 @@ void *OsxGuestEngineCreate(void *share)
 	return context;
 }
 
-static void OsxGuestDisableRectangleTextures(GLContext *context);
-static void OsxGuestApplyRectangleTextures(GLContext *context);
+static void OsxGuestDisableKindTextures(GLContext *context);
+static void OsxGuestApplyKindTextures(GLContext *context);
 
 static void OsxGuestCaptureHostLimits(GLContext *context)
 {
@@ -352,12 +383,12 @@ static void OsxGuestCaptureHostLimits(GLContext *context)
 	OsxGuestStateOf(context)->guestmaxtexturecoordinates = GUESTFIXEDTEXTURECOORDINATES;
 	OsxGuestStateOf(context)->guestmaxtextureimageunits = GUESTFIXEDTEXTUREIMAGEUNITS;
 	OsxGuestStateOf(context)->guestprogramerrorposition = -1;
-	GfxAccelHostShadowTextureCreate(context, &OsxGuestStateOf(context)->guestrectangleshadowtexture);
+	GfxAccelHostShadowTextureCreate(context, &OsxGuestStateOf(context)->guestshadowtexture);
 }
 
 static void OsxGuestEngineLeave(GLContext *context)
 {
-	OsxGuestDisableRectangleTextures(context);
+	OsxGuestDisableKindTextures(context);
 	GfxAccelHostTargetLeave(OsxGuestTargetOf(context));
 }
 
@@ -381,7 +412,7 @@ void OsxGuestEngineBind(void *engine, OsxCpu *cpu)
 		OsxGuestCaptureHostLimits(next);
 	}
 	GfxAccelHostTargetResume(next, OsxGuestTargetOf(next));
-	OsxGuestApplyRectangleTextures(next);
+	OsxGuestApplyKindTextures(next);
 }
 
 void OsxGuestEngineDestroy(void *engine)
@@ -389,7 +420,7 @@ void OsxGuestEngineDestroy(void *engine)
 	GLContext *context;
 	context = (GLContext *)engine;
 	OsxGuestEngineBind(context, (OsxCpu *)OsxGuestStateOf(context)->guestcpu);
-	GfxAccelHostShadowTextureDestroy(&OsxGuestStateOf(context)->guestrectangleshadowtexture);
+	GfxAccelHostShadowTextureDestroy(&OsxGuestStateOf(context)->guestshadowtexture);
 	GfxAccelHostTargetReleaseOverlays(OsxGuestTargetOf(context));
 	if (OsxGuestStateOf(context)->sharedtextures->referencecount > 1) {
 		OsxGuestStateOf(context)->sharedtextures->referencecount--;
@@ -445,8 +476,10 @@ static void OsxGuestEngineDispatch(OsxCpu *cpu, uint32 sub, int first)
 	last = 0;
 	if (first == 3)
 		last = cpu->gpr[10];
-	cpu->gpr[3] = GLDispatch(cpu->gpr[first], cpu->gpr[first + 1], cpu->gpr[first + 2], cpu->gpr[first + 3],
+	last = GLDispatch(cpu->gpr[first], cpu->gpr[first + 1], cpu->gpr[first + 2], cpu->gpr[first + 3],
 		cpu->gpr[first + 4], cpu->gpr[first + 5], cpu->gpr[first + 6], last, floats, count);
+	if (!OsxGuestStateOf(gl_current_context)->guestfaultraised)
+		cpu->gpr[3] = last;
 }
 
 static float OsxGuestEngineFloat(OsxCpu *cpu, int index)
@@ -485,53 +518,69 @@ static int OsxGuestEngineFastCall(OsxCpu *cpu, uint32 sub)
 	return 0;
 }
 
-void OsxGuestBindRectangleTexture(GLContext *context)
+static uint32 OsxGuestKindTarget(int kind)
 {
-	GfxAccelHostRectangleBind(context, context->active_texture, OsxGuestStateOf(context)->boundrectangletexture[context->active_texture]);
+	static const uint32 targets[GUESTTEXTUREKINDS] = { GUESTTEXTURERECTANGLE, GUESTTEXTURECUBEMAP, GUESTTEXTURE3D };
+	return targets[kind];
 }
 
-void OsxGuestEnableRectangleTexture(GLContext *context, bool enabled)
+static int OsxGuestTextureKind(uint32 target)
 {
-	if (enabled) {
-		GfxAccelHostRectangleEnable(context->active_texture, 1);
-		OsxGuestStateOf(context)->guestrectangleenabledunits |= 1u << context->active_texture;
-	} else {
-		GfxAccelHostRectangleEnable(context->active_texture, 0);
-		OsxGuestStateOf(context)->guestrectangleenabledunits &= ~(1u << context->active_texture);
-	}
+	if (target == GUESTTEXTURERECTANGLE)
+		return GUESTKINDRECTANGLE;
+	if (target == GUESTTEXTURECUBEMAP || (target >= GFXACCELHOSTCUBEMAPFIRSTFACE && target <= GFXACCELHOSTCUBEMAPLASTFACE))
+		return GUESTKINDCUBEMAP;
+	if (target == GUESTTEXTURE3D)
+		return GUESTKIND3D;
+	return -1;
 }
 
-void OsxGuestApplyRectangleSampler(GLContext *context, GLTextureObject *textureobject)
+static int OsxGuestKindEnabled(GLContext *context, int kind, int unit)
 {
-	GfxAccelHostRectangleSampler(context->active_texture, textureobject);
+	return (OsxGuestStateOf(context)->guestenabledunits[kind] >> unit) & 1;
 }
 
-void OsxGuestUploadRectangleTexture(GLContext *context, GLTextureObject *textureobject, int level, int xoffset, int yoffset, int width, int height, const uint8_t *pixels, int replacewholeimage)
+static void OsxGuestApplyKindTexture(GLContext *context, int kind, int unit, int enabled)
 {
-	GfxAccelHostRectangleUpload(context->active_texture, textureobject, level, xoffset, yoffset, width, height, pixels, replacewholeimage);
+	GfxAccelHostTextureApply(context, unit, OsxGuestKindTarget(kind), OsxGuestStateOf(context)->boundtextures[kind][unit], enabled);
 }
 
-static void OsxGuestApplyRectangleTextures(GLContext *context)
+static void OsxGuestApplyKindTextures(GLContext *context)
 {
+	int kind;
 	int unit;
-	for (unit = 0; unit < GfxAccelHostTextureUnitCount(context); unit++) {
-		if (!OsxGuestStateOf(context)->boundrectangletexture[unit] && !(OsxGuestStateOf(context)->guestrectangleenabledunits & (1u << unit)))
-			continue;
-		GfxAccelHostRectangleApply(context, unit, OsxGuestStateOf(context)->boundrectangletexture[unit], (OsxGuestStateOf(context)->guestrectangleenabledunits & (1u << unit)) != 0);
-	}
+	for (kind = 0; kind < GUESTTEXTUREKINDS; kind++)
+		for (unit = 0; unit < GfxAccelHostTextureUnitCount(context); unit++)
+			if (OsxGuestStateOf(context)->boundtextures[kind][unit] || OsxGuestKindEnabled(context, kind, unit))
+				OsxGuestApplyKindTexture(context, kind, unit, OsxGuestKindEnabled(context, kind, unit));
 }
 
-static void OsxGuestDisableRectangleTextures(GLContext *context)
+static void OsxGuestDisableKindTextures(GLContext *context)
 {
+	int kind;
 	int unit;
-	if (!OsxGuestStateOf(context)->guestrectangleenabledunits)
+	for (kind = 0; kind < GUESTTEXTUREKINDS; kind++)
+		for (unit = 0; unit < GfxAccelHostTextureUnitCount(context); unit++)
+			if (OsxGuestKindEnabled(context, kind, unit))
+				OsxGuestApplyKindTexture(context, kind, unit, 0);
+}
+
+static void OsxGuestKindDefaults(GLContext *context, int kind, uint32 name)
+{
+	GLTextureObject *object;
+	object = &context->texture_objects[name];
+	if (object->name == name)
 		return;
-	for (unit = 0; unit < GfxAccelHostTextureUnitCount(context); unit++) {
-		if (!(OsxGuestStateOf(context)->guestrectangleenabledunits & (1u << unit)))
-			continue;
-		GfxAccelHostRectangleDisable(unit);
-	}
-	GfxAccelHostRectangleFinish();
+	object->name = name;
+	object->min_filter = GL_NEAREST_MIPMAP_LINEAR;
+	object->mag_filter = GL_LINEAR;
+	object->wrap_s = GL_REPEAT;
+	object->wrap_t = GL_REPEAT;
+	if (kind != GUESTKINDRECTANGLE)
+		return;
+	object->min_filter = GL_LINEAR;
+	object->wrap_s = GL_CLAMP_TO_EDGE;
+	object->wrap_t = GL_CLAMP_TO_EDGE;
 }
 
 static int OsxGuestPixelChannels(uint32 format, int *channels)
@@ -635,6 +684,72 @@ static uint32 OsxGuestScalarPixel(uint32 type, uint8_t value, uint32 *elementbyt
 	return 0;
 }
 
+static uint32 OsxGuestDepthValue(uint32 type, float depth, uint32 *elementbytes)
+{
+	uint32 bits;
+	*elementbytes = 4;
+	switch (type) {
+	case GL_UNSIGNED_INT:
+		return (uint32)((double)depth * GUESTDEPTHMAXIMUMINT);
+	case GL_FLOAT:
+		memcpy(&bits, &depth, sizeof(bits));
+		return bits;
+	case GL_UNSIGNED_SHORT:
+		*elementbytes = 2;
+		return (uint32)((double)depth * GUESTDEPTHMAXIMUMSHORT);
+	case GL_UNSIGNED_BYTE:
+		*elementbytes = 1;
+		return (uint32)((double)depth * GUESTDEPTHMAXIMUMBYTE);
+	}
+	*elementbytes = 0;
+	return 0;
+}
+
+static int OsxGuestReadDepth(GLContext *context, OsxCpu *cpu)
+{
+	float *depths;
+	uint32 elementbytes;
+	uint32 packalignment;
+	uint32 guestrowbytes;
+	uint32 address;
+	uint32 value;
+	int width;
+	int height;
+	int row;
+	int column;
+	width = (int)cpu->gpr[6];
+	height = (int)cpu->gpr[7];
+	OsxGuestDepthValue(cpu->gpr[9], 0.0f, &elementbytes);
+	if (!elementbytes || width <= 0 || height <= 0)
+		return 0;
+	depths = GfxAccelHostReadDepthRect(context, (int)cpu->gpr[4], (int)cpu->gpr[5], width, height);
+	if (!depths)
+		return 1;
+	packalignment = (uint32)context->pixel_store.pack_alignment;
+	if (!packalignment)
+		packalignment = 4;
+	guestrowbytes = (uint32)width;
+	if (context->pixel_store.pack_row_length > 0)
+		guestrowbytes = (uint32)context->pixel_store.pack_row_length;
+	guestrowbytes = (guestrowbytes * elementbytes + packalignment - 1) & ~(packalignment - 1);
+	for (row = 0; row < height; row++) {
+		for (column = 0; column < width; column++) {
+			if (depths[row * width + column] < 0.0f)
+				continue;
+			value = OsxGuestDepthValue(cpu->gpr[9], depths[row * width + column], &elementbytes);
+			address = cpu->gpr[10] + (uint32)row * guestrowbytes + (uint32)column * elementbytes;
+			if (elementbytes == 4)
+				OsxGuestWrite32(address, value);
+			else if (elementbytes == 2)
+				OsxGuestWrite16(address, value);
+			else
+				OsxGuestWrite8(address, value);
+		}
+	}
+	free(depths);
+	return 1;
+}
+
 static int OsxGuestReadPixels(GLContext *context, OsxCpu *cpu)
 {
 	std::vector<uint8_t> packedrow;
@@ -725,47 +840,61 @@ static int OsxGuestReadPixels(GLContext *context, OsxCpu *cpu)
 	return 1;
 }
 
-void OsxGuestCopyFramebufferToRectangleTexture(GLContext *context, int level, uint32 internalformat, int sourcex, int sourcey, int width, int height, int xoffset, int yoffset, int replacewholeimage)
+static GLTextureObject *OsxGuestBoundObject(GLContext *context, uint32 target)
 {
-	GLTextureObject *textureobject;
-	uint32 guesttexturename;
-	guesttexturename = OsxGuestStateOf(context)->boundrectangletexture[context->active_texture];
-	if (!guesttexturename)
-		return;
-	textureobject = &context->texture_objects[guesttexturename];
-	if (replacewholeimage && !level) {
-		textureobject->width = width;
-		textureobject->height = height;
-	}
-	GfxAccelHostRectangleCopyFramebuffer(context->active_texture, level, internalformat, sourcex, sourcey, width, height, xoffset, yoffset, replacewholeimage);
+	uint32 name;
+	int kind;
+	name = context->tex_units[context->active_texture].bound_texture_2d;
+	kind = OsxGuestTextureKind(target);
+	if (kind >= 0)
+		name = OsxGuestStateOf(context)->boundtextures[kind][context->active_texture];
+	if (!name)
+		return NULL;
+	return &context->texture_objects[name];
 }
 
+static void OsxGuestCopyFramebufferToKindTexture(GLContext *context, uint32 target, int level, uint32 internalformat, int sourcex, int sourcey, int width, int height, int xoffset, int yoffset, int replacewholeimage)
+{
+	GLTextureObject *object;
+	object = OsxGuestBoundObject(context, target);
+	if (!object)
+		return;
+	if (replacewholeimage && !level) {
+		object->width = width;
+		object->height = height;
+	}
+	GfxAccelHostTextureCopyFramebuffer(context, context->active_texture, target, object, level, internalformat, sourcex, sourcey, width, height, xoffset, yoffset, replacewholeimage);
+}
 
-
-static void OsxGuestSyncRectangleShadow(GLContext *context, int unit)
+static void OsxGuestSyncShadow(GLContext *context, int unit)
 {
 	OsxGuestState *state;
 	GLTextureUnit *textureunit;
 	GLTextureObjectMap::iterator guesttexture;
+	int kind;
+	int special;
 	state = OsxGuestStateOf(context);
 	textureunit = &context->tex_units[unit];
 	guesttexture = context->texture_objects.find(textureunit->bound_texture_2d);
-	if (state->boundrectangletexture[unit]) {
-		if (!state->rectangleshadowactive[unit]) {
+	special = 0;
+	for (kind = 0; kind < GUESTTEXTUREKINDS; kind++)
+		special |= OsxGuestKindEnabled(context, kind, unit);
+	if (special) {
+		if (!state->shadowactive[unit]) {
 			state->guesttexture2denabled[unit] = textureunit->enabled_2d;
-			state->rectangleshadowactive[unit] = true;
+			state->shadowactive[unit] = true;
 		}
 		textureunit->enabled_2d = true;
-		textureunit->bound_object_2d = &state->guestrectangleshadowtexture;
+		textureunit->bound_object_2d = &state->guestshadowtexture;
 		if (state->guesttexture2denabled[unit] && guesttexture != context->texture_objects.end() && guesttexture->second.metal_texture)
 			textureunit->bound_object_2d = &guesttexture->second;
 		return;
 	}
-	if (!state->rectangleshadowactive[unit])
+	if (!state->shadowactive[unit])
 		return;
-	state->rectangleshadowactive[unit] = false;
+	state->shadowactive[unit] = false;
 	textureunit->enabled_2d = state->guesttexture2denabled[unit];
-	if (textureunit->bound_object_2d == &state->guestrectangleshadowtexture) {
+	if (textureunit->bound_object_2d == &state->guestshadowtexture) {
 		textureunit->bound_object_2d = NULL;
 		if (guesttexture != context->texture_objects.end())
 			textureunit->bound_object_2d = &guesttexture->second;
@@ -787,7 +916,11 @@ static int OsxGuestStateQuery(GLContext *context, uint32 name, int *values)
 	case GL_UNPACK_ALIGNMENT: values[0] = context->pixel_store.unpack_alignment; return 1;
 	case GL_UNPACK_ROW_LENGTH: values[0] = context->pixel_store.unpack_row_length; return 1;
 	case GUESTUNPACKROWBYTES: values[0] = state->guestunpackrowbytes; return 1;
-	case GUESTSTATERECTANGLEBINDING: values[0] = (int)state->boundrectangletexture[context->active_texture]; return 1;
+	case GUESTSTATERECTANGLEBINDING: values[0] = (int)state->boundtextures[GUESTKINDRECTANGLE][context->active_texture]; return 1;
+	case GUESTSTATECUBEMAPBINDING: values[0] = (int)state->boundtextures[GUESTKINDCUBEMAP][context->active_texture]; return 1;
+	case GUESTSTATE3DBINDING: values[0] = (int)state->boundtextures[GUESTKIND3D][context->active_texture]; return 1;
+	case GUESTSTATEMAXCUBEMAPTEXTURESIZE: values[0] = GUESTPROXYLIMIT; return 1;
+	case GUESTSTATEMAX3DTEXTURESIZE: values[0] = GUESTPROXYLIMIT; return 1;
 	case GUESTSTATEMAXRECTANGLETEXTURESIZE: values[0] = state->guestmaxrectangletexturesize; return 1;
 	case GUESTSTATEMAXVIEWPORTDIMENSIONS:
 		values[0] = state->guestmaxviewportdimensions[0];
@@ -806,17 +939,6 @@ static uint32 OsxGuestStackWord(OsxCpu *cpu, uint32 offset)
 	word = 0;
 	OsxGuestCpuReadVirtual(cpu, cpu->gpr[1] + offset, &word);
 	return word;
-}
-
-static GLTextureObject *OsxGuestBoundObject(GLContext *context, uint32 target)
-{
-	uint32 name;
-	name = context->tex_units[context->active_texture].bound_texture_2d;
-	if (target == GUESTTEXTURERECTANGLE)
-		name = OsxGuestStateOf(context)->boundrectangletexture[context->active_texture];
-	if (!name)
-		return NULL;
-	return &context->texture_objects[name];
 }
 
 static void OsxGuestIntensityAlpha(uint8_t *bgrapixels, int bytecount)
@@ -849,10 +971,12 @@ static int OsxGuestImageCall(GLContext *context, OsxCpu *cpu, uint32 sub)
 	uint32 elementbytes;
 	bool image;
 	bool intensity;
+	int kind;
 	state = OsxGuestStateOf(context);
 	shared = state->sharedtextures;
 	image = sub == GL_SUB_TEX_IMAGE2D;
 	target = cpu->gpr[4];
+	kind = OsxGuestTextureKind(target);
 	level = (int)cpu->gpr[5];
 	internalformat = cpu->gpr[6];
 	xoffset = (int)cpu->gpr[6];
@@ -868,8 +992,8 @@ static int OsxGuestImageCall(GLContext *context, OsxCpu *cpu, uint32 sub)
 	format = cpu->gpr[10];
 	type = OsxGuestStackWord(cpu, 56);
 	pixels = OsxGuestStackWord(cpu, 60);
-	if (image && (target == GUESTPROXYTEXTURE2D || target == GUESTPROXYTEXTURERECTANGLE)) {
-		limit = 1024;
+	if (image && (target == GUESTPROXYTEXTURE2D || target == GUESTPROXYTEXTURERECTANGLE || target == GUESTPROXYTEXTURECUBEMAP)) {
+		limit = GUESTPROXYLIMIT;
 		if (target == GUESTPROXYTEXTURERECTANGLE)
 			limit = state->guestmaxrectangletexturesize;
 		if (!level) {
@@ -884,7 +1008,7 @@ static int OsxGuestImageCall(GLContext *context, OsxCpu *cpu, uint32 sub)
 		}
 		return 1;
 	}
-	if (target != GL_TEXTURE_2D && target != GUESTTEXTURERECTANGLE)
+	if (target != GL_TEXTURE_2D && (kind < 0 || kind == GUESTKIND3D))
 		return 0;
 	object = OsxGuestBoundObject(context, target);
 	if (!object)
@@ -907,7 +1031,7 @@ static int OsxGuestImageCall(GLContext *context, OsxCpu *cpu, uint32 sub)
 		intensity = shared->intensitytextures[object->name];
 	converted = NULL;
 	bytecount = 0;
-	if (pixels && (intensity || target == GUESTTEXTURERECTANGLE))
+	if (pixels && (intensity || kind >= 0))
 		converted = ConvertPixelsToBGRA8(pixels, width, height, format, type, context->pixel_store, context, &bytecount);
 	if (target == GL_TEXTURE_2D) {
 		if (image)
@@ -917,7 +1041,7 @@ static int OsxGuestImageCall(GLContext *context, OsxCpu *cpu, uint32 sub)
 	}
 	if (converted && intensity)
 		OsxGuestIntensityAlpha(converted, bytecount);
-	if (target == GUESTTEXTURERECTANGLE) {
+	if (kind >= 0) {
 		if (!level && image) {
 			object->width = width;
 			object->height = height;
@@ -927,7 +1051,7 @@ static int OsxGuestImageCall(GLContext *context, OsxCpu *cpu, uint32 sub)
 			converted = (uint8_t *)calloc(1, (size_t)bytecount);
 		}
 		if (converted)
-			OsxGuestUploadRectangleTexture(context, object, level, xoffset, yoffset, width, height, converted, image);
+			GfxAccelHostTextureImage(context->active_texture, target, object, level, xoffset, yoffset, width, height, converted, image);
 	} else if (converted && image)
 		GfxAccelHostUploadTexture(context, object, level, width, height, converted, bytecount);
 	else if (converted)
@@ -937,40 +1061,179 @@ static int OsxGuestImageCall(GLContext *context, OsxCpu *cpu, uint32 sub)
 	return 1;
 }
 
-static int OsxGuestRectangleParameterCall(GLContext *context, OsxCpu *cpu, uint32 sub)
+static int OsxGuestCompressedImageCall(GLContext *context, OsxCpu *cpu, uint32 sub)
+{
+	GLTextureObject *object;
+	const uint8 *data;
+	uint8_t *pixels;
+	uint32 target;
+	uint32 format;
+	uint32 address;
+	int image;
+	int kind;
+	int level;
+	int xoffset;
+	int yoffset;
+	int width;
+	int height;
+	int size;
+	int blockbytes;
+	int bytecount;
+	image = sub == GL_SUB_COMPRESSED_TEX_IMAGE2D_ARB;
+	if (!image && sub != GL_SUB_COMPRESSED_TEX_SUB_IMAGE2D_ARB)
+		return 0;
+	target = cpu->gpr[4];
+	kind = OsxGuestTextureKind(target);
+	if (target != GL_TEXTURE_2D && kind != GUESTKINDCUBEMAP)
+		return 0;
+	level = (int)cpu->gpr[5];
+	xoffset = 0;
+	yoffset = 0;
+	format = cpu->gpr[6];
+	width = (int)cpu->gpr[7];
+	height = (int)cpu->gpr[8];
+	size = (int)cpu->gpr[10];
+	address = OsxGuestStackWord(cpu, 56);
+	if (!image) {
+		xoffset = (int)cpu->gpr[6];
+		yoffset = (int)cpu->gpr[7];
+		width = (int)cpu->gpr[8];
+		height = (int)cpu->gpr[9];
+		format = cpu->gpr[10];
+		size = (int)OsxGuestStackWord(cpu, 56);
+		address = OsxGuestStackWord(cpu, 60);
+	}
+	blockbytes = GLDXTLARGEBLOCK;
+	if (format <= GLDXT1ALPHA)
+		blockbytes = GLDXTSMALLBLOCK;
+	object = OsxGuestBoundObject(context, target);
+	if (!object || format < GLDXT1 || format > GLDXT5 || width <= 0 || height <= 0 || size < ((width + 3) / 4) * ((height + 3) / 4) * blockbytes)
+		return 1;
+	data = OsxGuestBytes(address, size);
+	if (OsxGuestStateOf(context)->guestfaultraised)
+		return 1;
+	pixels = dxt_decompress_image(data, width, height, format, &bytecount);
+	if (!pixels)
+		return 1;
+	if (image && level)
+		object->has_mipmaps = true;
+	else if (image) {
+		object->width = width;
+		object->height = height;
+	}
+	if (image)
+		object->internal_format_opaque = format == GLDXT1;
+	if (kind == GUESTKINDCUBEMAP)
+		GfxAccelHostTextureImage(context->active_texture, target, object, level, xoffset, yoffset, width, height, pixels, image);
+	else if (image)
+		GfxAccelHostUploadTexture(context, object, level, width, height, pixels, bytecount);
+	else
+		GfxAccelHostUploadSubTexture(context, object, level, xoffset, yoffset, width, height, pixels, width * 4);
+	free(pixels);
+	return 1;
+}
+
+static int OsxGuestVolumeCall(GLContext *context, OsxCpu *cpu, uint32 sub)
+{
+	GLTextureObject *object;
+	std::vector<uint8_t> volume;
+	uint8_t *converted;
+	uint32 format;
+	uint32 type;
+	uint32 pixels;
+	uint32 slicebytes;
+	int image;
+	int level;
+	int xoffset;
+	int yoffset;
+	int zoffset;
+	int width;
+	int height;
+	int depth;
+	int slice;
+	int bytecount;
+	image = sub == GL_SUB_TEX_IMAGE3D_EXT;
+	if ((!image && sub != GL_SUB_TEX_SUB_IMAGE3D_EXT) || cpu->gpr[4] != GUESTTEXTURE3D)
+		return 0;
+	level = (int)cpu->gpr[5];
+	xoffset = 0;
+	yoffset = 0;
+	zoffset = 0;
+	width = (int)cpu->gpr[7];
+	height = (int)cpu->gpr[8];
+	depth = (int)cpu->gpr[9];
+	format = OsxGuestStackWord(cpu, 56);
+	type = OsxGuestStackWord(cpu, 60);
+	pixels = OsxGuestStackWord(cpu, 64);
+	if (!image) {
+		xoffset = (int)cpu->gpr[6];
+		yoffset = (int)cpu->gpr[7];
+		zoffset = (int)cpu->gpr[8];
+		width = (int)cpu->gpr[9];
+		height = (int)cpu->gpr[10];
+		depth = (int)OsxGuestStackWord(cpu, 56);
+		format = OsxGuestStackWord(cpu, 60);
+		type = OsxGuestStackWord(cpu, 64);
+		pixels = OsxGuestStackWord(cpu, 68);
+	}
+	object = OsxGuestBoundObject(context, GUESTTEXTURE3D);
+	if (!object || width <= 0 || height <= 0 || depth <= 0)
+		return 1;
+	if (image && !level) {
+		object->width = width;
+		object->height = height;
+		object->depth = depth;
+	}
+	volume.resize((size_t)width * height * depth * 4);
+	slicebytes = (uint32)(ComputeRowStride(width, GLPixelSourceBytesPerPixel(format, type), context->pixel_store.unpack_alignment, context->pixel_store.unpack_row_length) * height);
+	for (slice = 0; pixels && slice < depth; slice++) {
+		converted = ConvertPixelsToBGRA8(pixels + (uint32)slice * slicebytes, width, height, format, type, context->pixel_store, context, &bytecount);
+		if (!converted)
+			continue;
+		memcpy(&volume[(size_t)slice * width * height * 4], converted, (size_t)width * height * 4);
+		free(converted);
+	}
+	GfxAccelHostTextureVolume(OsxGuestTargetOf(context), context->active_texture, object, level, xoffset, yoffset, zoffset, width, height, depth, vec_data(volume), image);
+	return 1;
+}
+
+static int OsxGuestParameterCall(GLContext *context, OsxCpu *cpu, uint32 sub)
 {
 	GLTextureObject *object;
 	double number;
-	uint32 value;
+	float value;
+	uint32 bits;
+	uint32 target;
 	uint32 pname;
-	object = OsxGuestBoundObject(context, GUESTTEXTURERECTANGLE);
+	target = cpu->gpr[4];
+	pname = cpu->gpr[5];
+	if (pname == GUESTTEXTURESTORAGEHINT || pname == GUESTTEXTUREBORDERCOLOR)
+		return 1;
+	if (OsxGuestTextureKind(target) < 0 && (target != GL_TEXTURE_2D || pname == GL_TEXTURE_MIN_FILTER || pname == GL_TEXTURE_MAG_FILTER || pname == GL_TEXTURE_WRAP_S || pname == GL_TEXTURE_WRAP_T))
+		return 0;
+	object = OsxGuestBoundObject(context, target);
 	if (!object)
 		return 1;
-	pname = cpu->gpr[5];
-	value = cpu->gpr[6];
+	value = (float)(int32)cpu->gpr[6];
 	if (sub == GL_SUB_TEX_PARAMETERF) {
 		memcpy(&number, &cpu->fpr[1], sizeof(number));
-		value = (uint32)number;
+		value = (float)number;
 	} else if (sub == GL_SUB_TEX_PARAMETERIV)
-		value = OsxGuestRead32(cpu->gpr[6]);
+		value = (float)(int32)OsxGuestRead32(cpu->gpr[6]);
 	else if (sub == GL_SUB_TEX_PARAMETERFV) {
-		float single;
-		uint32 bits;
 		bits = OsxGuestRead32(cpu->gpr[6]);
-		memcpy(&single, &bits, sizeof(single));
-		value = (uint32)single;
+		memcpy(&value, &bits, sizeof(value));
 	}
 	if (pname == GL_TEXTURE_MIN_FILTER)
-		object->min_filter = value;
+		object->min_filter = (uint32)value;
 	else if (pname == GL_TEXTURE_MAG_FILTER)
-		object->mag_filter = value;
+		object->mag_filter = (uint32)value;
 	else if (pname == GL_TEXTURE_WRAP_S)
-		object->wrap_s = value;
+		object->wrap_s = (uint32)value;
 	else if (pname == GL_TEXTURE_WRAP_T)
-		object->wrap_t = value;
-	else
-		return 1;
-	OsxGuestApplyRectangleSampler(context, object);
+		object->wrap_t = (uint32)value;
+	object->sampler_applied = false;
+	GfxAccelHostTextureParameter(context, context->active_texture, target, object, pname, value);
 	return 1;
 }
 
@@ -979,7 +1242,7 @@ static uint32 OsxGuestTextureQueryValue(GLContext *context, uint32 target, uint3
 	OsxGuestState *state;
 	GLTextureObject *object;
 	state = OsxGuestStateOf(context);
-	if (target == GUESTPROXYTEXTURE2D || target == GUESTPROXYTEXTURERECTANGLE) {
+	if (target == GUESTPROXYTEXTURE2D || target == GUESTPROXYTEXTURERECTANGLE || target == GUESTPROXYTEXTURECUBEMAP) {
 		if (pname == GL_TEXTURE_WIDTH)
 			return (uint32)state->guestproxywidth;
 		if (pname == GL_TEXTURE_HEIGHT)
@@ -1003,18 +1266,36 @@ static uint32 OsxGuestTextureQueryValue(GLContext *context, uint32 target, uint3
 	return 0;
 }
 
+static void OsxGuestForgetDeletedTextures(GLContext *context)
+{
+	OsxGuestState *state;
+	int kind;
+	int unit;
+	state = OsxGuestStateOf(context);
+	for (kind = 0; kind < GUESTTEXTUREKINDS; kind++) {
+		for (unit = 0; unit < GUESTTEXTUREUNITS; unit++) {
+			if (!state->boundtextures[kind][unit] || context->texture_objects.find(state->boundtextures[kind][unit]) != context->texture_objects.end())
+				continue;
+			state->boundtextures[kind][unit] = 0;
+			if (unit < GfxAccelHostTextureUnitCount(context))
+				OsxGuestApplyKindTexture(context, kind, unit, OsxGuestKindEnabled(context, kind, unit));
+		}
+	}
+}
+
 static int OsxGuestStateCall(GLContext *context, OsxCpu *cpu, uint32 sub)
 {
 	OsxGuestState *state;
-	GLTextureObject *object;
 	float single;
 	uint32 bits;
 	int values[2];
 	int count;
 	int index;
 	int unit;
+	int kind;
 	state = OsxGuestStateOf(context);
 	unit = context->active_texture;
+	kind = OsxGuestTextureKind(cpu->gpr[4]);
 	switch (sub) {
 	case GL_SUB_GET_INTEGERV:
 		count = OsxGuestStateQuery(context, cpu->gpr[4], values);
@@ -1022,7 +1303,8 @@ static int OsxGuestStateCall(GLContext *context, OsxCpu *cpu, uint32 sub)
 			OsxGuestWrite32(cpu->gpr[5] + (uint32)index * 4, (uint32)values[index]);
 		return count;
 	case GL_SUB_GET_FLOATV:
-		if (cpu->gpr[4] != GUESTSTATEMAXRECTANGLETEXTURESIZE && cpu->gpr[4] != GUESTSTATEMAXVIEWPORTDIMENSIONS && cpu->gpr[4] != GUESTSTATEMAXTEXTURECOORDINATES && cpu->gpr[4] != GUESTSTATEMAXTEXTUREIMAGEUNITS)
+		if (cpu->gpr[4] != GUESTSTATEMAXRECTANGLETEXTURESIZE && cpu->gpr[4] != GUESTSTATEMAXVIEWPORTDIMENSIONS && cpu->gpr[4] != GUESTSTATEMAXTEXTURECOORDINATES && cpu->gpr[4] != GUESTSTATEMAXTEXTUREIMAGEUNITS &&
+			cpu->gpr[4] != GUESTSTATEMAXCUBEMAPTEXTURESIZE && cpu->gpr[4] != GUESTSTATEMAX3DTEXTURESIZE)
 			return 0;
 		count = OsxGuestStateQuery(context, cpu->gpr[4], values);
 		for (index = 0; index < count; index++) {
@@ -1032,50 +1314,48 @@ static int OsxGuestStateCall(GLContext *context, OsxCpu *cpu, uint32 sub)
 		}
 		return 1;
 	case GL_SUB_IS_ENABLED:
-		if (cpu->gpr[4] == GUESTTEXTURERECTANGLE) {
-			cpu->gpr[3] = (state->guestrectangleenabledunits >> unit) & 1;
+		if (kind >= 0) {
+			cpu->gpr[3] = OsxGuestKindEnabled(context, kind, unit);
 			return 1;
 		}
-		if (cpu->gpr[4] == GL_TEXTURE_2D && state->rectangleshadowactive[unit]) {
+		if (cpu->gpr[4] == GL_TEXTURE_2D && state->shadowactive[unit]) {
 			cpu->gpr[3] = state->guesttexture2denabled[unit];
 			return 1;
 		}
 		return 0;
 	case GL_SUB_ENABLE:
 	case GL_SUB_DISABLE:
-		if (cpu->gpr[4] == GUESTTEXTURERECTANGLE) {
-			OsxGuestEnableRectangleTexture(context, sub == GL_SUB_ENABLE);
-			OsxGuestSyncRectangleShadow(context, unit);
+		if (kind >= 0) {
+			state->guestenabledunits[kind] &= ~(1u << unit);
+			if (sub == GL_SUB_ENABLE)
+				state->guestenabledunits[kind] |= 1u << unit;
+			OsxGuestApplyKindTexture(context, kind, unit, sub == GL_SUB_ENABLE);
+			OsxGuestSyncShadow(context, unit);
 			return 1;
 		}
 		if (cpu->gpr[4] != GL_TEXTURE_2D)
 			return 0;
 		OsxGuestEngineDispatch(cpu, sub, 4);
-		if (state->rectangleshadowactive[unit])
+		if (state->shadowactive[unit])
 			state->guesttexture2denabled[unit] = sub == GL_SUB_ENABLE;
-		OsxGuestSyncRectangleShadow(context, unit);
+		OsxGuestSyncShadow(context, unit);
 		return 1;
 	case GL_SUB_BIND_TEXTURE:
-		if (cpu->gpr[4] == GUESTTEXTURERECTANGLE) {
-			state->boundrectangletexture[unit] = cpu->gpr[5];
-			if (cpu->gpr[5]) {
-				object = &context->texture_objects[cpu->gpr[5]];
-				if (object->name != cpu->gpr[5]) {
-					object->name = cpu->gpr[5];
-					object->min_filter = GL_LINEAR;
-					object->mag_filter = GL_LINEAR;
-					object->wrap_s = GL_CLAMP_TO_EDGE;
-					object->wrap_t = GL_CLAMP_TO_EDGE;
-				}
-			}
-			OsxGuestBindRectangleTexture(context);
-			OsxGuestSyncRectangleShadow(context, unit);
+		if (kind >= 0) {
+			state->boundtextures[kind][unit] = cpu->gpr[5];
+			if (cpu->gpr[5])
+				OsxGuestKindDefaults(context, kind, cpu->gpr[5]);
+			OsxGuestApplyKindTexture(context, kind, unit, OsxGuestKindEnabled(context, kind, unit));
 			return 1;
 		}
 		if (cpu->gpr[4] != GL_TEXTURE_2D)
 			return 0;
 		OsxGuestEngineDispatch(cpu, sub, 4);
-		OsxGuestSyncRectangleShadow(context, unit);
+		OsxGuestSyncShadow(context, unit);
+		return 1;
+	case GL_SUB_DELETE_TEXTURES:
+		OsxGuestEngineDispatch(cpu, sub, 4);
+		OsxGuestForgetDeletedTextures(context);
 		return 1;
 	case GL_SUB_PIXEL_STOREI:
 		if (cpu->gpr[4] != GUESTUNPACKROWBYTES)
@@ -1085,50 +1365,52 @@ static int OsxGuestStateCall(GLContext *context, OsxCpu *cpu, uint32 sub)
 	case GL_SUB_TEX_IMAGE2D:
 	case GL_SUB_TEX_SUB_IMAGE2D:
 		return OsxGuestImageCall(context, cpu, sub);
+	case GL_SUB_TEX_IMAGE3D_EXT:
+	case GL_SUB_TEX_SUB_IMAGE3D_EXT:
+		return OsxGuestVolumeCall(context, cpu, sub);
+	case GL_SUB_COMPRESSED_TEX_IMAGE2D_ARB:
+	case GL_SUB_COMPRESSED_TEX_SUB_IMAGE2D_ARB:
+		return OsxGuestCompressedImageCall(context, cpu, sub);
 	case GL_SUB_TEX_PARAMETERF:
 	case GL_SUB_TEX_PARAMETERI:
 	case GL_SUB_TEX_PARAMETERFV:
 	case GL_SUB_TEX_PARAMETERIV:
-		if (cpu->gpr[5] == GUESTTEXTURESTORAGEHINT)
-			return 1;
-		if (cpu->gpr[4] != GUESTTEXTURERECTANGLE)
-			return 0;
-		return OsxGuestRectangleParameterCall(context, cpu, sub);
+		return OsxGuestParameterCall(context, cpu, sub);
 	case GL_SUB_GET_TEX_PARAMETERIV:
-		if (cpu->gpr[4] != GUESTTEXTURERECTANGLE)
+		if (kind < 0)
 			return 0;
 		OsxGuestWrite32(cpu->gpr[6], OsxGuestTextureQueryValue(context, cpu->gpr[4], cpu->gpr[5]));
 		return 1;
 	case GL_SUB_GET_TEX_PARAMETERFV:
-		if (cpu->gpr[4] != GUESTTEXTURERECTANGLE)
+		if (kind < 0)
 			return 0;
 		single = (float)OsxGuestTextureQueryValue(context, cpu->gpr[4], cpu->gpr[5]);
 		memcpy(&bits, &single, sizeof(bits));
 		OsxGuestWrite32(cpu->gpr[6], bits);
 		return 1;
 	case GL_SUB_GET_TEX_LEVEL_PARAMETERIV:
-		if (cpu->gpr[4] != GUESTTEXTURERECTANGLE && cpu->gpr[4] != GUESTPROXYTEXTURE2D && cpu->gpr[4] != GUESTPROXYTEXTURERECTANGLE)
+		if (kind < 0 && cpu->gpr[4] != GUESTPROXYTEXTURE2D && cpu->gpr[4] != GUESTPROXYTEXTURERECTANGLE && cpu->gpr[4] != GUESTPROXYTEXTURECUBEMAP)
 			return 0;
 		OsxGuestWrite32(cpu->gpr[7], OsxGuestTextureQueryValue(context, cpu->gpr[4], cpu->gpr[6]));
 		return 1;
 	case GL_SUB_GET_TEX_LEVEL_PARAMETERFV:
-		if (cpu->gpr[4] != GUESTTEXTURERECTANGLE && cpu->gpr[4] != GUESTPROXYTEXTURE2D && cpu->gpr[4] != GUESTPROXYTEXTURERECTANGLE)
+		if (kind < 0 && cpu->gpr[4] != GUESTPROXYTEXTURE2D && cpu->gpr[4] != GUESTPROXYTEXTURERECTANGLE && cpu->gpr[4] != GUESTPROXYTEXTURECUBEMAP)
 			return 0;
 		single = (float)OsxGuestTextureQueryValue(context, cpu->gpr[4], cpu->gpr[6]);
 		memcpy(&bits, &single, sizeof(bits));
 		OsxGuestWrite32(cpu->gpr[7], bits);
 		return 1;
 	case GL_SUB_COPY_TEX_IMAGE2D:
-		if (cpu->gpr[4] != GUESTTEXTURERECTANGLE)
+		if (kind < 0 || kind == GUESTKIND3D)
 			return 0;
 		GfxAccelHostBeginFrame(context);
-		OsxGuestCopyFramebufferToRectangleTexture(context, (int)cpu->gpr[5], cpu->gpr[6], (int)cpu->gpr[7], (int)cpu->gpr[8], (int)cpu->gpr[9], (int)cpu->gpr[10], 0, 0, 1);
+		OsxGuestCopyFramebufferToKindTexture(context, cpu->gpr[4], (int)cpu->gpr[5], cpu->gpr[6], (int)cpu->gpr[7], (int)cpu->gpr[8], (int)cpu->gpr[9], (int)cpu->gpr[10], 0, 0, 1);
 		return 1;
 	case GL_SUB_COPY_TEX_SUB_IMAGE2D:
-		if (cpu->gpr[4] != GUESTTEXTURERECTANGLE)
+		if (kind < 0 || kind == GUESTKIND3D)
 			return 0;
 		GfxAccelHostBeginFrame(context);
-		OsxGuestCopyFramebufferToRectangleTexture(context, (int)cpu->gpr[5], 0, (int)cpu->gpr[8], (int)cpu->gpr[9], (int)cpu->gpr[10], (int)OsxGuestStackWord(cpu, 56), (int)cpu->gpr[6], (int)cpu->gpr[7], 0);
+		OsxGuestCopyFramebufferToKindTexture(context, cpu->gpr[4], (int)cpu->gpr[5], 0, (int)cpu->gpr[8], (int)cpu->gpr[9], (int)cpu->gpr[10], (int)OsxGuestStackWord(cpu, 56), (int)cpu->gpr[6], (int)cpu->gpr[7], 0);
 		return 1;
 	}
 	return 0;
@@ -1139,8 +1421,10 @@ void OsxGuestEngineCall(void *engine, OsxCpu *cpu, uint32 sub)
 	OsxGuestEngineBind(engine, cpu);
 	if (OsxGuestEngineFastCall(cpu, sub))
 		return;
-	OsxGuestStateOf(gl_current_context)->guestreadpage = 1;
+	OsxGuestForgetReadPages(OsxGuestStateOf(gl_current_context));
 	if (OsxGuestStateCall(gl_current_context, cpu, sub))
+		return;
+	if (sub == GL_SUB_READ_PIXELS && cpu->gpr[8] == GL_DEPTH_COMPONENT && OsxGuestReadDepth(gl_current_context, cpu))
 		return;
 	if (sub == GL_SUB_READ_PIXELS && OsxGuestReadPixels(gl_current_context, cpu))
 		return;
@@ -1156,7 +1440,13 @@ void OsxGuestEngineFlush(void *engine, OsxCpu *cpu)
 void OsxGuestEngineReadPixels(void *engine, OsxCpu *cpu, uint32 width, uint32 height, void *pixels)
 {
 	OsxGuestEngineFlush(engine, cpu);
-	GfxAccelHostTargetReadPixels(width, height, pixels);
+	GfxAccelHostTargetReadPixels((GLContext *)engine, width, height, pixels);
+}
+
+int OsxGuestEngineAdoptFrame(void *engine, OsxCpu *cpu, uint32 width, uint32 height)
+{
+	OsxGuestEngineFlush(engine, cpu);
+	return GfxAccelHostTargetAdopt((GLContext *)engine, width, height);
 }
 
 void OsxGuestEngineHostString(void *engine, OsxCpu *cpu, uint32 name, char *text, uint32 size)
@@ -1170,13 +1460,13 @@ void OsxGuestEngineAfterPresent(void)
 	if (!gl_current_context || !GfxAccelHostTargetFrameActive())
 		return;
 	GfxAccelHostTargetResume(gl_current_context, OsxGuestTargetOf(gl_current_context));
-	OsxGuestApplyRectangleTextures(gl_current_context);
+	OsxGuestApplyKindTextures(gl_current_context);
 }
 
 void OsxGuestEngineBeforePresent(void)
 {
 	if (gl_current_context)
-		OsxGuestDisableRectangleTextures(gl_current_context);
+		OsxGuestDisableKindTextures(gl_current_context);
 }
 
 unsigned OsxGuestEngineTextureCreate(void *engine, OsxCpu *cpu, uint32 width, uint32 height, int floatpixels)
@@ -1201,6 +1491,10 @@ void OsxGuestEngineAttachTexture(void *engine, OsxCpu *cpu, unsigned texture, ui
 	context = (GLContext *)engine;
 	if (GfxAccelHostTargetFrameActive())
 		GfxAccelHostEndFrame(context);
+	if (!texture) {
+		GfxAccelHostTargetReleaseOverlays(OsxGuestTargetOf(context));
+		return;
+	}
 	GfxAccelHostTargetAttachTexture(OsxGuestTargetOf(context), texture, width, height);
 	context->viewport[0] = 0;
 	context->viewport[1] = 0;
@@ -1216,26 +1510,23 @@ void OsxGuestEngineCopyTexture(void *engine, OsxCpu *cpu, unsigned texture, uint
 {
 	GLContext *context;
 	GLTextureObject *object;
-	uint32_t name;
 	std::vector<uint8_t> blank;
+	int kind;
 	OsxGuestEngineBind(engine, cpu);
 	context = (GLContext *)engine;
-	name = context->tex_units[context->active_texture].bound_texture_2d;
-	if (texturetarget == GUESTTEXTURERECTANGLE)
-		name = OsxGuestStateOf(context)->boundrectangletexture[context->active_texture];
-	if (!name || !GfxAccelHostFramebufferAvailable())
+	kind = OsxGuestTextureKind(texturetarget);
+	object = OsxGuestBoundObject(context, texturetarget);
+	if (!object || !GfxAccelHostFramebufferAvailable())
 		return;
-	object = &context->texture_objects[name];
-	object->name = name;
-	if (texturetarget != GUESTTEXTURERECTANGLE && (!object->metal_texture || object->width != (int)width || object->height != (int)height)) {
+	if (kind < 0 && (!object->metal_texture || object->width != (int)width || object->height != (int)height)) {
 		blank.resize((size_t)width * height * 4);
 		object->width = (int)width;
 		object->height = (int)height;
 		GfxAccelHostUploadTexture(context, object, 0, (int)width, (int)height, vec_data(blank), (int)blank.size());
 	}
 	GfxAccelHostReadFramebufferAttach(OsxGuestTargetOf(context), texture);
-	if (texturetarget == GUESTTEXTURERECTANGLE)
-		OsxGuestCopyFramebufferToRectangleTexture(context, 0, internalformat, 0, 0, (int)width, (int)height, 0, 0, 1);
+	if (kind >= 0)
+		OsxGuestCopyFramebufferToKindTexture(context, texturetarget, 0, internalformat, 0, 0, (int)width, (int)height, 0, 0, 1);
 	else
 		GfxAccelHostTextureCopyFromRead(object, internalformat, (int)width, (int)height);
 	GfxAccelHostReadFramebufferRelease();
@@ -1255,6 +1546,12 @@ void OsxGuestEngineBlendSeparate(void *engine, OsxCpu *cpu, int separate)
 		OsxGuestStateOf(context)->guestblenddstalpha = cpu->gpr[7];
 	}
 	GfxAccelHostInvalidateState(context);
+}
+
+void OsxGuestEngineSamples(void *engine, OsxCpu *cpu, uint32 samples)
+{
+	OsxGuestEngineBind(engine, cpu);
+	GfxAccelHostSamples((GLContext *)engine, (int)samples);
 }
 
 void OsxGuestEngineProgramEnable(void *engine, OsxCpu *cpu, uint32 capability, int enable)
@@ -1344,7 +1641,7 @@ int OsxGuestEngineProgramCall(void *engine, OsxCpu *cpu, uint32 call)
 	if (!GfxAccelHostProgramEntryAvailable(target, program))
 		return 0;
 	OsxGuestEngineBind(engine, cpu);
-	OsxGuestStateOf(gl_current_context)->guestreadpage = 1;
+	OsxGuestForgetReadPages(OsxGuestStateOf(gl_current_context));
 	arguments = cpu->gpr + 4;
 	switch (call) {
 	case 472:
@@ -1423,6 +1720,134 @@ int OsxGuestEngineProgramCall(void *engine, OsxCpu *cpu, uint32 call)
 	return 1;
 }
 
+static const uint8 *OsxGuestSpan(uint32 address, uint32 length);
+
+static float OsxGuestComponent(const uint8 *bytes, uint32 type, int normalized)
+{
+	uint32 bits;
+	float value;
+	switch (type) {
+	case GL_FLOAT:
+		bits = ((uint32)bytes[0] << 24) | ((uint32)bytes[1] << 16) | ((uint32)bytes[2] << 8) | bytes[3];
+		memcpy(&value, &bits, sizeof(value));
+		return value;
+	case GL_BYTE:
+		if (normalized)
+			return (float)(int8_t)bytes[0] / 127.f;
+		return (float)(int8_t)bytes[0];
+	case GL_UNSIGNED_BYTE:
+		if (normalized)
+			return (float)bytes[0] / 255.f;
+		return (float)bytes[0];
+	case GL_SHORT:
+		if (normalized)
+			return (float)(int16_t)((bytes[0] << 8) | bytes[1]) / 32767.f;
+		return (float)(int16_t)((bytes[0] << 8) | bytes[1]);
+	case GL_UNSIGNED_SHORT:
+		if (normalized)
+			return (float)((bytes[0] << 8) | bytes[1]) / 65535.f;
+		return (float)((bytes[0] << 8) | bytes[1]);
+	}
+	return 0.f;
+}
+
+static void OsxGuestDrawAttributes(GLContext *context, uint32 mode, uint32 first, uint32 count, uint32 indextype, uint32 indices)
+{
+	OsxGuestState *state;
+	const GLVertexArrayPointer *array;
+	const uint8 *bytes;
+	float *values;
+	uint32 enabled[GUESTATTRIBUTES];
+	uint32 enabledcount;
+	uint32 attribute;
+	uint32 vertex;
+	uint32 index;
+	uint32 slot;
+	uint32 address;
+	int component;
+	int width;
+	state = OsxGuestStateOf(context);
+	enabledcount = 0;
+	for (attribute = GUESTATTRIBUTES; attribute-- > 0;)
+		if (state->guestattributes[attribute].enabled && state->guestattributes[attribute].pointer)
+			enabled[enabledcount++] = attribute;
+	state->guestattributevalues.resize((size_t)count * enabledcount * 4 + 4);
+	values = vec_data(state->guestattributevalues);
+	for (vertex = 0; vertex < count; vertex++) {
+		index = first + vertex;
+		if (indextype == GL_UNSIGNED_BYTE)
+			index = OsxGuestRead8(indices + vertex);
+		else if (indextype == GL_UNSIGNED_SHORT)
+			index = OsxGuestRead16(indices + vertex * 2);
+		else if (indextype)
+			index = OsxGuestRead32(indices + vertex * 4);
+		for (slot = 0; slot < enabledcount; slot++, values += 4) {
+			array = &state->guestattributes[enabled[slot]];
+			width = gl_type_size(array->type);
+			address = array->pointer + index * gl_array_stride(*array);
+			values[0] = 0.f;
+			values[1] = 0.f;
+			values[2] = 0.f;
+			values[3] = 1.f;
+			bytes = NULL;
+			if (array->type != GL_DOUBLE && array->type != GL_INT && array->type != GL_UNSIGNED_INT)
+				bytes = OsxGuestSpan(address, (uint32)(array->size * width));
+			for (component = 0; component < array->size && component < 4; component++) {
+				if (bytes)
+					values[component] = OsxGuestComponent(bytes + component * width, array->type, (state->guestattributenormalized >> enabled[slot]) & 1);
+				else if (state->guestattributenormalized & (1u << enabled[slot]))
+					values[component] = gl_read_comp(address + (uint32)(component * width), array->type);
+				else
+					values[component] = gl_read_raw(address + (uint32)(component * width), array->type);
+			}
+		}
+	}
+	if (!state->guestfaultraised)
+		GfxAccelHostDrawAttributes(context, OsxGuestTargetOf(context), mode, count, enabled, enabledcount, vec_data(state->guestattributevalues));
+}
+
+int OsxGuestEngineAttributeCall(void *engine, OsxCpu *cpu, uint32 call)
+{
+	GLContext *context;
+	OsxGuestState *state;
+	GLVertexArrayPointer *array;
+	uint32 *arguments;
+	if ((call < GUESTATTRIBUTEPOINTER || call > GUESTATTRIBUTEDISABLE) && call != GUESTDRAWARRAYS && call != GUESTDRAWELEMENTS && call != GUESTDRAWRANGEELEMENTS)
+		return 0;
+	context = (GLContext *)engine;
+	state = OsxGuestStateOf(context);
+	arguments = cpu->gpr + 4;
+	if (!GfxAccelHostProgramEntryAvailable(OsxGuestTargetOf(context), GFXACCELHOSTATTRIBUTEENTRY))
+		return 0;
+	if (call >= GUESTATTRIBUTEPOINTER && call <= GUESTATTRIBUTEDISABLE) {
+		if (arguments[0] >= GUESTATTRIBUTES)
+			return 1;
+		array = &state->guestattributes[arguments[0]];
+		if (call == GUESTATTRIBUTEPOINTER) {
+			array->size = (int)arguments[1];
+			array->type = arguments[2];
+			array->stride = (int)arguments[4];
+			array->pointer = arguments[5];
+			state->guestattributenormalized &= ~(1u << arguments[0]);
+			if (arguments[3])
+				state->guestattributenormalized |= 1u << arguments[0];
+		} else
+			array->enabled = call == GUESTATTRIBUTEENABLE;
+		return 1;
+	}
+	if (!state->guestattributes[0].enabled || !GfxAccelHostProgramEnabled(OsxGuestTargetOf(context), GFXACCELHOSTVERTEXPROGRAM))
+		return 0;
+	OsxGuestEngineBind(engine, cpu);
+	OsxGuestForgetReadPages(state);
+	if (call == GUESTDRAWARRAYS)
+		OsxGuestDrawAttributes(context, arguments[0], arguments[1], arguments[2], 0, 0);
+	else if (call == GUESTDRAWELEMENTS)
+		OsxGuestDrawAttributes(context, arguments[0], 0, arguments[1], arguments[2], arguments[3]);
+	else
+		OsxGuestDrawAttributes(context, arguments[0], 0, arguments[3], arguments[4], arguments[5]);
+	return 1;
+}
+
 static uint8 *OsxGuestScratch(uint32 address)
 {
 	if (address < OSXGLSCRATCHBASE || address - OSXGLSCRATCHBASE >= sizeof(OsxGuestStateOf(gl_current_context)->guestscratch))
@@ -1450,36 +1875,52 @@ static uint8 *OsxGuestByte(uint32 address, int kind)
 
 static uint8 *OsxGuestReadPage(uint32 address)
 {
-	GLContext *context;
+	OsxGuestState *state;
 	OsxCpu *cpu;
 	uint32 physical;
-	context = gl_current_context;
-	if ((address & ~4095u) == OsxGuestStateOf(context)->guestreadpage)
-		return OsxGuestStateOf(context)->guestreadhost;
-	if (OsxGuestStateOf(context)->guestfaultraised)
+	uint32 page;
+	uint32 index;
+	state = OsxGuestStateOf(gl_current_context);
+	page = address & ~4095u;
+	for (index = 0; index < GUESTREADPAGES; index++)
+		if (state->guestreadpages[index] == page)
+			return state->guestreadhosts[index];
+	if (state->guestfaultraised)
 		return NULL;
-	cpu = (OsxCpu *)OsxGuestStateOf(context)->guestcpu;
+	cpu = (OsxCpu *)state->guestcpu;
 	if (!OsxGuestCpuTranslate(cpu, address, OSXTLBREAD, 1, &physical) || physical >= cpu->ramsize) {
-		OsxGuestStateOf(context)->guestfaultraised = true;
+		state->guestfaultraised = true;
 		return NULL;
 	}
 	if ((physical | 4095u) >= cpu->ramsize)
 		return NULL;
-	OsxGuestStateOf(context)->guestreadpage = address & ~4095u;
-	OsxGuestStateOf(context)->guestreadhost = cpu->ram + (physical & ~4095u);
-	return OsxGuestStateOf(context)->guestreadhost;
+	index = state->guestreadnext;
+	state->guestreadnext = (index + 1) % GUESTREADPAGES;
+	state->guestreadpages[index] = page;
+	state->guestreadhosts[index] = cpu->ram + (physical & ~4095u);
+	return state->guestreadhosts[index];
+}
+
+static const uint8 *OsxGuestSpan(uint32 address, uint32 length)
+{
+	uint8 *page;
+	if (address - OSXGLSCRATCHBASE < sizeof(OsxGuestStateOf(gl_current_context)->guestscratch)) {
+		if (address - OSXGLSCRATCHBASE + length > sizeof(OsxGuestStateOf(gl_current_context)->guestscratch))
+			return NULL;
+		return OsxGuestStateOf(gl_current_context)->guestscratch + (address - OSXGLSCRATCHBASE);
+	}
+	if ((address & 4095) + length > 4096)
+		return NULL;
+	page = OsxGuestReadPage(address);
+	if (!page)
+		return NULL;
+	return page + (address & 4095);
 }
 
 uint8 OsxGuestRead8(uint32 address)
 {
-	uint8 *byte;
-	if (!OsxGuestScratch(address)) {
-		byte = OsxGuestReadPage(address);
-		if (byte)
-			return byte[address & 4095];
-		return 0;
-	}
-	byte = OsxGuestByte(address, OSXTLBREAD);
+	const uint8 *byte;
+	byte = OsxGuestSpan(address, 1);
 	if (!byte)
 		return 0;
 	return *byte;
@@ -1487,26 +1928,24 @@ uint8 OsxGuestRead8(uint32 address)
 
 uint16 OsxGuestRead16(uint32 address)
 {
-	return (uint16)((OsxGuestRead8(address) << 8) | OsxGuestRead8(address + 1));
+	const uint8 *bytes;
+	bytes = OsxGuestSpan(address, 2);
+	if (!bytes)
+		return (uint16)((OsxGuestRead8(address) << 8) | OsxGuestRead8(address + 1));
+	return (uint16)((bytes[0] << 8) | bytes[1]);
 }
 
 uint32 OsxGuestRead32(uint32 address)
 {
 	uint32 value;
-	uint8 *page;
-	page = OsxGuestScratch(address);
-	if (page) {
-		memcpy(&value, page, sizeof(value));
+	const uint8 *bytes;
+	bytes = OsxGuestSpan(address, 4);
+	if (bytes) {
+		memcpy(&value, bytes, sizeof(value));
 		return bswap_32(value);
 	}
-	if ((address & 4095) <= 4092) {
-		page = OsxGuestReadPage(address);
-		if (page) {
-			memcpy(&value, page + (address & 4095), sizeof(value));
-			return bswap_32(value);
-		}
+	if ((address & 4095) <= 4092)
 		return 0;
-	}
 	value = 0;
 	OsxGuestCpuReadVirtual((OsxCpu *)OsxGuestStateOf(gl_current_context)->guestcpu, address, &value);
 	return value;

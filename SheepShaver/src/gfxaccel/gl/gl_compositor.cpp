@@ -108,6 +108,10 @@ static int s_palette_5bit_lut_bpp = 0;
  * of wiping the desktop to a grayscale ramp - the "black and white on exit". */
 static bool s_palette_is_placeholder = true;
 static uint8_t s_gamma_lut[768];
+#if !defined(GFXACCEL_USE_SDLGPU)
+static GLuint s_gamma_texture = 0;
+static GLuint s_gamma_program = 0;
+#endif
 static uint32_t s_last_gamma_gen = UINT32_MAX;
 static bool s_palette_dirty = true;
 static atomic_uint64 s_present_origin = 0;
@@ -268,6 +272,86 @@ static const char *HostGLError(void)
 void *GfxGLGetProcAddress(const char *name)
 {
 	return (void *)SDL_GL_GetProcAddress(name);
+}
+#endif
+
+#if !defined(GFXACCEL_USE_SDLGPU)
+void GfxGLExtLoad(GfxGLExt &e)
+{
+	e.GenFramebuffers = (PFNGLGENFRAMEBUFFERSPROC)GfxGLGetProcAddress("glGenFramebuffers");
+	if (!e.GenFramebuffers)
+		e.GenFramebuffers = (PFNGLGENFRAMEBUFFERSPROC)GfxGLGetProcAddress("glGenFramebuffersEXT");
+	e.DeleteFramebuffers = (PFNGLDELETEFRAMEBUFFERSPROC)GfxGLGetProcAddress("glDeleteFramebuffers");
+	if (!e.DeleteFramebuffers)
+		e.DeleteFramebuffers = (PFNGLDELETEFRAMEBUFFERSPROC)GfxGLGetProcAddress("glDeleteFramebuffersEXT");
+	e.BindFramebuffer = (PFNGLBINDFRAMEBUFFERPROC)GfxGLGetProcAddress("glBindFramebuffer");
+	if (!e.BindFramebuffer)
+		e.BindFramebuffer = (PFNGLBINDFRAMEBUFFERPROC)GfxGLGetProcAddress("glBindFramebufferEXT");
+	e.FramebufferTexture2D = (PFNGLFRAMEBUFFERTEXTURE2DPROC)GfxGLGetProcAddress("glFramebufferTexture2D");
+	if (!e.FramebufferTexture2D)
+		e.FramebufferTexture2D = (PFNGLFRAMEBUFFERTEXTURE2DPROC)GfxGLGetProcAddress("glFramebufferTexture2DEXT");
+	e.GenRenderbuffers = (PFNGLGENRENDERBUFFERSPROC)GfxGLGetProcAddress("glGenRenderbuffers");
+	if (!e.GenRenderbuffers)
+		e.GenRenderbuffers = (PFNGLGENRENDERBUFFERSPROC)GfxGLGetProcAddress("glGenRenderbuffersEXT");
+	e.DeleteRenderbuffers = (PFNGLDELETERENDERBUFFERSPROC)GfxGLGetProcAddress("glDeleteRenderbuffers");
+	if (!e.DeleteRenderbuffers)
+		e.DeleteRenderbuffers = (PFNGLDELETERENDERBUFFERSPROC)GfxGLGetProcAddress("glDeleteRenderbuffersEXT");
+	e.BindRenderbuffer = (PFNGLBINDRENDERBUFFERPROC)GfxGLGetProcAddress("glBindRenderbuffer");
+	if (!e.BindRenderbuffer)
+		e.BindRenderbuffer = (PFNGLBINDRENDERBUFFERPROC)GfxGLGetProcAddress("glBindRenderbufferEXT");
+	e.RenderbufferStorage = (PFNGLRENDERBUFFERSTORAGEPROC)GfxGLGetProcAddress("glRenderbufferStorage");
+	if (!e.RenderbufferStorage)
+		e.RenderbufferStorage = (PFNGLRENDERBUFFERSTORAGEPROC)GfxGLGetProcAddress("glRenderbufferStorageEXT");
+	e.FramebufferRenderbuffer = (PFNGLFRAMEBUFFERRENDERBUFFERPROC)GfxGLGetProcAddress("glFramebufferRenderbuffer");
+	if (!e.FramebufferRenderbuffer)
+		e.FramebufferRenderbuffer = (PFNGLFRAMEBUFFERRENDERBUFFERPROC)GfxGLGetProcAddress("glFramebufferRenderbufferEXT");
+	e.CheckFramebufferStatus = (PFNGLCHECKFRAMEBUFFERSTATUSPROC)GfxGLGetProcAddress("glCheckFramebufferStatus");
+	if (!e.CheckFramebufferStatus)
+		e.CheckFramebufferStatus = (PFNGLCHECKFRAMEBUFFERSTATUSPROC)GfxGLGetProcAddress("glCheckFramebufferStatusEXT");
+	e.GenerateMipmap = (PFNGLGENERATEMIPMAPPROC)GfxGLGetProcAddress("glGenerateMipmap");
+	if (!e.GenerateMipmap)
+		e.GenerateMipmap = (PFNGLGENERATEMIPMAPPROC)GfxGLGetProcAddress("glGenerateMipmapEXT");
+	e.ActiveTexture = (PFNGLACTIVETEXTUREPROC)GfxGLGetProcAddress("glActiveTexture");
+	if (!e.ActiveTexture)
+		e.ActiveTexture = (PFNGLACTIVETEXTUREPROC)GfxGLGetProcAddress("glActiveTextureARB");
+	e.ClientActiveTexture = (PFNGLCLIENTACTIVETEXTUREPROC)GfxGLGetProcAddress("glClientActiveTexture");
+	if (!e.ClientActiveTexture)
+		e.ClientActiveTexture = (PFNGLCLIENTACTIVETEXTUREPROC)GfxGLGetProcAddress("glClientActiveTextureARB");
+	e.MultiTexCoord2f = (PFNGLMULTITEXCOORD2FPROC)GfxGLGetProcAddress("glMultiTexCoord2f");
+	if (!e.MultiTexCoord2f)
+		e.MultiTexCoord2f = (PFNGLMULTITEXCOORD2FPROC)GfxGLGetProcAddress("glMultiTexCoord2fARB");
+	e.MultiTexCoord4f = (PFNGLMULTITEXCOORD4FPROC)GfxGLGetProcAddress("glMultiTexCoord4f");
+	if (!e.MultiTexCoord4f)
+		e.MultiTexCoord4f = (PFNGLMULTITEXCOORD4FPROC)GfxGLGetProcAddress("glMultiTexCoord4fARB");
+	e.SecondaryColor3f = (PFNGLSECONDARYCOLOR3FPROC)GfxGLGetProcAddress("glSecondaryColor3f");
+	if (!e.SecondaryColor3f)
+		e.SecondaryColor3f = (PFNGLSECONDARYCOLOR3FPROC)GfxGLGetProcAddress("glSecondaryColor3fEXT");
+	e.BlendFuncSeparate = (PFNGLBLENDFUNCSEPARATEPROC)GfxGLGetProcAddress("glBlendFuncSeparate");
+	if (!e.BlendFuncSeparate)
+		e.BlendFuncSeparate = (PFNGLBLENDFUNCSEPARATEPROC)GfxGLGetProcAddress("glBlendFuncSeparateEXT");
+	e.BlendColor = (GFXPFNGLBLENDCOLORPROC)GfxGLGetProcAddress("glBlendColor");
+	if (!e.BlendColor)
+		e.BlendColor = (GFXPFNGLBLENDCOLORPROC)GfxGLGetProcAddress("glBlendColorEXT");
+	e.BlendEquation = (GFXPFNGLBLENDEQUATIONPROC)GfxGLGetProcAddress("glBlendEquation");
+	if (!e.BlendEquation)
+		e.BlendEquation = (GFXPFNGLBLENDEQUATIONPROC)GfxGLGetProcAddress("glBlendEquationEXT");
+	e.FogCoordf = (PFNGLFOGCOORDFPROC)GfxGLGetProcAddress("glFogCoordf");
+	if (!e.FogCoordf)
+		e.FogCoordf = (PFNGLFOGCOORDFPROC)GfxGLGetProcAddress("glFogCoordfEXT");
+	e.BlitFramebuffer = (GFXPFNGLBLITFRAMEBUFFERPROC)GfxGLGetProcAddress("glBlitFramebuffer");
+	if (!e.BlitFramebuffer)
+		e.BlitFramebuffer = (GFXPFNGLBLITFRAMEBUFFERPROC)GfxGLGetProcAddress("glBlitFramebufferEXT");
+	e.RenderbufferStorageMultisample = (GFXPFNGLRENDERBUFFERSTORAGEMULTISAMPLEPROC)GfxGLGetProcAddress("glRenderbufferStorageMultisample");
+	if (!e.RenderbufferStorageMultisample)
+		e.RenderbufferStorageMultisample = (GFXPFNGLRENDERBUFFERSTORAGEMULTISAMPLEPROC)GfxGLGetProcAddress("glRenderbufferStorageMultisampleEXT");
+	e.fbo = e.GenFramebuffers && e.BindFramebuffer && e.FramebufferTexture2D &&
+	        e.GenRenderbuffers && e.BindRenderbuffer && e.RenderbufferStorage &&
+	        e.FramebufferRenderbuffer && e.CheckFramebufferStatus && e.DeleteFramebuffers;
+	e.GenPrograms = (GFXPFNGLGENPROGRAMSPROC)GfxGLGetProcAddress("glGenProgramsARB");
+	e.BindProgram = (GFXPFNGLBINDPROGRAMPROC)GfxGLGetProcAddress("glBindProgramARB");
+	e.ProgramString = (GFXPFNGLPROGRAMSTRINGPROC)GfxGLGetProcAddress("glProgramStringARB");
+	e.multitex = e.ActiveTexture != NULL &&
+	             (e.MultiTexCoord2f != NULL || e.MultiTexCoord4f != NULL);
 }
 #endif
 
@@ -1239,18 +1323,7 @@ void MetalCompositorUpdatePalette(const uint8_t *pal, int num_colors)
 				   num_colors, compositor_depth, compositor_bits_per_pixel);
 }
 
-extern "C" bool GLCompositorCopyCurrentPaletteRGB(uint8_t out_rgb[768])
-{
-	if (!s_init || !out_rgb) return false;
-	for (int i = 0; i < 256; i++) {
-		out_rgb[i * 3 + 0] = s_palette[i * 4 + 0];
-		out_rgb[i * 3 + 1] = s_palette[i * 4 + 1];
-		out_rgb[i * 3 + 2] = s_palette[i * 4 + 2];
-	}
-	return true;
-}
-
-void MetalCompositorPresent_(bool presentvbltick = true)
+void MetalCompositorPresent_(bool presentvbltick = true, bool upload = true)
 {
 	if (!s_init) return;
 	/* Guest callbacks may pump a nested VideoVBL on the same emulation thread.
@@ -1326,14 +1399,31 @@ void MetalCompositorPresent_(bool presentvbltick = true)
 			   present_w, present_h);
 
 	MetalCompositorEnsureFrameBufferTexture();
-	(void)upload_guest_screen_to_texture();
+	if (upload)
+		(void)upload_guest_screen_to_texture();
 	glEnable(GL_TEXTURE_2D);
 	glBindTexture(GL_TEXTURE_2D, s_fb_tex);
 	glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
 	glDisable(GL_BLEND);
 	glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
 	glColor4f(1.f, 1.f, 1.f, 1.f);
+#if !defined(GFXACCEL_USE_SDLGPU)
+	GfxGLExt &gamma_ext = gfx_gl_ext();
+	if (s_gamma_texture) {
+		gamma_ext.ActiveTexture(GL_TEXTURE1);
+		glBindTexture(GL_TEXTURE_1D, s_gamma_texture);
+		gamma_ext.ActiveTexture(GL_TEXTURE0);
+		glEnable(GL_FRAGMENT_PROGRAM_ARB);
+		gamma_ext.BindProgram(GL_FRAGMENT_PROGRAM_ARB, s_gamma_program);
+	}
 	draw_textured_quad();
+	if (s_gamma_texture) {
+		gamma_ext.BindProgram(GL_FRAGMENT_PROGRAM_ARB, 0);
+		glDisable(GL_FRAGMENT_PROGRAM_ARB);
+	}
+#else
+	draw_textured_quad();
+#endif
 	GLCompositorDeviceSwap();
 
 	/* Cache present rect in window coords for host cursor / input helpers. */
@@ -1496,6 +1586,114 @@ void MetalCompositorPresentWithoutVBL(void)
 {
 	MetalCompositorPresent_(false);
 }
+
+void MetalCompositorPresentAdopted(void)
+{
+	MetalCompositorPresent_(false, false);
+}
+
+int MetalCompositorAdoptFrame(unsigned int readframebuffer, int width, int height)
+{
+	GfxGLExt &ext = gfx_gl_ext();
+	if (!s_init || !ext.BlitFramebuffer || width != compositor_pixel_width || height != compositor_pixel_height)
+		return 0;
+	ScopedGLScreenTransfer screen_transfer;
+	MetalCompositorEnsureFrameBufferTexture();
+	if (!bind_screen_write_target())
+		return 0;
+	ext.BindFramebuffer(GL_READ_FRAMEBUFFER, readframebuffer);
+	glReadBuffer(GL_COLOR_ATTACHMENT0);
+	glDisable(GL_SCISSOR_TEST);
+	ext.BlitFramebuffer(0, 0, width, height, 0, height, width, 0, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+	unbind_screen_write_target();
+	return 1;
+}
+
+#if !defined(GFXACCEL_USE_SDLGPU)
+int MetalCompositorSetGamma(const uint8_t *table)
+{
+	static const char program[] =
+		"!!ARBfp1.0\n"
+		"PARAM scale = { 0.99609375, 0.001953125, 0, 0 };\n"
+		"TEMP color, lookup, red, green, blue;\n"
+		"TEX color, fragment.texcoord[0], texture[0], 2D;\n"
+		"MAD lookup, color, scale.xxxx, scale.yyyy;\n"
+		"TEX red, lookup.xxxx, texture[1], 1D;\n"
+		"TEX green, lookup.yyyy, texture[1], 1D;\n"
+		"TEX blue, lookup.zzzz, texture[1], 1D;\n"
+		"MOV result.color.x, red.x;\n"
+		"MOV result.color.y, green.y;\n"
+		"MOV result.color.z, blue.z;\n"
+		"MOV result.color.w, color.w;\n"
+		"END\n";
+	uint8_t texels[256 * 4];
+	GLint errorposition;
+	int index;
+	if (!table) {
+		if (s_gamma_texture) {
+			glDeleteTextures(1, &s_gamma_texture);
+			s_gamma_texture = 0;
+		}
+		return 1;
+	}
+	GfxGLExt &ext = gfx_gl_ext();
+	if (!s_init || !ext.GenPrograms || !ext.BindProgram || !ext.ProgramString || !ext.ActiveTexture)
+		return 0;
+	ScopedGLScreenTransfer screen_transfer;
+	if (!s_gamma_program) {
+		ext.GenPrograms(1, &s_gamma_program);
+		ext.BindProgram(GL_FRAGMENT_PROGRAM_ARB, s_gamma_program);
+		ext.ProgramString(GL_FRAGMENT_PROGRAM_ARB, GL_PROGRAM_FORMAT_ASCII_ARB, (GLsizei)(sizeof(program) - 1), program);
+		glGetIntegerv(GL_PROGRAM_ERROR_POSITION_ARB, &errorposition);
+		ext.BindProgram(GL_FRAGMENT_PROGRAM_ARB, 0);
+		if (errorposition != -1) {
+			s_gamma_program = 0;
+			return 0;
+		}
+	}
+	for (index = 0; index < 256; index++) {
+		texels[index * 4] = table[index];
+		texels[index * 4 + 1] = table[256 + index];
+		texels[index * 4 + 2] = table[512 + index];
+		texels[index * 4 + 3] = 255;
+	}
+	if (!s_gamma_texture) {
+		glGenTextures(1, &s_gamma_texture);
+		glBindTexture(GL_TEXTURE_1D, s_gamma_texture);
+		glTexParameteri(GL_TEXTURE_1D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+		glTexParameteri(GL_TEXTURE_1D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+		glTexParameteri(GL_TEXTURE_1D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	}
+	glBindTexture(GL_TEXTURE_1D, s_gamma_texture);
+	glTexImage1D(GL_TEXTURE_1D, 0, GL_RGBA8, 256, 0, GL_RGBA, GL_UNSIGNED_BYTE, texels);
+	return 1;
+}
+
+int MetalCompositorReadFrame(uint8_t *pixels, int rowbytes)
+{
+	if (!s_init || !s_fb_tex || !pixels)
+		return 0;
+	ScopedGLScreenTransfer screen_transfer;
+	glBindTexture(GL_TEXTURE_2D, s_fb_tex);
+	glPixelStorei(GL_PACK_ALIGNMENT, 4);
+	glPixelStorei(GL_PACK_ROW_LENGTH, rowbytes / COMPOSITORGUESTPIXELBYTES);
+	glGetTexImage(GL_TEXTURE_2D, 0, GL_BGRA, COMPOSITORGUESTPIXELTYPE, pixels);
+	glPixelStorei(GL_PACK_ROW_LENGTH, 0);
+	return 1;
+}
+#else
+int MetalCompositorSetGamma(const uint8_t *table)
+{
+	return table == NULL;
+}
+
+int MetalCompositorReadFrame(uint8_t *pixels, int rowbytes)
+{
+	(void)pixels;
+	(void)rowbytes;
+	return 0;
+}
+#endif
 
 int32_t MetalCompositorSync3DFramePacingForEngine(int32_t engine_id)
 {
