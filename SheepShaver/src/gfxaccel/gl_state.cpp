@@ -4718,7 +4718,7 @@ void NativeGLListBase(GLContext *ctx, uint32_t base) { ctx->list_base = base; }
 
 // --- Vertex arrays ---
 void NativeGLVertexPointer(GLContext *ctx, int32_t size, uint32_t type, int32_t stride, uint32_t pointer) { ctx->vertex_array.size = size; ctx->vertex_array.type = type; ctx->vertex_array.stride = stride; ctx->vertex_array.pointer = pointer; }
-void NativeGLNormalPointer(GLContext *ctx, uint32_t type, int32_t stride, uint32_t pointer) { ctx->normal_array.type = type; ctx->normal_array.stride = stride; ctx->normal_array.pointer = pointer; }
+void NativeGLNormalPointer(GLContext *ctx, uint32_t type, int32_t stride, uint32_t pointer) { ctx->normal_array.size = 3; ctx->normal_array.type = type; ctx->normal_array.stride = stride; ctx->normal_array.pointer = pointer; }
 void NativeGLColorPointer(GLContext *ctx, int32_t size, uint32_t type, int32_t stride, uint32_t pointer) { ctx->color_array.size = size; ctx->color_array.type = type; ctx->color_array.stride = stride; ctx->color_array.pointer = pointer; }
 void NativeGLTexCoordPointer(GLContext *ctx, int32_t size, uint32_t type,
 							 int32_t stride, uint32_t pointer)
