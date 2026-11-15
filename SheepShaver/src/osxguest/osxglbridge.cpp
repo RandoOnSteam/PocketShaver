@@ -34,6 +34,7 @@
 #define GLBRIDGERENDERER 0x1f01u
 #define GLBRIDGEVERSION 0x1f02u
 #define GLBRIDGEEXTENSIONS 0x1f03u
+#define GLBRIDGESHADINGLANGUAGEVERSION 0x8b8cu
 #define GLBRIDGETEXTURE2D 0x0de1u
 
 static void OsxGuestGlModeDescription(DMCModeDesc *mode, uint32 width, uint32 height, uint32 rowbytes, uint8 *present)
@@ -1318,6 +1319,10 @@ static int OsxGuestQuartzGlCall(OsxQuartzBridge *bridge, OsxQuartzContext *conte
 {
 	int sub;
 	if (call == QUARTZGETSTRING) {
+		if (cpu->gpr[4] == GLBRIDGESHADINGLANGUAGEVERSION) {
+			cpu->gpr[3] = 0;
+			return 1;
+		}
 		if (!context->strings)
 			return 0;
 		if ((cpu->gpr[4] == GLBRIDGEEXTENSIONS || cpu->gpr[4] == 0x8874) && !context->extensions)

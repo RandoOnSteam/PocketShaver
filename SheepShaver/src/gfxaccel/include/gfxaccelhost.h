@@ -106,6 +106,7 @@ void GfxAccelHostMatrixMode(void *target, uint32_t mode);
 void GfxAccelHostLoadMatrix(GLContext *context, void *target, const float *matrix);
 void GfxAccelHostViewport(GLContext *context, void *target, int x, int y, int width, int height);
 void GfxAccelHostSamples(GLContext *context, int samples);
+int GfxAccelHostSampleCount(GLContext *context);
 float *GfxAccelHostReadDepthRect(GLContext *context, int x, int y, int width, int height);
 int GfxAccelHostProgramEntryAvailable(void *target, int entry);
 void GfxAccelHostProgramEnable(void *target, uint32_t capability, int enable);

@@ -569,6 +569,13 @@ void GfxAccelHostSamples(GLContext *context, int samples)
 		GLMetalGetState(context)->samples = samples;
 }
 
+int GfxAccelHostSampleCount(GLContext *context)
+{
+	if (!GLMetalGetState(context))
+		return 0;
+	return GLMetalGetState(context)->samples;
+}
+
 float *GfxAccelHostReadDepthRect(GLContext *context, int x, int y, int width, int height)
 {
 	std::vector<float> clipped;

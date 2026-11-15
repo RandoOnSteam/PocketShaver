@@ -150,6 +150,18 @@ bool RaveGetLastCL8ColorTableRGBSnapshot(unsigned char *table)
 #define GUESTSTATEMAXRECTANGLETEXTURESIZE 0x84f8u
 #define GUESTSTATEMAXTEXTURECOORDINATES 0x8871u
 #define GUESTSTATEMAXTEXTUREIMAGEUNITS 0x8872u
+#define GUESTSTATEMAXVERTEXATTRIBUTES 0x8869u
+#define GUESTSTATEREDBITS 0x0d52u
+#define GUESTSTATEGREENBITS 0x0d53u
+#define GUESTSTATEBLUEBITS 0x0d54u
+#define GUESTSTATEALPHABITS 0x0d55u
+#define GUESTSTATEDEPTHBITS 0x0d56u
+#define GUESTSTATESTENCILBITS 0x0d57u
+#define GUESTSTATESAMPLEBUFFERS 0x80a8u
+#define GUESTSTATESAMPLES 0x80a9u
+#define GUESTHOSTCOLORBITS 8
+#define GUESTHOSTDEPTHBITS 24
+#define GUESTHOSTSTENCILBITS 8
 #define GUESTUNPACKROWBYTES 0x8a16u
 #define GUESTPROXYTEXTURE2D 0x8064u
 #define GUESTPROXYTEXTURERECTANGLE 0x84f7u
@@ -928,6 +940,19 @@ static int OsxGuestStateQuery(GLContext *context, uint32 name, int *values)
 		return 2;
 	case GUESTSTATEMAXTEXTURECOORDINATES: values[0] = state->guestmaxtexturecoordinates; return 1;
 	case GUESTSTATEMAXTEXTUREIMAGEUNITS: values[0] = state->guestmaxtextureimageunits; return 1;
+	case GUESTSTATEMAXVERTEXATTRIBUTES: values[0] = GUESTATTRIBUTES; return 1;
+	case GUESTSTATEREDBITS:
+	case GUESTSTATEGREENBITS:
+	case GUESTSTATEBLUEBITS:
+	case GUESTSTATEALPHABITS: values[0] = GUESTHOSTCOLORBITS; return 1;
+	case GUESTSTATEDEPTHBITS: values[0] = GUESTHOSTDEPTHBITS; return 1;
+	case GUESTSTATESTENCILBITS: values[0] = GUESTHOSTSTENCILBITS; return 1;
+	case GUESTSTATESAMPLEBUFFERS: values[0] = GfxAccelHostSampleCount(context) > 1; return 1;
+	case GUESTSTATESAMPLES:
+		values[0] = GfxAccelHostSampleCount(context);
+		if (values[0] < 2)
+			values[0] = 0;
+		return 1;
 	case GUESTPROGRAMERRORPOSITION: values[0] = state->guestprogramerrorposition; return 1;
 	}
 	return 0;
@@ -1237,7 +1262,15 @@ static int OsxGuestParameterCall(GLContext *context, OsxCpu *cpu, uint32 sub)
 	return 1;
 }
 
-static uint32 OsxGuestTextureQueryValue(GLContext *context, uint32 target, uint32 pname)
+static uint32 OsxGuestLevelSize(int size, int level)
+{
+	size >>= level;
+	if (!size)
+		size = 1;
+	return (uint32)size;
+}
+
+static uint32 OsxGuestTextureQueryValue(GLContext *context, uint32 target, uint32 pname, int level)
 {
 	OsxGuestState *state;
 	GLTextureObject *object;
@@ -1252,11 +1285,11 @@ static uint32 OsxGuestTextureQueryValue(GLContext *context, uint32 target, uint3
 		return 0;
 	}
 	object = OsxGuestBoundObject(context, target);
-	if (!object)
+	if (!object || level < 0 || (level > 0 && (!object->has_mipmaps || !((object->width | object->height) >> level))))
 		return 0;
 	switch (pname) {
-	case GL_TEXTURE_WIDTH: return (uint32)object->width;
-	case GL_TEXTURE_HEIGHT: return (uint32)object->height;
+	case GL_TEXTURE_WIDTH: return OsxGuestLevelSize(object->width, level);
+	case GL_TEXTURE_HEIGHT: return OsxGuestLevelSize(object->height, level);
 	case GL_TEXTURE_INTERNAL_FORMAT: return GL_RGBA;
 	case GL_TEXTURE_MIN_FILTER: return object->min_filter;
 	case GL_TEXTURE_MAG_FILTER: return object->mag_filter;
@@ -1303,10 +1336,9 @@ static int OsxGuestStateCall(GLContext *context, OsxCpu *cpu, uint32 sub)
 			OsxGuestWrite32(cpu->gpr[5] + (uint32)index * 4, (uint32)values[index]);
 		return count;
 	case GL_SUB_GET_FLOATV:
-		if (cpu->gpr[4] != GUESTSTATEMAXRECTANGLETEXTURESIZE && cpu->gpr[4] != GUESTSTATEMAXVIEWPORTDIMENSIONS && cpu->gpr[4] != GUESTSTATEMAXTEXTURECOORDINATES && cpu->gpr[4] != GUESTSTATEMAXTEXTUREIMAGEUNITS &&
-			cpu->gpr[4] != GUESTSTATEMAXCUBEMAPTEXTURESIZE && cpu->gpr[4] != GUESTSTATEMAX3DTEXTURESIZE)
-			return 0;
 		count = OsxGuestStateQuery(context, cpu->gpr[4], values);
+		if (!count)
+			return 0;
 		for (index = 0; index < count; index++) {
 			single = (float)values[index];
 			memcpy(&bits, &single, sizeof(bits));
@@ -1379,24 +1411,24 @@ static int OsxGuestStateCall(GLContext *context, OsxCpu *cpu, uint32 sub)
 	case GL_SUB_GET_TEX_PARAMETERIV:
 		if (kind < 0)
 			return 0;
-		OsxGuestWrite32(cpu->gpr[6], OsxGuestTextureQueryValue(context, cpu->gpr[4], cpu->gpr[5]));
+		OsxGuestWrite32(cpu->gpr[6], OsxGuestTextureQueryValue(context, cpu->gpr[4], cpu->gpr[5], 0));
 		return 1;
 	case GL_SUB_GET_TEX_PARAMETERFV:
 		if (kind < 0)
 			return 0;
-		single = (float)OsxGuestTextureQueryValue(context, cpu->gpr[4], cpu->gpr[5]);
+		single = (float)OsxGuestTextureQueryValue(context, cpu->gpr[4], cpu->gpr[5], 0);
 		memcpy(&bits, &single, sizeof(bits));
 		OsxGuestWrite32(cpu->gpr[6], bits);
 		return 1;
 	case GL_SUB_GET_TEX_LEVEL_PARAMETERIV:
 		if (kind < 0 && cpu->gpr[4] != GUESTPROXYTEXTURE2D && cpu->gpr[4] != GUESTPROXYTEXTURERECTANGLE && cpu->gpr[4] != GUESTPROXYTEXTURECUBEMAP)
 			return 0;
-		OsxGuestWrite32(cpu->gpr[7], OsxGuestTextureQueryValue(context, cpu->gpr[4], cpu->gpr[6]));
+		OsxGuestWrite32(cpu->gpr[7], OsxGuestTextureQueryValue(context, cpu->gpr[4], cpu->gpr[6], (int)cpu->gpr[5]));
 		return 1;
 	case GL_SUB_GET_TEX_LEVEL_PARAMETERFV:
 		if (kind < 0 && cpu->gpr[4] != GUESTPROXYTEXTURE2D && cpu->gpr[4] != GUESTPROXYTEXTURERECTANGLE && cpu->gpr[4] != GUESTPROXYTEXTURECUBEMAP)
 			return 0;
-		single = (float)OsxGuestTextureQueryValue(context, cpu->gpr[4], cpu->gpr[6]);
+		single = (float)OsxGuestTextureQueryValue(context, cpu->gpr[4], cpu->gpr[6], (int)cpu->gpr[5]);
 		memcpy(&bits, &single, sizeof(bits));
 		OsxGuestWrite32(cpu->gpr[7], bits);
 		return 1;

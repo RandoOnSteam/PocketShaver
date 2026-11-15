@@ -340,6 +340,22 @@ extern bool RaveGetLastCL8ColorTableRGBSnapshot(uint8_t outRGB[768]);
 #define GL_ACTIVE_TEXTURE_ARB             0x84E0
 #define GL_MAX_TEXTURE_UNITS_ARB          0x84E2
 
+#define GL_MAX_LIST_NESTING               0x0B31
+#define GL_POINT_SIZE_RANGE               0x0B12
+#define GL_LINE_WIDTH_RANGE               0x0B22
+#define GL_MAX_ELEMENTS_VERTICES          0x80E8
+#define GL_MAX_ELEMENTS_INDICES           0x80E9
+#define GL_ALIASED_POINT_SIZE_RANGE       0x846D
+#define GL_ALIASED_LINE_WIDTH_RANGE       0x846E
+#define GL_NUM_COMPRESSED_TEXTURE_FORMATS 0x86A2
+#define GL_COMPRESSED_TEXTURE_FORMATS     0x86A3
+#define GLLISTNESTINGLIMIT                64
+#define GLELEMENTSLIMIT                   65536
+#define GLPOINTSIZEMAXIMUM                64.0f
+#define GLLINEWIDTHMAXIMUM                10.0f
+#define GLCOMPRESSEDFORMATS               4
+#define GLCOMPRESSEDFIRST                 0x83F0u
+
 // Vertex array
 #define GL_VERTEX_ARRAY                   0x8074
 #define GL_NORMAL_ARRAY                   0x8075
@@ -1720,6 +1736,17 @@ void NativeGLGetIntegerv(GLContext *ctx, uint32_t pname, uint32_t mac_ptr)
 		WriteMacInt32(mac_ptr, 64); break;
 	case GL_MAX_TEXTURE_UNITS_ARB:
 		WriteMacInt32(mac_ptr, 4); break;
+	case GL_MAX_LIST_NESTING:
+		WriteMacInt32(mac_ptr, GLLISTNESTINGLIMIT); break;
+	case GL_MAX_ELEMENTS_VERTICES:
+	case GL_MAX_ELEMENTS_INDICES:
+		WriteMacInt32(mac_ptr, GLELEMENTSLIMIT); break;
+	case GL_NUM_COMPRESSED_TEXTURE_FORMATS:
+		WriteMacInt32(mac_ptr, GLCOMPRESSEDFORMATS); break;
+	case GL_COMPRESSED_TEXTURE_FORMATS:
+		for (int i = 0; i < GLCOMPRESSEDFORMATS; i++)
+			WriteMacInt32(mac_ptr + i * 4, GLCOMPRESSEDFIRST + (uint32_t)i);
+		break;
 	case GL_VIEWPORT:
 		for (int i = 0; i < 4; i++)
 			WriteMacInt32(mac_ptr + i * 4, (uint32_t)ctx->viewport[i]);
@@ -1823,6 +1850,16 @@ void NativeGLGetFloatv(GLContext *ctx, uint32_t pname, uint32_t mac_ptr)
 		WriteMacFloat(mac_ptr, ctx->point_size); break;
 	case GL_LINE_WIDTH_QUERY:
 		WriteMacFloat(mac_ptr, ctx->line_width); break;
+	case GL_POINT_SIZE_RANGE:
+	case GL_ALIASED_POINT_SIZE_RANGE:
+		WriteMacFloat(mac_ptr, 1.0f);
+		WriteMacFloat(mac_ptr + 4, GLPOINTSIZEMAXIMUM);
+		break;
+	case GL_LINE_WIDTH_RANGE:
+	case GL_ALIASED_LINE_WIDTH_RANGE:
+		WriteMacFloat(mac_ptr, 1.0f);
+		WriteMacFloat(mac_ptr + 4, GLLINEWIDTHMAXIMUM);
+		break;
 	case GL_FOG_COLOR:
 		for (int i = 0; i < 4; i++) WriteMacFloat(mac_ptr + i * 4, ctx->fog_color[i]);
 		break;
@@ -4862,33 +4899,36 @@ void NativeGLGetTexImage(GLContext *ctx, uint32_t target, int32_t level, uint32_
 		for (int i = 0; i < bytes; i++) WriteMacInt8(p + i, 0);
 	}
 }
-void NativeGLGetTexLevelParameterfv(GLContext *ctx, uint32_t target, int32_t level, uint32_t pname, uint32_t p)
+static int32_t GLLevelParameter(GLContext *ctx, int32_t level, uint32_t pname)
 {
 	uint32_t tex = ctx->tex_units[ctx->active_texture].bound_texture_2d;
 	GLTextureObjectMap::iterator it = ctx->texture_objects.find(tex);
-	if (it == ctx->texture_objects.end()) { WriteMacFloat(p, 0.0f); return; }
-	GLTextureObject &obj = it->second;
+	int32_t width;
+	int32_t height;
+	if (it == ctx->texture_objects.end() || level < 0 || (level > 0 && !it->second.has_mipmaps))
+		return 0;
+	width = it->second.width >> level;
+	height = it->second.height >> level;
+	if (!width && !height)
+		return 0;
+	if (!width)
+		width = 1;
+	if (!height)
+		height = 1;
 	switch (pname) {
-	case GL_TEXTURE_WIDTH:           WriteMacFloat(p, (float)obj.width); break;
-	case GL_TEXTURE_HEIGHT:          WriteMacFloat(p, (float)obj.height); break;
-	case GL_TEXTURE_INTERNAL_FORMAT: WriteMacFloat(p, (float)GL_RGBA); break;
-	case GL_TEXTURE_BORDER:          WriteMacFloat(p, 0.0f); break;
-	default: WriteMacFloat(p, 0.0f); break;
+	case GL_TEXTURE_WIDTH:           return width;
+	case GL_TEXTURE_HEIGHT:          return height;
+	case GL_TEXTURE_INTERNAL_FORMAT: return GL_RGBA;
 	}
+	return 0;
+}
+void NativeGLGetTexLevelParameterfv(GLContext *ctx, uint32_t target, int32_t level, uint32_t pname, uint32_t p)
+{
+	WriteMacFloat(p, (float)GLLevelParameter(ctx, level, pname));
 }
 void NativeGLGetTexLevelParameteriv(GLContext *ctx, uint32_t target, int32_t level, uint32_t pname, uint32_t p)
 {
-	uint32_t tex = ctx->tex_units[ctx->active_texture].bound_texture_2d;
-	GLTextureObjectMap::iterator it = ctx->texture_objects.find(tex);
-	if (it == ctx->texture_objects.end()) { WriteMacInt32(p, 0); return; }
-	GLTextureObject &obj = it->second;
-	switch (pname) {
-	case GL_TEXTURE_WIDTH:           WriteMacInt32(p, obj.width); break;
-	case GL_TEXTURE_HEIGHT:          WriteMacInt32(p, obj.height); break;
-	case GL_TEXTURE_INTERNAL_FORMAT: WriteMacInt32(p, GL_RGBA); break;
-	case GL_TEXTURE_BORDER:          WriteMacInt32(p, 0); break;
-	default: WriteMacInt32(p, 0); break;
-	}
+	WriteMacInt32(p, (uint32_t)GLLevelParameter(ctx, level, pname));
 }
 
 void NativeGLGetTexParameterfv(GLContext *ctx, uint32_t target, uint32_t pname, uint32_t mac_ptr)
