@@ -1086,21 +1086,16 @@ static bool ix86_skip_instruction(SIGSEGV_REGISTER_TYPE * regs,
 		   eip, eip[0], eip[1], eip[2], eip[3]);
 #endif
 
-	// Operand size prefix
-	if (*eip == 0x66) {
-		eip++;
-		len++;
-		transfer_size = SIZE_WORD;
-	}
-
+	while (*eip == 0x66 // Operand size prefix
 #if defined(__x86_64__) || defined(_M_X64)
-	// Address size override
-	if (*eip == 0x67) {
-		// 32-bit address
+		|| *eip == 0x67 // Address size override
+#endif
+	) { // 0x66/0x67 can be in any order
+		if (*eip == 0x66)
+			transfer_size = SIZE_WORD;
 		eip++;
 		len++;
 	}
-#endif
 
 	// REX prefix
 #if defined(__x86_64__) || defined(_M_X64)
@@ -1222,6 +1217,8 @@ static bool ix86_skip_instruction(SIGSEGV_REGISTER_TYPE * regs,
 		len += 1 + op_len + ix86_step_over_modrm(eip + op_len);
 		break;
 	}
+	if (len > 15)
+		return false;
 	if (target_size == SIZE_UNKNOWN)
 		target_size = transfer_size;
 
