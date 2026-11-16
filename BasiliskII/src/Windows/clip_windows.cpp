@@ -253,13 +253,25 @@ static void do_getscrap(void **handle, uint32 type, int32 offset)
 			if (length) {
 				int32 out_length = 0;
 
-				// Allocate space for new scrap in MacOS side
+				// PutScrap(length, type, text) stub, arguments in d3/d4/a2,
+				// allocated together with the text in guest memory
+				static const uint8 putscrap_proc[] = {
+					0x59, 0x8f,		// subq.l	#4,sp
+					0xa9, 0xfc,		// ZeroScrap()
+					0x2f, 0x03,		// move.l	d3,-(sp)
+					0x2f, 0x04,		// move.l	d4,-(sp)
+					0x2f, 0x0a,		// move.l	a2,-(sp)
+					0xa9, 0xfe,		// PutScrap()
+					0x58, 0x8f,		// addq.l	#4,sp
+					uint8(M68K_RTS >> 8), uint8(M68K_RTS)
+				};
 				M68kRegisters r;
-				r.d[0] = length;
+				r.d[0] = sizeof(putscrap_proc) + length;
 				Execute68kTrap(0xa71e, &r);	// NewPtrSysClear()
-				uint32 scrap_area = r.a[0];
+				uint32 proc_area = r.a[0];
 
-				if (scrap_area) {
+				if (proc_area) {
+					uint32 scrap_area = proc_area + sizeof(putscrap_proc);
 					switch (type) {
 					case FOURCC('T','E','X','T'):
 						D(bug(" clipping TEXT\n"));
@@ -283,42 +295,17 @@ static void do_getscrap(void **handle, uint32 type, int32 offset)
 						break;
 					}
 
-					// Add new data to clipboard via a tiny 68k trampoline.
-					// Under SheepShaver DIRECT_ADDRESSING + NATMEM_OFFSET,
-					// Host2MacAddr() only works for guest-mapped RAM - a host
-					// static array is outside that range and WriteMacInt32
-					// then crashes (vm_do_write_memory_4 AV on boot/scrap).
-					static const uint8 putscrap_proc_template[] = {
-						0x59, 0x8f,					// subq.l	#4,sp
-						0xa9, 0xfc,					// ZeroScrap()
-						0x2f, 0x3c, 0, 0, 0, 0,		// move.l	#length,-(sp)
-						0x2f, 0x3c, 0, 0, 0, 0,		// move.l	#type,-(sp)
-						0x2f, 0x3c, 0, 0, 0, 0,		// move.l	#outbuf,-(sp)
-						0xa9, 0xfe,					// PutScrap()
-						0x58, 0x8f,					// addq.l	#4,sp
-						uint8(M68K_RTS >> 8), uint8(M68K_RTS)
-					};
-#if defined(SHEEPSHAVER)
-					static uint32 proc_area = 0;
-					if (proc_area == 0)
-						proc_area = SheepProc(putscrap_proc_template,
-						                      sizeof(putscrap_proc_template));
-#else
-					static uint8 proc[sizeof(putscrap_proc_template)];
-					memcpy(proc, putscrap_proc_template, sizeof(proc));
-					uint32 proc_area = Host2MacAddr(proc);
+					Host2Mac_memcpy(proc_area, putscrap_proc, sizeof(putscrap_proc));
+#if !defined(SHEEPSHAVER)
+					FlushCodeCache(Mac2HostAddr(proc_area), sizeof(putscrap_proc));
 #endif
-					if (proc_area != 0) {
-						WriteMacInt32(proc_area +  6, out_length);
-						WriteMacInt32(proc_area + 12, type);
-						WriteMacInt32(proc_area + 18, scrap_area);
-						we_put_this_data = true;
-						Execute68k(proc_area, &r);
-					}
-
-					// We are done with scratch memory
-					r.a[0] = scrap_area;
-					Execute68kTrap(0xa01f, &r);		// DisposePtr
+					r.d[3] = out_length;
+					r.d[4] = type;
+					r.a[2] = scrap_area;
+					we_put_this_data = true;
+					Execute68k(proc_area, &r);
+					r.a[0] = proc_area;
+					Execute68kTrap(0xa01f, &r);	// DisposePtr
 				}
 			}
 			GlobalUnlock(hData);

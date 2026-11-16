@@ -25,9 +25,6 @@
 #include "cpu_emulation.h"
 #include "main.h"
 #include "emul_op.h"
-#ifdef SHEEPSHAVER
-#include "thunks.h"
-#endif
 #include "sflroman.h"
 #include "gui.h"
 #include "sflui.h"
@@ -41,7 +38,6 @@ typedef struct SFLCLIP
 	size_t knownlength;
 	char *posted;
 	size_t postedlength;
-	uint32 proc;
 	bool weputthis;
 } SFLCLIP;
 
@@ -67,29 +63,19 @@ static bool SflClipMatches(const char *slot, size_t slotlength, const char *text
 	return memcmp(slot, text, length) == 0;
 }
 
-static const uint8 *SflClipCode(size_t *length)
-{
-	static const uint8 putscrap[] = {
-		0x59, 0x8f,
-		0xa9, 0xfc,
-		0x2f, 0x3c, 0, 0, 0, 0,
-		0x2f, 0x3c, 0, 0, 0, 0,
-		0x2f, 0x3c, 0, 0, 0, 0,
-		0xa9, 0xfe,
-		0x58, 0x8f,
-		uint8(M68K_RTS >> 8), uint8(M68K_RTS)
-	};
-	*length = sizeof(putscrap);
-	return putscrap;
-}
+static const uint8 SflClipProc[] = {
+	0x59, 0x8f,
+	0xa9, 0xfc,
+	0x2f, 0x03,
+	0x2f, 0x04,
+	0x2f, 0x0a,
+	0xa9, 0xfe,
+	0x58, 0x8f,
+	uint8(M68K_RTS >> 8), uint8(M68K_RTS)
+};
 
 void ClipInit(void)
 {
-#ifdef SHEEPSHAVER
-	size_t length;
-	const uint8 *code = SflClipCode(&length);
-	SflClip.proc = SheepProc(code, length);
-#endif
 	SflClip.weputthis = false;
 }
 
@@ -152,6 +138,7 @@ void GetScrap(void **handle, uint32 type, int32 offset)
 	size_t length;
 	size_t converted;
 	uint32 scrap;
+	uint32 procedure;
 	M68kRegisters r;
 	if (!PrefsFindBool("clipsharing"))
 		return;
@@ -162,33 +149,22 @@ void GetScrap(void **handle, uint32 type, int32 offset)
 	if (length != 0 && !SflClipMatches(SflClip.known, SflClip.knownlength, text, length)) {
 		SflClipRemember(&SflClip.known, &SflClip.knownlength, text, length);
 		if (PrefsFindBool("notifyclip")) SflUiNotify("Clipboard shared with guest");
-		r.d[0] = (uint32)length;
+		r.d[0] = (uint32)(sizeof(SflClipProc) + length);
 		Execute68kTrap(0xa71e, &r);
-		scrap = r.a[0];
-		if (scrap != 0) {
+		procedure = r.a[0];
+		if (procedure != 0) {
+			scrap = procedure + sizeof(SflClipProc);
 			converted = SflUtf8ToRoman(text, length, Mac2HostAddr(scrap), length, true);
-			uint32 procedure = SflClip.proc;
+			Host2Mac_memcpy(procedure, SflClipProc, sizeof(SflClipProc));
 #ifndef SHEEPSHAVER
-			size_t codelength;
-			const uint8 *code = SflClipCode(&codelength);
-			r.d[0] = (uint32)codelength;
-			Execute68kTrap(0xa71e, &r);
-			procedure = r.a[0];
-			if (procedure)
-				Host2Mac_memcpy(procedure, code, codelength);
+			FlushCodeCache(Mac2HostAddr(procedure), sizeof(SflClipProc));
 #endif
-			if (procedure) {
-				WriteMacInt32(procedure + 6, (uint32)converted);
-				WriteMacInt32(procedure + 12, type);
-				WriteMacInt32(procedure + 18, scrap);
-				SflClip.weputthis = true;
-				Execute68k(procedure, &r);
-#ifndef SHEEPSHAVER
-				r.a[0] = procedure;
-				Execute68kTrap(0xa01f, &r);
-#endif
-			}
-			r.a[0] = scrap;
+			r.d[3] = (uint32)converted;
+			r.d[4] = type;
+			r.a[2] = scrap;
+			SflClip.weputthis = true;
+			Execute68k(procedure, &r);
+			r.a[0] = procedure;
 			Execute68kTrap(0xa01f, &r);
 		}
 	}
