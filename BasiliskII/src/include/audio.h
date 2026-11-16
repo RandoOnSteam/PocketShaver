@@ -23,7 +23,7 @@
 
 #include <vector>
 
-#if defined(SHEEPSHAVER) && (defined(USE_SFL) || defined(USE_SDL1) || defined(USE_SDL2) || defined(USE_SDL3))
+#if defined(USE_SFL) || (defined(USE_SDL_AUDIO) && USE_SDL_AUDIO)
 #define MACEMU_USEVIASOUNDBASE
 #endif
 
@@ -91,6 +91,13 @@ extern void AudioCaptureClose(void *capture);
 #define AUDIO_SOUNDBASE_VIA 0x1d4
 #define AUDIO_SOUNDBASE_PORTA 0x1e00
 #define AUDIO_SOUNDBASE_MAINPAGE 0x08
+#define AUDIO_SOUNDBASE_VIAOFFSET 0x400
+#define AUDIO_SOUNDBASE_VIABYTES 0x2000
+#ifdef SHEEPSHAVER
+#define AUDIO_SOUNDBASE_RAMBASE RAMBase
+#else
+#define AUDIO_SOUNDBASE_RAMBASE RAMBaseMac
+#endif
 #endif
 
 // Current audio status

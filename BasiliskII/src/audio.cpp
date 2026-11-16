@@ -81,6 +81,10 @@ static uint32 AudioSoundBasePort(void)
 {
 	uint32 base;
 	base = ReadMacInt32(AUDIO_SOUNDBASE_VIA);
+	if (AudioStatus.soundbuffer && RAMSize >= AUDIO_SOUNDBASE_VIABYTES
+			&& base == AudioStatus.soundbuffer - AUDIO_SOUNDBASE_ALTERNATE + AUDIO_SOUNDBASE_VIAOFFSET
+			&& base - AUDIO_SOUNDBASE_RAMBASE <= RAMSize - AUDIO_SOUNDBASE_VIABYTES)
+		return base + AUDIO_SOUNDBASE_PORTA;
 	if (base < MACIO_VIA_BASE || base > MACIO_VIA_BASE + MACIO_VIA_SIZE - AUDIO_SOUNDBASE_PORTA - 1)
 		return 0;
 	return base + AUDIO_SOUNDBASE_PORTA;
@@ -101,6 +105,12 @@ void AudioSoundBaseInstall(void)
 	memset(Mac2HostAddr(AudioStatus.soundbuffer), 0x80, AUDIO_SOUNDBASE_BYTES);
 	WriteMacInt32(0x266, AudioStatus.soundbuffer);
 	port = AudioSoundBasePort();
+	if (!port) {
+		port = r.a[0] + AUDIO_SOUNDBASE_VIAOFFSET;
+		memset(Mac2HostAddr(port), 0, AUDIO_SOUNDBASE_VIABYTES);
+		WriteMacInt32(AUDIO_SOUNDBASE_VIA, port);
+		port += AUDIO_SOUNDBASE_PORTA;
+	}
 	if (port)
 		WriteMacInt8(port, ReadMacInt8(port) | AUDIO_SOUNDBASE_MAINPAGE);
 }
@@ -115,7 +125,7 @@ void AudioSoundBaseTick(void)
 	uint32 audible;
 	uint32 port;
 	base = ReadMacInt32(0x266);
-	if (base - RAMBase > RAMSize - AUDIO_SOUNDBASE_BYTES) {
+	if (base - AUDIO_SOUNDBASE_RAMBASE > RAMSize - AUDIO_SOUNDBASE_BYTES) {
 		if (AudioStatus.soundbuffer == 0)
 			return;
 		base = AudioStatus.soundbuffer;
@@ -123,7 +133,7 @@ void AudioSoundBaseTick(void)
 	}
 	port = AudioSoundBasePort();
 	if (port && !(ReadMacInt8(port) & AUDIO_SOUNDBASE_MAINPAGE)) {
-		if (base - RAMBase < AUDIO_SOUNDBASE_ALTERNATE)
+		if (base - AUDIO_SOUNDBASE_RAMBASE < AUDIO_SOUNDBASE_ALTERNATE)
 			return;
 		base -= AUDIO_SOUNDBASE_ALTERNATE;
 	}
