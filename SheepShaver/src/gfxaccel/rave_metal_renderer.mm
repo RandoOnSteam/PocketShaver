@@ -3525,6 +3525,7 @@ int32 NativeRenderEnd(uint32 drawContextAddr, uint32 modifiedRectAddr)
 		MetalCompositorSync3DFramePacingForEngine(kGfxFramePacingEngineRAVE);
 		return kQANoErr;
 	}
+	ms->atiBackBufferDirty = false;
 
 	// Emit the completed RAVE screen rectangle through
 	// MetalCompositorSubmitFrame. RAVE uses alpha internally while drawing
@@ -4755,7 +4756,9 @@ int32_t NativeATIGetDrawBuffer(uint32_t drawContextAddr, uint32_t deviceStructAd
 	// Present: everything the guest drew since the previous lock is now a
 	// completed frame — copy it to the visible framebuffer in one pass.
 	if (ms->atiBackBufferDirty) {
+		video_screen_publish_begin(0, 0, (int)mode.viXsize, (int)mode.viYsize);
 		memcpy(Mac2HostAddr(screen_base), ms->atiBackBufferHost, backSize);
+		video_screen_publish_end();
 	}
 
 	// Transfer a newly rendered 3D frame into the back buffer, converting
@@ -4807,6 +4810,11 @@ int32_t NativeATIGetDrawBuffer(uint32_t drawContextAddr, uint32_t deviceStructAd
 
 		if (wasActive) RestartRenderPassWithLoad(priv);
 		ms->cpuCompositeCopiedGen = ms->frameGeneration;
+		if (!ms->atiBackBufferDirty) {
+			video_screen_publish_begin(0, 0, (int)mode.viXsize, (int)mode.viYsize);
+			memcpy(Mac2HostAddr(screen_base), ms->atiBackBufferHost, backSize);
+			video_screen_publish_end();
+		}
 	}
 
 	// The framebuffer now owns presentation; stop compositing the (stale)

@@ -837,7 +837,9 @@ static void AdoptSDLWindowOnMain(void *)
 static Uint32 SDLGfxAccelWindowFlags(void)
 {
 #if defined(ENABLE_GFXACCEL) && defined(SHEEPSHAVER)
-#if !defined(GFXACCEL_USE_SDLGPU)
+#if defined(GFXACCEL_USE_METAL)
+	return SDL_WINDOW_METAL;
+#elif !defined(GFXACCEL_USE_SDLGPU)
 	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
 	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 1);
 	SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
@@ -845,8 +847,10 @@ static Uint32 SDLGfxAccelWindowFlags(void)
 	SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8);
 	SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK,
 		                SDL_GL_CONTEXT_PROFILE_COMPATIBILITY);
-#endif
 	return SDL_WINDOW_OPENGL;
+#else
+	return SDL_WINDOW_OPENGL;
+#endif
 #else
 	return 0;
 #endif
@@ -1329,8 +1333,9 @@ void driver_base::init()
 	}
 #endif
 	if (!use_vosf) {
-		// Allocate memory for frame buffer
-		the_buffer_size = (aligned_height + 2) * pitch;
+		// Allocate memory for frame buffer (page-aligned for Metal NoCopy buffers)
+		size_t fb_page = 16384;
+		the_buffer_size = (uint32)(((size_t)(aligned_height + 2) * (size_t)pitch + fb_page - 1) & ~(fb_page - 1));
 		the_buffer_copy = (uint8 *)calloc(1, the_buffer_size);
 		the_buffer = (uint8 *)vm_acquire_framebuffer(the_buffer_size);
 		memset(the_buffer, 0, the_buffer_size);
