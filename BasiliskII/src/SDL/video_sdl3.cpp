@@ -881,8 +881,27 @@ static SDL_Surface *init_sdl_video(int width, int height, int depth, Uint32 flag
 #if !TARGET_OS_IPHONE
 			if ((old_window_flags & window_flags_to_monitor) != (window_flags & window_flags_to_monitor))
 				SDL_SetWindowFullscreen(sdl_window, (window_flags & SDL_WINDOW_FULLSCREEN) != 0);
-			if (!(window_flags & SDL_WINDOW_FULLSCREEN))
-				SDL_SetWindowSize(sdl_window, (int)(m * window_width), (int)(m * window_height));
+			if (!(window_flags & SDL_WINDOW_FULLSCREEN)) {
+				int new_w = (int)(m * window_width);
+				int new_h = (int)(m * window_height);
+				int old_x = 0, old_y = 0;
+				bool have_pos = SDL_GetWindowPosition(sdl_window, &old_x, &old_y);
+				SDL_SetWindowSize(sdl_window, new_w, new_h);
+				if (have_pos && !(old_window_flags & SDL_WINDOW_FULLSCREEN)) {
+					int new_x = old_x + (old_window_width - new_w) / 2;
+					int new_y = old_y + (old_window_height - new_h) / 2;
+					SDL_Rect usable;
+					SDL_DisplayID disp = SDL_GetDisplayForWindow(sdl_window);
+					if (disp && SDL_GetDisplayUsableBounds(disp, &usable)) {
+						int top_border = 0;
+						SDL_GetWindowBordersSize(sdl_window, &top_border, NULL, NULL, NULL);
+						int min_y = usable.y + top_border;
+						if (new_y < min_y)
+							new_y = min_y;
+					}
+					SDL_SetWindowPosition(sdl_window, new_x, new_y);
+				}
+			}
 			SDL_SyncWindow(sdl_window);
 #endif
 		}
