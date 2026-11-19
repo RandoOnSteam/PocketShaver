@@ -1218,25 +1218,45 @@ static void apply_fog(RaveDrawPrivate *priv)
 	 * own fog tag block instead of the standard RAVE fog tags. Honor it the
 	 * same way the Metal renderer's RaveEffectiveFogMode does; otherwise the
 	 * ATI fog mode is silently ignored and fog never engages. */
-	int fogMode = (int)priv->state[17].i;
-	if (fogMode <= 0 && priv->ati_fog_active) {
-		/* ATI-ext fog: use linear fog driven by the ATI fog tags, which the
-		 * draw-context layer mirrors into the standard fog state on activation.
-		 * If the standard state is still zero, fall back to a safe linear fog so
-		 * the extension's "fog on" intent is honored rather than dropped. */
-		fogMode = 2;
+	int fogMode = 0;
+	float fstart = 0.f;
+	float fend = 0.f;
+	float fdens = 0.f;
+	GLfloat col[4] = {0.f, 0.f, 0.f, 0.f};
+	if (priv->ati_fog_active) {
+		switch ((int)priv->ati_state[2].i) {
+			case 0: fogMode = 0; break; /* kQATIFogDisable -> None */
+			case 1: fogMode = 3; break; /* kQATIFogExp */
+			case 2: fogMode = 4; break; /* kQATIFogExp2 */
+			case 3: fogMode = 1; break; /* kQATIFogAlpha */
+			case 4: fogMode = 2; break; /* kQATIFogLinear */
+			default: fogMode = 0; break;
+		}
+		col[0] = priv->ati_state[3].f;
+		col[1] = priv->ati_state[4].f;
+		col[2] = priv->ati_state[5].f;
+		col[3] = priv->ati_state[6].f;
+		fdens  = priv->ati_state[7].f;
+		fstart = priv->ati_state[8].f;
+		fend   = priv->ati_state[9].f;
+	} else {
+		fogMode = (int)priv->state[17].i;
+		col[0] = priv->state[19].f;
+		col[1] = priv->state[20].f;
+		col[2] = priv->state[21].f;
+		col[3] = priv->state[18].f;
+		fstart = priv->state[22].f;
+		fend   = priv->state[23].f;
+		fdens  = priv->state[24].f;
+		if (fogMode == 4 && fstart >= 0.f && fstart < fend && fdens > fend) {
+			/* QD3D linear fog mislabeled as Exp2 - treat as linear */
+			fogMode = 2;
+		}
 	}
 	if (fogMode <= 0 || fogMode > 4) {
 		s_current_fog_mode = 0;
 		glDisable(GL_FOG);
 		return;
-	}
-	float fstart = priv->state[22].f;
-	float fend = priv->state[23].f;
-	float fdens = priv->state[24].f;
-	if (fogMode == 4 && fstart >= 0.f && fstart < fend && fdens > fend) {
-		/* QD3D linear fog mislabeled as Exp2 - treat as linear */
-		fogMode = 2;
 	}
 	s_current_fog_mode = fogMode;
 	s_current_fog_max_depth = priv->state[25].f != 0.f ? priv->state[25].f : 1.f;
@@ -1251,9 +1271,6 @@ static void apply_fog(RaveDrawPrivate *priv)
 	else
 		glMode = GL_LINEAR; /* 1, 2 */
 	glFogi(GL_FOG_MODE, (GLint)glMode);
-	GLfloat col[4] = {
-		priv->state[19].f, priv->state[20].f, priv->state[21].f, priv->state[18].f
-	};
 	glFogfv(GL_FOG_COLOR, col);
 	glFogf(GL_FOG_START, fogMode == 1 ? 0.f : fstart);
 	glFogf(GL_FOG_END, fogMode == 1 ? 1.f : (fend > 0.f ? fend : 1.f));
@@ -1821,6 +1838,7 @@ int32_t NativeRenderEnd(uint32_t drawContextAddr, uint32_t modifiedRectAddr)
 		MetalCompositorFlushDeferredPresent();
 		return kQANoErr;
 	}
+	ms->ati_back_buffer_dirty = false;
 
 	CompositeLayer layer = {};
 	layer.source = (void *)(uintptr_t)s_overlay_tex;
@@ -2001,7 +2019,9 @@ int32_t NativeATIGetDrawBuffer(uint32_t drawContextAddr, uint32_t deviceStructAd
 	/* Present: everything the guest drew since the previous lock is now a
 	 * completed frame - copy it to the visible framebuffer in one pass. */
 	if (ms->ati_back_buffer_dirty) {
+		video_screen_publish_begin(0, 0, (int)screen.width, (int)screen.height);
 		memcpy(screen.host_base, ms->ati_back_buffer_host, backSize);
+		video_screen_publish_end();
 	}
 
 	/* Transfer a newly rendered 3D frame into the back buffer, converting

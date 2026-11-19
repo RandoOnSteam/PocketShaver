@@ -569,7 +569,8 @@ int32 NativeSetFloat(uint32 drawContextAddr, uint32 tag, uint32 valueBits)
 			}
 #endif
 			if (oldBits != valueBits &&
-				ati_idx == kRaveATIDepthWriteEnableIndex) {
+				(ati_idx == kRaveATIDepthWriteEnableIndex ||
+				 (ati_idx >= 2 && ati_idx <= 9))) {
 				ctx->dirty_flags |= 1;
 			}
 			// Activate ATI fog override when fog-related tags are set (indices 2-9)
@@ -642,7 +643,8 @@ int32 NativeSetInt(uint32 drawContextAddr, uint32 tag, uint32 value)
 			}
 #endif
 			if (oldValue != value &&
-				ati_idx == kRaveATIDepthWriteEnableIndex) {
+				(ati_idx == kRaveATIDepthWriteEnableIndex ||
+				 (ati_idx >= 2 && ati_idx <= 9))) {
 				ctx->dirty_flags |= 1;
 			}
 			// Activate ATI fog override when fog-related tags are set (indices 2-9)

@@ -4987,6 +4987,8 @@ extern "C" void SDLGPUglReadPixels(GLint x, GLint y, GLsizei width, GLsizei heig
 {
 	if (!pixels || width <= 0 || height <= 0)
 		return;
+	if (!SDLGPUFlushPendingDraws())
+		return;
 	SDL_GPUTexture *color = NULL;
 	SDL_GPUTexture *depth = NULL;
 	int target_width = 0;

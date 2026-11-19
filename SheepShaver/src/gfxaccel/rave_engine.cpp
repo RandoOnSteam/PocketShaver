@@ -1033,6 +1033,7 @@ bool ConvertPixels(uint32_t pixelType, uint32 srcAddr, uint8_t *dst,
 	bool converted = true;
 	switch (pixelType) {
 		case kQAPixel_ARGB32:
+		case 1003: // kQATIPixel_ARGB8
 			ConvertARGB32(srcAddr, dst, width, height, rowBytes);
 			break;
 		case kQAPixel_RGB32:
@@ -1050,6 +1051,8 @@ bool ConvertPixels(uint32_t pixelType, uint32 srcAddr, uint8_t *dst,
 			ConvertRGB8_332(srcAddr, dst, width, height, rowBytes);
 			break;
 		case kQAPixel_ARGB16_4444:
+		case 1000: // kQATIPixel_RGB4444
+		case 1001: // kQATIPixel_ARGB4444
 			ConvertARGB16_4444(srcAddr, dst, width, height, rowBytes);
 			break;
 		case kQAPixel_I8:
@@ -1196,7 +1199,7 @@ static void RaveCreateTextureFromImages(uint32_t flags, uint32_t pixelType,
 		entry->metal_texture = NULL;
 		entry->pixels_copied = false;
 
-		uint8_t *expanded = new uint8_t[w * h * 4];
+		uint8_t *expanded = new uint8_t[w * h * 4]();
 		const bool converted = ConvertPixels(pixelType, pixmap, expanded, w, h, rowBytes);
 		const bool whitenedAlphaMask =
 			(pixelType == kQAPixel_ARGB32) && RaveBGRAWhitenAlphaOnlyMask(expanded, w * h);
@@ -1304,7 +1307,7 @@ void RaveRealizeDeferredTexture(RaveResourceEntry *entry)
 		pixmap = entry->cpu_pixel_mac_addr;
 	}
 
-	uint8_t *expanded = new uint8_t[w * h * 4];
+	uint8_t *expanded = new uint8_t[w * h * 4]();
 	ConvertPixels(pixelType, pixmap, expanded, w, h, rowBytes);
 	const bool whitenedAlphaMask =
 		(pixelType == kQAPixel_ARGB32) && RaveBGRAWhitenAlphaOnlyMask(expanded, w * h);
@@ -1400,7 +1403,7 @@ static void RaveCreateBitmapFromImage(uint32_t pixelType, uint32 imageAddr,
 		RAVE_LOG("BitmapNew indexed (pixelType=%d) %dx%d rowBytes=%d pixmap=0x%08x",
 			   pixelType, w, h, rowBytes, pixmap);
 	} else {
-		uint8_t *expanded = new uint8_t[w * h * 4];
+		uint8_t *expanded = new uint8_t[w * h * 4]();
 		ConvertPixels(pixelType, pixmap, expanded, w, h, rowBytes);
 		entry->metal_texture = RaveCreateMetalTexture(w, h, 1, expanded, w * 4);
 		delete[] expanded;
@@ -1495,7 +1498,7 @@ static void RaveReExpandWithCLUT(RaveResourceEntry *texEntry, RaveResourceEntry 
 	}
 
 	// Expand level 0
-	uint8_t *expanded = new uint8_t[w * h * 4];
+	uint8_t *expanded = new uint8_t[w * h * 4]();
 
 	// Build a temporary "Mac memory" source address - but we stored orignal_pixels in native heap.
 	// We need to expand from original_pixels directly, not via ReadMacInt*.
@@ -1747,7 +1750,7 @@ int32_t NativeEngineAccessTextureEnd(uint32_t textureAddr, uint32_t dirtyRectAdd
 	// Re-convert from original Mac format to BGRA8Unorm and re-upload
 	uint32_t w = entry->width;
 	uint32_t h = entry->height;
-	uint8_t *expanded = new uint8_t[w * h * 4];
+	uint8_t *expanded = new uint8_t[w * h * 4]();
 
 	bool isIndexed = (entry->pixel_type == kQAPixel_CL8 || entry->pixel_type == kQAPixel_CL4 || entry->pixel_type == kQAPixel_ACL16_88);
 
@@ -1855,7 +1858,7 @@ int32_t NativeEngineAccessBitmapEnd(uint32_t bitmapAddr, uint32_t dirtyRectAddr)
 
 	uint32_t w = entry->width;
 	uint32_t h = entry->height;
-	uint8_t *expanded = new uint8_t[w * h * 4];
+	uint8_t *expanded = new uint8_t[w * h * 4]();
 
 	bool isIndexed = (entry->pixel_type == kQAPixel_CL8 || entry->pixel_type == kQAPixel_CL4 || entry->pixel_type == kQAPixel_ACL16_88);
 
