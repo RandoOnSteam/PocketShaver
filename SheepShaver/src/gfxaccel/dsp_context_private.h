@@ -1,7 +1,5 @@
 /*
- *  dsp_context_private.h - Full DSpContextPrivate struct definition,
- *                           shared between dsp_draw_context.mm and
- *                           dsp_metal_renderer.mm.
+ *  dsp_context_private.h - Full DSpContextPrivate struct definition.
  *
  *  (C) 2026 Sierra Burkhart (sierra760)
  *
@@ -10,25 +8,8 @@
  *  the Free Software Foundation; either version 2 of the License, or
  *  (at your option) any later version.
  *
- *  Strictly private to the gfxaccel/ tree - NOT exported via include/ -
- *  only dsp_draw_context.mm and dsp_metal_renderer.mm include it. Public
- *  consumers (dsp_dispatch.cpp, dsp_engine.cpp, test code) use the opaque
- *  `struct DSpContextPrivate;` forward declaration in dsp_engine.h /
- *  dsp_draw_context.h.
- *
- *  This struct previously lived inline in dsp_draw_context.mm; it is
- *  extracted here so dsp_metal_renderer.mm can touch the Metal resource
- *  fields (back_buffer / back_texture) without either file duplicating the
- *  definition (brittle) or exposing ObjC types
- *  in a public header (breaks .cpp callers like dsp_dispatch.cpp).
- *
- *  Field naming note:
- *    `persisted_palette_generation` / `persisted_gamma_generation` use the
- *    longer suffixes so the DMC write-site inventory grep-gate in
- *    DMCWriteSiteInventoryTests does not match - only the DMC controller
- *    module may declare the bare-word generation-counter identifiers.
- *    DSp stores local snapshots of the DMC values here for background/
- *    foreground persistence.
+ *  Private to gfxaccel/ because it holds ObjC Metal types; .cpp callers use
+ *  the opaque forward declaration in dsp_engine.h / dsp_draw_context.h.
  */
 
 #ifndef DSP_CONTEXT_PRIVATE_H
@@ -39,12 +20,10 @@
 #include <stdint.h>
 #include "atomic.h"
 
-#include "dsp_engine.h"       /* DSpContextAttributes + DSpContextState enum */
+#include "dsp_engine.h"
 
-/* DSP_ENUMERATION_INDEX_NONE is defined in the public dsp_draw_context.h
- * header so callers outside the gfxaccel tree (e.g., test wrappers) can
- * use it without pulling in this private struct. See that header for the
- * sentinel's semantics. */
+/* All fields are emul-thread only. new DSpContextPrivate() value-initializes
+ * every non-ObjC field to zero. */
 struct DSpContextPrivate {
 	DSpContextAttributes  attr;
 	uint32_t              state;          /* DSpContextState enum value */
@@ -91,9 +70,8 @@ struct DSpContextPrivate {
 	void *              back_buffer;  /* host buffer or MTLBuffer */
 	void *              back_texture; /* GLuint or MTLTexture */
 
-	/* CGrafPort emission caching (GetBackBuffer stable-pointer contract).
-	 * First GetBackBuffer call allocates via SheepMem::Reserve
-	 * and caches the Mac address here; subsequent calls return the same. */
+	/* Guest CGrafPort addresses, cached so GetBackBuffer / GetFrontBuffer
+	 * return a stable pointer. */
 	uint32_t              cgrafptr_mac_addr;
 	uint32_t              front_cgrafptr_mac_addr;
 	uint32_t              front_pixmap_mac_addr;
@@ -104,6 +82,9 @@ struct DSpContextPrivate {
 	int16_t               dirty_left, dirty_top, dirty_right, dirty_bottom;
 	bool                  dirty_empty;
 	bool                  dirty_cold_start;
+	int32_t               underlay_restore_left, underlay_restore_top;
+	int32_t               underlay_restore_right, underlay_restore_bottom;
+	bool                  underlay_restore_pending;
 
 	/* Staging-region fallback. When Host2MacAddr cannot map the
 	 * MTLBuffer contents pointer back to a usable guest-RAM address (e.g.,
@@ -123,11 +104,9 @@ struct DSpContextPrivate {
 	 * kDSpInternalErr; no OOB write is ever attempted. */
 	uint32_t              staging_mac_addr;
 	uint32_t              staging_size;
-	/* True only for staging_mac_addr allocations that came from the Mac
-	 * system heap. Exposed pixel buffers are quarantined on release instead
-	 * of Mac_sysfree'd, because CFM/code allocations may otherwise reuse
-	 * old frame bytes as executable memory during launch transitions. Test
-	 * scratch and direct Host2MacAddr paths leave this false. */
+	/* True when staging came from the Mac system heap. Such buffers are
+	 * quarantined on release rather than freed, because CFM could reuse the
+	 * old frame bytes as executable memory during launch transitions. */
 	bool                  staging_owned_sysheap;
 
 	/* WindowPtr of the full-screen Window Manager backdrop owned while this
@@ -171,24 +150,9 @@ struct DSpContextPrivate {
 	 * not match this storage. */
 	uint8_t               gamma_lut_persisted[768];
 
-	/* Per-context fade machinery. The
-	 * DSpVBLGammaFadeCallback registered in DSpInit walks dsp_context_table
-	 * each VBL tick; for every context with fade_state.active != 0 it
-	 * computes the interpolated LUT and
-	 * pushes it via dmc_record_gamma_change_with_lut. FadeGammaIn/Out
-	 * and parametric FadeGamma initialize
-	 * start_lut + end_lut + duration_vbls + elapsed_vbls + active when a
-	 * fade is requested. SetGamma cancels an in-flight fade
-	 * by setting active = 0.
-	 *
-	 * Sized: 768 + 768 + 2 + 2 + 1 + 3 = 1544 bytes per context. Field
-	 * names (start_lut, end_lut, duration_vbls, elapsed_vbls, active)
-	 * deliberately use long-suffix conventions so the DMC-owned bare-word
-	 * identifiers (see testNoDirectDMCWritesInDSpFiles + the
-	 * sibling testPaletteGenAndGammaGenAreOnlyDeclaredInDMCHeader) do not
-	 * appear in this header even as comment text.
-	 * The 3-byte `reserved` array preserves uint16-alignment of the
-	 * trailing persisted{} struct (host-side ABI consistency). */
+	/* Gamma fade in progress. DSpVBLGammaFadeCallback interpolates and
+	 * pushes the LUT each VBL while active != 0. The FadeGamma calls start a
+	 * fade; SetGamma cancels one. */
 	struct DSpFadeState {
 		uint8_t           start_lut[768];
 		uint8_t           end_lut[768];
@@ -228,8 +192,7 @@ struct DSpContextPrivate {
 	 * zero-init contract for non-ObjC fields). */
 	uint8_t               paused_by_background; /* bg-induced pause flag */
 
-	/* Background/foreground persistence.
-	 * See naming note in file header. */
+	/* DMC values snapshotted for background/foreground persistence. */
 	struct {
 		DSpContextAttributes attr;
 		uint32_t             persisted_palette_generation;
@@ -299,9 +262,8 @@ struct DSpContextPrivate {
 	uint32_t              queued_child;
 };
 
-/* Back-buffer logical dimensions (fall back to display dims when the app did
- * not request an explicit back-buffer size). Hoisted from dsp_draw_context.mm
- * so dsp_alt_buffer.mm can size alt-buffer backings identically. */
+/* Back-buffer size, falling back to the display size when the app did not
+ * request one. */
 static inline uint32_t DSpContextBackBufferWidth(const DSpContextPrivate *ctx)
 {
 	return ctx->attr.backBufferWidth != 0
@@ -315,11 +277,6 @@ static inline uint32_t DSpContextBackBufferHeight(const DSpContextPrivate *ctx)
 		   ? ctx->attr.backBufferHeight
 		   : ctx->attr.displayHeight;
 }
-
-/* Reserve guest-RAM scratch (SheepMem). Definition stays in
- * dsp_draw_context.mm; declared here so dsp_alt_buffer.mm can reserve
- * CGrafPort scratch for alt-buffers. */
-uint32_t DSpReserveGuestScratch(uint32_t size);
 
 extern "C" uint32_t DSpReserveGuestPixelStaging(uint32_t size);
 extern "C" void DSpQuarantineGuestPixelStaging(uint32_t mac_addr,
@@ -338,5 +295,8 @@ bool DSpPollBusyProc(uint32_t ctxRef, uint32_t busyProcAddr,
 void DSpSyncSwapFramePacing(uint32_t ctxRef, uint32_t maxFrameRate);
 void DSpContextPrivateReleaseBackBufferVariables(void** texture, void** buffer);
 void DSpContextPrivateReleaseBackBuffer(DSpContextPrivate* ctx);
+
+uint32_t DSpReserveGuestScratch(uint32_t size);
+extern "C" void DSpSaveUnderlayRestoreRegion(struct DSpContextPrivate *ctx);
 
 #endif /* DSP_CONTEXT_PRIVATE_H */

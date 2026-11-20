@@ -7,6 +7,42 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		6D5B98AE38078EFD7BB18B31 /* nativejitarm64.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E713B4EAEFD3489B101BBCF /* nativejitarm64.cpp */; };
+		281025210FF22F3ABC7834D5 /* ppc-nativejit.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 137422B10E5364E93142CAC4 /* ppc-nativejit.cpp */; };
+		1B127FA2A144B2D03BB1526A /* chd.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0D778BBF476D0DFCD815FD35 /* chd.cpp */; };
+		A057D229A909825B65D5E355 /* imageio.cpp in Sources */ = {isa = PBXBuildFile; fileRef = A50A4CCAFC85D16708C5E252 /* imageio.cpp */; };
+		15AD7FC8886BB6C95812B2C3 /* pdfgen.c in Sources */ = {isa = PBXBuildFile; fileRef = AF5A79345ECEC6E4EA33409D /* pdfgen.c */; };
+		A590DE392ED48A6EF9CB71F3 /* pictpdf.c in Sources */ = {isa = PBXBuildFile; fileRef = FB9BDA8C7E2E10D1C9F3F04E /* pictpdf.c */; };
+		BC02190B1905EC4DA6D986E6 /* printing.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 7F83A5B57E450A615099A956 /* printing.cpp */; };
+		AD5BE71AAF2FCC367C493AEC /* qcow.cpp in Sources */ = {isa = PBXBuildFile; fileRef = C07DEADFAF8A2E4D875D3183 /* qcow.cpp */; };
+		030F566B3EB174127FA3E898 /* gfxaccelhost.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0DDEA81B8AB77650F46E2C35 /* gfxaccelhost.cpp */; };
+		3C53D6D6C40043EC7D2974D5 /* glide_dispatch.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 967E7F6768ABBE75414457A9 /* glide_dispatch.cpp */; };
+		9B8AD9B67A51AE7153100195 /* glide_engine.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 30843500962D068A366961A0 /* glide_engine.cpp */; };
+		F9BFECB74D9E901383F8AE1D /* glide_pef_register.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 8B5FCA90C21DD23648C08720 /* glide_pef_register.cpp */; };
+		3175A0E99EB6C7D4CA224BC4 /* glide_state.cpp in Sources */ = {isa = PBXBuildFile; fileRef = DE917840CF274A35A40A4143 /* glide_state.cpp */; };
+		AC2C14893E06084E7D9B7B00 /* macio_escc.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 357377107A28BA9CC1025501 /* macio_escc.cpp */; };
+		E55E336DE7FBF78F04B65D80 /* mmio.cpp in Sources */ = {isa = PBXBuildFile; fileRef = DEC85387A6218D3EA4CD4905 /* mmio.cpp */; };
+		DB5AF6FC571266A46ADA1424 /* osxhost_sdl.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 81AB807E995E2191282E0EAF /* osxhost_sdl.cpp */; };
+		74B6E8B82F9DE297058A6BA8 /* osxata.cpp in Sources */ = {isa = PBXBuildFile; fileRef = C081018D731651A2017719D2 /* osxata.cpp */; };
+		EDFB855D1E8A46559ED06137 /* osxboot.cpp in Sources */ = {isa = PBXBuildFile; fileRef = F1BFE873CC068C96E83D9815 /* osxboot.cpp */; };
+		2A4D00CEA6CF06F271607C5F /* osxbus.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 1D13B1FAC121F44D9CBDEA4F /* osxbus.cpp */; };
+		D1CA9BB8045987FFBF2F807D /* osxclip.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 11397947DA7FCD0F2BF59A5C /* osxclip.cpp */; };
+		8D94B93520B2BDF806745E93 /* osxcpu.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 3F292D13124536EA224C8041 /* osxcpu.cpp */; };
+		2450E1134BFB21656F66DD20 /* osxcpu970.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 11E985384176EB3D294EBB07 /* osxcpu970.cpp */; };
+		E0EF84EE1703B2D744CD8FFE /* osxcuda.cpp in Sources */ = {isa = PBXBuildFile; fileRef = A8103172C032D0EC52D1A91F /* osxcuda.cpp */; };
+		C7B49EED5CDD061CA41E0FD5 /* osxg5.cpp in Sources */ = {isa = PBXBuildFile; fileRef = AA79588ADB0DFF4ADF97A9AF /* osxg5.cpp */; };
+		290A90386B0E1C560B8B32FF /* osxglbridge.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 6E3A1413BE9C45EDC38C52D6 /* osxglbridge.cpp */; };
+		3F495473380AE124455A3566 /* osxjit.cpp in Sources */ = {isa = PBXBuildFile; fileRef = D3B433110A87836E4E6467A0 /* osxjit.cpp */; };
+		37B9CE06F405A7CAB9D3C3F5 /* osxmain.cpp in Sources */ = {isa = PBXBuildFile; fileRef = AE7574B9F1C27B94A2C7BF5A /* osxmain.cpp */; };
+		3377FB6BFC9822B7B354A05C /* osxpointer.cpp in Sources */ = {isa = PBXBuildFile; fileRef = D13B0F4E92A5F506891DA142 /* osxpointer.cpp */; };
+		E3515F6D82F88916DD6B612C /* osxsmp.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 4F3AA23A8B58C28AF22EB7AD /* osxsmp.cpp */; };
+		66E048473FB140843E14686E /* osxtest.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 8F998D9C866ACA84F9E2B1FB /* osxtest.cpp */; };
+		9C1F84EA59320F18A50CF108 /* pcibridge.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 369344E34CEC3899B3CC4739 /* pcibridge.cpp */; };
+		9817F8861C1C18AE572FB67E /* shears.cpp in Sources */ = {isa = PBXBuildFile; fileRef = F52ED426DCAB4491684887E6 /* shears.cpp */; };
+		56F95AC36E4FDDA678B02C3E /* soundinput.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 52161B8A58A74C7406168590 /* soundinput.cpp */; };
+		6BFB7B8E3C11E5F4158734F0 /* usbhid.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0061FFA27CA9BD69DE879FFB /* usbhid.cpp */; };
+		EA6CBC6AEB226A33660BAD0F /* usbuim.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 4F4847FCBD814B3318A83C2C /* usbuim.cpp */; };
+		5A27AAD24029BA9F34D0C8AC /* sbkernels.c in Sources */ = {isa = PBXBuildFile; fileRef = 2204D306B0EB1155FA8F7DE9 /* sbkernels.c */; };
 		08003F8C1E0624D100A3ADAB /* basic-dyngen-ops-x86_32.hpp in Headers */ = {isa = PBXBuildFile; fileRef = 08003F851E0624D100A3ADAB /* basic-dyngen-ops-x86_32.hpp */; };
 		08003F8E1E0624D100A3ADAB /* basic-dyngen-ops.hpp in Headers */ = {isa = PBXBuildFile; fileRef = 08003F871E0624D100A3ADAB /* basic-dyngen-ops.hpp */; };
 		08003F8F1E0624D100A3ADAB /* ppc-dyngen-ops-x86_32.hpp in Headers */ = {isa = PBXBuildFile; fileRef = 08003F881E0624D100A3ADAB /* ppc-dyngen-ops-x86_32.hpp */; };
@@ -495,6 +531,42 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		0E713B4EAEFD3489B101BBCF /* nativejitarm64.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = nativejitarm64.cpp; path = ../kpx_cpu/src/cpu/jit/arm64/nativejitarm64.cpp; sourceTree = SOURCE_ROOT; };
+		137422B10E5364E93142CAC4 /* ppc-nativejit.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ppc-nativejit.cpp; path = ../kpx_cpu/src/cpu/ppc/ppc-nativejit.cpp; sourceTree = SOURCE_ROOT; };
+		0D778BBF476D0DFCD815FD35 /* chd.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = chd.cpp; path = ../../../BasiliskII/src/chd.cpp; sourceTree = SOURCE_ROOT; };
+		A50A4CCAFC85D16708C5E252 /* imageio.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = imageio.cpp; path = ../../../BasiliskII/src/imageio.cpp; sourceTree = SOURCE_ROOT; };
+		AF5A79345ECEC6E4EA33409D /* pdfgen.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; name = pdfgen.c; path = ../../../BasiliskII/src/pdfgen.c; sourceTree = SOURCE_ROOT; };
+		FB9BDA8C7E2E10D1C9F3F04E /* pictpdf.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; name = pictpdf.c; path = ../../../BasiliskII/src/pictpdf.c; sourceTree = SOURCE_ROOT; };
+		7F83A5B57E450A615099A956 /* printing.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = printing.cpp; path = ../../../BasiliskII/src/printing.cpp; sourceTree = SOURCE_ROOT; };
+		C07DEADFAF8A2E4D875D3183 /* qcow.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = qcow.cpp; path = ../../../BasiliskII/src/qcow.cpp; sourceTree = SOURCE_ROOT; };
+		0DDEA81B8AB77650F46E2C35 /* gfxaccelhost.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = gfxaccelhost.cpp; path = ../gfxaccel/gfxaccelhost.cpp; sourceTree = SOURCE_ROOT; };
+		967E7F6768ABBE75414457A9 /* glide_dispatch.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = glide_dispatch.cpp; path = ../gfxaccel/glide_dispatch.cpp; sourceTree = SOURCE_ROOT; };
+		30843500962D068A366961A0 /* glide_engine.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = glide_engine.cpp; path = ../gfxaccel/glide_engine.cpp; sourceTree = SOURCE_ROOT; };
+		8B5FCA90C21DD23648C08720 /* glide_pef_register.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = glide_pef_register.cpp; path = ../gfxaccel/glide_pef_register.cpp; sourceTree = SOURCE_ROOT; };
+		DE917840CF274A35A40A4143 /* glide_state.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = glide_state.cpp; path = ../gfxaccel/glide_state.cpp; sourceTree = SOURCE_ROOT; };
+		357377107A28BA9CC1025501 /* macio_escc.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = macio_escc.cpp; path = ../macio_escc.cpp; sourceTree = SOURCE_ROOT; };
+		DEC85387A6218D3EA4CD4905 /* mmio.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = mmio.cpp; path = ../mmio.cpp; sourceTree = SOURCE_ROOT; };
+		81AB807E995E2191282E0EAF /* osxhost_sdl.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = osxhost_sdl.cpp; path = ../osxguest/SDL/osxhost_sdl.cpp; sourceTree = SOURCE_ROOT; };
+		C081018D731651A2017719D2 /* osxata.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = osxata.cpp; path = ../osxguest/osxata.cpp; sourceTree = SOURCE_ROOT; };
+		F1BFE873CC068C96E83D9815 /* osxboot.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = osxboot.cpp; path = ../osxguest/osxboot.cpp; sourceTree = SOURCE_ROOT; };
+		1D13B1FAC121F44D9CBDEA4F /* osxbus.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = osxbus.cpp; path = ../osxguest/osxbus.cpp; sourceTree = SOURCE_ROOT; };
+		11397947DA7FCD0F2BF59A5C /* osxclip.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = osxclip.cpp; path = ../osxguest/osxclip.cpp; sourceTree = SOURCE_ROOT; };
+		3F292D13124536EA224C8041 /* osxcpu.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = osxcpu.cpp; path = ../osxguest/osxcpu.cpp; sourceTree = SOURCE_ROOT; };
+		11E985384176EB3D294EBB07 /* osxcpu970.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = osxcpu970.cpp; path = ../osxguest/osxcpu970.cpp; sourceTree = SOURCE_ROOT; };
+		A8103172C032D0EC52D1A91F /* osxcuda.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = osxcuda.cpp; path = ../osxguest/osxcuda.cpp; sourceTree = SOURCE_ROOT; };
+		AA79588ADB0DFF4ADF97A9AF /* osxg5.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = osxg5.cpp; path = ../osxguest/osxg5.cpp; sourceTree = SOURCE_ROOT; };
+		6E3A1413BE9C45EDC38C52D6 /* osxglbridge.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = osxglbridge.cpp; path = ../osxguest/osxglbridge.cpp; sourceTree = SOURCE_ROOT; };
+		D3B433110A87836E4E6467A0 /* osxjit.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = osxjit.cpp; path = ../osxguest/osxjit.cpp; sourceTree = SOURCE_ROOT; };
+		AE7574B9F1C27B94A2C7BF5A /* osxmain.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = osxmain.cpp; path = ../osxguest/osxmain.cpp; sourceTree = SOURCE_ROOT; };
+		D13B0F4E92A5F506891DA142 /* osxpointer.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = osxpointer.cpp; path = ../osxguest/osxpointer.cpp; sourceTree = SOURCE_ROOT; };
+		4F3AA23A8B58C28AF22EB7AD /* osxsmp.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = osxsmp.cpp; path = ../osxguest/osxsmp.cpp; sourceTree = SOURCE_ROOT; };
+		8F998D9C866ACA84F9E2B1FB /* osxtest.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = osxtest.cpp; path = ../osxguest/osxtest.cpp; sourceTree = SOURCE_ROOT; };
+		369344E34CEC3899B3CC4739 /* pcibridge.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = pcibridge.cpp; path = ../pcibridge.cpp; sourceTree = SOURCE_ROOT; };
+		F52ED426DCAB4491684887E6 /* shears.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = shears.cpp; path = ../shears.cpp; sourceTree = SOURCE_ROOT; };
+		52161B8A58A74C7406168590 /* soundinput.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = soundinput.cpp; path = ../soundinput.cpp; sourceTree = SOURCE_ROOT; };
+		0061FFA27CA9BD69DE879FFB /* usbhid.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = usbhid.cpp; path = ../usbhid.cpp; sourceTree = SOURCE_ROOT; };
+		4F4847FCBD814B3318A83C2C /* usbuim.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = usbuim.cpp; path = ../usbuim.cpp; sourceTree = SOURCE_ROOT; };
+		2204D306B0EB1155FA8F7DE9 /* sbkernels.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; name = sbkernels.c; path = ../../../guest/sheepbench/sbkernels.c; sourceTree = SOURCE_ROOT; };
 		08003F851E0624D100A3ADAB /* basic-dyngen-ops-x86_32.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; name = "basic-dyngen-ops-x86_32.hpp"; path = "dyngen_precompiled/basic-dyngen-ops-x86_32.hpp"; sourceTree = "<group>"; };
 		08003F871E0624D100A3ADAB /* basic-dyngen-ops.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; name = "basic-dyngen-ops.hpp"; path = "dyngen_precompiled/basic-dyngen-ops.hpp"; sourceTree = "<group>"; };
 		08003F881E0624D100A3ADAB /* ppc-dyngen-ops-x86_32.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; name = "ppc-dyngen-ops-x86_32.hpp"; path = "dyngen_precompiled/ppc-dyngen-ops-x86_32.hpp"; sourceTree = "<group>"; };
@@ -895,13 +967,13 @@
 		C7F42CE62E5B4E8600FA7169 /* PreferencesROMValidatorObjC.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = PreferencesROMValidatorObjC.mm; sourceTree = "<group>"; };
 		C7F42CE82E5B4E9800FA7169 /* PreferencesROMValidatorObjC.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = PreferencesROMValidatorObjC.h; sourceTree = "<group>"; };
 		C7F42CEA2E5B4FF700FA7169 /* PocketShaver-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "PocketShaver-Bridging-Header.h"; sourceTree = "<group>"; };
-		CEACF3F3302CCC0300F53B01 /* joymanager.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = joymanager.cpp; path = /Users/user/Documents/PocketShaver/BasiliskII/src/joymanager.cpp; sourceTree = "<absolute>"; };
+		CEACF3F3302CCC0300F53B01 /* joymanager.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = joymanager.cpp; path = ../../../BasiliskII/src/joymanager.cpp; sourceTree = SOURCE_ROOT; };
 		CEACF3F6302CCC9A00F53B01 /* rave_draw_context.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = rave_draw_context.cpp; path = ../gfxaccel/rave_draw_context.cpp; sourceTree = SOURCE_ROOT; };
 		CEACF3F9302CCCB400F53B01 /* dsp_draw_context.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = dsp_draw_context.cpp; path = ../gfxaccel/dsp_draw_context.cpp; sourceTree = SOURCE_ROOT; };
 		CEACF3FC302CCCC200F53B01 /* dsp_clut_gamma.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = dsp_clut_gamma.cpp; path = ../gfxaccel/dsp_clut_gamma.cpp; sourceTree = SOURCE_ROOT; };
 		CEACF3FF302CCCD400F53B01 /* dsp_flatten_restore.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = dsp_flatten_restore.cpp; path = ../gfxaccel/dsp_flatten_restore.cpp; sourceTree = SOURCE_ROOT; };
 		CEACF402302CCCE200F53B01 /* dsp_alt_buffer.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = dsp_alt_buffer.cpp; path = ../gfxaccel/dsp_alt_buffer.cpp; sourceTree = SOURCE_ROOT; };
-		CEACF406302CCD5600F53B01 /* joymanager.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = joymanager.h; path = /Users/user/Documents/PocketShaver/BasiliskII/src/include/joymanager.h; sourceTree = "<absolute>"; };
+		CEACF406302CCD5600F53B01 /* joymanager.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = joymanager.h; path = ../../../BasiliskII/src/include/joymanager.h; sourceTree = SOURCE_ROOT; };
 		COMP10A1B2C3D4E5F60001 /* metal_compositor.mm */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.objcpp; name = metal_compositor.mm; path = ../gfxaccel/metal_compositor.mm; sourceTree = SOURCE_ROOT; };
 		COMP10A1B2C3D4E5F60002 /* compositor_shaders.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; name = compositor_shaders.metal; path = ../gfxaccel/compositor_shaders.metal; sourceTree = SOURCE_ROOT; };
 		COMP10A1B2C3D4E5F60003 /* metal_compositor.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = metal_compositor.h; sourceTree = "<group>"; };
@@ -1108,6 +1180,42 @@
 		0856CCAC14A99DE0000B1711 = {
 			isa = PBXGroup;
 			children = (
+				0E713B4EAEFD3489B101BBCF /* nativejitarm64.cpp */,
+				137422B10E5364E93142CAC4 /* ppc-nativejit.cpp */,
+				0D778BBF476D0DFCD815FD35 /* chd.cpp */,
+				A50A4CCAFC85D16708C5E252 /* imageio.cpp */,
+				AF5A79345ECEC6E4EA33409D /* pdfgen.c */,
+				FB9BDA8C7E2E10D1C9F3F04E /* pictpdf.c */,
+				7F83A5B57E450A615099A956 /* printing.cpp */,
+				C07DEADFAF8A2E4D875D3183 /* qcow.cpp */,
+				0DDEA81B8AB77650F46E2C35 /* gfxaccelhost.cpp */,
+				967E7F6768ABBE75414457A9 /* glide_dispatch.cpp */,
+				30843500962D068A366961A0 /* glide_engine.cpp */,
+				8B5FCA90C21DD23648C08720 /* glide_pef_register.cpp */,
+				DE917840CF274A35A40A4143 /* glide_state.cpp */,
+				357377107A28BA9CC1025501 /* macio_escc.cpp */,
+				DEC85387A6218D3EA4CD4905 /* mmio.cpp */,
+				81AB807E995E2191282E0EAF /* osxhost_sdl.cpp */,
+				C081018D731651A2017719D2 /* osxata.cpp */,
+				F1BFE873CC068C96E83D9815 /* osxboot.cpp */,
+				1D13B1FAC121F44D9CBDEA4F /* osxbus.cpp */,
+				11397947DA7FCD0F2BF59A5C /* osxclip.cpp */,
+				3F292D13124536EA224C8041 /* osxcpu.cpp */,
+				11E985384176EB3D294EBB07 /* osxcpu970.cpp */,
+				A8103172C032D0EC52D1A91F /* osxcuda.cpp */,
+				AA79588ADB0DFF4ADF97A9AF /* osxg5.cpp */,
+				6E3A1413BE9C45EDC38C52D6 /* osxglbridge.cpp */,
+				D3B433110A87836E4E6467A0 /* osxjit.cpp */,
+				AE7574B9F1C27B94A2C7BF5A /* osxmain.cpp */,
+				D13B0F4E92A5F506891DA142 /* osxpointer.cpp */,
+				4F3AA23A8B58C28AF22EB7AD /* osxsmp.cpp */,
+				8F998D9C866ACA84F9E2B1FB /* osxtest.cpp */,
+				369344E34CEC3899B3CC4739 /* pcibridge.cpp */,
+				F52ED426DCAB4491684887E6 /* shears.cpp */,
+				52161B8A58A74C7406168590 /* soundinput.cpp */,
+				0061FFA27CA9BD69DE879FFB /* usbhid.cpp */,
+				4F4847FCBD814B3318A83C2C /* usbuim.cpp */,
+				2204D306B0EB1155FA8F7DE9 /* sbkernels.c */,
 				E204B92128BC3D640081FDCA /* SDL2.xcframework */,
 				0856CCC814A99E30000B1711 /* Sources */,
 				C7F42CE92E5B4FEA00FA7169 /* Supporting files */,
@@ -2677,6 +2785,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				6D5B98AE38078EFD7BB18B31 /* nativejitarm64.cpp in Sources */,
+				281025210FF22F3ABC7834D5 /* ppc-nativejit.cpp in Sources */,
 				E204B90B28BC3B640081FDCA /* ieeefp.cpp in Sources */,
 				E204B90C28BC3B640081FDCA /* mathlib.cpp in Sources */,
 				E204B90D28BC3B640081FDCA /* utils-cpuinfo.cpp in Sources */,
@@ -2697,6 +2807,40 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				1B127FA2A144B2D03BB1526A /* chd.cpp in Sources */,
+				A057D229A909825B65D5E355 /* imageio.cpp in Sources */,
+				15AD7FC8886BB6C95812B2C3 /* pdfgen.c in Sources */,
+				A590DE392ED48A6EF9CB71F3 /* pictpdf.c in Sources */,
+				BC02190B1905EC4DA6D986E6 /* printing.cpp in Sources */,
+				AD5BE71AAF2FCC367C493AEC /* qcow.cpp in Sources */,
+				030F566B3EB174127FA3E898 /* gfxaccelhost.cpp in Sources */,
+				3C53D6D6C40043EC7D2974D5 /* glide_dispatch.cpp in Sources */,
+				9B8AD9B67A51AE7153100195 /* glide_engine.cpp in Sources */,
+				F9BFECB74D9E901383F8AE1D /* glide_pef_register.cpp in Sources */,
+				3175A0E99EB6C7D4CA224BC4 /* glide_state.cpp in Sources */,
+				AC2C14893E06084E7D9B7B00 /* macio_escc.cpp in Sources */,
+				E55E336DE7FBF78F04B65D80 /* mmio.cpp in Sources */,
+				DB5AF6FC571266A46ADA1424 /* osxhost_sdl.cpp in Sources */,
+				74B6E8B82F9DE297058A6BA8 /* osxata.cpp in Sources */,
+				EDFB855D1E8A46559ED06137 /* osxboot.cpp in Sources */,
+				2A4D00CEA6CF06F271607C5F /* osxbus.cpp in Sources */,
+				D1CA9BB8045987FFBF2F807D /* osxclip.cpp in Sources */,
+				8D94B93520B2BDF806745E93 /* osxcpu.cpp in Sources */,
+				2450E1134BFB21656F66DD20 /* osxcpu970.cpp in Sources */,
+				E0EF84EE1703B2D744CD8FFE /* osxcuda.cpp in Sources */,
+				C7B49EED5CDD061CA41E0FD5 /* osxg5.cpp in Sources */,
+				290A90386B0E1C560B8B32FF /* osxglbridge.cpp in Sources */,
+				3F495473380AE124455A3566 /* osxjit.cpp in Sources */,
+				37B9CE06F405A7CAB9D3C3F5 /* osxmain.cpp in Sources */,
+				3377FB6BFC9822B7B354A05C /* osxpointer.cpp in Sources */,
+				E3515F6D82F88916DD6B612C /* osxsmp.cpp in Sources */,
+				66E048473FB140843E14686E /* osxtest.cpp in Sources */,
+				9C1F84EA59320F18A50CF108 /* pcibridge.cpp in Sources */,
+				9817F8861C1C18AE572FB67E /* shears.cpp in Sources */,
+				56F95AC36E4FDDA678B02C3E /* soundinput.cpp in Sources */,
+				6BFB7B8E3C11E5F4158734F0 /* usbhid.cpp in Sources */,
+				EA6CBC6AEB226A33660BAD0F /* usbuim.cpp in Sources */,
+				5A27AAD24029BA9F34D0C8AC /* sbkernels.c in Sources */,
 				E204B93328BC3EBE0081FDCA /* adb.cpp in Sources */,
 				E204B93428BC3EBE0081FDCA /* debug.c in Sources */,
 				C74035AD2EDAF1C50045B9C6 /* PerformanceCounterObjC.mm in Sources */,
@@ -3015,6 +3159,8 @@
 					../kpx_cpu/include,
 					../include,
 					../gfxaccel/include,
+					../osxguest,
+					../gfxaccel,
 					../Unix/dyngen_precompiled,
 				);
 				INSTALL_PATH = /usr/local/lib;
@@ -3054,6 +3200,8 @@
 					../kpx_cpu/include,
 					../include,
 					../gfxaccel/include,
+					../osxguest,
+					../gfxaccel,
 					../Unix/dyngen_precompiled,
 				);
 				INSTALL_PATH = /usr/local/lib;
@@ -3130,6 +3278,8 @@
 					../kpx_cpu/include,
 					../include,
 					../gfxaccel/include,
+					../osxguest,
+					../gfxaccel,
 					../CrossPlatform,
 				);
 				INFOPLIST_FILE = Info.plist.in;
@@ -3199,6 +3349,8 @@
 					../kpx_cpu/include,
 					../include,
 					../gfxaccel/include,
+					../osxguest,
+					../gfxaccel,
 					../CrossPlatform,
 				);
 				INFOPLIST_EXPAND_BUILD_SETTINGS = NO;
@@ -3250,6 +3402,9 @@
 					"_GNU_SOURCE=1",
 					_THREAD_SAFE,
 					_REENTRANT,
+					"USE_SDL2=1",
+					"ENABLE_GFXACCEL=1",
+					"GFXACCEL_USE_METAL=1",
 				);
 				HEADER_SEARCH_PATHS = (
 					"./SDL2.xcframework/**",
@@ -3261,7 +3416,25 @@
 					../kpx_cpu/include,
 					../include,
 					../gfxaccel/include,
+					../osxguest,
+					../gfxaccel,
 					../Unix/dyngen_precompiled,
+					../../../BasiliskII/src/include,
+					../../../BasiliskII/src/CrossPlatform,
+					../../../BasiliskII/src/Unix,
+					../../../BasiliskII/src/SDL,
+					../../../BasiliskII/src/slirp,
+					../../../BasiliskII/src/MacOSX,
+					../CrossPlatform,
+					../gfxaccel/gl,
+					./PocketShaver,
+					./PocketShaver/Swift/Overlay,
+					./PocketShaver/Swift/Overlay/ADB,
+					./PocketShaver/Swift/Preferences,
+					./PocketShaver/Swift/Services/Bonjour,
+					./impluse-hfs,
+					./Bonjour,
+					.,
 				);
 				INSTALL_PATH = /usr/local/lib;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.2;
@@ -3298,6 +3471,9 @@
 					"_GNU_SOURCE=1",
 					_THREAD_SAFE,
 					_REENTRANT,
+					"USE_SDL2=1",
+					"ENABLE_GFXACCEL=1",
+					"GFXACCEL_USE_METAL=1",
 				);
 				HEADER_SEARCH_PATHS = (
 					"./SDL2.xcframework/**",
@@ -3309,7 +3485,25 @@
 					../kpx_cpu/include,
 					../include,
 					../gfxaccel/include,
+					../osxguest,
+					../gfxaccel,
 					../Unix/dyngen_precompiled,
+					../../../BasiliskII/src/include,
+					../../../BasiliskII/src/CrossPlatform,
+					../../../BasiliskII/src/Unix,
+					../../../BasiliskII/src/SDL,
+					../../../BasiliskII/src/slirp,
+					../../../BasiliskII/src/MacOSX,
+					../CrossPlatform,
+					../gfxaccel/gl,
+					./PocketShaver,
+					./PocketShaver/Swift/Overlay,
+					./PocketShaver/Swift/Overlay/ADB,
+					./PocketShaver/Swift/Preferences,
+					./PocketShaver/Swift/Services/Bonjour,
+					./impluse-hfs,
+					./Bonjour,
+					.,
 				);
 				INSTALL_PATH = /usr/local/lib;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.2;
@@ -3390,6 +3584,9 @@
 					_REENTRANT,
 					"BINCUE=1",
 					"USE_SDL_AUDIO=1",
+					"USE_SDL2=1",
+					"ENABLE_GFXACCEL=1",
+					"GFXACCEL_USE_METAL=1",
 				);
 				GCC_SYMBOLS_PRIVATE_EXTERN = NO;
 				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
@@ -3406,9 +3603,25 @@
 					../kpx_cpu/include,
 					../include,
 					../gfxaccel/include,
+					../osxguest,
+					../gfxaccel,
 					../CrossPlatform,
 					"./SDL2.xcframework/**",
 					.,
+					../../../BasiliskII/src/include,
+					../../../BasiliskII/src/CrossPlatform,
+					../../../BasiliskII/src/Unix,
+					../../../BasiliskII/src/SDL,
+					../../../BasiliskII/src/slirp,
+					../../../BasiliskII/src/MacOSX,
+					../gfxaccel/gl,
+					./PocketShaver,
+					./PocketShaver/Swift/Overlay,
+					./PocketShaver/Swift/Overlay/ADB,
+					./PocketShaver/Swift/Preferences,
+					./PocketShaver/Swift/Services/Bonjour,
+					./impluse-hfs,
+					./Bonjour,
 				);
 				INFOPLIST_FILE = PocketShaver/Info.plist;
 				INFOPLIST_PREFIX_HEADER = "";
@@ -3511,6 +3724,9 @@
 					_REENTRANT,
 					"BINCUE=1",
 					"USE_SDL_AUDIO=1",
+					"USE_SDL2=1",
+					"ENABLE_GFXACCEL=1",
+					"GFXACCEL_USE_METAL=1",
 				);
 				GCC_SYMBOLS_PRIVATE_EXTERN = NO;
 				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
@@ -3527,9 +3743,25 @@
 					../kpx_cpu/include,
 					../include,
 					../gfxaccel/include,
+					../osxguest,
+					../gfxaccel,
 					../CrossPlatform,
 					"./SDL2.xcframework/**",
 					.,
+					../../../BasiliskII/src/include,
+					../../../BasiliskII/src/CrossPlatform,
+					../../../BasiliskII/src/Unix,
+					../../../BasiliskII/src/SDL,
+					../../../BasiliskII/src/slirp,
+					../../../BasiliskII/src/MacOSX,
+					../gfxaccel/gl,
+					./PocketShaver,
+					./PocketShaver/Swift/Overlay,
+					./PocketShaver/Swift/Overlay/ADB,
+					./PocketShaver/Swift/Preferences,
+					./PocketShaver/Swift/Services/Bonjour,
+					./impluse-hfs,
+					./Bonjour,
 				);
 				INFOPLIST_EXPAND_BUILD_SETTINGS = YES;
 				INFOPLIST_FILE = PocketShaver/Info.plist;

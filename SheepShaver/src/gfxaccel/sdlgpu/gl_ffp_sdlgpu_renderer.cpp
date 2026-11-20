@@ -48,21 +48,21 @@ static void *SDLGPUVendGLOverlayTexture(uint32_t engine_id,
 }
 
 #if SDLGPU_TRANSITION_LOGGING_ENABLED
-extern "C" void gl_overlay_bind(int32_t left, int32_t top, int32_t width,
+extern "C" void gl_overlay_bind(GLContext *ctx, int32_t left, int32_t top, int32_t width,
 	int32_t height)
 {
 	Uint64 trace_start_tick = SDLGPUTransitionTraceBegin();
-	SDLGPUGLOverlayBind(left, top, width, height);
+	SDLGPUGLOverlayBind(ctx, left, top, width, height);
 	SDLGPUTransitionTraceEnd("gl-overlay-bind", kGfxEngineGL, width, height,
 		trace_start_tick);
 }
 
-extern "C" void gl_overlay_unbind(void)
+extern "C" void gl_overlay_unbind(GLContext *ctx)
 {
 	int width = (int)s_ow;
 	int height = (int)s_oh;
 	Uint64 trace_start_tick = SDLGPUTransitionTraceBegin();
-	SDLGPUGLOverlayUnbind();
+	SDLGPUGLOverlayUnbind(ctx);
 	SDLGPUTransitionTraceEnd("gl-overlay-unbind", kGfxEngineGL, width, height,
 		trace_start_tick);
 }

@@ -7,6 +7,11 @@
  *  it under the terms of the GNU General Public License as published by
  *  the Free Software Foundation; either version 2 of the License, or
  *  (at your option) any later version.
+ *
+ *  Same approach as GLInstallHooks(): overwrite the first 4 PPC instructions
+ *  of each export with a branch to dsp_method_tvects[subop]. We replace
+ *  DrawSprocket entirely, so nothing chains to the original. The fragment
+ *  may load late, so accRun retries up to DSP_HOOKS_MAX_ATTEMPTS ticks.
  */
 
 #include "sysdeps.h"
@@ -21,7 +26,6 @@
 #include <vector>
 extern uint32_t dsp_method_tvects[DSP_MAX_SUBOPCODE];
 
-// ----- File-scope retry-guard triplet (mirrors gl_engine.cpp:1913-1917) -----
 static bool dsp_hooks_installed = false;
 static bool dsp_hooks_in_progress = false;
 
@@ -47,8 +51,6 @@ static const DSpInstallSymbol dsp_install_symbols[] = {
 	{ "\036DSpContext_InvalBackBufferRect",  kDSpContext_InvalBackBufferRect,  "DSpContext_InvalBackBufferRect" },
 
 	// Sub-opcodes 200-203: Mode enumeration + best-match (DSp 1.7 PDF pp.13, 16, 17, 18, 22)
-	// Sub-op 203 DSpGetNextContext is the stub terminator (PDF p.17).
-	// strlen("DSpGetNextContext") = 17; octal 021 = decimal 17.
 	{ "\022DSpGetFirstContext",              kDSpGetFirstContext,              "DSpGetFirstContext" },
 	{ "\022DSpFindBestContext",              kDSpFindBestContext,              "DSpFindBestContext" },
 	{ "\030DSpContext_GetAttributes",        kDSpContext_GetAttributes,        "DSpContext_GetAttributes" },
@@ -154,7 +156,6 @@ static int dsp_install_patch_one(uint32_t orig_tvect, uint32_t hook_tvect, const
 	uint32_t hook_hi = (hook_code >> 16) & 0xFFFF;
 	uint32_t hook_lo = hook_code & 0xFFFF;
 
-	// Overwrite first 4 instructions at orig_code (same encoding as GLInstallHooks)
 	// lis r11, hook_code_hi
 	WriteMacInt32(orig_code + 0,  0x3C000000 | (r11 << 21) | hook_hi);
 	// ori r11, r11, hook_code_lo
@@ -221,7 +222,7 @@ void DSpInstallHooks(void)
 		int length_mismatches = 0;
 		for (int i = 0; i < num_dsp_symbols; i++) {
 			const char *psym = dsp_install_symbols[i].pascal_sym;
-			int pascal_len_octal = (unsigned char)psym[0];  /* already-decoded-to-decimal */
+			int pascal_len_octal = (unsigned char)psym[0];
 			int ascii_len = (int)strlen(psym + 1);
 			int name_len = (int)strlen(dsp_install_symbols[i].name);
 			bool length_match = (pascal_len_octal == ascii_len) &&
@@ -246,7 +247,7 @@ void DSpInstallHooks(void)
 		        found_count, num_dsp_symbols, length_mismatches);
 	}
 
-	// ---- Second pass: patch all resolved symbols ----
+	// Second pass: patch all resolved symbols.
 	int patched_count = 0;
 	for (size_t i = 0; i < cached_tvects.size(); i++) {
 		uint32_t hook_tvect = dsp_method_tvects[cached_tvects[i].sub_opcode];

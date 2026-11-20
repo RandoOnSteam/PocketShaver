@@ -28,6 +28,7 @@
 #include "gl_ext.h"
 #include "gfxaccel_backend.h"
 #include "gl_metal_draw_state.h"
+#include "gl_texture_format_policy.h"
 #if USE_SDL3
 #include <SDL3/SDL_opengl.h>
 #else
@@ -421,19 +422,20 @@ static bool GLMetalApplyTextureUnit(GLContext *ctx,int unit,
 					glTexGeni(pname[i],GL_TEXTURE_GEN_MODE,resolved);
 				C.texgen_mode[unit][i] = resolved;
 				if(resolved == GL_OBJECT_LINEAR) {
-					const float *plane = ctx->tex_units[unit].texgen_object_plane[i];
+					const double *planedouble = ctx->tex_units[unit].texgen_object_plane[i];
+					GLfloat plane[4] = {(GLfloat)planedouble[0],(GLfloat)planedouble[1],(GLfloat)planedouble[2],(GLfloat)planedouble[3]};
 					if(!cache_ok || memcmp(C.texgen_object_plane[unit][i],plane,sizeof(C.texgen_object_plane[unit][i]))) {
 						glTexGenfv(pname[i],GL_OBJECT_PLANE,plane);
 						memcpy(C.texgen_object_plane[unit][i],plane,sizeof(C.texgen_object_plane[unit][i]));
 					}
 				}
 				else if(resolved == GL_EYE_LINEAR) {
-					const float *plane = ctx->tex_units[unit].texgen_eye_plane[i];
+					const double *plane = ctx->tex_units[unit].texgen_eye_plane[i];
 					const float *modelview = ctx->modelview_stack[ctx->modelview_depth];
 					GLfloat loadedplane[4];
 					for(int column = 0; column < 4; ++column)
-						loadedplane[column] = plane[0]*modelview[column*4+0] + plane[1]*modelview[column*4+1] +
-							plane[2]*modelview[column*4+2] + plane[3]*modelview[column*4+3];
+						loadedplane[column] = (GLfloat)(plane[0]*modelview[column*4+0] + plane[1]*modelview[column*4+1] +
+							plane[2]*modelview[column*4+2] + plane[3]*modelview[column*4+3]);
 					glTexGenfv(pname[i],GL_EYE_PLANE,loadedplane);
 				}
 			}
@@ -445,14 +447,17 @@ static bool GLMetalApplyTextureUnit(GLContext *ctx,int unit,
 	}
 
 	GLTextureUnit &TU = ctx->tex_units[unit];
-	if(TU.enabled_2d && TU.bound_object_2d &&
-		TU.bound_object_2d->metal_texture) {
-		const GLuint tex = (GLuint)(uintptr_t)TU.bound_object_2d->metal_texture;
+	GLTextureObject *boundobject = TU.bound_object_2d;
+	if(!boundobject)
+		boundobject = GLBoundTextureObject(ctx, unit, GL_TEXTURE_2D);
+	if(TU.enabled_2d && boundobject &&
+		boundobject->metal_texture) {
+		const GLuint tex = (GLuint)(uintptr_t)boundobject->metal_texture;
 		const GLint env = GLMetalMapTextureEnvMode(TU.env_mode);
 		if(!cache_ok || !C.tex_enabled[unit]) glEnable(GL_TEXTURE_2D);
 		if(!cache_ok || C.tex[unit] != tex) glBindTexture(GL_TEXTURE_2D,tex);
 
-		GLTextureObject &TO = *TU.bound_object_2d;
+		GLTextureObject &TO = *boundobject;
 		const GLint magf = GLMetalMapTextureMagFilter(TO.mag_filter);
 		const GLint minf = GLMetalMapBoundMinFilter(TO);
 		const GLint ws = GLMetalMapTextureWrap(TO.wrap_s);
@@ -537,7 +542,8 @@ static void GLMetalReleaseOverlayTextures(bool clear_drawable)
 	}
 }
 
-extern "C" void gl_overlay_bind(int32_t left,int32_t top,int32_t width,int32_t height){
+extern "C" void gl_overlay_bind(GLContext *ctx,int32_t left,int32_t top,int32_t width,int32_t height){
+	(void)ctx;
 	s_dl=left;s_dt=top;s_dw=width;s_dh=height;
 	if(width<=0||height<=0)return;
 	uint32_t w=(uint32_t)width,h=(uint32_t)height;
@@ -557,10 +563,12 @@ extern "C" void gl_overlay_bind(int32_t left,int32_t top,int32_t width,int32_t h
 	s_cur=s_ov[s_wr];
 	s_frame_committed=false;
 }
-extern "C" void gl_overlay_unbind(void){
+extern "C" void gl_overlay_unbind(GLContext *ctx){
+	(void)ctx;
 	GLMetalReleaseOverlayTextures(true);
 }
-extern "C" void gl_overlay_present(void){
+extern "C" void gl_overlay_present(GLContext *ctx){
+	(void)ctx;
 	if(!s_cur||!s_frame_committed)return;
 	if(dmc_set_active_owner(kDMCOwnerGL)!=kDMCNoErr)return;
 	if(!s_cur||!s_frame_committed)return;
@@ -590,6 +598,10 @@ extern "C" int gl_has_active_overlay(void){
 }
 extern "C" int gl_get_overlay_dims(uint32_t*w,uint32_t*h){
 	if(w)*w=s_ow?s_ow:(uint32_t)s_dw;if(h)*h=s_oh?s_oh:(uint32_t)s_dh;return gl_has_active_overlay();
+}
+extern "C" int gl_prepare_overlays_for_attach(void){
+	if(!s_cur&&s_dw>0&&s_dh>0)gl_overlay_bind(NULL,s_dl,s_dt,s_dw,s_dh);
+	return 0;
 }
 extern "C" void gl_release_overlay_for_detach(void){
 	GLMetalReleaseOverlayTextures(false);
@@ -776,7 +788,7 @@ void GLMetalBeginFrame(GLContext*ctx){
 	/* The DMC transition releases outgoing engine textures.  A bound AGL
 	 * drawable remains valid across that transition, so reacquire its pair
 	 * before attaching the GL framebuffer. */
-	if(!s_cur&&s_dw>0&&s_dh>0)gl_overlay_bind(s_dl,s_dt,s_dw,s_dh);
+	if(!s_cur&&s_dw>0&&s_dh>0)gl_overlay_bind(ctx,s_dl,s_dt,s_dw,s_dh);
 	if(!s_cur)return;
 	if(!s_frame_active){
 		if(!GLMetalBindOverlayFBO())return;
@@ -979,6 +991,8 @@ static void GLMetalDumpDrawState(GLContext *ctx,const char *tag,
 	ms->dumpCount++;
 
 	const GLTextureObject *t0 = ctx->tex_units[0].bound_object_2d;
+	if (!t0)
+		t0 = GLBoundTextureObject(ctx, 0, GL_TEXTURE_2D);
 	const bool have0 = (t0 != NULL);
 
 	GL_LOG("[drawdump #%d %s] mode=0x%x nverts=%d unit1Live=%d",
@@ -1604,13 +1618,83 @@ void GLMetalDrawPixels(GLContext*ctx,int width,int height,const uint8_t*pixels,i
 	glPixelZoom(ctx->pixel_zoom_x,ctx->pixel_zoom_y);
 	glDrawPixels(width,height,GL_BGRA,GL_UNSIGNED_BYTE,pixels);
 }
-void GLMetalBitmap(GLContext*ctx,int width,int height,const uint8_t*bits,int data_len){
+void GLMetalBitmap(GLContext*ctx,int width,int height,const uint8_t*bits,int data_len,float xorig,float yorig){
 	(void)data_len; if(!ctx||!bits||!SharedMetalDevice())return;
 	GLMetalBeginFrame(ctx);
 	if(!s_frame_active)return;
 	GLMetalApplyState(ctx);
 	glRasterPos2i(0,0);
-	glBitmap(width,height,0,0,0,0,bits);
+	glBitmap(0,0,0,0,-xorig,-yorig,NULL);
+	glPushAttrib(GL_COLOR_BUFFER_BIT);
+	glEnable(GL_ALPHA_TEST);
+	glAlphaFunc(GL_GREATER,0.5f);
+	glDrawPixels(width,height,GL_BGRA,GL_UNSIGNED_BYTE,bits);
+	glPopAttrib();
+}
+bool GLMetalCopyFramebufferToTexture(GLContext*ctx,GLTextureObject*texObj,int level,int xoffset,int yoffset,int x,int y,int width,int height,bool redefine){
+	if(!ctx||!texObj||!SharedMetalDevice())return false;
+	GLMetalBeginFrame(ctx);
+	if(!s_frame_active)return false;
+	if(width<=0||height<=0)return true;
+	GLMetalResolveSamples(ctx);
+	GLMetalSelectTextureUnitZero();
+	if(!texObj->metal_texture){
+		GLuint hostname=0;
+		glGenTextures(1,&hostname);
+		texObj->metal_texture=(void*)(uintptr_t)hostname;
+	}
+	glBindTexture(GL_TEXTURE_2D,(GLuint)(uintptr_t)texObj->metal_texture);
+	const GLint internalformat=texObj->internal_format_opaque?GL_RGB8:GL_RGBA8;
+	if(redefine)glCopyTexImage2D(GL_TEXTURE_2D,level,internalformat,x,y,width,height,0);
+	else glCopyTexSubImage2D(GL_TEXTURE_2D,level,xoffset,yoffset,x,y,width,height);
+	if(level>0)texObj->has_mipmaps=true;
+	texObj->sampler_applied=false;
+	GLMetalInvalidateTextureBindings(ctx);
+	return true;
+}
+bool GLMetalReadTexture(GLContext*ctx,GLTextureObject*obj,int32_t level,int32_t width,int32_t height,std::vector<uint8_t>&pixels){
+	if(!ctx||!obj||!obj->metal_texture||!SharedMetalDevice()||width<=0||height<=0){
+		if(ctx&&!ctx->last_error)ctx->last_error=0x0502;
+		return false;
+	}
+	GLMetalSelectTextureUnitZero();
+	glBindTexture(GL_TEXTURE_2D,(GLuint)(uintptr_t)obj->metal_texture);
+	GLint w=0,h=0;
+	glGetTexLevelParameteriv(GL_TEXTURE_2D,level,GL_TEXTURE_WIDTH,&w);
+	glGetTexLevelParameteriv(GL_TEXTURE_2D,level,GL_TEXTURE_HEIGHT,&h);
+	if(w!=width||h!=height){
+		GLMetalInvalidateTextureBindings(ctx);
+		if(!ctx->last_error)ctx->last_error=0x0502;
+		return false;
+	}
+	GfxGLExt &ext=gfx_gl_ext();
+	if(!ext.fbo){
+		GLMetalInvalidateTextureBindings(ctx);
+		if(!ctx->last_error)ctx->last_error=0x0502;
+		return false;
+	}
+	GLuint readfbo=0;
+	ext.GenFramebuffers(1,&readfbo);
+	ext.BindFramebuffer(GL_FRAMEBUFFER,readfbo);
+	ext.FramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,(GLuint)(uintptr_t)obj->metal_texture,level);
+	pixels.resize((size_t)width*height*4);
+	glPixelStorei(GL_PACK_ALIGNMENT,1);
+	glReadPixels(0,0,width,height,GL_BGRA,GL_UNSIGNED_BYTE,vec_data(pixels));
+	if(s_frame_active&&s_fbo)ext.BindFramebuffer(GL_FRAMEBUFFER,s_fbo);
+	else ext.BindFramebuffer(GL_FRAMEBUFFER,0);
+	ext.DeleteFramebuffers(1,&readfbo);
+	GLTexturePrepareReadbackBGRA(vec_data(pixels),pixels.size(),GLTextureLevelBaseFormat(*obj,level));
+	GLMetalInvalidateTextureBindings(ctx);
+	return true;
+}
+void GLMetalPrepareDrawableChange(GLContext*ctx){
+	if(!ctx||!SharedMetalDevice())return;
+	glFinish();
+	GLMetalInvalidateTextureBindings(ctx);
+}
+void GLMetalSynchronizeSharedContexts(GLContext*ctx){
+	if(!ctx||!SharedMetalDevice())return;
+	glFlush();
 }
 uint8_t* GLMetalReadFramebufferRect(GLContext*ctx,int x,int y,int w,int h,int*out_len){
 	if(out_len)*out_len=0;
@@ -1629,6 +1713,15 @@ uint8_t* GLMetalReadFramebufferRect(GLContext*ctx,int x,int y,int w,int h,int*ou
 	uint8_t*p=(uint8_t*)std::malloc(bytes);
 	if(!p)return NULL;
 	glReadPixels(x,y,w,h,GL_BGRA,GL_UNSIGNED_BYTE,p);
+	for(size_t row=0;row<sh/2;++row){
+		uint8_t*bottom=p+row*sw*4;
+		uint8_t*top=p+(sh-1-row)*sw*4;
+		for(size_t byte=0;byte<sw*4;++byte){
+			const uint8_t value=bottom[byte];
+			bottom[byte]=top[byte];
+			top[byte]=value;
+		}
+	}
 	if(out_len)*out_len=(int)bytes;
 	return p;
 }

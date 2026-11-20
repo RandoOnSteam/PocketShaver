@@ -851,13 +851,11 @@ static bool has_mode(uint32 id)
 }
 
 /*
- *  DepthMode translation at the driver ABI. The Display Manager numbers a
- *  display's depth modes RELATIVE to what the driver supports: kDepthMode1
- *  (0x80, firstVidMode) is always the LOWEST supported depth. VModes stores
- *  absolute APPLE_*_BIT constants; while the driver advertised every depth
- *  1..32bpp the two numberings coincided, but with a trimmed depth set the
- *  relative names must be translated. Absolute values are still accepted on
- *  input for back-compat with guest state saved by older builds.
+ *  DepthMode translation at the driver ABI. The Display Manager numbers depth
+ *  modes relative to what the driver supports: kDepthMode1 (0x80,
+ *  firstVidMode) is the lowest supported depth. VModes stores absolute
+ *  APPLE_*_BIT constants, which only coincide when every depth is offered.
+ *  video_mode_change still accepts absolute values from older guest state.
  */
 static int video_depth_list(uint32 depths[6])
 {
@@ -1473,13 +1471,11 @@ static int16 VideoStatus(uint32 pb, VidLocals *csSave)
 					break;
 			}
 			WriteMacInt32(param + csRIDisplayModeID, work_id);
-			/* csMaxDepthMode is a RELATIVE depth mode (kDepthModeN). */
+			/* csMaxDepthMode is relative (kDepthModeN). */
 			WriteMacInt16(param + csMaxDepthMode, video_rel_max_depth_mode());
-			/* Zero csResolutionFlags + csReserved: the guest Display Manager
-			 * copies the whole VDResolutionInfoRec into its mode-list
-			 * entries, and stale guest RAM here (e.g. a stray
-			 * kResolutionHasMultipleDepthSizes bit) changes the entry layout
-			 * apps parse. */
+			/* Zero csResolutionFlags + csReserved: the Display Manager copies
+			 * the whole record into its mode list, and stale bits (e.g.
+			 * kResolutionHasMultipleDepthSizes) change the layout apps parse. */
 			WriteMacInt16(param + csResolutionFlags, 0);
 			WriteMacInt32(param + csResolutionFlags + 2, 0);	// csReserved
 #if TARGET_OS_IPHONE

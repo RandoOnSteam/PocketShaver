@@ -8,18 +8,12 @@
  *  the Free Software Foundation; either version 2 of the License, or
  *  (at your option) any later version.
  *
- *  Provides a process-wide Metal device and command queue created
- *  exactly once via dispatch_once.  All Metal subsystems (NQD, RAVE,
- *  GL, compositor) share the same device to eliminate redundant
- *  allocations and enable zero-copy resource sharing.
+ *  Process-wide Metal device and command queue, shared by NQD, RAVE,
+ *  GL and the compositor so resources can be shared without copies.
  */
 
 #import <Metal/Metal.h>
 #include "metal_device_shared.h"
-
-// ---------------------------------------------------------------------------
-// Static singleton state
-// ---------------------------------------------------------------------------
 
 static id<MTLDevice>        s_device = nil;
 static id<MTLCommandQueue>  s_queue  = nil;

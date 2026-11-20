@@ -22,9 +22,14 @@ void GfxAccelHostBeginFrame(GLContext *ctx)
 	GLMetalBeginFrame(ctx);
 }
 
-void GfxAccelHostBitmap(GLContext *ctx, int width, int height, const uint8_t *bgra_data, int data_len)
+void GfxAccelHostBitmap(GLContext *ctx, int width, int height, const uint8_t *bgra_data, int data_len, float xorig, float yorig)
 {
-	GLMetalBitmap(ctx, width, height, bgra_data, data_len);
+	GLMetalBitmap(ctx, width, height, bgra_data, data_len, xorig, yorig);
+}
+
+bool GfxAccelHostCopyFramebufferToTexture(GLContext *ctx, GLTextureObject *texObj, int level, int xoffset, int yoffset, int x, int y, int width, int height, bool redefine)
+{
+	return GLMetalCopyFramebufferToTexture(ctx, texObj, level, xoffset, yoffset, x, y, width, height, redefine);
 }
 
 void GfxAccelHostClear(GLContext *ctx, uint32_t mask)
@@ -60,6 +65,11 @@ void GfxAccelHostInit(GLContext *ctx)
 uint8_t * GfxAccelHostReadFramebufferRect(GLContext *ctx, int x, int y, int width, int height, int *out_len)
 {
 	return GLMetalReadFramebufferRect(ctx, x, y, width, height, out_len);
+}
+
+bool GfxAccelHostReadTexture(GLContext *ctx, GLTextureObject *texObj, int32_t level, int32_t width, int32_t height, std::vector<uint8_t> &pixels)
+{
+	return GLMetalReadTexture(ctx, texObj, level, width, height, pixels);
 }
 
 void GfxAccelHostRelease(GLContext *ctx)

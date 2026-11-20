@@ -186,6 +186,11 @@ static uint32_t DSpAllocContextHandle(DSpContextPrivate *ctx)
 static void DSpFreeContextHandle(uint32_t handle)
 {
 	if (handle > 0 && handle <= DSP_MAX_CONTEXTS) {
+		for (uint32_t i = 0; i < DSP_MAX_CONTEXTS; ++i) {
+			DSpContextPrivate *parent = dsp_context_table[i];
+			if (parent != NULL && parent->queued_child == handle)
+				parent->queued_child = 0;
+		}
 		dsp_context_table[handle - 1] = NULL;
 	}
 }
@@ -568,6 +573,46 @@ static void DSpCopyDriverGammaLUT(uint8_t out_lut[768])
 	}
 }
 
+static uint32_t s_dsp_gamma_context = 0;
+
+static int32_t DSpPublishFadeGamma(DSpContextPrivate *ctx, const uint8_t *lut, int fading)
+{
+	int32_t rc = dmc_record_gamma_change_with_lut_fade(lut, fading);
+	if (rc == kDMCNoErr) {
+		s_dsp_gamma_context = 0;
+		if (fading && ctx)
+			s_dsp_gamma_context = ctx->handle;
+	}
+	return rc;
+}
+
+static int32_t DSpCancelContextFade(DSpContextPrivate *ctx)
+{
+	uint8_t lut[768];
+	DSpContextPrivate *remaining = NULL;
+	uint32_t i;
+	if (ctx == NULL)
+		return kDSpNoErr;
+	if (s_dsp_gamma_context != ctx->handle) {
+		ctx->fade_state.active = 0;
+		return kDSpNoErr;
+	}
+	for (i = 0; i < DSP_MAX_CONTEXTS; ++i) {
+		DSpContextPrivate *other = dsp_context_table[i];
+		if (other != NULL && other != ctx && other->fade_state.active != 0)
+			remaining = other;
+	}
+	if (remaining != NULL)
+		DSpInterpolateGammaLUT(remaining->fade_state.start_lut, remaining->fade_state.end_lut,
+							   remaining->fade_state.elapsed_vbls, remaining->fade_state.duration_vbls, lut);
+	else
+		DSpCopyDriverGammaLUT(lut);
+	if (DSpPublishFadeGamma(remaining, lut, remaining != NULL) != kDMCNoErr)
+		return kDSpInternalErr;
+	ctx->fade_state.active = 0;
+	return kDSpNoErr;
+}
+
 /*
  *  Shared fade-state
  *  initialization. Used by FadeGammaIn (end_lut = identity),
@@ -682,6 +727,7 @@ extern "C" void DSpVBLGammaFadeCallback(void *cb_ctx, void *drawable, double ts)
 	 * (no longer fading). This mirrors the per-context final-frame test below so
 	 * the OR is exact. */
 	uint32_t any_still_fading = 0u;
+	DSpContextPrivate *continuing_fade = NULL;
 	for (uint32_t i = 0; i < DSP_MAX_CONTEXTS; i++) {
 		DSpContextPrivate *ctx = dsp_context_table[i];
 		if (ctx == NULL || ctx->fade_state.active == 0) continue;
@@ -689,6 +735,7 @@ extern "C" void DSpVBLGammaFadeCallback(void *cb_ctx, void *drawable, double ts)
 		uint32_t after = (uint32_t)ctx->fade_state.elapsed_vbls + 1u;
 		if (after < (uint32_t)ctx->fade_state.duration_vbls) {
 			any_still_fading = 1u;
+			continuing_fade = ctx;
 			break;
 		}
 	}
@@ -717,7 +764,7 @@ extern "C" void DSpVBLGammaFadeCallback(void *cb_ctx, void *drawable, double ts)
 			// any_still_fading so a concurrent lower/higher-index fade is not
 			// clobbered to 0. The compositor restores its static display-LUT
 			// composition only once NO context is fading.
-			int32_t rv = dmc_record_gamma_change_with_lut_fade(
+			int32_t rv = DSpPublishFadeGamma(continuing_fade,
 				ctx->fade_state.end_lut, (int)any_still_fading);
 			if (rv != kDMCNoErr) {
 				DSP_LOG("DSpVBLGammaFadeCallback: final-frame DMC push failed "
@@ -747,7 +794,7 @@ extern "C" void DSpVBLGammaFadeCallback(void *cb_ctx, void *drawable, double ts)
 		// LUT with the OR'd fade_active=1 (this context is mid-fade, so the OR is
 		// trivially 1) so the compositor bypasses pow and the ramp marches
 		// linearly (DSp-1.7). Flag + LUT publish atomically.
-		int32_t rv = dmc_record_gamma_change_with_lut_fade(interp_lut, 1);
+		int32_t rv = DSpPublishFadeGamma(ctx, interp_lut, 1);
 		if (rv != kDMCNoErr) {
 			DSP_LOG("DSpVBLGammaFadeCallback: mid-fade DMC push failed "
 					"(ctx=%u, elapsed=%u/%u, rv=%d) - leaving fade active",
@@ -760,119 +807,32 @@ extern "C" void DSpVBLGammaFadeCallback(void *cb_ctx, void *drawable, double ts)
 	}
 }
 
-/* --- VBL service callback ---
- *
- *  Atomic-increment plus the per-context walk + PPC VBLProc invocation
- *  via call_macos3.
- *
- *  Registered from DSpInit via vbl_source_register_secondary_callback
- *  AFTER DSpVBLGammaFadeCallback - 4th and FINAL VBL
- *  secondary callback slot. Unregistered from DSpShutdown FIRST
- *  (reverse registration order).
- *
- *  Execution sequence per VBL tick:
- *    1. atomic_fetch_add s_dsp_vbl_count (monotonic tick).
- *    2. Walk dsp_context_table[0..DSP_MAX_CONTEXTS-1] in INDEX ORDER
- *       (deterministic dispatch).
- *    3. For each Active context with vbl_proc_ptr != 0, invoke the
- *       VBLProc via call_macos3(vbl_proc_ptr, handle, refcon, count).
- *
- *  PPC-trampoline mechanism: call_macos3 is the sanctioned
- *  entry point for PPC subroutine calls from native code. Declared in
- *  SheepShaver/src/Unix/sysdeps.h:490; defined in
- *  SheepShaver/src/kpx_cpu/sheepshaver_glue.cpp:1438-1442; wraps
- *  ppc_cpu->execute_macos_code which handles register save/restore,
- *  stack frame setup, TOC marshalling, and POWERPC_EXEC_RETURN
- *  trampolining (sheepshaver_glue.cpp:652-702). Production precedent:
- *  rave_metal_renderer.mm:2709 (call_macos4 for RAVE notice methods).
- *
- *  VBLProc ABI per DSp 1.7 spec p.81:
- *    void DSpVBLProc(DSpContextReference ctx, void *refCon, UInt32 vblCount)
- *  PPC calling convention: r3=ctx (32-bit handle), r4=refCon (opaque),
- *  r5=vblCount (truncated from s_dsp_vbl_count uint64). Return value
- *  is void (call_macos3's uint32 return is discarded).
- *
- *  Iteration order: dsp_context_table is indexed 0..7;
- *  iteration is linear in index. Since dsp_context_table allocates
- *  lowest-free-index, index-order ==
- *  registration-order for contexts created without intervening Release
- *  calls. DSp 1.7 spec doesn't pin a specific order beyond "all VBLProcs
- *  fire each VBL"; index-order is the natural reading and gives a
- *  deterministic order with no drops, verified across 1000 ticks.
- *
- *  Threading: single-writer emul-thread. The VBL secondary callback
- *  invocation is itself on the emul thread; call_macos3 blocks the
- *  emul thread on PPC execution until the user VBLProc returns. Total
- *  time budget: < 1 ms aggregate across all contexts
- *  (4 contexts x ~250 ?s per VBLProc). If any single VBLProc exceeds
- *  250 ?s, DSP_LOG warns (post-call wall-time check) but the callback
- *  does NOT early-exit - all registered VBLProcs must fire every VBL
- *  per DSp 1.7 semantics. Caller is responsible for keeping VBLProcs
- *  short (documented game-author contract).
- *
- *  Robustness: if call_macos3 returns kDSpInternalErr-like values (no
- *  error path from this API - it's void-returning by design), the
- *  callback continues to the next context. A SIGSEGV in the user
- *  VBLProc is uncatchable and crashes the process; that's a guest-code
- *  bug matching DSp 1.7 semantics (bad VBLProc crashes the game).
- */
+static bool s_dsp_vblproc_pending = false;
+static bool s_dsp_vblproc_delivering = false;
+
 extern "C" void DSpVBLServiceCallback(void *cb_ctx, void *drawable, double ts)
 {
 	(void)cb_ctx; (void)drawable; (void)ts;
+	atomic_fetch_add_explicit(&s_dsp_vbl_count, 1u, memory_order_relaxed);
+	s_dsp_vblproc_pending = true;
+}
 
-	/* Step 1: monotonic tick counter. Relaxed ordering - reader
-	 * side only needs monotonicity, not happens-before vs other state. */
-	atomic_fetch_add_explicit(&s_dsp_vbl_count, 1u,
-							  memory_order_relaxed);
-
-	/* Step 2-3: walk contexts in INDEX ORDER;
-	 * invoke registered VBLProcs via call_macos3. */
-
-	/* Read the post-increment tick count once - all VBLProcs fired this
-	 * tick see the same vblCount argument. Matches DSp 1.7 spec p.81
-	 * which documents vblCount as "the tick number of the VBL that
-	 * fired this call". */
-	const uint32_t vbl_count_arg =
-		(uint32_t)(atomic_load_explicit(&s_dsp_vbl_count,
-										 memory_order_relaxed) & 0xFFFFFFFFu);
-
-	for (uint32_t i = 0; i < DSP_MAX_CONTEXTS; i++) {
+extern "C" void DSpDeliverPendingVBLProcs(void)
+{
+	uint32_t vbl_count_arg;
+	uint32_t i;
+	if (!s_dsp_vblproc_pending || s_dsp_vblproc_delivering)
+		return;
+	s_dsp_vblproc_pending = false;
+	s_dsp_vblproc_delivering = true;
+	vbl_count_arg = (uint32_t)(atomic_load_explicit(&s_dsp_vbl_count, memory_order_relaxed) & 0xFFFFFFFFu);
+	for (i = 0; i < DSP_MAX_CONTEXTS; i++) {
 		DSpContextPrivate *ctx = dsp_context_table[i];
-		if (ctx == NULL) continue;
-
-		/* Only Active contexts fire VBLProcs per DSp 1.7 spec p.81
-		 * ("VBLProcs are dispatched only while the context is in the
-		 * Active play state"). Inactive + Paused contexts retain their
-		 * registered proc but do not fire. */
-		if (ctx->state != (uint32_t)kDSpContextState_Active) continue;
-
-		/* Early-out: no proc installed. The `vbl_proc_ptr == 0` case
-		 * includes both "never installed" and "explicitly uninstalled
-		 * via SetVBLProc(ptr=0)" per DSp 1.7 spec p.81. */
-		if (ctx->vbl_proc_ptr == 0) continue;
-
-		/* Snapshot the proc + refcon + handle to local vars so the call
-		 * sees a consistent tuple even if (hypothetically) the fields
-		 * were mutated by future code. In practice single-writer
-		 * main==emul execution makes this an invariant - snapshotting is
-		 * defense-in-depth if a future thread split weakens it. */
-		const uint32_t proc_addr    = ctx->vbl_proc_ptr;
-		const uint32_t proc_refcon  = ctx->vbl_proc_refcon;
-		const uint32_t proc_handle  = ctx->handle;
-
-		/* Invoke user VBLProc per the VBLProc ABI:
-		 *   r3 = ctx (DSpContextReference, 32-bit handle)
-		 *   r4 = refCon (opaque)
-		 *   r5 = vblCount (UInt32 tick count)
-		 * call_macos3 marshals these into PPC r3/r4/r5, executes the
-		 * TVECT-addressed routine, and returns on POWERPC_EXEC_RETURN.
-		 * Return value ignored (VBLProc is void-returning in spec).
-		 */
-		(void)call_macos3(proc_addr,
-						  proc_handle,
-						  proc_refcon,
-						  vbl_count_arg);
+		if (ctx == NULL || ctx->state != (uint32_t)kDSpContextState_Active || ctx->vbl_proc_ptr == 0)
+			continue;
+		(void)call_macos3(ctx->vbl_proc_ptr, ctx->handle, ctx->vbl_proc_refcon, vbl_count_arg);
 	}
+	s_dsp_vblproc_delivering = false;
 }
 
 
@@ -1032,6 +992,7 @@ extern "C" int32_t DSpProcessEventHandler(uint32_t inEventAddr,
 		return kDSpInvalidAttributesErr;
 	}
 
+	WriteMacInt8(outProcessedAddr, 0);
 	uint16_t what    = (uint16_t)ReadMacInt16(inEventAddr + 0);
 	uint32_t message = (uint32_t)ReadMacInt32(inEventAddr + 2);
 
@@ -1079,8 +1040,10 @@ extern "C" int32_t DSpProcessEventHandler(uint32_t inEventAddr,
 					if (ctx == NULL) continue;
 					if (ctx->state != (uint32_t)kDSpContextState_Paused) continue;
 					if (ctx->paused_by_background == 0) continue;
-					(void)DSpContext_SetStateHandler(ctx->handle,
+					int32_t rc = DSpContext_SetStateHandler(i + 1u,
 						(uint32_t)kDSpContextState_Active);
+					if (rc != kDSpNoErr) return rc;
+					if (DSpGetContext(i + 1u) != ctx) return kDSpInvalidContextErr;
 					ctx->paused_by_background = 0;
 				}
 			} else {
@@ -1093,8 +1056,10 @@ extern "C" int32_t DSpProcessEventHandler(uint32_t inEventAddr,
 					DSpContextPrivate *ctx = DSpGetContext(i + 1u);
 					if (ctx == NULL) continue;
 					if (ctx->state != (uint32_t)kDSpContextState_Active) continue;
-					(void)DSpContext_SetStateHandler(ctx->handle,
+					int32_t rc = DSpContext_SetStateHandler(i + 1u,
 						(uint32_t)kDSpContextState_Paused);
+					if (rc != kDSpNoErr) return rc;
+					if (DSpGetContext(i + 1u) != ctx) return kDSpInvalidContextErr;
 					ctx->paused_by_background = 1;
 				}
 			}
@@ -1213,16 +1178,13 @@ extern "C" void DSpHandleForegroundFromEmulThread(void)
 
 		/* Cold-start: force full re-upload on next SwapBuffers
 		 * regardless of any stale dirty-rect accumulator contents. */
+		DSpSaveUnderlayRestoreRegion(ctx);
 		ctx->dirty_cold_start = true;
 		ctx->dirty_empty      = true;
 		ctx->dirty_left       = 0;
 		ctx->dirty_top        = 0;
 		ctx->dirty_right      = 0;
 		ctx->dirty_bottom     = 0;
-
-		/* Invalidate the restore flag - defence-in-depth against a
-		 * redundant foreground event double-restoring the context. */
-		ctx->persisted.invalidated_full = 0u;
 
 		if (DSpContext_SetStateHandler(
 				ctx->handle,
@@ -1231,6 +1193,8 @@ extern "C" void DSpHandleForegroundFromEmulThread(void)
 					"context remains Paused", ctx->handle);
 			continue;
 		}
+		if (DSpGetContext(i + 1u) != ctx) continue;
+		ctx->persisted.invalidated_full = 0u;
 
 		DSP_LOG("Foreground: ctx=%u Paused->Active "
 				"(back-buffer re-allocated; dirty_cold_start=1)",
@@ -1710,6 +1674,14 @@ extern "C" uint32_t DSpAllocMetadataContextHandle(
 {
 	if (attr == NULL) return 0;
 
+	for (uint32_t i = 0; i < DSP_MAX_CONTEXTS; i++) {
+		DSpContextPrivate *existing = dsp_context_table[i];
+		if (!DSpIsInactiveMetadataOnlyContext(existing)) continue;
+		if (existing->enumeration_mode_index != enumeration_mode_index) continue;
+		if (memcmp(&existing->attr, attr, sizeof(*attr)) != 0) continue;
+		return existing->handle;
+	}
+
 	uint32_t handle = DSpAllocFirstContextHandle(attr, enumeration_mode_index);
 	if (handle != 0) return handle;
 
@@ -1747,12 +1719,17 @@ extern "C" int32_t DSpContext_ReleaseHandler(uint32_t ctxRef)
 		DSP_LOG("Release: invalid ctxRef=%u", ctxRef);
 		return kDSpInvalidContextErr;
 	}
-	if (ctx->state == (uint32_t)kDSpContextState_Active) {
+	if (ctx->state != (uint32_t)kDSpContextState_Inactive) {
 		const int32_t state_err = DSpContext_SetStateHandler(
 			ctxRef, (uint32_t)kDSpContextState_Inactive);
 		if (state_err != kDSpNoErr)
 			return state_err;
+		if (DSpGetContext(ctxRef) != ctx)
+			return kDSpInvalidContextErr;
 	}
+	const int32_t fade_err = DSpCancelContextFade(ctx);
+	if (fade_err != kDSpNoErr)
+		return fade_err;
 	/* The Window Manager backdrop cannot outlive its DSp context. */
 	DSpSetContextBackdropWindow(ctx, false);
 	DSpFreeContextHandle(ctxRef);
@@ -2281,76 +2258,101 @@ extern "C" int32_t DSpBlit_FasterHandler(uint32_t inBlitInfo,
  *  plain memcpy. */
 
 
+extern "C" void DSpSaveUnderlayRestoreRegion(DSpContextPrivate *ctx)
+{
+	int32_t left;
+	int32_t top;
+	int32_t right;
+	int32_t bottom;
+	if (ctx == NULL || ctx->underlay_alt_buffer == 0)
+		return;
+	left = ctx->dirty_left;
+	top = ctx->dirty_top;
+	right = ctx->dirty_right;
+	bottom = ctx->dirty_bottom;
+	if (ctx->dirty_cold_start || ctx->dirty_empty) {
+		left = 0;
+		top = 0;
+		right = (int32_t)DSpContextBackBufferWidth(ctx);
+		bottom = (int32_t)DSpContextBackBufferHeight(ctx);
+	}
+	if (ctx->underlay_restore_pending) {
+		if (left > ctx->underlay_restore_left) left = ctx->underlay_restore_left;
+		if (top > ctx->underlay_restore_top) top = ctx->underlay_restore_top;
+		if (right < ctx->underlay_restore_right) right = ctx->underlay_restore_right;
+		if (bottom < ctx->underlay_restore_bottom) bottom = ctx->underlay_restore_bottom;
+	}
+	ctx->underlay_restore_left = left;
+	ctx->underlay_restore_top = top;
+	ctx->underlay_restore_right = right;
+	ctx->underlay_restore_bottom = bottom;
+	ctx->underlay_restore_pending = true;
+}
+
 static void DSpRestoreBackBufferFromUnderlay(DSpContextPrivate *ctx)
 {
-	if (ctx == NULL || ctx->underlay_alt_buffer == 0) return;
-	DSpAltBufferRecord *u = DSpGetAltBuffer(ctx->underlay_alt_buffer);
+	DSpAltBufferRecord *u;
+	uint32_t depth, width, height, px, srcrb, dstrb;
+	int32_t left, top, right, bottom, y;
+	uint64_t srcend, dstend;
+	uint8_t *src = NULL;
+	uint8_t *dst = NULL;
+	if (ctx == NULL || ctx->underlay_alt_buffer == 0 || !ctx->underlay_restore_pending)
+		return;
+	u = DSpGetAltBuffer(ctx->underlay_alt_buffer);
 	if (u == NULL) {
-		/* Stale designation (underlay disposed) - clear it defensively. */
 		ctx->underlay_alt_buffer = 0;
+		ctx->underlay_restore_pending = false;
 		return;
 	}
-	/* Mirror the guest-drawn staging into the underlay's Metal backing so the
-	 * CPU dirty-band restore reads the guest's pixels (NQD draws land in the
-	 * guest-RAM staging, not Metal). */
-	DSpSyncAltBufferStagingToBacking(u);
-	/* Only restore the BACK buffer's invalid (dirty) areas (PDF p.51). When
-	 * the back buffer is clean there is nothing to clean. */
-	if (ctx->dirty_empty) return;
-	if (ctx->back_buffer == NULL) return;
-
-	/* Intersection of the back-buffer dirty rect with the underlay bounds. */
-	int32_t rx0 = ctx->dirty_left,  ry0 = ctx->dirty_top;
-	int32_t rx1 = ctx->dirty_right, ry1 = ctx->dirty_bottom;
-	if (rx0 < 0) rx0 = 0;
-	if (ry0 < 0) ry0 = 0;
-	if ((uint32_t)rx1 > u->width)  rx1 = (int32_t)u->width;
-	if ((uint32_t)ry1 > u->height) ry1 = (int32_t)u->height;
-	if (rx1 <= rx0 || ry1 <= ry0) return;
-
-	/* (1) CPU restore copy (underlay -> back buffer) - only when both
-	 * backings are host-visible (Shared). Alt buffers inherit the owning
-	 * context's depth at New time (DSpAllocAltBufferBacking), so when the
-	 * depths still agree the copy is a direct row-wise memcpy of the dirty
-	 * band at that depth. Skipped on StorageModePrivate (simulator) where
-	 * contents is NULL.
-	 *
-	 * The depths can only disagree if the context was re-Reserved at a new
-	 * depth after the underlay was created; a cross-depth restore would need
-	 * a per-pixel format conversion that is NOT implemented, so the PDF-p.51
-	 * "clean a back buffer" restore no-ops there (production SubmitFrame
-	 * ignores underlay-slot layers, so there is no compositor fallback). The
-	 * else-branch logs the skipped restore rather than silently no-op'ing. */
-	void *u_contents  = DSpGetBackingContents(u->backing);
-	void *bb_contents = DSpGetBackingContents(ctx->back_buffer);
-	uint32_t bb_depth = ctx->attr.backBufferBestDepth;
-	if (u_contents != NULL && bb_contents != NULL &&
-		u->depth == bb_depth &&
-		(bb_depth == 8 || bb_depth == 16 || bb_depth == 32)) {
-		uint32_t px_bytes = bb_depth / 8u;
-		uint32_t u_rb  = ((u->width * px_bytes) + 255u) & ~255u;
-		uint32_t bb_rb = DSpAlignedRowBytes(DSpContextBackBufferWidth(ctx),
-											bb_depth);
-		uint8_t *u_base  = (uint8_t *)u_contents;
-		uint8_t *bb_base = (uint8_t *)bb_contents;
-		uint32_t band_bytes = (uint32_t)(rx1 - rx0) * px_bytes;
-		for (int32_t y = ry0; y < ry1; y++) {
-			uint8_t *src = u_base  + (uint32_t)y * u_rb  + (uint32_t)rx0 * px_bytes;
-			uint8_t *dst = bb_base + (uint32_t)y * bb_rb + (uint32_t)rx0 * px_bytes;
-			memcpy(dst, src, band_bytes);
-		}
-		DSP_LOG("UnderlayRestore: ctx=%u underlay=%u copied dirty band "
-				"(%d,%d)-(%d,%d) @%ubpp", ctx->handle, ctx->underlay_alt_buffer,
-				rx0, ry0, rx1, ry1, bb_depth);
-	} else if (u_contents != NULL && bb_contents != NULL) {
-		/* Depth mismatch precludes the restore copy.
-		 * Make the skipped restore observable instead of silently no-op'ing. */
-		DSP_LOG("UnderlayRestore: ctx=%u underlay=%u depth mismatch "
-				"(underlay=%u back-buffer=%u) - CPU dirty-band restore SKIPPED "
-				"(cross-depth conversion deferred; no compositor underlay "
-				"fallback)",
-				ctx->handle, ctx->underlay_alt_buffer, u->depth, bb_depth);
+	depth = ctx->attr.backBufferBestDepth;
+	if (u->depth != depth || (depth != 8 && depth != 16 && depth != 32))
+		return;
+	width = DSpContextBackBufferWidth(ctx);
+	height = DSpContextBackBufferHeight(ctx);
+	px = depth / 8u;
+	srcrb = DSpAlignedRowBytes(u->width, depth);
+	dstrb = DSpAlignedRowBytes(width, depth);
+	left = ctx->underlay_restore_left;
+	top = ctx->underlay_restore_top;
+	right = ctx->underlay_restore_right;
+	bottom = ctx->underlay_restore_bottom;
+	if (left < 0) left = 0;
+	if (top < 0) top = 0;
+	if (right > (int32_t)width) right = (int32_t)width;
+	if (right > (int32_t)u->width) right = (int32_t)u->width;
+	if (bottom > (int32_t)height) bottom = (int32_t)height;
+	if (bottom > (int32_t)u->height) bottom = (int32_t)u->height;
+	if (right <= left || bottom <= top) {
+		ctx->underlay_restore_pending = false;
+		return;
 	}
+	srcend = (uint64_t)(bottom - 1) * srcrb + (uint64_t)right * px;
+	dstend = (uint64_t)(bottom - 1) * dstrb + (uint64_t)right * px;
+	if (u->baseaddr_mac != 0) {
+		if (srcend > u->baseaddr_size ||
+			!DSpGuestRAMContains(u->baseaddr_mac, (uint32_t)srcend, (uint32_t)RAMBase, (uint32_t)RAMSize))
+			return;
+		src = Mac2HostAddr(u->baseaddr_mac);
+	} else {
+		src = (uint8_t *)DSpGetBackingContents(u->backing);
+	}
+	if (ctx->staging_mac_addr != 0) {
+		if (dstend > ctx->staging_size ||
+			!DSpGuestRAMContains(ctx->staging_mac_addr, (uint32_t)dstend, (uint32_t)RAMBase, (uint32_t)RAMSize))
+			return;
+		dst = Mac2HostAddr(ctx->staging_mac_addr);
+	} else {
+		dst = (uint8_t *)DSpGetBackingContents(ctx->back_buffer);
+	}
+	if (src == NULL || dst == NULL)
+		return;
+	NQDMetalFlush();
+	for (y = top; y < bottom; ++y)
+		memmove(dst + (uint32_t)y * dstrb + (uint32_t)left * px,
+				src + (uint32_t)y * srcrb + (uint32_t)left * px,
+				(uint32_t)(right - left) * px);
+	ctx->underlay_restore_pending = false;
 }
 
 /* --------------------------------------------------------------------- *
@@ -2759,6 +2761,12 @@ extern "C" int32_t DSpContext_SetStateHandler(uint32_t ctxRef, uint32_t state)
 				ctxRef, state);
 		return kDSpNoErr;
 	}
+	if (state == (uint32_t)kDSpContextState_Active && ctx->back_buffer == NULL) {
+		DSP_LOG("SetState: ctx=%u has no drawable back-buffer", ctxRef);
+		if (ctx->persisted.invalidated_full != 0)
+			return kDSpInternalErr;
+		return kDSpContextNotReservedErr;
+	}
 
 	const bool activating =
 		state == (uint32_t)kDSpContextState_Active &&
@@ -3018,6 +3026,10 @@ extern "C" void DSpShutdownContexts(void)
 					ctx->handle, err);
 		}
 	}
+	DSpResetAltBufferTable();
+	uint8_t lut[768];
+	DSpCopyDriverGammaLUT(lut);
+	(void)DSpPublishFadeGamma(NULL, lut, 0);
 }
 
 /* --- DSpContext_GetStateHandler ---
@@ -3354,15 +3366,12 @@ extern "C" uint32_t DSpEmitSurfaceCGrafPort(uint32_t baseAddr_mac,
 				  vis_rgn_handle);
 	WriteMacInt32(cgrafptr_addr + DSP_CGRAFPORT_OFF_CLIP_RGN,
 				  clip_rgn_handle);
-	WriteMacInt16(cgrafptr_addr + DSP_CGRAFPORT_OFF_RGB_FG_COLOR + 0,
-				  0xffff);
-	WriteMacInt16(cgrafptr_addr + DSP_CGRAFPORT_OFF_RGB_FG_COLOR + 2,
-				  0xffff);
-	WriteMacInt16(cgrafptr_addr + DSP_CGRAFPORT_OFF_RGB_FG_COLOR + 4,
-				  0xffff);
-	WriteMacInt16(cgrafptr_addr + DSP_CGRAFPORT_OFF_RGB_BK_COLOR + 0, 0);
-	WriteMacInt16(cgrafptr_addr + DSP_CGRAFPORT_OFF_RGB_BK_COLOR + 2, 0);
-	WriteMacInt16(cgrafptr_addr + DSP_CGRAFPORT_OFF_RGB_BK_COLOR + 4, 0);
+	WriteMacInt16(cgrafptr_addr + DSP_CGRAFPORT_OFF_RGB_FG_COLOR + 0, 0);
+	WriteMacInt16(cgrafptr_addr + DSP_CGRAFPORT_OFF_RGB_FG_COLOR + 2, 0);
+	WriteMacInt16(cgrafptr_addr + DSP_CGRAFPORT_OFF_RGB_FG_COLOR + 4, 0);
+	WriteMacInt16(cgrafptr_addr + DSP_CGRAFPORT_OFF_RGB_BK_COLOR + 0, 0xffff);
+	WriteMacInt16(cgrafptr_addr + DSP_CGRAFPORT_OFF_RGB_BK_COLOR + 2, 0xffff);
+	WriteMacInt16(cgrafptr_addr + DSP_CGRAFPORT_OFF_RGB_BK_COLOR + 4, 0xffff);
 	WriteMacInt16(cgrafptr_addr + DSP_CGRAFPORT_OFF_PN_SIZE + 0, 1);
 	WriteMacInt16(cgrafptr_addr + DSP_CGRAFPORT_OFF_PN_SIZE + 2, 1);
 	WriteMacInt16(cgrafptr_addr + DSP_CGRAFPORT_OFF_PN_MODE, 8);
@@ -4355,8 +4364,7 @@ extern "C" int32_t DSpContext_FadeGammaHandler(uint32_t ctxRef,
 	 * mid-fade (LUT must march linearly, and driver SetGamma arriving
 	 * now must defer, not pop); 100 restores the driver table and ends
 	 * the fade. */
-	int32_t rv = dmc_record_gamma_change_with_lut_fade(
-		target_lut, (inPercent != 100) ? 1 : 0);
+	int32_t rv = DSpPublishFadeGamma(ctx, target_lut, inPercent != 100);
 	if (rv != kDMCNoErr) {
 		DSP_LOG("FadeGamma: dmc_record_gamma_change_with_lut_fade returned %d "
 				"for ctx=%u",

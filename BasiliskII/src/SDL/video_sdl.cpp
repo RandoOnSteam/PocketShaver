@@ -591,6 +591,19 @@ static void set_mac_frame_buffer(SDL_monitor_desc &monitor, int depth)
 	D(bug("monitor.mac_frame_base = %08x\n", monitor.get_mac_frame_base()));
 }
 
+bool video_get_frame_buffer_range(uint32 *mac_base, uint32 *size)
+{
+#if REAL_ADDRESSING || DIRECT_ADDRESSING
+	if (the_buffer == NULL || the_buffer_size == 0)
+		return false;
+	*mac_base = Host2MacAddr(the_buffer);
+	*size = the_buffer_size;
+	return true;
+#else
+	return false;
+#endif
+}
+
 // Set window name and class
 static void set_window_name(bool mouse_grabbed)
 {

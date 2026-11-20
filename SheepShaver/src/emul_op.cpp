@@ -82,13 +82,40 @@ void GetInterruptServiceDiagnostics(InterruptServiceDiagnostics &d)
 	d.via_services = via_service_count;
 }
 
+
+
+
+/*
+ *  SynchIdleTime sleep. Games yield here between frames and streamed reads,
+ *  so sleeping to the next 60Hz tick costs up to 16.7 ms per yield. While a
+ *  3D or DrawSprocket context owns the screen the sleep is capped; the
+ *  desktop keeps the full power-saving sleep.
+ */
+
+#if defined(__APPLE__) && (defined(ENABLE_GFXACCEL) || (defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE))
+extern "C" __attribute__((weak)) int gfx_idle_latency_sensitive(void) { return 0; }
+#endif
+
+static const uint32 IDLE_WAIT_3D_USEC = 1000;
+
+static void synch_idle_wait(void)
+{
+#if defined(__APPLE__) && (defined(ENABLE_GFXACCEL) || (defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE))
+	if (gfx_idle_latency_sensitive()) {
+		idle_wait_usec(IDLE_WAIT_3D_USEC);
+		return;
+	}
+#endif
+	idle_wait();
+}
+
 static void IdleWaitMeasured(void)
 {
 #if EMULATED_PPC
 	PPCExceptionIdleDiagnostic();
 #endif
 	const uint64 started = GetTicks_usec();
-	idle_wait();
+	synch_idle_wait();
 	IdleWaitUsec += GetTicks_usec() - started;
 	IdleWaitCount++;
 }
@@ -425,7 +452,7 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 			if (HasMacStarted()) {
 				if (InterruptFlags & INTFLAG_RSRC) {
 					ClearInterruptFlag(INTFLAG_RSRC);
-					DrainPendingResourceLocks();	// DII fix: lock sound-component PEF handles ASAP after load (before CFM prepare can purge them)
+					DrainPendingResourceLocks();	// lock sound-component PEF handles before CFM prepare can purge them
 				}
 				if (InterruptFlags & INTFLAG_VIA) {
 					ClearInterruptFlag(INTFLAG_VIA);
@@ -606,20 +633,16 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 				break;
 			uint16 *p = (uint16 *)Mac2HostAddr(adr);
 			uint32 size = ReadMacInt32(adr - 8) & 0xffffff;
-			maybe_queue_nift_lock(type, r->a[0]);	// DII fix: schedule sound-component PEF lock
+			maybe_queue_nift_lock(type, r->a[0]);	// schedule sound-component PEF lock
 			CheckLoad(type, id, p, size);
 			break;
 		}
 
 		case OP_DISPOSE_NIFT_GUARD:	// _DisposHandle head-patch: A0 = handle
-			// Keep a live monitored 'nift' sound-component fragment ALIVE.  If the
-			// handle being disposed is one we lock, report SKIP so the thunk RTSs
-			// without freeing (intentional bounded leak), leaving CFM's prepared
-			// cross-TOC TVectors valid -> no use-after-free regardless of timing.
-			// Otherwise report CHAIN and hand the thunk the stock _DisposHandle
-			// entry in A1 (captured at install via GetOSTrapAddress) so it tail-
-			// jumps there.  A0 (handle) is preserved for the chain; A1/D1 are
-			// scratch for _DisposHandle (it consumes only A0, returns D0=MemError).
+			// Never free a locked 'nift' sound-component fragment: report SKIP so
+			// the thunk RTSs (a deliberate bounded leak) and CFM's cross-TOC
+			// TVectors stay valid. Otherwise CHAIN to the stock _DisposHandle in
+			// A1. A0 is preserved; A1/D1 are scratch for _DisposHandle.
 			if (RsrcLockIsLiveNift(r->a[0])) {
 				r->d[1] = 1;					// verdict: SKIP (keep the block alive)
 				r->d[0] = 0;					// MemError() = noErr for the skipped dispose

@@ -300,7 +300,7 @@ void GfxAccelHostOverlayRelease(void *texture)
 
 void GfxAccelHostOverlayBind(int32_t width, int32_t height)
 {
-	gl_overlay_bind(0, 0, width, height);
+	gl_overlay_bind(NULL, 0, 0, width, height);
 }
 
 int GfxAccelHostDeviceReady(void)
@@ -771,7 +771,7 @@ void GfxAccelHostDrawAttributes(GLContext *context, void *handle, uint32_t mode,
 		return;
 	for (unit = 0; unit < GFXACCELHOSTTEXTUREUNITS; unit++) {
 		enabled[unit] = context->tex_units[unit].enabled_2d;
-		if (((GfxAccelHostTarget *)handle)->programenabled[1] && context->tex_units[unit].bound_object_2d)
+		if (((GfxAccelHostTarget *)handle)->programenabled[1] && (context->tex_units[unit].bound_object_2d || GLBoundTextureObject(context, unit, GL_TEXTURE_2D)))
 			context->tex_units[unit].enabled_2d = true;
 	}
 	GLMetalApplyState(context);

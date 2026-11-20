@@ -47,6 +47,8 @@
 #define GFXACCELHOSTFOGEXP 2
 #define GFXACCELHOSTFOGEXP2 3
 
+#include <vector>
+
 struct GLContext;
 struct GLTextureObject;
 
@@ -55,7 +57,8 @@ char *GfxAccelHostTranslateProgram(const char *programtext, uint32_t length, int
 int GfxAccelHostProgramTextureTargets(const char *programtext, uint32_t length, uint32_t *targets);
 
 void GfxAccelHostBeginFrame(GLContext *ctx);
-void GfxAccelHostBitmap(GLContext *ctx, int width, int height, const uint8_t *bgra_data, int data_len);
+void GfxAccelHostBitmap(GLContext *ctx, int width, int height, const uint8_t *bgra_data, int data_len, float xorig, float yorig);
+bool GfxAccelHostCopyFramebufferToTexture(GLContext *ctx, GLTextureObject *texObj, int level, int xoffset, int yoffset, int x, int y, int width, int height, bool redefine = false);
 void GfxAccelHostClear(GLContext *ctx, uint32_t mask);
 void GfxAccelHostDestroyTexture(GLTextureObject *texObj);
 void GfxAccelHostDrawPixels(GLContext *ctx, int width, int height, const uint8_t *bgra_data, int data_len);
@@ -63,6 +66,7 @@ void GfxAccelHostEndFrame(GLContext *ctx);
 void GfxAccelHostFlushImmediateMode(GLContext *ctx);
 void GfxAccelHostInit(GLContext *ctx);
 uint8_t * GfxAccelHostReadFramebufferRect(GLContext *ctx, int x, int y, int width, int height, int *out_len);
+bool GfxAccelHostReadTexture(GLContext *ctx, GLTextureObject *texObj, int32_t level, int32_t width, int32_t height, std::vector<uint8_t> &pixels);
 void GfxAccelHostRelease(GLContext *ctx);
 void GfxAccelHostUpload3DTexture(GLContext *ctx, GLTextureObject *texObj, int level, int width, int height, int depth, const uint8_t *data, int dataLen);
 void GfxAccelHostUploadSubTexture(GLContext *ctx, GLTextureObject *texObj, int level, int xoff, int yoff, int w, int h, const uint8_t *data, int bytesPerRow);

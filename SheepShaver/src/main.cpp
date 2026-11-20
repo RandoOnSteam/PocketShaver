@@ -349,8 +349,7 @@ void ExitAll(void)
 
 void PatchAfterStartup(void)
 {
-	// One-time patches: NQD acceleration hooks and ExtFS.
-	// These are idempotent but wasteful to repeat, so guard them.
+	// One-time patches (idempotent, but wasteful to repeat)
 	static bool one_time_done = false;
 	if (!one_time_done) {
 		one_time_done = true;

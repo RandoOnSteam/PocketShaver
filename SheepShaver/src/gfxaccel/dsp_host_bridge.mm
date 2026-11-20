@@ -8,39 +8,12 @@
  *  the Free Software Foundation; either version 2 of the License, or
  *  (at your option) any later version.
  *
- *  The setter performs the full NotificationCenter wiring.
- *  DSpIdleTimerService.swift observes the posted notification on the
- *  main queue and toggles UIApplication.shared.isIdleTimerDisabled.
+ *  Tells DSpIdleTimerService.swift when a DSp context goes Active fullscreen
+ *  so it can disable the idle timer. The setter runs on the emul thread; the
+ *  Swift observer handles the notification on the main queue.
  *
- *  Threading:
- *    - Setter called from DSpContext_SetStateHandler on the emul thread.
- *    - NotificationCenter.postNotification is thread-safe by Apple's
- *      documented contract (internal lock; safe to call from any thread).
- *    - Observer closure runs on main queue (queue: .main in addObserver
- *      call) - UIApplication.shared.isIdleTimerDisabled write happens on
- *      main thread per UIKit's main-thread contract.
- *    - Getter: single-word atomic_uint32 read (memory_order_relaxed);
- *      callable from any thread.
- *
- *  Threading rationale for the atomic flag:
- *    - Single writer: DSpContext_SetStateHandler on emul thread
- *      (NATIVE_DSP_DISPATCH serialized).
- *    - Readers: DSpIdleTimerService on main thread via the
- *      willEnterForegroundNotification observer; the emul-thread
- *      conditional-set read in DSpContext_SetStateHandler (both via
- *      DSpHostBridge_GetActiveFullscreen).
- *    - Cross-thread single-word bool - the atomic flag with
- *      memory_order_relaxed is the minimum sanctioned primitive per the
- *      read-mostly precedent. The threading-grep CI gate
- *      (MTLFence|MTLSharedEvent|std::mutex|@synchronized) does not
- *      match the atomic flag by design.
- *
- *  The `atomic_uint32 s_dsp_active_fullscreen` flag is kept
- *  because DSpIdleTimerService re-reads it on willEnterForegroundNotification
- *  - the notification post path alone would miss the case where DSp
- *  transitioned to Active-fullscreen WHILE the app was backgrounded (no
- *  observer firing during that window). The flag provides the source of
- *  truth for foreground re-apply decisions.
+ *  The flag is also re-read on willEnterForeground, because a transition
+ *  made while backgrounded would otherwise be missed.
  */
 
 #import <Foundation/Foundation.h>

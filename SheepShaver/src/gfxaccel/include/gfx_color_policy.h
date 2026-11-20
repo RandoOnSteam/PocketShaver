@@ -13,21 +13,14 @@
 #include <string.h>
 
 /*
- * DMC snapshots store the Mac-side gamma/fade LUT: identity means "full
- * classic Mac intensity". The compositor converts that source LUT into the
- * display-ready LUT sampled by every visible path. Outside active DSp fades,
- * the default display policy composes the classic Mac 1.8 gamma space into
- * the modern sRGB-ish 2.2 display space. During an active fade, the LUT is
- * used directly so DSp's linear fade ramps stay linear instead of being
- * warped by a static display correction.
+ * DMC snapshots hold the guest gamma/fade LUT. The compositor turns it into
+ * the display LUT sampled by every visible path. During a DSp fade the LUT is
+ * used as-is so fade ramps stay linear.
  *
- * Single-owner rule: on iOS the compositor LUT is the ONLY place driver
- * gamma is applied. The legacy CPU bake in video.cpp cscSetEntries
- * (palette entries pre-multiplied through the guest gamma table) is
- * disabled under TARGET_OS_IPHONE - with the LUT also carrying the guest
- * table, the bake would apply gamma twice on every indexed path. Any new
- * consumer of csSave->gammaTable must route through
- * publish_gamma_lut_to_display_controller instead of baking.
+ * On iOS the compositor LUT is the only place driver gamma is applied; the
+ * cscSetEntries palette bake in video.cpp is disabled there, or indexed paths
+ * would get gamma twice. New consumers of csSave->gammaTable must go through
+ * publish_gamma_lut_to_display_controller rather than baking.
  */
 
 static inline uint8_t GfxColorByteFromUnitFloat(float unit)

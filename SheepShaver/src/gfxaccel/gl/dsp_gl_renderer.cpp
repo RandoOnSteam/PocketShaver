@@ -260,6 +260,7 @@ int32_t DSpContext_SwapBuffersHandler(uint32_t ctxRef,
 	DSpContextPrivate *ctx = DSpGetContext(ctxRef);
 	if (!ctx || !ctx->back_buffer) return kDSpInternalErr;
 
+	DSpSaveUnderlayRestoreRegion(ctx);
 	ctx->dirty_cold_start = false;
 	ctx->dirty_empty = true;
 

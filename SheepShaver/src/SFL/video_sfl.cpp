@@ -129,6 +129,15 @@ static bool SflVideoMapBuffer(void)
 	return true;
 }
 
+bool video_get_frame_buffer_range(uint32 *mac_base, uint32 *size)
+{
+	if (SflVideo.buffer == NULL || SflVideo.buffersize == 0)
+		return false;
+	*mac_base = SFLMAINVIDEOBASE;
+	*size = (uint32)SflVideo.buffersize;
+	return true;
+}
+
 static void SflVideoOpenMode(int index)
 {
 	VideoInfo *mode;
@@ -301,6 +310,10 @@ void VideoQuitFullScreen(void)
 	SflUiQuitFullScreen();
 }
 
+#if defined(ENABLE_GFXACCEL) && defined(SHEEPSHAVER)
+extern "C" void DSpDeliverPendingVBLProcs(void);
+#endif
+
 void VideoVBL(void)
 {
 #if defined(ENABLE_GFXACCEL)
@@ -311,6 +324,9 @@ void VideoVBL(void)
 #endif
 	if (private_data != NULL && private_data->interruptsEnabled)
 		VSLDoInterruptService(private_data->vslServiceID);
+#if defined(ENABLE_GFXACCEL) && defined(SHEEPSHAVER)
+	DSpDeliverPendingVBLProcs();
+#endif
 }
 
 int16 video_mode_change(VidLocals *csSave, uint32 ParamPtr)

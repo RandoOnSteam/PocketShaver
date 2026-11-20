@@ -19,7 +19,14 @@
  */
 #define OSXGLGUEST 1
 #include "sysdeps.h"
+#include <algorithm>
 #include <cassert>
+#include <cstddef>
+#include <memory>
+#include <new>
+#include <type_traits>
+#include <unordered_map>
+#include <utility>
 #include <cfloat>
 #include <cmath>
 #include <cstdint>
@@ -78,6 +85,7 @@ static inline void GLPixelUnpackRGBA5551ToBGRA(uint16_t packed, bool reversed, u
 #define WriteMacInt32 OsxGuestWrite32
 #define Mac2HostAddr OsxGuestHostAddress
 #define Mac_sysalloc OsxGuestAllocate
+#define Mac_sysfree OsxGuestFree
 #define Mac_memset OsxGuestSet
 #define Mac2Host_memcpy OsxGuestCopyIn
 #define Host2Mac_memcpy OsxGuestCopyOut
@@ -96,6 +104,7 @@ static inline void GLPixelUnpackRGBA5551ToBGRA(uint16_t packed, bool reversed, u
 #define gl_has_active_overlay osx_gl_has_active_overlay
 #define gl_get_overlay_dims osx_gl_get_overlay_dims
 #define gl_release_overlay_for_detach osx_gl_release_overlay_for_detach
+#define gl_prepare_overlays_for_attach osx_gl_prepare_overlays_for_attach
 
 namespace OsxGl {
 
@@ -108,6 +117,7 @@ void OsxGuestWrite16(uint32 address, uint32 value);
 void OsxGuestWrite32(uint32 address, uint32 value);
 uint8 *OsxGuestHostAddress(uint32 address);
 uint32 OsxGuestAllocate(uint32 size);
+void OsxGuestFree(uint32 address);
 void *OsxGuestSet(uint32 address, int value, size_t length);
 void *OsxGuestCopyIn(void *destination, uint32 source, size_t length);
 void *OsxGuestCopyOut(uint32 destination, const void *source, size_t length);
@@ -362,15 +372,12 @@ void OsxGuestOverlayRelease(int engine, void *texture)
 
 void *OsxGuestEngineCreate(void *share)
 {
-	GLContext *initial;
 	OsxGuestContext *created;
 	GLContext *context;
 	InitFuncSignatures();
 	gl_scratch_addr = OSXGLSCRATCHBASE;
-	initial = GLContextNew(640, 480);
 	created = new OsxGuestContext();
-	*static_cast<GLContext *>(created) = *initial;
-	delete initial;
+	GLContextInitialize(created, 640, 480);
 	context = created;
 	OsxGuestStateOf(context)->guesttarget = GfxAccelHostTargetCreate();
 	if (share) {
@@ -819,7 +826,7 @@ static int OsxGuestReadPixels(GLContext *context, OsxCpu *cpu)
 	for (row = 0; row < height; row++) {
 		packedoffset = 0;
 		for (column = 0; column < width; column++) {
-			const uint8_t *pixel = framebufferpixels + ((size_t)row * width + column) * 4;
+			const uint8_t *pixel = framebufferpixels + ((size_t)(height - 1 - row) * width + column) * 4;
 			for (component = 0; component < 4; component++) {
 				values[component] = 255;
 				if (component < channelcount)
@@ -899,18 +906,15 @@ static void OsxGuestSyncShadow(GLContext *context, int unit)
 		textureunit->enabled_2d = true;
 		textureunit->bound_object_2d = &state->guestshadowtexture;
 		if (state->guesttexture2denabled[unit] && guesttexture != context->texture_objects.end() && guesttexture->second.metal_texture)
-			textureunit->bound_object_2d = &guesttexture->second;
+			textureunit->bound_object_2d = NULL;
 		return;
 	}
 	if (!state->shadowactive[unit])
 		return;
 	state->shadowactive[unit] = false;
 	textureunit->enabled_2d = state->guesttexture2denabled[unit];
-	if (textureunit->bound_object_2d == &state->guestshadowtexture) {
+	if (textureunit->bound_object_2d == &state->guestshadowtexture)
 		textureunit->bound_object_2d = NULL;
-		if (guesttexture != context->texture_objects.end())
-			textureunit->bound_object_2d = &guesttexture->second;
-	}
 }
 
 static int OsxGuestStateQuery(GLContext *context, uint32 name, int *values)
@@ -1137,7 +1141,7 @@ static int OsxGuestCompressedImageCall(GLContext *context, OsxCpu *cpu, uint32 s
 	data = OsxGuestBytes(address, size);
 	if (OsxGuestStateOf(context)->guestfaultraised)
 		return 1;
-	pixels = dxt_decompress_image(data, width, height, format, &bytecount);
+	pixels = dxt_decompress_image(address, width, height, format, (size_t)size, &bytecount);
 	if (!pixels)
 		return 1;
 	if (image && level)
@@ -1177,6 +1181,7 @@ static int OsxGuestVolumeCall(GLContext *context, OsxCpu *cpu, uint32 sub)
 	int depth;
 	int slice;
 	int bytecount;
+	int rowbytes;
 	image = sub == GL_SUB_TEX_IMAGE3D_EXT;
 	if ((!image && sub != GL_SUB_TEX_SUB_IMAGE3D_EXT) || cpu->gpr[4] != GUESTTEXTURE3D)
 		return 0;
@@ -1210,7 +1215,13 @@ static int OsxGuestVolumeCall(GLContext *context, OsxCpu *cpu, uint32 sub)
 		object->depth = depth;
 	}
 	volume.resize((size_t)width * height * depth * 4);
-	slicebytes = (uint32)(ComputeRowStride(width, GLPixelSourceBytesPerPixel(format, type), context->pixel_store.unpack_alignment, context->pixel_store.unpack_row_length) * height);
+	rowbytes = width;
+	if (context->pixel_store.unpack_row_length > 0)
+		rowbytes = context->pixel_store.unpack_row_length;
+	rowbytes *= GLPixelSourceBytesPerPixel(format, type);
+	if (context->pixel_store.unpack_alignment > 1)
+		rowbytes = ((rowbytes + context->pixel_store.unpack_alignment - 1) / context->pixel_store.unpack_alignment) * context->pixel_store.unpack_alignment;
+	slicebytes = (uint32)(rowbytes * height);
 	for (slice = 0; pixels && slice < depth; slice++) {
 		converted = ConvertPixelsToBGRA8(pixels + (uint32)slice * slicebytes, width, height, format, type, context->pixel_store, context, &bytecount);
 		if (!converted)
@@ -2006,6 +2017,11 @@ void OsxGuestWrite32(uint32 address, uint32 value)
 uint8 *OsxGuestHostAddress(uint32 address)
 {
 	return OsxGuestScratch(address);
+}
+
+void OsxGuestFree(uint32 address)
+{
+	(void)address;
 }
 
 uint32 OsxGuestAllocate(uint32 size)

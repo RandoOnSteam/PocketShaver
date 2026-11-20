@@ -1,5 +1,5 @@
 /*
- *  dsp_pixmap_offsets.h - canonical PixMap field offsets + Mac OS lowmem globals
+ *  dsp_pixmap_offsets.h - PixMap field offsets and Mac OS lowmem globals.
  *
  *  (C) 2026 Sierra Burkhart (sierra760)
  *
@@ -8,10 +8,9 @@
  *  the Free Software Foundation; either version 2 of the License, or
  *  (at your option) any later version.
  *
- *  DSP_PIXMAP_OFF_* values are the compact PixMap subset used by DSp's
- *  alt-buffer shim. DSP_MAINDEVICE_PIXMAP_OFF_* values are the real QuickDraw
- *  PixMap offsets used to read the live Display Manager-owned MainDevice and
- *  emit real DSp CGrafPorts.
+ *  DSP_PIXMAP_OFF_* is the compact PixMap subset used by DSp's alt-buffer
+ *  shim. DSP_MAINDEVICE_PIXMAP_OFF_* is the real QuickDraw PixMap layout used
+ *  by MainDevice and real DSp CGrafPorts.
  */
 #ifndef DSP_PIXMAP_OFFSETS_H
 #define DSP_PIXMAP_OFFSETS_H

@@ -1554,12 +1554,9 @@ static void buffer_zsort_tri(RaveDrawPrivate *priv, const HostV &a, const HostV 
 	hostv_pack(c, tri->verts[2]);
 	tri->sortKey = (a.z + b.z + c.z) / 3.0f;
 	tri->textured = textured;
-	tri->textureMacAddr = priv->state[13].i;
-	tri->textureOp = (int32_t)priv->state[12].i;
-	tri->blendMode = (int32_t)priv->state[9].i;
-	tri->glBlendSrc = priv->state[109].i;
-	tri->glBlendDst = priv->state[110].i;
-	tri->filterMode = (int32_t)priv->state[11].i;
+	memcpy(tri->state, priv->state, sizeof(tri->state));
+	tri->multiTextureActive = false;
+	tri->multiTextureHandle = 0;
 }
 
 /* Back-to-front ordering for the software Z-sort buffer. */
@@ -1578,23 +1575,15 @@ static void flush_zsort_buffer(RaveDrawPrivate *priv)
 	std::sort(priv->zsortBuffer, priv->zsortBuffer + priv->zsortCount,
 			  ZSortTriangleFartherFirst);
 
-	uint32_t saved_tex = priv->state[13].i;
-	int32_t saved_top = (int32_t)priv->state[12].i;
-	int32_t saved_blend = (int32_t)priv->state[9].i;
-	uint32_t saved_gs = priv->state[109].i, saved_gd = priv->state[110].i;
-	int32_t saved_filt = (int32_t)priv->state[11].i;
+	RaveStateValue saved_state[RAVE_MAX_TAG];
+	memcpy(saved_state, priv->state, sizeof(saved_state));
 
 	/* Disable depth write for transparent sorted pass (typical RAVE behavior). */
 	glDepthMask(GL_FALSE);
 
 	for (uint32_t i = 0; i < priv->zsortCount; i++) {
 		ZSortTriangle &tri = priv->zsortBuffer[i];
-		priv->state[13].i = tri.textureMacAddr;
-		priv->state[12].i = (uint32_t)tri.textureOp;
-		priv->state[9].i = (uint32_t)tri.blendMode;
-		priv->state[109].i = tri.glBlendSrc;
-		priv->state[110].i = tri.glBlendDst;
-		priv->state[11].i = (uint32_t)tri.filterMode;
+		memcpy(priv->state, tri.state, sizeof(priv->state));
 		invalidate_draw_state(priv->metal);
 		apply_draw_state(priv, tri.textured);
 		glDepthMask(GL_FALSE);
@@ -1602,18 +1591,13 @@ static void flush_zsort_buffer(RaveDrawPrivate *priv)
 		HostV b = hostv_unpack(tri.verts[1]);
 		HostV c = hostv_unpack(tri.verts[2]);
 		glBegin(GL_TRIANGLES);
-		emit_v(a, tri.textured, tri.textureOp);
-		emit_v(b, tri.textured, tri.textureOp);
-		emit_v(c, tri.textured, tri.textureOp);
+		emit_v(a, tri.textured, (int32_t)tri.state[12].i);
+		emit_v(b, tri.textured, (int32_t)tri.state[12].i);
+		emit_v(c, tri.textured, (int32_t)tri.state[12].i);
 		glEnd();
 	}
 
-	priv->state[13].i = saved_tex;
-	priv->state[12].i = (uint32_t)saved_top;
-	priv->state[9].i = (uint32_t)saved_blend;
-	priv->state[109].i = saved_gs;
-	priv->state[110].i = saved_gd;
-	priv->state[11].i = (uint32_t)saved_filt;
+	memcpy(priv->state, saved_state, sizeof(priv->state));
 	priv->zsortCount = 0;
 	apply_depth(priv); /* restore depth write */
 	invalidate_draw_state(priv->metal);
@@ -3031,4 +3015,22 @@ int32_t NativeATIClearDrawBuffer(uint32_t ctx, uint32_t rect)
 int32_t NativeATIClearZBuffer(uint32_t ctx, uint32_t rect)
 {
 	return NativeClearZBuffer(ctx, rect, 0);
+}
+
+void RaveFlushPendingDraws(void)
+{
+	uint32_t handle;
+	if (!SharedMetalDevice())
+		return;
+	flush_draw_batch();
+	for (handle = 1; handle <= RAVE_MAX_CONTEXTS; handle++) {
+		RaveDrawPrivate *context = RaveGetContext(handle);
+		if (context && context->zsortBuffer && context->zsortCount)
+			flush_zsort_buffer(context);
+	}
+}
+
+void RaveInvalidateContextOverlay(RaveDrawPrivate *priv)
+{
+	(void)priv;
 }

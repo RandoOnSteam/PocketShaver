@@ -1,6 +1,5 @@
 /*
- *  dsp_event_record.h - classic Mac EventRecord event-kind constants
- *                        + reason-code constants.
+ *  dsp_event_record.h - classic Mac EventRecord kinds and DSp reason codes.
  *
  *  (C) 2026 Sierra Burkhart (sierra760)
  *
@@ -9,14 +8,8 @@
  *  the Free Software Foundation; either version 2 of the License, or
  *  (at your option) any later version.
  *
- *  Pure-C header. No Metal / Objective-C / Swift types. Defines the
- *  event-kind enum constants used by DSpProcessEventHandler (sub-opcode
- *  750) to decode app-supplied guest EventRecords, and the context-loss
- *  reason-code constant used by the bg/fg lifecycle path.
- *
- *  kDSpContextReason_Lost = 1 is the placeholder per DSp 1.7 PDF p.~92
- *  default; confirmable via DrawSprocketLib decompile. If the decompile
- *  reveals a different value, change the constant.
+ *  Pure C. Used by DSpProcessEventHandler (sub-opcode 750) to decode guest
+ *  EventRecords and by the background/foreground lifecycle path.
  */
 
 #ifndef DSP_EVENT_RECORD_H
@@ -57,11 +50,7 @@ enum {
 	kDSpOSEvt_MouseMovedMessage    = 0xFA   /* osEvt subtype 250 */
 };
 
-/*
- *  Bit flags within the message field for osEvt(SuspendResumeMessage):
- *    Bit 0 (resumeFlag): 1 = resume (foreground); 0 = suspend (background)
- *  This bit is set/cleared when constructing the osEvt message.
- */
+/* Suspend/resume osEvt message bit 0: 1 = resume, 0 = suspend. */
 enum {
 	kDSpOSEvtMsg_ResumeFlag        = 0x01u
 };
@@ -82,7 +71,7 @@ enum {
 #ifndef DSP_CONTEXT_REASON_LOST_DEFINED
 #define DSP_CONTEXT_REASON_LOST_DEFINED 1
 enum {
-	kDSpContextReason_Lost         = 1   /* confirmable via decompile */
+	kDSpContextReason_Lost         = 1
 };
 #endif
 

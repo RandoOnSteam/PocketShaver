@@ -1361,8 +1361,10 @@ static void OsxGuestSaveScriptScreenshot(OsxSession *session, const char *path)
 {
 #if OSXGLBRIDGE
 	if (session->glpresent) {
+#if defined(GFXACCEL_USE_OPENGL)
 		if (session->quartz && OsxGuestQuartzAdopting(session->quartz))
 			MetalCompositorReadFrame(session->glpresent, (int)session->machine->rowbytes);
+#endif
 		OsxGuestSaveScreenPixelsAsImage(session->machine, session->glpresent, path);
 		return;
 	}

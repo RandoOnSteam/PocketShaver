@@ -2832,7 +2832,7 @@ static int pdf_add_text_spacing(struct pdf_doc *pdf, struct pdf_object *page,
                 buf[1] = pdf_char;
                 buf[2] = '\0';
                 dstr_append(&str, buf);
-            } else if (strrchr("\n\r\t\b\f", pdf_char)) {
+            } else if (strchr("\n\r\t\b\f", pdf_char)) {
                 /* Skip over these characters */
                 ;
             } else {

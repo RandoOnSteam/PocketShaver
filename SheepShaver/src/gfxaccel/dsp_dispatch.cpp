@@ -8,75 +8,23 @@
  *  the Free Software Foundation; either version 2 of the License, or
  *  (at your option) any later version.
  *
- *  DSpDispatch is invoked from sheepshaver_glue.cpp's NATIVE_DSP_DISPATCH
- *  case. The SUB-OPCODE is read from dsp_scratch_addr (Mac memory word
- *  written by the PPC TVECT thunk's `stw r12, 0(r11)` - see
- *  dsp_thunks.cpp:AllocateDSpTVECT). r3-r8 carry the guest function's raw
- *  argument registers (r3 is the FIRST real function arg - e.g. a ctxRef
- *  handle - NOT the sub-opcode). Returns the value to be written back to
- *  PPC gpr(3).
- *
- *  Signature mirrors RaveDispatch (rave_dispatch.cpp) and GLDispatch
- *  (gl_dispatch.cpp).
- *
- *  sims-dsp-subop-mismatch fix (2026-04-18): this file previously did
- *  `const uint32_t subop = r3;` which treated the guest's first real
- *  argument as the sub-opcode. That worked for zero-arg calls
- *  (Startup/Shutdown/GetVersion - r3 garbage-was-0 by chance) but broke
- *  for every Context_* call (r3 carries the ctxRef pointer -> dispatch
- *  fell into `default` -> kDSpInternalErr). The Sims crashed on its first
- *  Context_Reserve attempt. RAVE and GL have always read their sub-opcode
- *  from rave_scratch_addr / gl_scratch_addr; DSp now mirrors that pattern
- *  verbatim.
- *
- *  sims-dsp-subop-mismatch follow-on fix (2026-04-18 part 2): after the
- *  scratch-read correction above, The Sims re-UAT revealed a SECOND bug
- *  hiding behind the first. With subop decoupled from r3, r3 now genuinely
- *  IS the guest's first real argument - but every handler case was still
- *  reading args from r4..r7 (the positions that were correct back when r3
- *  was consumed by the subop). That produced an off-by-one on every
- *  Context_* handler: e.g. DSpGetFirstContext saw r4=&ctxRef as "displayID"
- *  (flagged 'non-zero displayID rejected'), and DSpContext_FadeGamma saw
- *  r4=percent as "ctxRef=0 invalid". Fix is purely a dispatch-site arg-index
- *  shift r4->r3, r5->r4, r6->r5, r7->r6 across all 22 Context_* cases; handler
- *  signatures are unchanged. Both fix commits (scratch-read + handler-shift)
- *  are required for end-to-end DSp correctness.
- *
- *  Debug session `dsp-sims-post-reserve-black-screen` fix (2026-04-19):
- *  The Sims evidence proved DSpContext_Reserve's signature was still
- *  wrong. Per DSp 1.7 PDF p.25, the real signature is:
- *      OSStatus DSpContext_Reserve(DSpContextReference inContext,
- *                                   const DSpContextAttributesPtr inDesiredAttributes);
- *  The FIRST argument is the EXISTING ctxRef (returned by FindBestContext
- *  or GetFirstContext), and Reserve's job is to allocate back-buffer
- *  resources ON that existing context. Our handler had been treating r3
- *  as an OUT-pointer to write a NEW handle to, producing a bogus second
- *  handle the app then ignored (since its own `gContext` local was
- *  already set by FindBestContext). The dispatch-site comment was also
- *  wrong. Post-fix: r3 is ctxRef (inContext), r4 is attrAddr
- *  (inDesiredAttributes). Reserve looks up the ctx + attaches the
- *  back-buffer + returns noErr; no out-write.
+ *  Called from sheepshaver_glue.cpp's NATIVE_DSP_DISPATCH case. The
+ *  sub-opcode is the word the TVECT thunk stored at dsp_scratch_addr
+ *  (dsp_thunks.cpp:AllocateDSpTVECT); r3-r8 are the guest call's own
+ *  argument registers, so r3 is the first real argument. The return value
+ *  goes back to gpr(3). Same shape as RaveDispatch and GLDispatch.
  */
 
 #include "sysdeps.h"
 #include "cpu_emulation.h"        /* ReadMacInt32 */
 #include "dsp_engine.h"           /* DSpDispatch + sub-opcode enum + DSP_LOG (pulls in gfx_log.h) */
 #include "dsp_draw_context.h"
-#include "dsp_mode_enumerate.h"   /* GetFirstContext handler */
+#include "dsp_mode_enumerate.h"
 
 /*
- *  Caller LR + r11 stash.
- *
- *  Populated by sheepshaver_glue.cpp at NATIVE_DSP_DISPATCH entry (before
- *  calling DSpDispatch) so we can correlate a guest's call site. r11 is the
- *  CFM TVECT register convention: PPC CFM uses r11 to pass the TVECT address
- *  into the stub, so if a guest's CFM lazy-binding TVECT points at our hook
- *  code, r11 carries the address of THAT TVECT (and therefore tells us which
- *  DSp symbol the guest was attempting). Single-writer (emul thread) /
- *  single-reader (same thread inside DSpDispatch) - no concurrency primitives
- *  needed.
- *
- *  Mirrors the gl_ppc_sp pattern in gl_dispatch.cpp.
+ *  Caller LR and r11, set by sheepshaver_glue.cpp before DSpDispatch for
+ *  call-site diagnostics. Under CFM, r11 holds the TVECT being called, which
+ *  identifies the DSp symbol. Emul thread only.
  */
 uint32_t dsp_caller_lr = 0;
 uint32_t dsp_caller_r11 = 0;
@@ -85,9 +33,7 @@ uint32_t dsp_caller_r11 = 0;
 uint32_t DSpDispatch(uint32_t r3, uint32_t r4, uint32_t r5,
 					 uint32_t r6, uint32_t r7, uint32_t r8)
 {
-	/* subop comes from the SheepMem scratch word written by the TVECT thunk,
-	 * NOT from r3 (which is the guest's first real arg, e.g. ctxRef). Mirrors
-	 * rave_dispatch.cpp. */
+	/* The sub-opcode comes from the scratch word, not r3. */
 	const uint32_t subop = ReadMacInt32(dsp_scratch_addr);
 
 	/* Per-sub-opcode entry log, observable in console when dspaccel=true and
@@ -100,17 +46,9 @@ uint32_t DSpDispatch(uint32_t r3, uint32_t r4, uint32_t r5,
 		DSP_LOG("DSpDispatch: subop %u (r3=0x%08x r4=0x%08x r5=0x%08x r6=0x%08x)",
 				(unsigned)subop, r3, r4, r5, r6);
 
-	/* dsp_caller_lr / dsp_caller_r11 remain populated by sheepshaver_glue.cpp
-	 * and available for any future caller-mapping diagnostic. */
-
-
-	/* r3..r6 carry the first four guest args under the scratch-based-subop
-	 * contract. r7 and r8 are unused by every case post-shift (FadeGamma +
-	 * SetCLUTEntries/GetCLUTEntries, which were the only 4-arg handlers, now
-	 * consume through r6). Suppress-on-purpose. */
+	/* No handler takes more than four arguments. */
 	(void)r7;
 	(void)r8;
-
 	switch (subop) {
 		case kDSpStartup:
 			return (uint32_t)DSpStartupHandler();
@@ -237,10 +175,7 @@ uint32_t DSpDispatch(uint32_t r3, uint32_t r4, uint32_t r5,
 														   r4 /* procOutAddr */,
 														   r5 /* refConOutAddr */);
 
-		/* ==================================================================
-		 * Cheap-family query bodies. Sub-ops 730-738 + 745. r3 = ctxRef (or
-		 * displayID for 745), r4/r5 = out-pointer(s).
-		 * ================================================================== */
+		/* Queries, 730-738 and 745. r3 = ctxRef (displayID for 745). */
 		case kDSpContext_IsBusy:                                    /* sub-op 730 */
 			return (uint32_t)DSpContext_IsBusyHandler(r3 /* ctxRef */,
 													   r4 /* outBusyAddr */);
@@ -272,8 +207,7 @@ uint32_t DSpDispatch(uint32_t r3, uint32_t r4, uint32_t r5,
 			return (uint32_t)DSpContext_GetFrontBufferHandler(r3 /* ctxRef */,
 															   r4 /* outCGrafPtrAddr */);
 		case kDSpGetCurrentContext:                                 /* sub-op 745 */
-			/* NOTE: r3 is a displayID (NOT a ctxRef); r4 is the out-ctxRef
-			 * address. Single-display-faithful active-context walk. */
+			/* r3 is a displayID, not a ctxRef. */
 			return (uint32_t)DSpGetCurrentContextHandler(r3 /* displayID */,
 														  r4 /* outCtxRefAddr */);
 
@@ -287,7 +221,7 @@ uint32_t DSpDispatch(uint32_t r3, uint32_t r4, uint32_t r5,
 		 * pointer.
 		 * ================================================================== */
 		case kDSpGetMouse:                                          /* sub-op 720 */
-			/* NOTE: r3 is the out-Point address (NOT a ctxRef). */
+			/* r3 is the out-Point address. */
 			return (uint32_t)DSpGetMouseHandler(r3 /* outGlobalPointAddr */);
 		case kDSpContext_GlobalToLocal:                             /* sub-op 721 */
 			return (uint32_t)DSpContext_GlobalToLocalHandler(r3 /* ctxRef */,
@@ -329,10 +263,10 @@ uint32_t DSpDispatch(uint32_t r3, uint32_t r4, uint32_t r5,
 														  r5 /* eventProc */,
 														  r6 /* outCtxRefAddr */);
 		case kDSpSetBlankingColor:                                  /* sub-op 760 */
-			/* NOTE: r3 is the RGBColor address (NOT a ctxRef). */
+			/* r3 is the RGBColor address. */
 			return (uint32_t)DSpSetBlankingColorHandler(r3 /* inRGBColorAddr */);
 		case kDSpSetDebugMode:                                      /* sub-op 761 */
-			/* NOTE: r3 is the Boolean debug-mode value (NOT a ctxRef). */
+			/* r3 is the Boolean value. */
 			return (uint32_t)DSpSetDebugModeHandler(r3 /* inDebugMode */);
 
 		/* ==================================================================
@@ -386,18 +320,7 @@ uint32_t DSpDispatch(uint32_t r3, uint32_t r4, uint32_t r5,
 		 *   760-761 SetBlankingColor / SetDebugMode ......... cheap
 		 * ================================================================== */
 
-		/* ==================================================================
-		 * Heavy-family AltBuffer bodies. Sub-ops 700-705. Real Metal-backed
-		 * implementations reusing the engine-blind gfxaccel infra.
-		 *
-		 * Arg marshalling per the DSp 1.7 PDF ABI:
-		 *   New (700)        r3=ctxRef, r4=inVRAMBuffer, r5=inAttributes, r6=outAltBuffer
-		 *   Dispose (701)    r3=altBuffer
-		 *   GetCGrafPtr (702) r3=altBuffer, r4=bufferKind, r5=outCGrafPtr
-		 *   InvalRect (703)  r3=altBuffer, r4=inInvalidRect
-		 *   GetUnderlay (704) r3=ctxRef, r4=outUnderlay
-		 *   SetUnderlay (705) r3=ctxRef, r4=inNewUnderlay
-		 * ================================================================== */
+		/* AltBuffers, 700-705. */
 		case kDSpAltBuffer_New:                                     /* sub-op 700 */
 			return (uint32_t)DSpAltBuffer_NewHandler(r3 /* ctxRef */,
 													 r4 /* inVRAMBuffer */,
@@ -419,15 +342,8 @@ uint32_t DSpDispatch(uint32_t r3, uint32_t r4, uint32_t r5,
 			return (uint32_t)DSpContext_SetUnderlayAltBufferHandler(r3 /* ctxRef */,
 																	r4 /* inNewUnderlay */);
 
-		/* ==================================================================
-		 * Heavy-family Blit bodies. Sub-ops 710-711. DSpBlit_Faster scales via
-		 * the nqd_bitblt_scaled kernel; DSpBlit_Fastest reuses the 1:1
-		 * nqd_bitblt kernel. Async = synchronous-then-complete.
-		 *
-		 * Arg marshalling per the DSp 1.7 PDF ABI:
-		 *   Faster (710)  r3=inBlitInfo, r4=inAsyncFlag
-		 *   Fastest (711) r3=inBlitInfo, r4=inAsyncFlag
-		 * ================================================================== */
+		/* Blit, 710-711. Faster scales via nqd_bitblt_scaled, Fastest uses
+		 * 1:1 nqd_bitblt. Async requests complete synchronously. */
 		case kDSpBlit_Faster:                                      /* sub-op 710 */
 			return (uint32_t)DSpBlit_FasterHandler(r3 /* inBlitInfo */,
 												   r4 /* inAsyncFlag */);
@@ -435,18 +351,9 @@ uint32_t DSpDispatch(uint32_t r3, uint32_t r4, uint32_t r5,
 			return (uint32_t)DSpBlit_FastestHandler(r3 /* inBlitInfo */,
 													r4 /* inAsyncFlag */);
 
-		/* ==================================================================
-		 * Heavy-family Save/Restore/Flatten bodies. Sub-ops 739-741.
-		 * Self-consistent magic+version round-trip; Flatten is pre-Active so
-		 * the runtime/Metal fields are NOT serialized; a Restore magic/version
-		 * mismatch -> kDSpContextNotFoundErr (documented valid, PDF p.22). Pure
-		 * RAM serialization.
-		 *
-		 * Arg marshalling per the DSp 1.7 PDF ABI:
-		 *   Flatten (739)         r3=ctxRef, r4=outFlatContext
-		 *   GetFlattenedSize (740) r3=ctxRef, r4=outSize
-		 *   Restore (741)         r3=inFlatContext, r4=outRestoredContext
-		 * ================================================================== */
+		/* Flatten / Restore, 739-741. Only pre-Active state is serialized.
+		 * A magic/version mismatch on Restore returns kDSpContextNotFoundErr
+		 * (DSp p.22). */
 		case kDSpContext_Flatten:                                  /* sub-op 739 */
 			return (uint32_t)DSpContext_FlattenHandler(r3 /* ctxRef */,
 													   r4 /* outFlatContext */);
@@ -457,15 +364,7 @@ uint32_t DSpDispatch(uint32_t r3, uint32_t r4, uint32_t r5,
 			return (uint32_t)DSpContext_RestoreHandler(r3 /* inFlatContext */,
 													   r4 /* outRestoredContext */);
 
-		/* ==================================================================
-		 * Queue/Switch (sub-ops 742-743), the DSp 1.7 deferred-context-switch
-		 * family (PDF pp.26-27). RAM-only single-writer bookkeeping
-		 * (queued_child / state / vbl_proc_ptr).
-		 *
-		 * Arg marshalling per the DSp 1.7 PDF ABI:
-		 *   Queue (742)  r3=parentCtx, r4=childCtx, r5=inDesiredAttributes
-		 *   Switch (743) r3=oldCtx,    r4=newCtx
-		 * ================================================================== */
+		/* Queue / Switch, 742-743 (DSp pp.26-27). */
 		case kDSpContext_Queue:                                    /* sub-op 742 */
 			return (uint32_t)DSpContext_QueueHandler(r3 /* parentCtx */,
 													 r4 /* childCtx */,

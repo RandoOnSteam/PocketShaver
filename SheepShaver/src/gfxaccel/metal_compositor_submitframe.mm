@@ -8,70 +8,20 @@
  *  the Free Software Foundation; either version 2 of the License, or
  *  (at your option) any later version.
  *
- *  Engine-blind: the compositor sees only CompositeLayer PODs with
- *  opaque source-texture handles. In production SubmitFrame is a
- *  validate-and-cache shim: it rejects malformed/stale descriptors, stores
- *  the last kLayerSlotOverlay layer in a single mailbox, and returns.
- *  MetalCompositorPresent is the sole production drawable owner/presenter.
- *  Underlay/framebuffer layers are accepted but ignored in production.
+ *  SubmitFrame is a validate-and-cache shim. It sees only CompositeLayer
+ *  PODs with opaque texture handles, rejects malformed or stale
+ *  descriptors, and keeps the last kLayerSlotOverlay layer in a one-entry
+ *  cache. Underlay/framebuffer layers are accepted and ignored.
  *
- *  Split from metal_compositor.mm to keep the SubmitFrame state machine
- *  self-contained. metal_compositor.mm calls
- *  MetalCompositorSubmitFrame_BindPresentationContext from its Init
- *  to hand over the device + queue + CAMetalLayer; this module keeps
- *  its own static state and provides:
+ *  MetalCompositorPresent is the only drawable owner. It composites the
+ *  cached overlay over the 2D framebuffer every VBL, which covers gaps when
+ *  an engine stops submitting (e.g. a full-3D app recreating its
+ *  QADrawContext between scenes would otherwise flash black). A second
+ *  presenter here would race Present for drawables and hide the 2D layer.
  *
- *    - MetalCompositorSubmitFrame(const FrameDescriptor *)     (public)
- *    - MetalCompositorSubmitFrame_BindPresentationContext      (internal)
- *    - MetalCompositorSubmitFrame_UnbindPresentationContext    (internal)
- *
- *  Overlay caching (rave-overlay-flicker-black, 2026-04-16):
- *  -------------------------------------------------------
- *  RAVE and GL engines submit overlay frames via SubmitFrame only when
- *  they actually render (e.g. on RAVE's QARenderEnd).  Nanosaur and
- *  similar full-3D apps destroy and recreate their QADrawContext during
- *  scene transitions, which produces a short interval with no
- *  SubmitFrame calls.  During that interval MetalCompositorPresent (called
- *  every emulated VBL from VideoVBL) presents the 2D framebuffer only;
- *  for a full-3D app the 2D framebuffer is black, so the user sees a
- *  visible black flash.
- *
- *  Fix (Iteration #2): every successful SubmitFrame populates a
- *  last-good overlay cache (source texture + layer POD).
- *  MetalCompositorPresent consults the cache via
- *  MetalCompositorSubmitFrame_AcquireCachedOverlay and composites the
- *  last-known overlay atop the 2D framebuffer in its own render pass.
- *
- *  Fix (Iteration #3, 2026-04-16 - 2D/3D composition regression):
- *  Iteration #2 introduced a second presenter: SubmitFrame was still
- *  acquiring its own drawable via [layer nextDrawable] and calling
- *  presentDrawable:/presentAtTime: alongside the new Present-path
- *  cached-overlay composite.  The two presenters raced for the
- *  CAMetalLayer drawable pool; SubmitFrame (one present per RenderEnd
- *  at ~60 Hz) consistently won the race during active 3D rendering,
- *  so the user saw the overlay-only pass (no 2D framebuffer) and the
- *  Nanosaur menu bar / HUD disappeared.  Even with the race fixed,
- *  submitframe_encode_layer was issuing a fullscreen triangle that
- *  ignored dst_origin / dst_size, so a 640x469 overlay rect (Nanosaur's
- *  11-px menu strip) still covered the full 640x480 drawable.
- *
- *  Iteration #3 makes Present the sole drawable owner in production:
- *    - SubmitFrame ONLY caches the overlay and returns -- no drawable
- *      acquisition, no render pass, no present.  MetalCompositorPresent
- *      is the single owner of nextDrawable / presentDrawable,
- *      eliminating the race.
- *    - submitframe_encode_layer now sets a per-layer MTLViewport to
- *      (dst_origin, dst_size) so the fullscreen triangle is clipped
- *      to the layer's dst rect; 2D underlay shows through outside the
- *      overlay rect.  Existing tests all use dst_size == render target
- *      size so the viewport is the default (no behavior change).
- *
- *  The cache retains the source MTLTexture by strong reference so it
- *  remains valid even if the submitting engine releases its own handle. It
- *  is not a pixel snapshot; the submitting engine must not redraw that
- *  texture until it submits a different overlay texture.
- *
- *  Concurrency: production SubmitFrame does no GPU work and does not consume
+ *  The cache holds a strong reference to the source texture, not a pixel
+ *  snapshot: the engine must not redraw that texture until it submits a
+ *  different one. SubmitFrame does no GPU work and never waits on
  *  s_inflight_semaphore.
  */
 
@@ -87,10 +37,7 @@
 #include "gfxaccel_resources_heap.h"
 #include "vbl_source.h"
 
-// ---------------------------------------------------------------------------
-// Logging (stand-alone; does not share metal_compositor.mm's macros so this
-// module compiles without that file's includes).
-// ---------------------------------------------------------------------------
+// Own log macros so this file builds without metal_compositor.mm's includes.
 
 #define COMPSF_LOG(fmt, ...) \
 	do { printf("[MetalCompositor/SubmitFrame] " fmt "\n", ##__VA_ARGS__); } while (0)
@@ -98,14 +45,10 @@
 #define COMPSF_ERR(fmt, ...) \
 	do { printf("[MetalCompositor/SubmitFrame ERROR] " fmt "\n", ##__VA_ARGS__); } while (0)
 
-// ---------------------------------------------------------------------------
-// Module-local state
-// ---------------------------------------------------------------------------
-
 static id<MTLDevice>                  s_device             = nil;
 static id<MTLCommandQueue>            s_queue              = nil;
 static id<MTLLibrary>                 s_library            = nil;
-static CAMetalLayer                  *s_layer              = nil;    // nil in headless/testing mode
+static CAMetalLayer                  *s_layer              = nil;    // may be nil
 static dispatch_semaphore_t           s_inflight_semaphore = NULL;
 static id<MTLRenderPipelineState>     s_pipe_for_blend[3]  = { nil, nil, nil };
 static id<MTLRenderPipelineState>     s_pipe_display_premultiplied = nil;
@@ -126,21 +69,9 @@ static id<MTLRenderPipelineState>     s_pipe_display_premultiplied = nil;
  */
 static atomic_double s_target_presentation_ts = 0;
 
-// ---------------------------------------------------------------------------
-// Overlay cache (rave-overlay-flicker-black fix).
-//
-// Single kLayerSlotOverlay layer kept around between SubmitFrame calls so
-// that MetalCompositorPresent can keep composing the last-known overlay
-// while the submitting engine is between frames (QADrawContextDelete ->
-// QADrawContextNew interval, etc.).  The lock is os_unfair_lock (same primitive
-// family as the project's minimal-primitive concurrency pattern; writes
-// happen on the emul thread from SubmitFrame and the clear helpers, reads
-// happen on the VBL / emul thread from Present).
-//
-// The cache retains the source MTLTexture so that if the submitting
-// engine releases its own reference the texture survives until the cache
-// is cleared or replaced.
-// ---------------------------------------------------------------------------
+// Overlay cache: the last kLayerSlotOverlay layer, composited by Present while
+// the engine is between frames. Retains the source texture until replaced or
+// cleared. Written by SubmitFrame and the clear helpers, read by Present.
 
 static os_unfair_lock           s_overlay_cache_lock  = OS_UNFAIR_LOCK_INIT;
 static bool                     s_overlay_cache_valid = false;
@@ -148,15 +79,8 @@ static struct CompositeLayer    s_overlay_cache_layer;
 static id<MTLTexture>           s_overlay_cache_tex   = nil;
 
 
-// ---------------------------------------------------------------------------
-// submitframe_build_pipelines - lazy one-time PSO cache
-// ---------------------------------------------------------------------------
-//
-// Builds three MTLRenderPipelineState objects sharing submitframe_vertex +
-// submitframe_fragment but differing in their color-attachment blend state.
-// BGRA8Unorm color attachments match the drawable pixel format.
-//
-//   kBlendOpaque        - blending disabled; source color replaces dest
+// One PSO per blend mode, plus the display-gamma premultiplied variant:
+//   kBlendOpaque        - no blending
 //   kBlendPremultiplied - src=One,      dst=OneMinusSrcAlpha
 //   kBlendStraight      - src=SrcAlpha, dst=OneMinusSrcAlpha
 
@@ -264,24 +188,9 @@ static id<MTLRenderPipelineState> submitframe_pipeline_for_blend(CompositeBlendM
 	return s_pipe_for_blend[(int)b];
 }
 
-// ---------------------------------------------------------------------------
-// submitframe_encode_layer - single-layer encode (engine-blind)
-// ---------------------------------------------------------------------------
-//
-// Sets the layer's source texture, selects the appropriate blend-mode PSO,
-// uploads a single-struct LayerUniform via setFragmentBytes (small-buffer
-// path - no MTLBuffer allocation per frame), sets an MTLViewport to the
-// layer's dst_origin / dst_size so the fullscreen-triangle output is
-// clipped to the layer's destination rect, and issues the drawPrimitives.
-//
-// Viewport clipping (Iteration #3, rave-overlay-flicker-black): previously
-// the fullscreen triangle covered the entire render target regardless of
-// dst rect, so e.g. a 640x469 Nanosaur overlay on a 640x480 drawable
-// overwrote the 11-pixel 2D menu strip.  Setting viewport = dst rect
-// confines rasterization to that rect; pixels outside the rect are not
-// touched (2D underlay shows through).  All existing tests use
-// dst_size == render target size so the viewport == default full-target
-// viewport and there is no test behavior change.
+// The viewport is set to the layer's dst rect so the fullscreen triangle
+// leaves the 2D underlay visible outside it (e.g. a 640x469 overlay must not
+// cover an 11-pixel menu strip).
 
 static void submitframe_encode_layer(id<MTLRenderCommandEncoder> enc,
 									 const struct CompositeLayer *layer)
@@ -398,21 +307,8 @@ static void submitframe_encode_layer_display_gamma(id<MTLRenderCommandEncoder> e
 	[enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
 }
 
-// ---------------------------------------------------------------------------
-// Overlay cache helpers (rave-overlay-flicker-black fix).
-// ---------------------------------------------------------------------------
-//
-// Cache is updated at the END of SubmitFrame once we know the submitted
-// overlay layers were encoded without error.  Present reads via
-// MetalCompositorSubmitFrame_AcquireCachedOverlay and encodes the overlay
-// with submitframe_encode_layer in its own render pass.
-//
-// Invalidation surfaces:
-//   - MetalCompositorSubmitFrame_ClearCachedOverlay: called explicitly on
-//     mode-exit / compositor shutdown (MTLTexture tied to a drawable size
-//     must not be reused across mode changes).
-//   - Unbind path drops the cache so that a fresh Bind doesn't present
-//     texture from a torn-down device.
+// Overlay cache. Cleared on mode exit (the texture is sized for the old mode)
+// and on Unbind (the texture belongs to the torn-down device).
 
 static void submitframe_cache_store(const struct CompositeLayer *layer)
 {
@@ -475,47 +371,33 @@ extern "C" void MetalCompositorSubmitFrame_ClearCachedFramebuffer(void)
 	 * has no persistent framebuffer-slot cache to invalidate. */
 }
 
-// ---------------------------------------------------------------------------
-// VBL-paced present + 3D pacing API
-// ---------------------------------------------------------------------------
+extern "C" void MetalCompositorSubmitFrame_ClearCachedOverlayForSource(void *source)
+{
+    if (source == NULL) return;
+    id<MTLTexture> texture = (__bridge id<MTLTexture>)source;
+    os_unfair_lock_lock(&s_overlay_cache_lock);
+    if (s_overlay_cache_tex == texture) {
+        s_overlay_cache_tex = nil;
+        s_overlay_cache_valid = false;
+    }
+    os_unfair_lock_unlock(&s_overlay_cache_lock);
+}
 
-/*
- * Called from the VBL callback to preserve the older SubmitFrame-present API
- * shape. Production SubmitFrame no longer presents, so the stored value is
- * currently unused. Declared in metal_compositor.h under extern "C".
- */
+/* Called from the VBL callback; the stored value is currently unused. */
 extern "C"
 void MetalCompositorSubmitFrame_SetTargetTimestamp(double ts)
 {
 	atomic_store_explicit(&s_target_presentation_ts, ts, memory_order_release);
 }
 
-/*
- * MetalCompositorSync3DFramePacingForEngine.
- *
- * Thin wrapper that routes to VBLSource's per-engine deadline pacing.
- * RAVE/GL engines include only metal_compositor.h, not vbl_source.h.
- */
+/* For RAVE/GL, which include metal_compositor.h but not vbl_source.h. */
 extern "C"
 int32_t MetalCompositorSync3DFramePacingForEngine(int32_t engine_id)
 {
 	return vbl_source_sync_3d_pacing_for_engine(engine_id);
 }
 
-// ---------------------------------------------------------------------------
-// Present-path overlay encode helper (rave-overlay-flicker-black fix).
-// ---------------------------------------------------------------------------
-//
-// Encodes `layer` onto an existing MTLRenderCommandEncoder using the same
-// blend-mode PSO cache that SubmitFrame uses.  Callers (specifically
-// MetalCompositorPresent) must have already drawn the 2D framebuffer
-// underlay with their own pipeline; this routine composites the overlay
-// on top with kBlendPremultiplied or whatever blend mode is in the layer.
-//
-// Iteration #3: the encode path now sets an MTLViewport to the layer's
-// dst rect so the overlay fullscreen triangle is clipped to that rect --
-// 2D pixels outside the rect (e.g. Nanosaur's 11-pixel menu strip)
-// remain visible.
+// Present calls this after drawing the 2D underlay in the same encoder.
 
 extern "C" void MetalCompositorSubmitFrame_EncodeCachedOverlay(
 	void *render_encoder, const struct CompositeLayer *layer, void *display_gamma_lut)
@@ -525,17 +407,9 @@ extern "C" void MetalCompositorSubmitFrame_EncodeCachedOverlay(
 	submitframe_encode_layer_display_gamma(enc, layer, gamma);
 }
 
-// ---------------------------------------------------------------------------
-// Presentation-context bind / unbind (called from metal_compositor.mm)
-// ---------------------------------------------------------------------------
-
 /*
- * Resolve the Metal shader library that contains submitframe_vertex /
- * submitframe_fragment. In production the compositor lives in the main
- * bundle (default.metallib on disk next to the executable). To be robust
- * to the shaders living in a non-default library, we try newDefaultLibrary
- * first, then fall back to every loaded bundle's default.metallib until we
- * find the submitframe_vertex function.
+ * Find the library with submitframe_vertex: the default library first, then
+ * each loaded bundle's default.metallib.
  */
 static id<MTLLibrary> submitframe_resolve_library(id<MTLDevice> dev)
 {
@@ -641,15 +515,8 @@ extern "C" void MetalCompositorSubmitFrame_UnbindPresentationContext(void)
 }
 
 
-// ---------------------------------------------------------------------------
-// MetalCompositorSubmitFrame - public entry point
-// ---------------------------------------------------------------------------
-//
-// Iteration #3 (rave-overlay-flicker-black): in production SubmitFrame
-// no longer acquires a CAMetalLayer drawable or calls presentDrawable.
-// It caches the overlay layer and returns -- MetalCompositorPresent is
-// now the sole drawable owner, eliminating the race that hid the 2D
-// underlay in multi-engine apps.
+// Validates the descriptor and caches its overlay layer. Never touches a
+// drawable; MetalCompositorPresent owns presentation.
 
 extern "C" int32_t MetalCompositorSubmitFrame(const struct FrameDescriptor *desc)
 {

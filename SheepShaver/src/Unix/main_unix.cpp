@@ -221,10 +221,9 @@ uint8 *ROMBaseHost;		// Base address of Mac ROM (host address space)
 uint32 ROMEnd;
 
 #if defined(__APPLE__) && (defined(__x86_64__) || defined(__aarch64__)) || defined(MEM_BULK)
-// gKernelData is a 16 KB window: KernelData struct in the upper 8 KB
+// gKernelData is a 16 KB window: KernelData in the upper 8 KB
 // (0x68ffe000 / 0x5fffe000), nanokernel stack slack in the lower 8 KB
-// (0x68ffc000 / 0x5fffc000). See vm_do_get_real_address in
-// kpx_cpu/src/cpu/vm.hpp.
+// (0x68ffc000 / 0x5fffc000). Keep in sync with vm_do_get_real_address.
 uint8 gZeroPage[0x3000], gKernelData[0x4000];
 #endif
 
@@ -857,9 +856,9 @@ int main(int argc, char *argv[])
 	printf(" %s\n", GetString(STR_ABOUT_TEXT2));
 
 #ifdef __APPLE__
-	// Probe the W^X code-memory path (MAP_JIT + write callback); passes
-	// on macOS / Mac Catalyst with the allow-jit entitlement or a
-	// non-hardened signature, and is expected to fail on iOS devices
+	// Probe the W^X code-memory path (MAP_JIT + write callback). Passes on
+	// macOS / Catalyst with allow-jit or a non-hardened signature; expected to
+	// fail on iOS devices.
 	printf("JIT W^X self-test: %s\n", jit_wx_selftest() ? "pass" : "unavailable");
 	fflush(stdout);
 #endif

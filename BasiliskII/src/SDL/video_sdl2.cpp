@@ -64,6 +64,9 @@
 #include "display_mode_controller.h"
 #include "gfxaccel_resources.h"
 #endif
+#if defined(ENABLE_GFXACCEL) && defined(SHEEPSHAVER)
+extern "C" void DSpDeliverPendingVBLProcs(void);
+#endif
 
 #ifdef WIN32
 #include <malloc.h> /* alloca() */
@@ -617,6 +620,20 @@ static void set_mac_frame_buffer(SDL_monitor_desc &monitor, int depth, bool nati
 	monitor.set_mac_frame_base(Host2MacAddr(the_buffer));
 #endif
 	D(bug("monitor.mac_frame_base = %08x\n", monitor.get_mac_frame_base()));
+}
+
+// Mac address range of the frame buffer mapping (native QuickDraw acceleration)
+bool video_get_frame_buffer_range(uint32 *mac_base, uint32 *size)
+{
+#if REAL_ADDRESSING || DIRECT_ADDRESSING
+	if (the_buffer == NULL || the_buffer_size == 0)
+		return false;
+	*mac_base = Host2MacAddr(the_buffer);
+	*size = the_buffer_size;
+	return true;
+#else
+	return false;
+#endif
 }
 
 // Set window name and class
@@ -1733,8 +1750,7 @@ static void DMCModeDescFromVModesIndex(int idx, DMCModeDesc *out)
 {
 	out->width      = (uint32_t)VModes[idx].viXsize;
 	out->height     = (uint32_t)VModes[idx].viYsize;
-	// viAppleMode carries the APPLE_*_BIT constant; translate to a raw bit count
-	// per DMCModeDesc contract (depth in {1,2,4,8,16,32}).
+	// viAppleMode holds APPLE_*_BIT; DMCModeDesc wants a bit count.
 	int apple = (int)VModes[idx].viAppleMode;
 	uint32_t bit_depth;
 	switch (apple) {
@@ -1744,7 +1760,7 @@ static void DMCModeDescFromVModesIndex(int idx, DMCModeDesc *out)
 		case VIDEO_DEPTH_8BIT:  bit_depth = 8;  break;
 		case VIDEO_DEPTH_16BIT: bit_depth = 16; break;
 		case VIDEO_DEPTH_32BIT: bit_depth = 32; break;
-		default:                bit_depth = 8;  break;  // defensive fallback
+		default:                bit_depth = 8;  break;
 	}
 	out->depth            = bit_depth;
 	out->row_bytes        = (uint32_t)VModes[idx].viRowBytes;
@@ -2160,8 +2176,7 @@ static void do_toggle_fullscreen(void)
 			display_type = DISPLAY_SCREEN;
 			SDL_SetWindowFullscreen(sdl_window, SDL_WINDOW_FULLSCREEN_DESKTOP);
 #if !TARGET_OS_IPHONE
-			// See the init-path note: pointer confinement is harmful on
-			// iOS/Catalyst (transposed window rect clips the cursor on refocus).
+			// No pointer confinement on iOS/Catalyst (see the init path).
 			SDL_SetWindowGrab(sdl_window, SDL_TRUE);
 #endif
 		}
@@ -2250,6 +2265,9 @@ void VideoVBL(void)
 	// Execute video VBL
 	if (private_data != NULL && private_data->interruptsEnabled)
 		VSLDoInterruptService(private_data->vslServiceID);
+#if defined(ENABLE_GFXACCEL) && defined(SHEEPSHAVER)
+	DSpDeliverPendingVBLProcs();
+#endif
 }
 #else
 void VideoInterrupt(void)
@@ -2365,8 +2383,7 @@ void SDL_monitor_desc::set_palette(uint8 *pal, int num_in)
 #if (defined(ENABLE_GFXACCEL) && defined(SHEEPSHAVER)) || TARGET_OS_IPHONE
 	// Update the GPU palette buffer so the Metal compositor renders correct colors
 	MetalCompositorUpdatePalette(pal, num_in);
-	// Bump DMC palette_gen so the compositor / engines can detect the CLUT change
-	// via dmc_current_snapshot()->palette_gen next frame (DMC seam).
+	// Bump DMC palette_gen so listeners see the CLUT change next frame.
 	dmc_record_palette_change();
 #endif
 
@@ -2545,10 +2562,9 @@ static int16 video_switch_to_mode_index(int mode_index)
 
 int16 video_mode_change(VidLocals *csSave, uint32 ParamPtr)
 {
-	/* csMode arrives in the RELATIVE kDepthModeN namespace (0x80 = lowest
-	 * supported depth); translate to the absolute APPLE_*_BIT constants
-	 * VModes stores. Untranslatable values fall through unchanged so
-	 * internal callers that already pass absolute modes keep working. */
+	/* csMode is a relative kDepthModeN (0x80 = lowest supported depth);
+	 * VModes stores absolute APPLE_*_BIT values. Untranslatable values pass
+	 * through so internal callers can pass absolute modes. */
 	uint16 req_mode = ReadMacInt16(ParamPtr + csMode);
 	{
 		uint32 abs = video_abs_depth_from_rel(req_mode);
@@ -3004,11 +3020,9 @@ static void handle_mouse_event(SDL_Event &event)
 			drv->mouse_moved(event.motion.xrel, event.motion.yrel);
 		} else {
 #if TARGET_OS_MACCATALYST
-			// Mac Catalyst: the absolute cursor position is fed by the native
-			// UIKit hover/drag bypass (VideoMapWindowPointToGuestAndMove) because
-			// SDL's Catalyst window transposes to portrait on unfocus/refocus and
-			// clamps event.motion.x to the wrong width. Ignore SDL's absolute
-			// motion here; mouse buttons/wheel still flow through SDL.
+			// Catalyst: absolute position comes from the UIKit bypass
+			// (VideoMapWindowPointToGuestAndMove), since SDL's transposed window
+			// clamps event.motion.x. Buttons and wheel still use SDL.
 			(void)event;
 #elif TARGET_OS_IPHONE
 			// Absolute touch cursor. In hover / two-finger-steering mode the app
@@ -3068,16 +3082,13 @@ extern "C" void VideoMapWindowPointToGuestAndMove(double winX, double winY)
 	// ADBMouseMoved() would add the mapped window point as a delta, slamming
 	// the view (e.g. Quake 3 pitches straight down on every fire-drag).
 	if (ADBIsRelativeMouseMode()) return;
-	// Called on the main thread from the UIKit hover/drag recognizers. Refresh
-	// the present-rect cache here too: in the right region of the desktop SDL
-	// generates no motion events (its transposed view ends early), so
-	// on_sdl_event_generated wouldn't otherwise keep the rect current there.
+	// Main thread. Refresh the present rect here too: SDL generates no motion
+	// events in the right region of the desktop (its transposed view ends early).
 	MetalCompositorRefreshPresentRect();
 	int rx = 0, ry = 0, rw = 0, rh = 0;
 	MetalCompositorGetPresentRect(&rx, &ry, &rw, &rh);
 	if (rw <= 0 || rh <= 0) return;
-	// Aspect-FIT (letterbox) to match the compositor (kCAGravityResizeAspect) in both windowed
-	// and full screen: the offset centres the guest and the clamp handles the letterbox bars.
+	// Aspect-fit, matching the compositor's kCAGravityResizeAspect.
 	float mag = std::min((float)rw / drv->VIDEO_MODE_X,
 	                     (float)rh / drv->VIDEO_MODE_Y);
 	if (mag <= 0.f) return;
@@ -3128,14 +3139,9 @@ static int SDLCALL on_sdl_event_generated(void *userdata, SDL_Event * event)
 		case SDL_MOUSEBUTTONUP:
 		case SDL_MOUSEMOTION:
 		case SDL_MOUSEWHEEL:
-			// Refresh the present-rect cache from the compositor view's rect
-			// (window coordinates, safe-area inset folded in) while we are on
-			// the main thread. handle_mouse_event's absolute-cursor letterbox
-			// map reads that cache (never SDL_GetWindowSize, which is
-			// transposed/stale off the main thread on Catalyst) so the cursor
-			// lands where the compositor actually draws the guest image, even
-			// after the menu bar shifts the safe area on a refocus. Cheap; safe
-			// for both the fast-path and the queued/touch path below.
+			// Refresh the present-rect cache while on the main thread. The
+			// cursor map reads it instead of SDL_GetWindowSize, which is
+			// stale off the main thread on Catalyst.
 			MetalCompositorRefreshPresentRect();
 			// With a real pointer (mouse passthrough / Catalyst), feed ADB the
 			// moment the main-thread pump generates the event instead of

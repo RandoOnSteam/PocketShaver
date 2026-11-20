@@ -1,5 +1,5 @@
 /*
- *  gl_defer.cpp - Track-A GL immediate-mode deferred-batching descriptor table
+ *  gl_defer.cpp - GL immediate-mode deferred batching: descriptors and drain
  *
  *  (C) 2026 Sierra Burkhart (sierra760)
  *
@@ -8,80 +8,52 @@
  *  the Free Software Foundation; either version 2 of the License, or
  *  (at your option) any later version.
  *
- *  ---------------------------------------------------------------------------
- *  Task 2 scope: the hand-authored descriptor table only.
- *
- *  Each GLDeferDesc tells the deferred-batching ring how to snapshot the args
- *  of one immediate-mode setter call so it can be replayed later through
- *  GLDispatch verbatim. The table is HAND-AUTHORED: gl_func_signatures[] only
- *  covers float functions ({0,0} for integer-only calls), so it cannot be used
- *  to derive integer GPR arg counts.
+ *  Each GLDeferDesc says how to snapshot one immediate-mode setter's args so
+ *  the call can be replayed later through GLDispatch verbatim. The table is
+ *  hand-authored: gl_func_signatures[] only covers float functions, so it
+ *  cannot give integer GPR counts.
  *
  *  Argument wire model (matches gl_dispatch.cpp / sheepshaver_glue.cpp):
- *    - scalar_gpr_count integer/pointer args arrive verbatim in r3.. .
- *    - Each floating arg (float OR double) occupies exactly ONE 32-bit slot in
- *      float_bits[] (the glue casts every FPR value down to a 32-bit float),
- *      so fpr_mask treats f and d scalar variants identically.
- *    - The "...v" array variants take scalar_gpr_count int args followed by a
- *      single trailing pointer (at GPR index scalar_gpr_count); ptr_bytes is the
- *      exact guest array size to snapshot = component_count * per-component size
- *      (f=4 d=8 i=4 s=2 b=1 ub=1 us=2 ui=4).
- *    - An opcode is EITHER scalar/FP (ptr_bytes==0) OR trailing-pointer; never
- *      both. deferrable==1 marks every authored entry.
- *
- *  Task 3 scope (added below): GLDeferDecodeRecord() -- reads one captured
- *  record out of the guest ring and reconstructs the exact (gpr[], float_bits[])
- *  argument tuple the original trapped call would have handed GLDispatch, so the
- *  record can be replayed verbatim. The trailing-pointer snapshot is exposed as
- *  an IN-RING guest address (not the original, possibly-reused, source pointer).
- *
- *  NOT in scope here (later Track-A tasks): the SheepMem ring address externs
- *  and GLDrainDeferred().
+ *    - scalar_gpr_count integer/pointer args arrive verbatim in r3...
+ *    - Each float or double arg takes one 32-bit slot in float_bits[] (the
+ *      glue narrows every FPR to float), so f and d variants share a mask.
+ *    - "...v" variants take scalar_gpr_count ints then one trailing pointer;
+ *      ptr_bytes is the guest array size to snapshot.
+ *    - An opcode is either scalar/FP or trailing-pointer, never both.
  */
 
 #include "gl_defer.h"
 
 #include <cstdint>
-#include <cstring>   // memset
+#include <cstring>
 #include <cassert>
 
-// Guest big-endian memory read resolves to the vm_read_memory_4 inline in
-// cpu_emulation.h (which honors guest endianness).
 #include "sysdeps.h"
-#include "cpu_emulation.h"   // ReadMacInt32 / WriteMacInt32
+#include "cpu_emulation.h"
 
-// Real-build symbols GLDrainDeferred replays through. Declared here (no extra
-// header exposes them); definitions live in gl_thunks.cpp / gl_dispatch.cpp.
-extern uint32_t gl_scratch_addr;            // gl_thunks.cpp: scratch word holding the sub-opcode
-extern uint32_t gl_ppc_sp;                  // gl_dispatch.cpp: PPC SP for stack-arg reads
-extern int      gl_ppc_stack_arg_offset;    // gl_dispatch.cpp: dispatch-table stack shift
+// No header exposes these; defined in gl_thunks.cpp / gl_dispatch.cpp.
+extern uint32_t gl_scratch_addr;            // scratch word holding the sub-opcode
+extern uint32_t gl_ppc_sp;                  // PPC SP for stack-arg reads
+extern int      gl_ppc_stack_arg_offset;    // dispatch-table stack shift
 extern uint32_t GLDispatch(uint32_t r3, uint32_t r4, uint32_t r5, uint32_t r6,
 						   uint32_t r7, uint32_t r8, uint32_t r9, uint32_t r10,
 						   const uint32_t *float_bits, int num_float_args);
 
-// Host authoritative descriptor table + host re-entrancy guard.
 GLDeferDesc gl_defer_desc[GL_MAX_SUBOPCODE];
 bool gl_defer_draining = false;
 
-// Permanent failsafe latch. Set true the first time GLDrainDeferred detects ring
-// corruption; once set, deferral must never be re-enabled for the rest of the
-// session (glEndList consults this before re-enabling). Latching prevents the
-// failsafe from "flapping" -- re-tripping and dropping vertices every batch when
-// glEndList would otherwise unconditionally re-enable deferral.
+// Set when GLDrainDeferred detects ring corruption. Deferral then stays off for
+// the session; glEndList checks this so it cannot re-enable it and drop
+// vertices every batch.
 bool gl_defer_failsafe_tripped = false;
 
-// Diagnostic counters for the deferred-batching path.
-// Logging is gated by gl_logging_enabled (via GL_LOG) so these are silent in
-// shipping/logging-off builds; the counters themselves are always incremented
-// (uint64 wraps in ~100 years at 60fps, negligible).
-uint64_t g_defer_records_drained = 0;  // total records replayed across all drain calls
+// Diagnostic counters, always incremented.
+uint64_t g_defer_records_drained = 0;  // total records replayed
 uint64_t g_defer_drain_calls     = 0;  // total GLDrainDeferred calls that did work
 uint64_t g_defer_fallbacks       = 0;  // deferrable opcodes that hit GLDispatch directly
 
-// SheepMem ring addresses (set in GLDeferInit / GLThunksInit in a later task).
-// Defined here, initialized to 0 so the ring reads as "not allocated" until then;
-// GLDrainDeferred null-guards on gl_defer_count_addr == 0. Harmless in the
-// standalone unit-test build (nothing touches them there).
+// SheepMem ring addresses, set at thunk init. 0 means "not allocated";
+// GLDrainDeferred checks gl_defer_count_addr.
 uint32_t gl_defer_ring_base    = 0;
 uint32_t gl_defer_head_addr    = 0;
 uint32_t gl_defer_count_addr   = 0;
@@ -97,8 +69,7 @@ struct GLDeferRow {
 	uint8_t  ptr_bytes;
 };
 
-// Common fpr masks for N consecutive floating args (each one FPR slot).
-//   1 float -> 0x1, 2 -> 0x3, 3 -> 0x7, 4 -> 0xF.
+// fpr masks for N consecutive floating args.
 #define FPR1 0x1
 #define FPR2 0x3
 #define FPR3 0x7
@@ -114,14 +85,9 @@ struct GLDeferRow {
 #define BV_f  4
 #define BV_d  8
 
-// The hand-authored deferrable table. Only immediate-mode per-vertex setters
-// are present; state changes, queries, glEnd, glArrayElement, glEvalCoord*,
-// glEvalMesh*, glEvalPoint* and glRect* are intentionally absent.
-//
-// Variants with no GL_SUB_ constant in gl_engine.h are simply omitted (no row);
-// see the SKIPPED list in the source-control commit / task report. In this
-// codebase those are: every glFogCoord* variant (only glFog* parameter setters
-// exist as GL_SUB_FOG{F,FV,I,IV}, which are NOT per-vertex setters).
+// Only immediate-mode per-vertex setters. State changes, queries, glEnd,
+// glArrayElement, glEval* and glRect* are intentionally absent, as is
+// glFogCoord* (no GL_SUB_ constant exists).
 const GLDeferRow kRows[] = {
 	// --- glBegin --------------------------------------------------------------
 	// glBegin(GLenum mode): one int GPR.
@@ -326,7 +292,6 @@ const GLDeferRow kRows[] = {
 	{ GL_SUB_INDEXUBV, 0, 0, 1 * BV_ub },
 };
 
-// popcount over a 16-bit mask (table is tiny; keep it dependency-free).
 int popcount16(uint16_t v) {
 	int n = 0;
 	while (v) { n += (v & 1u); v >>= 1; }
@@ -335,8 +300,7 @@ int popcount16(uint16_t v) {
 
 int round_up_4(int n) { return (n + 3) & ~3; }
 
-// Worst-case wire size of one record for a given descriptor:
-//   8 (header) + 4*scalar + 4*popcount(fpr_mask) + round_up_4(ptr_bytes).
+// Wire size of one record: 8-byte header + scalars + floats + padded snapshot.
 int record_size(const GLDeferDesc &d) {
 	return 8
 		 + 4 * (int)d.scalar_gpr_count
@@ -374,23 +338,16 @@ bool GLDeferIsDeferrable(uint32_t op) {
 	return op < GL_MAX_SUBOPCODE && gl_defer_desc[op].deferrable;
 }
 
-// Decode one captured record at guest address `rec` into `out`, reconstructing
-// the exact argument tuple GLDispatch would replay. Returns the record's total
-// size in bytes (read from the header), so the caller can advance to the next
-// record with `rec += return value`.
+// Decode the record at guest address `rec` into GLDispatch args. Returns the
+// record size from its header.
 //
-// Wire layout (big-endian guest words, read via ReadMacInt32):
+// Wire layout (big-endian guest words):
 //   rec+0 : sub_opcode
 //   rec+4 : size_bytes
-//   rec+8 : scalar_gpr_count u32 scalars, then popcount(fpr_mask) u32 float bits,
-//           then (if ptr_bytes>0) round_up_4(ptr_bytes) snapshot bytes.
+//   rec+8 : scalars, then float bits, then round_up_4(ptr_bytes) snapshot bytes.
 //
-// out->gpr[]:        scalars verbatim; if the opcode has a trailing pointer, the
-//                    next slot holds the IN-RING guest address of the snapshot
-//                    (so the GL handler dereferences the captured copy, never the
-//                    guest's original buffer, which may already be reused).
-// out->float_bits[]: the dense float words in ascending fpr_mask bit order.
-// Unused gpr[]/float_bits[] slots are zeroed.
+// A trailing pointer is replaced by the in-ring address of the snapshot, since
+// the guest's original buffer may already be reused. Unused slots are zeroed.
 uint32_t GLDeferDecodeRecord(uint32_t rec, GLDeferDecoded *out) {
 	std::memset(out, 0, sizeof(*out));
 
@@ -440,9 +397,7 @@ uint32_t GLDeferDecodeRecord(uint32_t rec, GLDeferDecoded *out) {
 	return size_bytes;
 }
 
-// Replay every buffered record through the existing GLDispatch path, then clear
-// the ring. Stays a no-op until the ring is allocated and records are actually
-// captured (gl_defer_count_addr == 0 here).
+// Replay every buffered record through GLDispatch, then clear the ring.
 void GLDrainDeferred(void) {
 	if (gl_defer_draining) return;          // re-entrancy guard
 	if (!gl_defer_count_addr) return;       // ring not allocated yet -> safe no-op
@@ -453,9 +408,25 @@ void GLDrainDeferred(void) {
 	g_defer_drain_calls++;
 	gl_defer_draining = true;
 
-	uint32_t total = ReadMacInt32(gl_defer_head_addr);   // bytes written
-	WriteMacInt32(gl_defer_count_addr, 0);               // reset BEFORE replay so replayed calls see an empty ring
-	WriteMacInt32(gl_defer_head_addr, 0);
+    // The drain runs inside GLDispatch for the triggering call, whose SP and
+    // sub-opcode are already published. Replay clobbers them, so restore on
+    // every exit or 9+ arg calls (glTexImage2D) read zeros.
+    struct GLDeferCallerArgs {
+        uint32_t sp, scratch;
+        int      stack_arg_offset;
+        GLDeferCallerArgs()
+            : sp(gl_ppc_sp), scratch(ReadMacInt32(gl_scratch_addr)),
+              stack_arg_offset(gl_ppc_stack_arg_offset) {}
+        ~GLDeferCallerArgs() {
+            gl_ppc_sp = sp;
+            gl_ppc_stack_arg_offset = stack_arg_offset;
+            WriteMacInt32(gl_scratch_addr, scratch);
+        }
+    } caller_args;
+
+    uint32_t total = ReadMacInt32(gl_defer_head_addr);   // bytes written
+    WriteMacInt32(gl_defer_count_addr, 0);               // reset before replay so replayed calls see an empty ring
+    WriteMacInt32(gl_defer_head_addr, 0);
 
 	// One-time error log cap: avoids flooding the log on persistent ring corruption.
 	static int s_failsafe_log_count = 0;

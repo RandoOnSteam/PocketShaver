@@ -18,6 +18,9 @@
  *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 #include "sysdeps.h"
+#if defined(__APPLE__)
+#include <libkern/OSCacheControl.h>
+#endif
 #include <math.h>
 #ifdef _WIN32
 #include <windows.h>
@@ -282,6 +285,8 @@ void OsxGuestJitFlush(uint8 *memory, uint32 size)
 {
 #if defined(_WIN32)
 	FlushInstructionCache(GetCurrentProcess(), memory, size);
+#elif defined(__APPLE__)
+	sys_icache_invalidate(memory, size);
 #elif defined(__GNUC__)
 	__builtin___clear_cache((char *)memory, (char *)memory + size);
 #endif

@@ -342,11 +342,8 @@ bool ThunksInit(void)
 	// Initialize RAVE method TVECTs (must be after SheepMem is available)
 	RaveThunksInit();
 
-	// Initialize OpenGL TVECTs (must be after SheepMem is available)
 	GLThunksInit();
 
-	// Initialize DSp thunks. Allocates real TVECTs for the
-	// public DSp entry points via SheepMem::Reserve, matching RAVE.
 	DSpThunksInit();
 
 	#if !defined(TARGET_OS_IPHONE) || !TARGET_OS_IPHONE

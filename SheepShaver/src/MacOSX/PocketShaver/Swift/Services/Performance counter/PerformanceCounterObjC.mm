@@ -42,8 +42,7 @@ PerformanceCounterObjC* objc_getPerformanceCounter(void) {
 @implementation PerformanceCounterObjC
 
 - (PerformanceCounterReport*)reportOneSecondAndFetchReport {
-	// Read-and-clear each tally atomically. The 1-second sampling window means
-	// the frame count returned here IS the frames-per-second value.
+	// Over the 1-second window, the frame count is the FPS.
 	int framesRendered   = atomic_exchange_explicit(&s_framesRendered, 0, memory_order_relaxed);
 	int bytesTransferred = atomic_exchange_explicit(&s_bytesTransferred, 0, memory_order_relaxed);
 

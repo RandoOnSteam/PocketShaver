@@ -8,26 +8,21 @@
  *  the Free Software Foundation; either version 2 of the License, or
  *  (at your option) any later version.
  *
- *  Master compile-time switch for NQD, RAVE, GL, DSp, and compositor logging.
- *  When ACCEL_LOGGING_ENABLED is 1: all subsystem logging macros (NQD_LOG,
- *  RAVE_LOG, GL_LOG, GL_METAL_LOG, DSP_LOG, COMPOSITOR_LOG and their *_VLOG
- *  verbose variants) compile in, gated by per-subsystem runtime bools that are
- *  initialised from the GFXACCEL_LOG environment variable at startup.
- *  When ACCEL_LOGGING_ENABLED is 0 (ship default): all diagnostic logging
- *  compiles to zero-cost no-ops, runtime bools become compile-time false for
- *  dead-code elimination. Always-on *_ERR macros are NOT gated by this flag.
+ *  ACCEL_LOGGING_ENABLED=1 compiles in the subsystem *_LOG / *_VLOG macros,
+ *  each gated at runtime by the environment. At 0 (ship default) they compile
+ *  away. *_ERR macros are always on.
  *
- *  Runtime control (when compiled in), toggled via tools/gfxlog.sh:
- *    GFXACCEL_LOG          = "all" | comma list of gl,rave,dsp,nqd,comp
- *                            (unset => all subsystems on)
- *    GFXACCEL_LOG_VERBOSE  = 1 to enable the per-draw/per-frame verbose tier
+ *  Runtime control (tools/gfxlog.sh):
+ *    GFXACCEL_LOG          = "all" or a comma list of gl,rave,dsp,nqd,comp
+ *                            (unset = all on)
+ *    GFXACCEL_LOG_VERBOSE  = 1 for the per-draw/per-frame tier
  */
 
 #ifndef ACCEL_LOGGING_H
 #define ACCEL_LOGGING_H
 
 #ifndef ACCEL_LOGGING_ENABLED
-#define ACCEL_LOGGING_ENABLED 0   /* ship default OFF; toggle via tools/gfxlog.sh */
+#define ACCEL_LOGGING_ENABLED 0
 #endif
 
 #ifdef __cplusplus
@@ -40,9 +35,7 @@
 namespace accel_log_detail {
 
 /* True if GFXACCEL_LOG is unset, "all", or a comma list containing `name`.
- * Unset => all-on, preserving the legacy "compile flag on => logs on".
- * Each subsystem calls this to initialise its gate bool at definition,
- * which is order-independent (no static-init ordering hazards). */
+ * Has no static-init ordering dependency, so gate bools can call it. */
 inline bool subsystem_on(const char *name) {
     const char *env = std::getenv("GFXACCEL_LOG");
     if (!env || !*env) return true;
@@ -56,7 +49,6 @@ inline bool subsystem_on(const char *name) {
     return std::strstr(hay, needle) != NULL;
 }
 
-/* True if GFXACCEL_LOG_VERBOSE is set to a truthy value (1/t/y). */
 inline bool verbose_env() {
     const char *e = std::getenv("GFXACCEL_LOG_VERBOSE");
     if (!e || !*e) return false;
