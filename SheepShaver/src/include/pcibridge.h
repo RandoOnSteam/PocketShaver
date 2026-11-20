@@ -50,5 +50,9 @@ enum {
 
 extern void PCIBridgeInstall(void);
 extern bool PCIBridgeReady(void);
+#if defined(CLASSICSMP) && CLASSICSMP
+extern uint32 PCIBridgeAddressLatch(void);
+extern int ClassicSmpEnabled(void);
+#endif
 
 #endif

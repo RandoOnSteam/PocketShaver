@@ -53,5 +53,9 @@ extern bool MMIOMapWindow(uint32 base, uint32 size,
 extern bool MMIOIsWindow(void *host_addr);
 extern uint32 MMIORead(void *host_addr, int size);
 extern void MMIOWrite(void *host_addr, int size, uint32 value);
+#if defined(CLASSICSMP) && CLASSICSMP
+extern bool MMIOMapMemory(uint32 base, uint32 size, uint8 *copy, mmio_read_proc read_proc, mmio_write_proc write_proc);
+extern void MMIOUnmapMemory(uint32 base, const uint8 *copy);
+#endif
 
 #endif

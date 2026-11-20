@@ -2207,6 +2207,10 @@ static void SflBootBuildAdvanced(SFLBOOTGUI *pThis)
 	if (SflBootIsSheepShaver()) {
 		SflBootAddCheck(pThis, SFLBOOTPAGEADVANCED, "jit68k", "68k JIT compiler", 0);
 		SflBootAddCheck(pThis, SFLBOOTPAGEADVANCED, "osxjit", "JIT compiler (Mac OS X)", 0);
+#if (defined(OSXSMP) && OSXSMP) || (defined(CLASSICSMP) && CLASSICSMP)
+		SflBootAddCombo(pThis, SFLBOOTPAGEADVANCED, "osxcpus", "Processors", "1=1|2=2", SFLBOOTKINDINT);
+		SflBootAddHelp(pThis, SFLBOOTPAGEADVANCED, NULL, "Each processor runs on its own host thread. Mac OS 7.5.3 to 9.0.4 use the second one through Multiprocessing Services; it stays off with ROMs that cannot start it.");
+#endif
 		item = SflBootAddHeading(pThis, SFLBOOTPAGEADVANCED, "Bootstrap");
 		item->pref = "advbootstrapheading";
 		SflBootAddHelp(pThis, SFLBOOTPAGEADVANCED, "advbootstraptext", "Select a Mac OS install disc file if you want to redo bootstrapping with another install disc.");

@@ -287,11 +287,100 @@ void OsxGuestJitFlush(uint8 *memory, uint32 size)
 #endif
 }
 
+#if OSXSMP
+static uint64 OsxGuestSmpComputeTimebase(OsxCpu *source)
+{
+	uint64 elapsed;
+	elapsed = OsxGuestHostTicks() - source->hostbase;
+	return (elapsed >> 32) * source->hostscale + (((elapsed & 0xffffffffULL) * source->hostscale) >> 32) + source->tboffset;
+}
+
+static uint64 OsxGuestSmpSharedTimebase(OsxCpu *source, int raw)
+{
+	uint64 value;
+	uint32 sequence;
+	do {
+		sequence = source->timesequence;
+		if (source->timefrozen && !raw)
+			value = source->timefrozenvalue;
+		else
+			value = OsxGuestSmpComputeTimebase(source);
+		OsxGuestAtomicOrder();
+	} while ((sequence & 1) || sequence != source->timesequence);
+	return value;
+}
+
+static void OsxGuestSmpTimeWrite(OsxCpu *source)
+{
+	uint32 sequence;
+	sequence = source->timesequence;
+	while ((sequence & 1) || OsxGuestAtomicCompare(&source->timesequence, sequence, sequence + 1) != sequence) {
+		OsxGuestAtomicPause();
+		sequence = source->timesequence;
+	}
+}
+
+static void OsxGuestSmpTimeDone(OsxCpu *source)
+{
+	OsxGuestAtomicAdd((volatile int32 *)&source->timesequence, 1);
+}
+
+uint64 OsxGuestSmpRawTimebase(OsxCpu *cpu)
+{
+	return OsxGuestSmpSharedTimebase(cpu->primary, 1);
+}
+
+void OsxGuestSmpFreezeTime(OsxCpu *cpu, int reason, int frozen)
+{
+	OsxCpu *source;
+	uint64 raw;
+	int32 previous;
+	int32 mask;
+	source = cpu->primary;
+	OsxGuestSmpTimeWrite(source);
+	previous = source->timefrozen;
+	mask = previous & ~reason;
+	if (frozen)
+		mask |= reason;
+	raw = OsxGuestSmpComputeTimebase(source);
+	if (!previous && mask)
+		source->timefrozenvalue = raw;
+	if (previous && !mask)
+		source->tboffset -= raw - source->timefrozenvalue;
+	source->timefrozen = mask;
+	OsxGuestSmpTimeDone(source);
+}
+
+void OsxGuestSmpShiftTime(OsxCpu *cpu, uint64 ticks)
+{
+	OsxCpu *source;
+	source = cpu->primary;
+	OsxGuestSmpTimeWrite(source);
+	source->tboffset += ticks;
+	source->timefrozenvalue += ticks;
+	OsxGuestSmpTimeDone(source);
+}
+
+void OsxGuestSmpRewindTime(OsxCpu *cpu, uint64 ticks)
+{
+	OsxCpu *source;
+	source = cpu->primary;
+	OsxGuestSmpTimeWrite(source);
+	if (!source->timefrozen)
+		source->tboffset -= ticks;
+	OsxGuestSmpTimeDone(source);
+}
+#endif
+
 OSXJITABI uint64 OsxGuestCpuTimebase(OsxCpu *cpu)
 {
 	uint64 elapsed;
 	if (cpu->deterministic)
 		return cpu->instructions / cpu->deterministic + cpu->virtualticks;
+#if OSXSMP
+	if (cpu->cpucount > 1)
+		return OsxGuestSmpSharedTimebase(cpu->primary, 0);
+#endif
 	elapsed = OsxGuestHostTicks() - cpu->hostbase;
 	return (elapsed >> 32) * cpu->hostscale + (((elapsed & 0xffffffffULL) * cpu->hostscale) >> 32) + cpu->tboffset;
 }
@@ -300,9 +389,23 @@ void OsxGuestCpuCalibrateTimebase(OsxCpu *cpu)
 {
 	uint64 current;
 	uint64 frequency;
+#if OSXSMP
+	cpu = cpu->primary;
+#endif
 	if (cpu->deterministic || OsxGuestHostCounter() == cpu->calibrationcounter)
 		return;
 	frequency = OsxGuestHostFrequency(cpu->calibrationticks, cpu->calibrationcounter);
+#if OSXSMP
+	if (cpu->cpucount > 1) {
+		OsxGuestSmpTimeWrite(cpu);
+		current = OsxGuestSmpComputeTimebase(cpu);
+		cpu->hostbase = OsxGuestHostTicks();
+		cpu->hostscale = (cpu->tbfrequency << 32) / frequency;
+		cpu->tboffset = current;
+		OsxGuestSmpTimeDone(cpu);
+		return;
+	}
+#endif
 	current = OsxGuestCpuTimebase(cpu);
 	cpu->hostbase = OsxGuestHostTicks();
 	cpu->hostscale = (cpu->tbfrequency << 32) / frequency;
@@ -354,6 +457,37 @@ static void OsxGuestInvalidateTlbPage(OsxCpu *cpu, uint32 address)
 			cpu->tlb[mode][kind][index].page = OSXTLBINVALID;
 	cpu->fetchtag = 0;
 }
+
+#if OSXSMP
+void OsxGuestSmpDrain(OsxCpu *cpu)
+{
+	int32 count;
+	int32 posted;
+	int32 index;
+	if (cpu->flushposted == cpu->flushdone)
+		return;
+	while (OsxGuestAtomicCompare(&cpu->flushlock, 0, 1) != 0)
+		OsxGuestAtomicPause();
+	count = cpu->flushcount;
+	posted = cpu->flushposted;
+	cpu->flushcount = 0;
+#if OSXG5
+	if (cpu->core970 && count > OSXSMPFLUSHES)
+		OsxGuest970FlushTlb((Osx970 *)cpu->core970);
+	else if (cpu->core970)
+		for (index = 0; index < count; index++)
+			OsxGuest970FlushPage((Osx970 *)cpu->core970, cpu->flushpages[index] >> 12);
+	else
+#endif
+	if (count > OSXSMPFLUSHES)
+		OsxGuestCpuFlushTlb(cpu);
+	else
+		for (index = 0; index < count; index++)
+			OsxGuestInvalidateTlbPage(cpu, cpu->flushpages[index]);
+	OsxGuestAtomicCompare(&cpu->flushlock, 1, 0);
+	OsxGuestAtomicExchange(&cpu->flushdone, posted);
+}
+#endif
 
 #define OSXBATVALID 3u
 #define OSXBATLENGTHBITS 0x1ffcu
@@ -490,6 +624,10 @@ void OsxGuestCpuReset(OsxCpu *cpu, uint32 pvr, uint64 tbfrequency)
 	cpu->faultlogs = 0;
 	cpu->unknownspr = 0;
 	cpu->nativejit = NULL;
+#if OSXSMP
+	cpu->primary = cpu;
+	cpu->cpucount = 1;
+#endif
 	OsxGuestCpuFlushTlb(cpu);
 	OsxGuestCpuUpdateModes(cpu);
 }
@@ -620,6 +758,13 @@ static int OsxGuestCheckProtection(int key, uint32 pp, int kind)
 	return 1;
 }
 
+#if OSXSMP
+#define OSXPTEREFERENCED 0x100
+#define OSXPTECHANGED 0x80
+#define OSXPTEREFERENCEDBYTE 6
+#define OSXPTECHANGEDBYTE 7
+#endif
+
 int OsxGuestCpuTranslate(OsxCpu *cpu, uint32 address, int kind, int raise, uint32 *physical)
 {
 	uint32 *bats;
@@ -717,11 +862,19 @@ int OsxGuestCpuTranslate(OsxCpu *cpu, uint32 address, int kind, int raise, uint3
 				}
 				return 0;
 			}
+#if OSXSMP
+			updated = word1;
+			if (!(word1 & OSXPTEREFERENCED))
+				host[OSXPTEREFERENCEDBYTE] |= OSXPTEREFERENCED >> 8;
+			if (kind == OSXTLBWRITE && !(word1 & OSXPTECHANGED))
+				host[OSXPTECHANGEDBYTE] |= OSXPTECHANGED;
+#else
 			updated = word1 | 0x100;
 			if (kind == OSXTLBWRITE)
 				updated |= 0x80;
 			if (updated != word1)
 				OsxGuestStoreHost32(host + 4, updated);
+#endif
 			*physical = (word1 & OSXPAGEMASK) | (address & 0xfff);
 			return 1;
 		}
@@ -923,6 +1076,38 @@ static OSXFORCEINLINE int OsxGuestCpuWrite16(OsxCpu *cpu, uint32 address, uint32
 	return OsxGuestWriteSlow(cpu, address, 2, value);
 }
 
+#if OSXSMP
+static void OsxGuestSmpStoreConditional(OsxCpu *cpu, uint32 address, uint32 value)
+{
+	uint8 *host;
+	uint32 physical;
+	uint32 expected;
+	int status;
+	host = OsxGuestWriteHost(cpu, address, 0xffc);
+	if (!host) {
+		status = OsxGuestAccessSlow(cpu, address, OSXTLBWRITE, &host, &physical);
+		if (status == OSXACCESSFAULT)
+			return;
+		if (status == OSXACCESSBUS) {
+			cpu->buswrite(cpu->buscontext, physical, 4, value);
+			cpu->reservationvalid = 0;
+			OsxGuestSetCrField(cpu, 0, 2 | (cpu->xer >> 31));
+			return;
+		}
+	}
+	expected = tswap32(cpu->reservationvalue);
+	cpu->reservationvalid = 0;
+	if (OsxGuestAtomicCompare((volatile uint32 *)host, expected, tswap32(value)) == expected) {
+		OsxGuestSetCrField(cpu, 0, 2 | (cpu->xer >> 31));
+		return;
+	}
+#if OSXSMPTRACE
+	cpu->tracefailures++;
+#endif
+	OsxGuestSetCrField(cpu, 0, cpu->xer >> 31);
+}
+#endif
+
 int OsxGuestCpuReadData(OsxCpu *cpu, uint32 address, int size, uint32 *value)
 {
 	if (size == 4)
@@ -998,7 +1183,8 @@ static int OsxGuestRead64(OsxCpu *cpu, uint32 address, uint64 *value)
 	uint32 low;
 	host = OsxGuestReadHost(cpu, address, 0xff8);
 	if (host) {
-		*value = ((uint64)OsxGuestLoadHost32(host) << 32) | OsxGuestLoadHost32(host + 4);
+		memcpy(value, host, 8);
+		*value = tswap64(*value);
 		return 1;
 	}
 	if (!OsxGuestReadSlow(cpu, address, 4, &high))
@@ -1015,8 +1201,8 @@ static int OsxGuestWrite64(OsxCpu *cpu, uint32 address, uint64 value)
 	uint32 physical;
 	host = OsxGuestWriteHost(cpu, address, 0xff8);
 	if (host) {
-		OsxGuestStoreHost32(host, (uint32)(value >> 32));
-		OsxGuestStoreHost32(host + 4, (uint32)value);
+		value = tswap64(value);
+		memcpy(host, &value, 8);
 		return 1;
 	}
 	if (((address + 4) & OSXPAGEMASK) != (address & OSXPAGEMASK) && !OsxGuestCpuTranslate(cpu, address + 4, OSXTLBWRITE, 1, &physical))
@@ -1081,6 +1267,9 @@ int OsxGuestCpuFetchPage(OsxCpu *cpu)
 int OsxGuestCpuAddHook(OsxCpu *cpu, uint32 address, OsxHookFunction function, void *context)
 {
 	OsxHook *hook;
+#if OSXSMP
+	cpu = cpu->primary;
+#endif
 	if (cpu->hookcount >= OSXMAXHOOKS || address + 4 > cpu->ramsize)
 		return 0;
 	hook = &cpu->hooks[cpu->hookcount];
@@ -1259,6 +1448,11 @@ static void OsxGuestWriteTimebase(OsxCpu *cpu, uint32 number, uint32 value)
 		wanted = ((uint64)value << 32) | (current & 0xffffffffu);
 	else
 		wanted = (current & 0xffffffff00000000ULL) | value;
+#if OSXSMP
+	if (cpu->cpucount > 1)
+		OsxGuestSmpShiftTime(cpu, wanted - current);
+	else
+#endif
 	cpu->tboffset += wanted - current;
 	if (cpu->decdeadline != OSXNEVER)
 		cpu->decdeadline += wanted - current;
@@ -1318,6 +1512,9 @@ static int OsxGuestReadSpr(OsxCpu *cpu, uint32 number, uint32 *value)
 			*value = (*value & ~0x80000000u) | 0x40000000u;
 		return 1;
 	case 1022: *value = cpu->thrm[2]; return 1;
+#if OSXSMP
+	case OSXSPRPROCESSORID: *value = cpu->processorid; return 1;
+#endif
 	}
 	return 0;
 }
@@ -1372,6 +1569,9 @@ static int OsxGuestWriteSpr(OsxCpu *cpu, uint32 number, uint32 value)
 	case 1017: cpu->l2cr = value & ~0x00200000u; return 1;
 	case 1019: cpu->ictc = value; return 1;
 	case 1020: case 1021: case 1022: cpu->thrm[number - 1020] = value; return 1;
+#if OSXSMP
+	case OSXSPRPROCESSORID: cpu->processorid = value; return 1;
+#endif
 	}
 	return 0;
 }
@@ -1946,11 +2146,19 @@ static void OsxGuestExecuteGroup31(OsxCpu *cpu, uint32 instruction)
 		if (!OsxGuestRequireSupervisor(cpu))
 			return;
 		OsxGuestInvalidateTlbPage(cpu, operand);
+#if OSXSMP
+		if (cpu->cpucount > 1)
+			OsxGuestSmpFlush(cpu, operand & OSXPAGEMASK);
+#endif
 		return;
 	case 370:
 		if (!OsxGuestRequireSupervisor(cpu))
 			return;
 		OsxGuestCpuFlushTlb(cpu);
+#if OSXSMP
+		if (cpu->cpucount > 1)
+			OsxGuestSmpFlush(cpu, OSXSMPFLUSHEVERYTHING);
+#endif
 		return;
 	case 566:
 		if (!OsxGuestRequireSupervisor(cpu))
@@ -1960,12 +2168,25 @@ static void OsxGuestExecuteGroup31(OsxCpu *cpu, uint32 instruction)
 		if (!OsxGuestRequireSupervisor(cpu))
 			return;
 		return;
+#if OSXSMP
+	case 598: case 854:
+		OsxGuestAtomicOrder();
+		return;
+	case 54: case 86: case 246: case 278: case 758:
+		return;
+#else
 	case 54: case 86: case 246: case 278: case 598: case 758: case 854:
 		return;
+#endif
 	case 982:
 		cpu->fetchtag = 0;
-		if (cpu->nativejit && OsxGuestCpuTranslate(cpu, address, OSXTLBREAD, 1, &value) && OsxGuestJitInvalidate(cpu, value & ~31u, 32))
+		if (cpu->nativejit && OsxGuestCpuTranslate(cpu, address, OSXTLBREAD, 1, &value) && OsxGuestJitInvalidate(cpu, value & ~31u, 32)) {
 			cpu->jitflush = 1;
+#if OSXSMP
+			if (cpu->cpucount > 1)
+				OsxGuestSmpKickOthers(cpu);
+#endif
+		}
 		return;
 	case 1014:
 		OsxGuestZeroCacheBlock(cpu, address);
@@ -1981,6 +2202,9 @@ static void OsxGuestExecuteGroup31(OsxCpu *cpu, uint32 instruction)
 			return;
 		cpu->reservation = address;
 		cpu->reservationvalid = 1;
+#if OSXSMP
+		cpu->reservationvalue = value;
+#endif
 		cpu->gpr[rd] = value;
 		return;
 	case 150:
@@ -1991,6 +2215,12 @@ static void OsxGuestExecuteGroup31(OsxCpu *cpu, uint32 instruction)
 			return;
 		}
 		if (cpu->reservationvalid && cpu->reservation == address) {
+#if OSXSMP
+			if (cpu->cpucount > 1) {
+				OsxGuestSmpStoreConditional(cpu, address, source);
+				return;
+			}
+#endif
 			if (!OsxGuestCpuWrite32(cpu, address, source))
 				return;
 			cpu->reservationvalid = 0;
@@ -2177,20 +2407,69 @@ static void OsxGuestExecuteVectorQuad(OsxCpu *cpu, uint32 instruction)
 	OsxGuestCpuReadQuad(cpu, address, vector);
 }
 
+#if OSXSMP
+static int OsxGuestSmpRestart(OsxCpu *cpu)
+{
+	if (!cpu->restart)
+		return 0;
+	cpu->restart = 0;
+	cpu->nextpc = cpu->pc;
+	cpu->slice = 0;
+	cpu->jitflush = 1;
+	return 1;
+}
+
+#endif
+
 static void OsxGuestExecuteHook(OsxCpu *cpu, uint32 instruction)
 {
 	uint32 index;
 	OsxHook *hook;
 	index = instruction & 0x03ffffff;
+#if OSXSMP
+	if (cpu->cpucount > 1)
+		OsxGuestSmpLock(cpu);
+	if ((cpu->msr & OSXMSRPR) || index >= (uint32)cpu->primary->hookcount) {
+		if (cpu->cpucount > 1)
+			OsxGuestSmpUnlock(cpu);
+		OsxGuestIllegalInstruction(cpu, instruction);
+		return;
+	}
+	hook = &cpu->primary->hooks[index];
+	hook->function(cpu, hook->context, hook->address);
+	if (cpu->cpucount > 1) {
+		OsxGuestSmpUnlock(cpu);
+		if (OsxGuestSmpRestart(cpu))
+			return;
+	}
+#else
 	if ((cpu->msr & OSXMSRPR) || index >= (uint32)cpu->hookcount) {
 		OsxGuestIllegalInstruction(cpu, instruction);
 		return;
 	}
 	hook = &cpu->hooks[index];
 	hook->function(cpu, hook->context, hook->address);
+#endif
 	if (cpu->nextpc == cpu->pc + 4)
 		OsxGuestExecute(cpu, hook->original);
 }
+
+#if OSXSMP
+static int OsxGuestSmpObserveSyscall(OsxCpu *cpu, uint32 instruction)
+{
+	int handled;
+	if (!cpu->syscallobserver)
+		return 0;
+	if (cpu->cpucount <= 1)
+		return cpu->syscallobserver(cpu, cpu->syscallcontext, instruction);
+	OsxGuestSmpLock(cpu);
+	handled = cpu->syscallobserver(cpu, cpu->syscallcontext, instruction);
+	OsxGuestSmpUnlock(cpu);
+	if (OsxGuestSmpRestart(cpu))
+		return 1;
+	return handled;
+}
+#endif
 
 static OSXFORCEINLINE void OsxGuestExecute(OsxCpu *cpu, uint32 instruction)
 {
@@ -2262,8 +2541,13 @@ static OSXFORCEINLINE void OsxGuestExecute(OsxCpu *cpu, uint32 instruction)
 			cpu->lr = cpu->pc + 4;
 		return;
 	case 17:
+#if OSXSMP
+		if (OsxGuestSmpObserveSyscall(cpu, instruction))
+			return;
+#else
 		if (cpu->syscallobserver && cpu->syscallobserver(cpu, cpu->syscallcontext, instruction))
 			return;
+#endif
 		OsxGuestCpuRaiseException(cpu, OSXVECTORSYSCALL, 0, cpu->pc + 4);
 		return;
 	case 18:

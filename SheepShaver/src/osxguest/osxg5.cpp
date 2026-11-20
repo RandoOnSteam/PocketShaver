@@ -21,7 +21,7 @@
 #include "osxmachine.h"
 #include "osxhost.h"
 
-#if OSXG5
+#if OSXNEWWORLD
 
 #define MPICMASK 0x80000000u
 #define MPICACTIVITY 0x40000000u
@@ -70,6 +70,7 @@
 #define K2FCR1I2SCLOCK 0x00001000u
 
 #define GPIOINDATA 0x02
+#define GPIOOUTDATA 0x01
 #define GPIOPMU 0x09
 
 #define K2COUNTERFREQUENCY 18432000
@@ -143,19 +144,90 @@ static void OsxGuestMpicReset(OsxMpic *mpic)
 		mpic->idr[index] = 0;
 		mpic->pending[index] = 0;
 	}
-	mpic->inservicecount = 0;
+	for (index = 0; index < OSXMPICCPUS; index++) {
+		mpic->inservicecount[index] = 0;
+		mpic->ctpr[index] = 15;
+	}
 	mpic->gcr = 0;
 	mpic->vid = 2;
 	mpic->spvr = 0xff;
 	mpic->tfrr = 4160000;
-	mpic->ctpr = 15;
 	memset(mpic->timers, 0, sizeof(mpic->timers));
 }
+
+#if OSXSMP
+#define CORE99HOSTIDENTITY 0x001f106b
+#define CORE99HOSTCLASS 0x06000000
+#define CORE99KEYLARGOIDENTITY 0x0022106b
+#define CORE99KEYLARGOCLASS 0xff000003
+#define CORE99SERIALSTART 0x12000
+#define CORE99SERIALEND 0x14000
+#define CORE99ATASTART 0x20000
+#define CORE99ATAEND 0x22000
+#define CORE99ATAINTERRUPT 0x300
+
+static void OsxGuestCore99Reset(OsxMachine *machine)
+{
+	OsxG5 *g5;
+	g5 = &machine->g5state;
+	memset(g5, 0, sizeof(OsxG5));
+	OsxGuestMpicReset(&g5->mpic);
+	g5->gpio[GPIOPMU] = GPIOINDATA;
+	machine->uninorth[0] = OSXCORE99UNINORTHVERSION;
+	machine->pci[0].vendordevice = CORE99HOSTIDENTITY;
+	machine->pci[0].classrevision = CORE99HOSTCLASS;
+	machine->pci[1].vendordevice = CORE99KEYLARGOIDENTITY;
+	machine->pci[1].classrevision = CORE99KEYLARGOCLASS;
+	machine->pci[1].bar0 = OSXG5MACIOBASE;
+	machine->pci[1].bar0mask = ~(OSXG5MACIOSIZE - 1);
+}
+
+static int OsxGuestCore99Legacy(uint32 offset)
+{
+	return offset - OSXBMACOFFSET < OSXBMACSIZE || offset - OSXAUDIOOFFSET < OSXAUDIOSIZE || (offset >= CORE99SERIALSTART && offset < CORE99SERIALEND) || (offset >= CORE99ATASTART && offset < CORE99ATAEND);
+}
+
+static uint32 OsxGuestCore99AtaInterrupt(OsxMachine *machine, uint32 offset, int size)
+{
+	uint32 value;
+	value = 0;
+	if (machine->ata[(offset >> 12) & 1].irqline)
+		value = ATAIRQDRIVE;
+	return bswap_32(value) >> ((4 - size) * 8);
+}
+
+static int OsxGuestCore99DrivenLow(uint32 value)
+{
+	return (value & OSXCORE99GPIOOUTPUT) && !(value & GPIOOUTDATA);
+}
+
+static void OsxGuestSmpGpio(OsxMachine *machine, uint32 offset, uint32 value)
+{
+	static const uint8 resets[2][OSXSMPCPUS] = { { 0x71, 0x72, 0x73, 0x74 }, { 0x5b, 0x5c, 0x67, 0x68 } };
+	static const uint8 timebases[2] = { 0x76, OSXCORE99TIMEBASEGPIO };
+	uint8 previous;
+	int index;
+	previous = machine->g5state.gpio[offset - OSXG5GPIOBASE];
+	if (offset == timebases[machine->core99]) {
+		OsxGuestSmpFreezeTime(machine->cpus[0], OSXSMPFREEZEGPIO, OsxGuestCore99DrivenLow(value));
+		return;
+	}
+	for (index = 1; index < machine->cpucount; index++)
+		if (offset == resets[machine->core99][index] && OsxGuestCore99DrivenLow(previous) && !OsxGuestCore99DrivenLow(value))
+			OsxGuestSmpStart(machine, index);
+}
+#endif
 
 void OsxGuestG5Reset(OsxMachine *machine)
 {
 	OsxG5 *g5;
 	uint32 highsize;
+#if OSXSMP
+	if (machine->core99) {
+		OsxGuestCore99Reset(machine);
+		return;
+	}
+#endif
 	g5 = &machine->g5state;
 	highsize = g5->highsize;
 	memset(g5, 0, sizeof(OsxG5));
@@ -191,45 +263,83 @@ static int OsxGuestMpicPriority(uint32 ivpr)
 	return (int)((ivpr >> 16) & 15);
 }
 
-static int OsxGuestMpicPending(OsxMpic *mpic, int source)
+static int OsxGuestMpicCpus(OsxMachine *machine)
 {
-	if (source < MPICSOURCESK2 && (mpic->ivpr[source] & MPICSENSE))
+#if OSXSMP
+	return machine->cpucount;
+#else
+	return 1;
+#endif
+}
+
+static int OsxGuestMpicInService(OsxMpic *mpic, int source)
+{
+	int cpu;
+	int index;
+	for (cpu = 0; cpu < OSXMPICCPUS; cpu++)
+		for (index = 0; index < mpic->inservicecount[cpu]; index++)
+			if (mpic->inservice[cpu][index] == source)
+				return 1;
+	return 0;
+}
+
+static int OsxGuestMpicPending(OsxMpic *mpic, int source, int cpu)
+{
+	if (source >= OSXG5MPICIPI)
+		return (mpic->pending[source] >> cpu) & 1;
+	if (!(mpic->idr[source] & (1u << cpu)))
+		return 0;
+	if (mpic->ivpr[source] & MPICSENSE)
 		return mpic->line[source];
 	return mpic->pending[source];
 }
 
-static int OsxGuestMpicBest(OsxMpic *mpic)
+static int OsxGuestMpicRaised(OsxMpic *mpic, int source)
+{
+	if (source < OSXG5MPICIPI && (mpic->ivpr[source] & MPICSENSE))
+		return mpic->line[source];
+	return mpic->pending[source] != 0;
+}
+
+static int OsxGuestMpicBest(OsxMpic *mpic, int cpu)
 {
 	int floor;
 	int best;
 	int index;
 	int priority;
-	floor = (int)mpic->ctpr;
-	if (mpic->inservicecount > 0) {
-		priority = OsxGuestMpicPriority(mpic->ivpr[mpic->inservice[mpic->inservicecount - 1]]);
+	floor = (int)mpic->ctpr[cpu];
+	if (mpic->inservicecount[cpu] > 0) {
+		priority = OsxGuestMpicPriority(mpic->ivpr[mpic->inservice[cpu][mpic->inservicecount[cpu] - 1]]);
 		if (priority > floor)
 			floor = priority;
 	}
 	best = -1;
 	for (index = 0; index < OSXG5MPICSOURCES; index++) {
-		if (!OsxGuestMpicPending(mpic, index) || (mpic->ivpr[index] & MPICMASK) || !(mpic->idr[index] & 1))
+		if (!OsxGuestMpicPending(mpic, index, cpu) || (mpic->ivpr[index] & MPICMASK))
 			continue;
 		priority = OsxGuestMpicPriority(mpic->ivpr[index]);
-		if (priority > floor) {
-			floor = priority;
-			best = index;
-		}
+		if (priority <= floor || (index < OSXG5MPICIPI && OsxGuestMpicInService(mpic, index)))
+			continue;
+		floor = priority;
+		best = index;
 	}
 	return best;
 }
 
 static void OsxGuestMpicUpdate(OsxMachine *machine)
 {
+	int cpu;
 	int line;
-	line = OsxGuestMpicBest(&machine->g5state.mpic) >= 0;
-	machine->cpu->externalline = line;
-	if (line)
-		machine->cpu->halted = 0;
+	for (cpu = 0; cpu < OsxGuestMpicCpus(machine); cpu++) {
+		line = OsxGuestMpicBest(&machine->g5state.mpic, cpu) >= 0;
+#if OSXSMP
+		OsxGuestSmpSetLine(machine, cpu, line);
+#else
+		machine->cpu->externalline = line;
+		if (line)
+			machine->cpu->halted = 0;
+#endif
+	}
 }
 
 static void OsxGuestMpicSetSource(OsxMachine *machine, int source, int level)
@@ -242,76 +352,82 @@ static void OsxGuestMpicSetSource(OsxMachine *machine, int source, int level)
 	OsxGuestMpicUpdate(machine);
 }
 
-static uint32 OsxGuestMpicAcknowledge(OsxMachine *machine)
+static uint32 OsxGuestMpicAcknowledge(OsxMachine *machine, int cpu)
 {
 	OsxMpic *mpic;
 	int source;
 	mpic = &machine->g5state.mpic;
-	source = OsxGuestMpicBest(mpic);
+	source = OsxGuestMpicBest(mpic, cpu);
 	if (source < 0)
 		return mpic->spvr & 0xff;
-	if (source >= MPICSOURCESK2 || !(mpic->ivpr[source] & MPICSENSE))
+	if (source >= OSXG5MPICIPI)
+		mpic->pending[source] &= (uint8)~(1u << cpu);
+	else if (!(mpic->ivpr[source] & MPICSENSE))
 		mpic->pending[source] = 0;
-	if (mpic->inservicecount < 16)
-		mpic->inservice[mpic->inservicecount++] = (uint8)source;
+	if (mpic->inservicecount[cpu] < 16)
+		mpic->inservice[cpu][mpic->inservicecount[cpu]++] = (uint8)source;
 	OsxGuestMpicUpdate(machine);
 	return mpic->ivpr[source] & 0xff;
 }
 
-static void OsxGuestMpicEndOfInterrupt(OsxMachine *machine)
+static void OsxGuestMpicEndOfInterrupt(OsxMachine *machine, int cpu)
 {
 	OsxMpic *mpic;
 	mpic = &machine->g5state.mpic;
-	if (mpic->inservicecount > 0)
-		mpic->inservicecount--;
+	if (mpic->inservicecount[cpu] > 0)
+		mpic->inservicecount[cpu]--;
 	OsxGuestMpicUpdate(machine);
-}
-
-static int OsxGuestMpicInService(OsxMpic *mpic, int source)
-{
-	int index;
-	for (index = 0; index < mpic->inservicecount; index++)
-		if (mpic->inservice[index] == source)
-			return 1;
-	return 0;
 }
 
 static uint32 OsxGuestMpicSourceVector(OsxMpic *mpic, int source)
 {
 	uint32 value;
 	value = mpic->ivpr[source] & ~MPICACTIVITY;
-	if (OsxGuestMpicPending(mpic, source) || OsxGuestMpicInService(mpic, source))
+	if (OsxGuestMpicRaised(mpic, source) || OsxGuestMpicInService(mpic, source))
 		value |= MPICACTIVITY;
 	return value;
 }
 
-static uint32 OsxGuestMpicCpuRead(OsxMachine *machine, uint32 reg)
+static uint32 OsxGuestMpicCpuRead(OsxMachine *machine, int cpu, uint32 reg)
 {
 	switch (reg) {
-	case 0x80: return machine->g5state.mpic.ctpr;
-	case 0x90: return 0;
-	case 0xa0: return OsxGuestMpicAcknowledge(machine);
+	case 0x80: return machine->g5state.mpic.ctpr[cpu];
+	case 0x90: return (uint32)cpu;
+	case 0xa0: return OsxGuestMpicAcknowledge(machine, cpu);
 	}
 	return 0;
 }
 
-static void OsxGuestMpicCpuWrite(OsxMachine *machine, uint32 reg, uint32 value)
+static void OsxGuestMpicCpuWrite(OsxMachine *machine, int cpu, uint32 reg, uint32 value)
 {
 	OsxMpic *mpic;
 	mpic = &machine->g5state.mpic;
 	if (reg >= 0x40 && reg < 0x80) {
-		if (value & 1)
-			mpic->pending[OSXG5MPICIPI + ((reg - 0x40) >> 4)] = 1;
+		mpic->pending[OSXG5MPICIPI + ((reg - 0x40) >> 4)] |= (uint8)(value & ((1u << OsxGuestMpicCpus(machine)) - 1));
 		OsxGuestMpicUpdate(machine);
 		return;
 	}
 	if (reg == 0x80) {
-		mpic->ctpr = value & 15;
+		mpic->ctpr[cpu] = value & 15;
 		OsxGuestMpicUpdate(machine);
 		return;
 	}
 	if (reg == 0xb0)
-		OsxGuestMpicEndOfInterrupt(machine);
+		OsxGuestMpicEndOfInterrupt(machine, cpu);
+}
+
+static int OsxGuestMpicBlock(OsxMachine *machine, uint32 offset)
+{
+	if (offset >= 0x20000 && offset < 0x20000 + OSXMPICCPUS * 0x1000)
+		return (int)((offset - 0x20000) >> 12);
+#if OSXSMP
+	if (offset < 0x1000)
+		return machine->accessor;
+#else
+	if (offset < 0x1000)
+		return 0;
+#endif
+	return -1;
 }
 
 static uint32 OsxGuestMpicRead(OsxMachine *machine, uint32 offset)
@@ -319,10 +435,8 @@ static uint32 OsxGuestMpicRead(OsxMachine *machine, uint32 offset)
 	OsxMpic *mpic;
 	int source;
 	mpic = &machine->g5state.mpic;
-	if (offset < 0x1000)
-		return OsxGuestMpicCpuRead(machine, offset & 0xff0);
-	if (offset >= 0x20000 && offset < 0x21000)
-		return OsxGuestMpicCpuRead(machine, offset & 0xff0);
+	if (OsxGuestMpicBlock(machine, offset) >= 0)
+		return OsxGuestMpicCpuRead(machine, OsxGuestMpicBlock(machine, offset), offset & 0xff0);
 	if (offset >= 0x10000 && offset < 0x10000 + MPICSOURCESK2 * 0x20) {
 		source = (int)((offset - 0x10000) >> 5);
 		if (offset & 0x10)
@@ -334,7 +448,7 @@ static uint32 OsxGuestMpicRead(OsxMachine *machine, uint32 offset)
 	if (offset >= 0x1100 && offset < 0x1200)
 		return mpic->timers[(offset - 0x1100) >> 4];
 	switch (offset) {
-	case 0x1000: return ((uint32)(MPICSOURCESK2 - 1) << 16) | 2;
+	case 0x1000: return ((uint32)(MPICSOURCESK2 - 1) << 16) | ((uint32)(OsxGuestMpicCpus(machine) - 1) << 8) | 2;
 	case 0x1020: return mpic->gcr;
 	case 0x1080: return mpic->vid;
 	case 0x10e0: return mpic->spvr;
@@ -348,8 +462,8 @@ static void OsxGuestMpicWrite(OsxMachine *machine, uint32 offset, uint32 value)
 	OsxMpic *mpic;
 	int source;
 	mpic = &machine->g5state.mpic;
-	if (offset < 0x1000 || (offset >= 0x20000 && offset < 0x21000)) {
-		OsxGuestMpicCpuWrite(machine, offset & 0xff0, value);
+	if (OsxGuestMpicBlock(machine, offset) >= 0) {
+		OsxGuestMpicCpuWrite(machine, OsxGuestMpicBlock(machine, offset), offset & 0xff0, value);
 		return;
 	}
 	if (offset >= 0x10000 && offset < 0x10000 + MPICSOURCESK2 * 0x20) {
@@ -363,7 +477,6 @@ static void OsxGuestMpicWrite(OsxMachine *machine, uint32 offset, uint32 value)
 	}
 	if (offset >= 0x10a0 && offset < 0x10e0) {
 		mpic->ivpr[OSXG5MPICIPI + ((offset - 0x10a0) >> 4)] = value & ~MPICACTIVITY;
-		mpic->idr[OSXG5MPICIPI + ((offset - 0x10a0) >> 4)] = 1;
 		OsxGuestMpicUpdate(machine);
 		return;
 	}
@@ -394,6 +507,14 @@ void OsxGuestG5SetLine(OsxMachine *machine, int source, int level)
 {
 	OsxG5 *g5;
 	g5 = &machine->g5state;
+#if OSXSMP
+	if (machine->core99) {
+		if (source == OSXIRQCUDA)
+			source = OSXCORE99IRQPMU;
+		OsxGuestMpicSetSource(machine, source, level);
+		return;
+	}
+#endif
 	switch (source) {
 	case OSXIRQIDE0:
 		machine->dbdma[OSXDBDMAIDE0].status = (machine->dbdma[OSXDBDMAIDE0].status & ~0x80u) | (level ? 0x80u : 0);
@@ -847,6 +968,12 @@ static uint32 OsxGuestMacIoRead(OsxMachine *machine, uint32 offset, int size)
 {
 	OsxG5 *g5;
 	g5 = &machine->g5state;
+#if OSXSMP
+	if (machine->core99 && offset >= CORE99ATASTART && offset < CORE99ATAEND && (offset & 0xfff) == CORE99ATAINTERRUPT)
+		return OsxGuestCore99AtaInterrupt(machine, offset, size);
+	if (machine->core99 && OsxGuestCore99Legacy(offset))
+		return OsxGuestHeathrowRead(machine, offset, size);
+#endif
 	if (offset >= 0x10000 && offset < 0x10100)
 		return bswap_32(OsxGuestI2sRead(machine, offset & 0xf0)) >> ((4 - size) * 8);
 	if (offset >= 0x18000 && offset < 0x19000)
@@ -875,6 +1002,12 @@ static void OsxGuestMacIoWrite(OsxMachine *machine, uint32 offset, int size, uin
 {
 	OsxG5 *g5;
 	g5 = &machine->g5state;
+#if OSXSMP
+	if (machine->core99 && OsxGuestCore99Legacy(offset)) {
+		OsxGuestHeathrowWrite(machine, offset, size, value);
+		return;
+	}
+#endif
 	if (offset >= 0x8000 && offset < 0x9000) {
 		OsxGuestHeathrowWrite(machine, offset, size, value);
 		return;
@@ -906,6 +1039,10 @@ static void OsxGuestMacIoWrite(OsxMachine *machine, uint32 offset, int size, uin
 		return;
 	}
 	if (offset - OSXG5GPIOBASE + size <= OSXG5GPIOSIZE) {
+#if OSXSMP
+		if (machine->cpucount > 1 && size == 1)
+			OsxGuestSmpGpio(machine, offset, value & 0xff);
+#endif
 		OsxGuestBytesFromBus(g5->gpio + offset - OSXG5GPIOBASE, size, value);
 		return;
 	}
@@ -1450,5 +1587,40 @@ void OsxGuestG5BusWrite(OsxMachine *machine, uint32 address, int size, uint32 va
 	if (machine->log && machine->unknownwrites < 200)
 		fprintf(machine->log, "g5 bus write %08x size %d value %08x pc %08x\n", address, size, value, machine->cpu->pc);
 }
+
+#if OSXSMP
+uint32 OsxGuestCore99Read(OsxMachine *machine, uint32 address, int size)
+{
+	uint32 reg;
+	if (address - OSXG5MACIOBASE < OSXG5MACIOSIZE)
+		return OsxGuestMacIoRead(machine, address - OSXG5MACIOBASE, size);
+	reg = (address - OSXCORE99UNINORTH) >> 2;
+	if (address - OSXCORE99UNINORTH < OSXCORE99UNINORTHSIZE && reg < OSXCORE99UNINORTHREGISTERS)
+		return machine->uninorth[reg] >> ((4 - size) * 8);
+	machine->unknownreads++;
+	if (machine->log && machine->unknownreads < 200)
+		fprintf(machine->log, "core99 bus read %08x size %d\n", address, size);
+	if (address - OSXCORE99UNINORTH < OSXCORE99UNINORTHSIZE)
+		return 0;
+	return OsxGuestAllOnes(size);
+}
+
+void OsxGuestCore99Write(OsxMachine *machine, uint32 address, int size, uint32 value)
+{
+	uint32 reg;
+	if (address - OSXG5MACIOBASE < OSXG5MACIOSIZE) {
+		OsxGuestMacIoWrite(machine, address - OSXG5MACIOBASE, size, value);
+		return;
+	}
+	reg = (address - OSXCORE99UNINORTH) >> 2;
+	if (address - OSXCORE99UNINORTH < OSXCORE99UNINORTHSIZE && reg > 0 && reg < OSXCORE99UNINORTHREGISTERS && size == 4) {
+		machine->uninorth[reg] = value;
+		return;
+	}
+	machine->unknownwrites++;
+	if (machine->log && machine->unknownwrites < 200)
+		fprintf(machine->log, "core99 bus write %08x size %d value %08x\n", address, size, value);
+}
+#endif
 
 #endif

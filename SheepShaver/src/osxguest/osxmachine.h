@@ -299,7 +299,7 @@ typedef struct OsxCuda {
 	OsxMouseEvent pointerqueue[OSXMOUSEQUEUE];
 	int pointerread;
 	int pointerwrite;
-#if OSXG5
+#if OSXNEWWORLD
 	int pmu;
 	int pmustate;
 	uint8 pmucommand;
@@ -318,7 +318,13 @@ typedef struct OsxCuda {
 #endif
 } OsxCuda;
 
-#if OSXG5
+#if OSXSMP
+#define OSXMPICCPUS OSXSMPCPUS
+#else
+#define OSXMPICCPUS 1
+#endif
+
+#if OSXNEWWORLD
 #define OSXG5MACIOBASE 0x80000000
 #define OSXG5MACIOSIZE 0x00080000
 #define OSXG5ATABASE 0x80080000
@@ -375,13 +381,13 @@ typedef struct OsxMpic {
 	uint32 idr[OSXG5MPICSOURCES];
 	uint8 line[OSXG5MPICSOURCES];
 	uint8 pending[OSXG5MPICSOURCES];
-	uint8 inservice[16];
-	int inservicecount;
+	uint8 inservice[OSXMPICCPUS][16];
+	int inservicecount[OSXMPICCPUS];
+	uint32 ctpr[OSXMPICCPUS];
 	uint32 gcr;
 	uint32 vid;
 	uint32 spvr;
 	uint32 tfrr;
-	uint32 ctpr;
 	uint32 timers[16];
 } OsxMpic;
 
@@ -441,6 +447,28 @@ typedef struct OsxG5 {
 	uint32 atafcr[2];
 	uint32 atairq[2];
 } OsxG5;
+#endif
+
+#if OSXSMP
+#define OSXCORE99UNINORTH 0xf8000000
+#define OSXCORE99UNINORTHSIZE 0x01000000
+#define OSXCORE99UNINORTHVERSION 7
+#define OSXCORE99UNINORTHREGISTERS 32
+#define OSXCORE99PCIBASE 0xf2000000
+#define OSXCORE99PCISIZE 0x02000000
+#define OSXCORE99CONFIGADDRESS 0xf2800000
+#define OSXCORE99CONFIGDATA 0xf2c00000
+#define OSXCORE99DEVICEHOST 11
+#define OSXCORE99TIMEBASEGPIO 0x73
+#define OSXCORE99GPIOOUTPUT 0x04
+#define OSXCORE99IRQPMU 0x19
+#define OSXCORE99IRQPMUGPIO 0x2f
+
+typedef struct OsxSmpSlot {
+	OsxMachine *machine;
+	void *thread;
+	int index;
+} OsxSmpSlot;
 #endif
 
 typedef struct OsxPointer {
@@ -577,9 +605,23 @@ struct OsxMachine {
 	int pointermoved;
 	uint64 unknownreads;
 	uint64 unknownwrites;
-#if OSXG5
+#if OSXNEWWORLD
+	int newworld;
 	int g5;
 	OsxG5 g5state;
+#endif
+#if OSXSMP
+	OsxCpu *cpus[OSXSMPCPUS];
+	OsxCpu *threadcpus[OSXSMPCPUS];
+	OsxSmpSlot slots[OSXSMPCPUS];
+	void *lock;
+	int cpucount;
+	int core99;
+	int inlinecpus;
+	int accessor;
+	volatile uint32 hostwanted;
+	volatile int32 hostparked;
+	uint32 uninorth[OSXCORE99UNINORTHREGISTERS];
 #endif
 };
 
@@ -590,7 +632,22 @@ uint32 OsxGuestPciConfigRead(OsxMachine *machine, uint32 offset, int size);
 void OsxGuestPciConfigWrite(OsxMachine *machine, uint32 offset, int size, uint32 value);
 
 void OsxGuestPicSetLine(OsxMachine *machine, int source, int level);
-#if OSXG5
+#if OSXSMP
+int OsxGuestSmpCreate(OsxMachine *machine, int count);
+int OsxGuestSmpLaunch(OsxMachine *machine);
+void OsxGuestSmpJoin(OsxMachine *machine);
+void OsxGuestSmpDestroy(OsxMachine *machine);
+void OsxGuestSmpStart(OsxMachine *machine, int index);
+OsxCpu *OsxGuestSmpBegin(OsxMachine *machine, int thread);
+void OsxGuestSmpEnd(OsxCpu *cpu);
+void OsxGuestSmpIdle(OsxCpu *cpu, uint64 ticks);
+void OsxGuestSmpInterrupts(OsxCpu *cpu, uint64 now);
+void OsxGuestSmpStatus(OsxMachine *machine, FILE *log);
+void OsxGuestSmpSetLine(OsxMachine *machine, int index, int level);
+uint32 OsxGuestCore99Read(OsxMachine *machine, uint32 address, int size);
+void OsxGuestCore99Write(OsxMachine *machine, uint32 address, int size, uint32 value);
+#endif
+#if OSXNEWWORLD
 void OsxGuestG5Reset(OsxMachine *machine);
 uint32 OsxGuestG5BusRead(OsxMachine *machine, uint32 address, int size);
 void OsxGuestG5BusWrite(OsxMachine *machine, uint32 address, int size, uint32 value);

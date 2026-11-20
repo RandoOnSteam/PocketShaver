@@ -127,6 +127,111 @@ void OsxGuestHostSleep(uint32 milliseconds)
 	WSThreadSleep(milliseconds);
 }
 
+#if OSXSMP || CLASSICSMP
+struct OsxSmpSignal {
+	WSSIGNAL signal;
+};
+
+typedef struct OsxSflThread {
+	OsxSmpThreadFunction function;
+	void *context;
+	WSTHREAD thread;
+	volatile size_t identifier;
+} OsxSflThread;
+
+OsxSmpSignal *OsxGuestHostSignalCreate(void)
+{
+	OsxSmpSignal *signal;
+	signal = (OsxSmpSignal *)calloc(1, sizeof(OsxSmpSignal));
+	if (signal == NULL)
+		return NULL;
+	WSSignal_Create(&signal->signal);
+	return signal;
+}
+
+void OsxGuestHostSignalDestroy(OsxSmpSignal *signal)
+{
+	WSSignal_Destroy(&signal->signal);
+	free(signal);
+}
+
+void OsxGuestHostSignalRaise(OsxSmpSignal *signal)
+{
+	WSSignal_Raise(&signal->signal);
+}
+
+int OsxGuestHostSignalWait(OsxSmpSignal *signal, uint32 milliseconds)
+{
+	return WSSignal_Wait(&signal->signal, (int)milliseconds) != 0;
+}
+
+static WSTHREADENTRYCALLBACK(OsxSflThreadEntry)
+{
+	OsxSflThread *thread;
+	thread = (OsxSflThread *)cbparam;
+	thread->identifier = WSThreadGetCurrentID();
+	thread->function(thread->context);
+	return WSTHREADENTRYPROCRETCODE(0);
+}
+
+void *OsxGuestHostThreadStart(OsxSmpThreadFunction function, void *context)
+{
+	OsxSflThread *thread;
+	thread = (OsxSflThread *)calloc(1, sizeof(OsxSflThread));
+	if (thread == NULL)
+		return NULL;
+	thread->function = function;
+	thread->context = context;
+	if (!WSThread_Create(&thread->thread, OsxSflThreadEntry, thread)) {
+		free(thread);
+		return NULL;
+	}
+	return thread;
+}
+
+int OsxGuestHostThreadCurrent(void *thread)
+{
+	return ((OsxSflThread *)thread)->identifier == WSThreadGetCurrentID();
+}
+
+void OsxGuestHostThreadJoin(void *thread)
+{
+	WSThread_WaitForExit(&((OsxSflThread *)thread)->thread);
+	WSThread_Destroy(&((OsxSflThread *)thread)->thread);
+	free(thread);
+}
+
+void *OsxGuestHostMutexCreate(void)
+{
+	WSCRITICALSECTION *mutex;
+	mutex = (WSCRITICALSECTION *)calloc(1, sizeof(WSCRITICALSECTION));
+	if (mutex != NULL)
+		WSCriticalSection_Construct(mutex);
+	return mutex;
+}
+
+void OsxGuestHostMutexDestroy(void *mutex)
+{
+	WSCriticalSection_Destruct((WSCRITICALSECTION *)mutex);
+	free(mutex);
+}
+
+int OsxGuestHostMutexTry(void *mutex)
+{
+	return WSCriticalSection_TryLock((WSCRITICALSECTION *)mutex) != 0;
+}
+
+void OsxGuestHostMutexEnter(void *mutex)
+{
+	WSCriticalSection_Lock((WSCRITICALSECTION *)mutex);
+}
+
+void OsxGuestHostMutexLeave(void *mutex)
+{
+	WSCriticalSection_Unlock((WSCRITICALSECTION *)mutex);
+}
+#endif
+
 #define AUDIOCDVOLUME 128
 
 struct OsxSflAudio {

@@ -241,6 +241,8 @@ bool RsrcLockIsLiveNift(uint32 h)
 // does not stick); the dispose thunk's EMUL_OP returns it in A1 so the chain path
 // tail-jumps to the genuine _DisposHandle for every non-'nift' handle.
 static uint32 dispose_orig_addr = 0;
+static bool dispose_patch_installed = false;
+static bool gestalt_hook_installed = false;
 uint32 RsrcLockDisposeOrig(void) { return dispose_orig_addr; }
 
 // Virtual-memory-present Gestalt spoof (see GestaltFakeVMForCurrentApp).  Stock
@@ -514,7 +516,6 @@ void DrainPendingResourceLocks(void)
 	// entry into the thunk's indirect-original long, then point the OS trap slot at
 	// our thunk.  Idempotent (static guard); never installed for apps that load no
 	// 'nift', so they stay byte-for-byte unaffected.
-	static bool dispose_patch_installed = false;
 	if (!dispose_patch_installed && locked_nift_count > 0) {
 		M68kRegisters r;
 		memset(&r, 0, sizeof(r));
@@ -537,7 +538,6 @@ void DrainPendingResourceLocks(void)
 	// after boot, and this drain runs on every VBL once HasMacStarted().  _Gestalt
 	// is OS-dispatched (trap word $A1AD has bit 11 clear and is <= $A800), so use
 	// Get/SetOSTrapAddress, exactly like the _DisposHandle patch above.
-	static bool gestalt_hook_installed = false;
 	if (!gestalt_hook_installed) {
 		M68kRegisters r;
 		memset(&r, 0, sizeof(r));
@@ -553,6 +553,14 @@ void DrainPendingResourceLocks(void)
 	}
 
 	draining = false;
+}
+
+void RsrcLocksReset(void)
+{
+	pending_resource_lock_count = 0;
+	locked_nift_count = 0;
+	dispose_patch_installed = false;
+	gestalt_hook_installed = false;
 }
 
 void CheckLoad(uint32 type, int16 id, uint16 *p, uint32 size)

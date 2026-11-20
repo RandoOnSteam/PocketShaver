@@ -32,6 +32,7 @@ extern void PatchNativeResourceManager(void);
 // (the 60Hz VBL interrupt), never the native get_resource thunk.
 extern void maybe_queue_nift_lock(uint32 type, uint32 h);
 extern void DrainPendingResourceLocks(void);
+extern void RsrcLocksReset(void);
 
 // Diagnostic: dump monitored 'nift' handle state from the illegal-instruction
 // handler.  Pure host-side reads, safe from any context.

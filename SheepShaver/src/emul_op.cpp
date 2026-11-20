@@ -381,16 +381,21 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 				break;
 			}
 			tick_inhibit = true;
+			RedirectKernelCallSlots();
+			if (MachineReset())
+				break;
 		#ifdef ENABLE_JOYMANAGER
 			JoyManagerReset();
 		#endif /* ENABLE_JOYMANAGER */
 			CDROMRemount(); // for System 7.x
 			TimerReset();
+			ADBReset();
 			MacOSUtilReset();
 			EtherResetCachedAllocation();
 			ether_reset();
 			AudioReset();
 			SoundInputReset();
+			RsrcLocksReset();
 #if (defined(ENABLE_GFXACCEL) && defined(SHEEPSHAVER)) || TARGET_OS_IPHONE
 			GfxAccelResetForReboot();
 #endif

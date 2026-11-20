@@ -122,6 +122,13 @@ static void pci_config_write(uint32 reg, uint32 val, uint32 byte_mask)
  *  mmio layer hands us, so no swapping happens anywhere in here.
  */
 
+#if defined(CLASSICSMP) && CLASSICSMP
+uint32 PCIBridgeAddressLatch(void)
+{
+	return pci_addr_latch;
+}
+#endif
+
 static uint32 pci_addr_read(uint32 off, int size)
 {
 	uint32 v = pci_addr_latch;

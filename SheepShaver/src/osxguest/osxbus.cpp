@@ -79,7 +79,7 @@ static uint32 OsxGuestWriteLittleRegister(uint32 reg, uint32 offset, int size, u
 static inline uint32 OsxGuestReadGuest32(OsxMachine *machine, uint32 address)
 {
 	uint8 *host;
-#if OSXG5
+#if OSXNEWWORLD
 	if (machine->g5) {
 		host = OsxGuestG5DmaHost(machine, address, 4);
 		if (host == NULL)
@@ -101,7 +101,7 @@ static inline uint32 OsxGuestReadGuestLittle32(OsxMachine *machine, uint32 addre
 static inline void OsxGuestWriteGuestLittle32(OsxMachine *machine, uint32 address, uint32 value)
 {
 	uint8 *host;
-#if OSXG5
+#if OSXNEWWORLD
 	if (machine->g5) {
 		host = OsxGuestG5DmaHost(machine, address, 4);
 		if (host == NULL)
@@ -151,6 +151,19 @@ static OsxPciFunction *OsxGuestSelectedFunction(OsxMachine *machine, uint32 *reg
 	uint32 device;
 	address = machine->configaddress;
 	*reg = address & 0xfc;
+#if OSXSMP
+	if (machine->core99) {
+		if ((address & 1) || ((address >> 8) & 7) != 0)
+			return NULL;
+		if (address & (1u << OSXCORE99DEVICEHOST))
+			return &machine->pci[0];
+		if (address & (1u << OSXPCIDEVICEHEATHROW))
+			return &machine->pci[1];
+		if (address & (1u << OSXPCIDEVICEDISPLAY))
+			return &machine->pci[2];
+		return NULL;
+	}
+#endif
 	if (!(address & 0x80000000u) || ((address >> 16) & 0xff) != 0 || ((address >> 8) & 7) != 0)
 		return NULL;
 	device = (address >> 11) & 0x1f;
@@ -229,8 +242,8 @@ void OsxGuestPicSetLine(OsxMachine *machine, int source, int level)
 	OsxPic *pic;
 	int bank;
 	uint32 bit;
-#if OSXG5
-	if (machine->g5) {
+#if OSXNEWWORLD
+	if (machine->newworld) {
 		OsxGuestG5SetLine(machine, source, level);
 		return;
 	}
@@ -397,7 +410,7 @@ int OsxGuestDbdmaTransfer(OsxMachine *machine, int channel, uint8 *data, uint32 
 		chunk = residual;
 		if (chunk > length - consumed)
 			chunk = length - consumed;
-#if OSXG5
+#if OSXNEWWORLD
 		if (machine->g5)
 			OsxGuestG5DmaCopy(machine, address + done, data + consumed, chunk, towardmemory);
 		else
@@ -675,9 +688,20 @@ uint32 OsxGuestBusRead(void *context, uint32 address, int size)
 {
 	OsxMachine *machine;
 	machine = (OsxMachine *)context;
-#if OSXG5
+#if OSXNEWWORLD
 	if (machine->g5)
 		return OsxGuestG5BusRead(machine, address, size);
+#endif
+#if OSXSMP
+	if (machine->core99) {
+		if (address - OSXCORE99CONFIGDATA < OSXCORE99PCISIZE - (OSXCORE99CONFIGDATA - OSXCORE99PCIBASE))
+			return OsxGuestPciConfigRead(machine, address & 3, size);
+		if (address - OSXCORE99CONFIGADDRESS < OSXCORE99CONFIGDATA - OSXCORE99CONFIGADDRESS)
+			return OsxGuestReadLittleRegister(machine->configaddress, address & 3, size);
+		if (address - OSXFLASHBASE < OSXFLASHSIZE)
+			return OsxGuestFlashRead(machine, address - OSXFLASHBASE, size);
+		return OsxGuestCore99Read(machine, address, size);
+	}
 #endif
 	if (address - OSXHEATHROWBASE < OSXHEATHROWSIZE)
 		return OsxGuestHeathrowRead(machine, address - OSXHEATHROWBASE, size);
@@ -699,9 +723,22 @@ void OsxGuestBusWrite(void *context, uint32 address, int size, uint32 value)
 {
 	OsxMachine *machine;
 	machine = (OsxMachine *)context;
-#if OSXG5
+#if OSXNEWWORLD
 	if (machine->g5) {
 		OsxGuestG5BusWrite(machine, address, size, value);
+		return;
+	}
+#endif
+#if OSXSMP
+	if (machine->core99) {
+		if (address - OSXCORE99CONFIGDATA < OSXCORE99PCISIZE - (OSXCORE99CONFIGDATA - OSXCORE99PCIBASE))
+			OsxGuestPciConfigWrite(machine, address & 3, size, value);
+		else if (address - OSXCORE99CONFIGADDRESS < OSXCORE99CONFIGDATA - OSXCORE99CONFIGADDRESS)
+			machine->configaddress = OsxGuestWriteLittleRegister(machine->configaddress, address & 3, size, value);
+		else if (address - OSXFLASHBASE < OSXFLASHSIZE)
+			OsxGuestFlashWrite(machine, address - OSXFLASHBASE, size, value);
+		else
+			OsxGuestCore99Write(machine, address, size, value);
 		return;
 	}
 #endif
@@ -1233,7 +1270,7 @@ void OsxGuestAudioPoll(OsxMachine *machine, uint64 now)
 	int channel;
 	audio = &machine->audio;
 	channel = OSXDBDMAAUDIOOUT;
-#if OSXG5
+#if OSXNEWWORLD
 	if (machine->g5)
 		channel = OSXG5DBDMAI2SOUT;
 #endif
@@ -1274,7 +1311,7 @@ void OsxGuestAudioPoll(OsxMachine *machine, uint64 now)
 		got = OsxGuestDbdmaTransfer(machine, channel, audio->block, want, 0);
 		if (got <= 0)
 			return;
-#if OSXG5
+#if OSXNEWWORLD
 		machine->g5state.i2sframes += (uint32)got / AUDIOFRAMEBYTES;
 #endif
 		if (audio->stream) {
@@ -1587,7 +1624,7 @@ void OsxGuestBmacPoll(OsxMachine *machine, uint64 now)
 	else
 		bmac->polldeadline = now + BMACIDLEPOLL;
 	OsxGuestHostNetPoll(bmac->slirpthread);
-#if OSXG5
+#if OSXNEWWORLD
 	if (machine->g5) {
 		OsxGuestG5GmacReceive(machine);
 		return;

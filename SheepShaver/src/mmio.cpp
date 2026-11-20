@@ -31,7 +31,11 @@
 #include "debug.h"
 
 enum {
+#if defined(CLASSICSMP) && CLASSICSMP
+	MMIO_MAX_WINDOWS = 8,
+#else
 	MMIO_MAX_WINDOWS = 4,
+#endif
 	// Protection is per page; reservation is per allocation granule. Both
 	// matter - see MMIOMapWindow.
 	MMIO_PAGE = 0x1000,
@@ -113,6 +117,41 @@ bool MMIOMapWindow(uint32 base, uint32 size,
 	mmio_window_count++;
 	return true;
 }
+
+#if defined(CLASSICSMP) && CLASSICSMP
+bool MMIOMapMemory(uint32 base, uint32 size, uint8 *copy, mmio_read_proc read_proc, mmio_write_proc write_proc)
+{
+	uint8 *host;
+	if (!MMIO_SUPPORTED || mmio_window_count >= MMIO_MAX_WINDOWS)
+		return false;
+	host = (uint8 *)Mac2HostAddr(base);
+	mmio_windows[mmio_window_count].host = host;
+	mmio_windows[mmio_window_count].size = size;
+	mmio_windows[mmio_window_count].read_proc = read_proc;
+	mmio_windows[mmio_window_count].write_proc = write_proc;
+	mmio_window_count++;
+	vm_protect(host, size, VM_PAGE_READ);
+	memcpy(copy, host, size);
+	vm_protect(host, size, VM_PAGE_NOACCESS);
+	return true;
+}
+
+void MMIOUnmapMemory(uint32 base, const uint8 *copy)
+{
+	uint8 *host;
+	int index;
+	host = (uint8 *)Mac2HostAddr(base);
+	for (index = 0; index < mmio_window_count; index++) {
+		if (mmio_windows[index].host == host) {
+			vm_protect(host, mmio_windows[index].size, VM_PAGE_READ | VM_PAGE_WRITE);
+			memcpy(host, copy, mmio_windows[index].size);
+			mmio_windows[index] = mmio_windows[mmio_window_count - 1];
+			mmio_window_count--;
+			return;
+		}
+	}
+}
+#endif
 
 bool MMIOIsWindow(void *host_addr)
 {

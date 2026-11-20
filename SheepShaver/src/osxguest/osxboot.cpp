@@ -2117,7 +2117,7 @@ static OsxTreeProperty *OsxGuestFindProperty(OsxTreeNode *node, const char *name
 static void OsxGuestAddPhandles(OsxTreeNode *node, uint32 *phandle)
 {
 	OsxTreeNode *child;
-#if OSXG5
+#if OSXNEWWORLD
 	if (OsxGuestFindProperty(node, "AAPL,phandle") == NULL)
 #endif
 	OsxGuestAddCell(node, "AAPL,phandle", (*phandle)++);
@@ -2263,7 +2263,7 @@ static void OsxGuestAddAudioNode(OsxTreeNode *macio)
 	OsxGuestAddProperty(node, "sound-objects", objects, sizeof(objects));
 }
 
-#if OSXG5
+#if OSXNEWWORLD
 static void OsxGuestAddPciRegister(OsxTreeNode *node, uint32 device, uint32 base, uint32 size, uint32 prefetch)
 {
 	uint32 cells[10];
@@ -2545,6 +2545,69 @@ static void OsxGuestAddI2sFunctions(OsxTreeNode *macio, OsxTreeNode *bus)
 	}
 }
 
+#if OSXSMP
+#define SMPCORE99RESET 0x5b5c6768u
+#define SMPK2RESET 0x71727374u
+#define SMPK2TIMEBASE 0x26
+#define SMPFUNCTIONONDEMAND 0x08000000u
+#define SMPFUNCTIONWRITEGPIO 1
+#define SMPFUNCTIONMASK 4
+
+static void OsxGuestSmpProcessors(OsxTreeNode *cpus, OsxTreeNode *first, const char *name, uint32 resets, int count)
+{
+	OsxTreeNode *node;
+	OsxTreeProperty *property;
+	int index;
+	if (OsxGuestFindProperty(first, "state") == NULL)
+		OsxGuestAddString(first, "state", "running");
+	OsxGuestAddCell(first, "soft-reset", resets >> 24);
+	for (index = 1; index < count; index++) {
+		node = OsxGuestNewNode(cpus, name);
+		for (property = first->firstproperty->next; property; property = property->next)
+			OsxGuestAddProperty(node, property->name, property->value, property->length);
+		OsxGuestStoreBig32(OsxGuestFindProperty(node, "reg")->value, (uint32)index);
+		memcpy(OsxGuestFindProperty(node, "state")->value, "stopped", 8);
+		OsxGuestStoreBig32(OsxGuestFindProperty(node, "soft-reset")->value, (resets >> (24 - index * 8)) & 0xff);
+	}
+}
+
+static OsxTreeNode *OsxGuestFindChild(OsxTreeNode *node, const char *name)
+{
+	OsxTreeNode *child;
+	for (child = node->firstchild; child; child = child->next)
+		if (strcmp((const char *)child->firstproperty->value, name) == 0)
+			return child;
+	return NULL;
+}
+
+static OsxTreeNode *OsxGuestSmpTimebaseNode(OsxTreeNode *macio)
+{
+	static const char compatible[] = "timebase-enable\0gpio30\0gpio";
+	OsxTreeNode *node;
+	node = OsxGuestNewNode(OsxGuestFindChild(macio, "gpio"), "timebase-enable");
+	OsxGuestAddString(node, "device_type", "gpio");
+	OsxGuestAddProperty(node, "compatible", compatible, sizeof(compatible));
+	OsxGuestAddCell(node, "reg", SMPK2TIMEBASE);
+	OsxGuestAddProperty(node, "built-in", "", 0);
+	return node;
+}
+
+static void OsxGuestSmpTimebaseFunction(OsxTreeNode *cpus, OsxTreeNode *timebase, uint32 controller)
+{
+	OsxTreeNode *child;
+	uint32 cells[5];
+	cells[0] = OsxGuestBig32(OsxGuestFindProperty(cpus, "AAPL,phandle")->value);
+	cells[1] = SMPFUNCTIONONDEMAND;
+	cells[2] = SMPFUNCTIONWRITEGPIO;
+	cells[3] = 0;
+	cells[4] = SMPFUNCTIONMASK;
+	OsxGuestAddCells(timebase, "platform-do-cpu-timebase", cells, 5);
+	OsxGuestAddCell(cpus, "platform-cpu-timebase", OsxGuestBig32(OsxGuestFindProperty(timebase, "AAPL,phandle")->value));
+	for (child = cpus->firstchild->next; child; child = child->next)
+		OsxGuestAddCell(child, "AAPL,parentIC", controller);
+}
+#endif
+
 static OsxTreeNode *OsxGuestBuildTreeG5(OsxBootState *state, OsxTreeNode **memorymap)
 {
 	static const char rootcompatible[] = "PowerMac7,3\0MacRISC4\0Power Macintosh";
@@ -2562,6 +2625,10 @@ static OsxTreeNode *OsxGuestBuildTreeG5(OsxBootState *state, OsxTreeNode **memor
 	uint32 cells[12];
 	uint32 parent;
 	int index;
+#if OSXSMP
+	OsxTreeNode *cpus;
+	OsxTreeNode *timebase;
+#endif
 	machine = state->machine;
 	root = OsxGuestNewNode(NULL, "device-tree");
 	OsxGuestAddString(root, "model", "PowerMac7,3");
@@ -2598,6 +2665,12 @@ static OsxTreeNode *OsxGuestBuildTreeG5(OsxBootState *state, OsxTreeNode **memor
 	OsxGuestAddProperty(cpu, "graphics", "", 0);
 	OsxGuestAddProperty(cpu, "external-control", "", 0);
 	OsxGuestAddProperty(cpu, "general-purpose", "", 0);
+#if OSXSMP
+	cpus = node;
+	timebase = NULL;
+	if (machine->cpucount > 1)
+		OsxGuestSmpProcessors(cpus, cpu, "PowerPC,G5", SMPK2RESET, machine->cpucount);
+#endif
 
 	node = OsxGuestNewNode(root, "memory");
 	OsxGuestAddString(node, "device_type", "memory");
@@ -2704,6 +2777,10 @@ static OsxTreeNode *OsxGuestBuildTreeG5(OsxBootState *state, OsxTreeNode **memor
 	OsxGuestAddCell(mpic, "clock-frequency", 4166666);
 
 	OsxGuestAddPmuNodes(macio, interrupting);
+#if OSXSMP
+	if (machine->cpucount > 1)
+		timebase = OsxGuestSmpTimebaseNode(macio);
+#endif
 	interrupting[7] = OsxGuestAddK2I2cNode(macio);
 	interrupting[6] = OsxGuestAddI2sNodes(macio);
 	interrupting[3] = OsxGuestAddKauaiNode(ht, OSXG5DEVICEATA0, OSXG5ATABASE, OSXG5IRQATA0, OSXG5IRQATA0DMA);
@@ -2730,7 +2807,142 @@ static OsxTreeNode *OsxGuestBuildTreeG5(OsxBootState *state, OsxTreeNode **memor
 		OsxGuestAddCell(interrupting[index], "interrupt-parent", parent);
 	OsxGuestAddI2sFunctions(macio, interrupting[6]);
 	OsxGuestAddCell(cpu, "AAPL,parentIC", parent);
+#if OSXSMP
+	if (timebase)
+		OsxGuestSmpTimebaseFunction(cpus, timebase, parent);
+#endif
 	return root;
+}
+#endif
+
+#if OSXSMP
+#define CORE99KEYLARGODEVICE 0x0022
+#define CORE99KEYLARGOREVISION 3
+#define CORE99PCIMEMORY 0x80000000
+#define CORE99PCIMEMORYSIZE 0x10000000
+#define CORE99PCIIOSIZE 0x00800000
+#define CORE99CONTROLLERHANDLE 0xff000000
+
+static void OsxGuestCore99Sources(OsxTreeNode *node, uint32 levels, uint32 controller)
+{
+	OsxTreeProperty *legacy;
+	OsxTreeProperty *parent;
+	uint8 *sources;
+	uint32 count;
+	uint32 index;
+	legacy = OsxGuestFindProperty(node, "AAPL,interrupts");
+	parent = OsxGuestFindProperty(node, "interrupts");
+	count = legacy->length / 4;
+	sources = (uint8 *)malloc(count * 8);
+	for (index = 0; index < count; index++) {
+		memcpy(sources + index * 8, legacy->value + index * 4, 4);
+		OsxGuestStoreBig32(sources + index * 8 + 4, index < levels);
+	}
+	free(legacy->value);
+	legacy->value = sources;
+	legacy->length = count * 8;
+	strcpy(legacy->name, "interrupts");
+	strcpy(parent->name, "interrupt-parent");
+	parent->length = 4;
+	OsxGuestStoreBig32(parent->value, controller);
+}
+
+static OsxTreeNode *OsxGuestCore99Bridge(OsxTreeNode *root)
+{
+	OsxTreeNode *node;
+	OsxTreeNode *pci;
+	uint32 cells[12];
+	node = OsxGuestNewNode(root, "aliases");
+	OsxGuestAddString(node, "pci", "/pci@f2000000");
+	OsxGuestAddString(node, "mac-io", "/pci@f2000000/mac-io@10");
+	OsxGuestAddString(node, "via-pmu", "/pci@f2000000/mac-io@10/via-pmu@16000");
+	OsxGuestAddString(node, "rtc", "/pci@f2000000/mac-io@10/via-pmu@16000/rtc");
+	OsxGuestAddString(node, "nvram", "/nvram@fff80000");
+	node = OsxGuestNewNode(root, "nvram");
+	OsxGuestAddString(node, "device_type", "nvram");
+	OsxGuestAddString(node, "compatible", "nvram,flash");
+	cells[0] = OSXFLASHBASE;
+	cells[1] = OSXFLASHSIZE;
+	OsxGuestAddCells(node, "reg", cells, 2);
+	OsxGuestAddCell(node, "#bytes", OSXFLASHBANK);
+	node = OsxGuestNewNode(root, "uni-n");
+	OsxGuestAddString(node, "device_type", "memory-controller");
+	OsxGuestAddString(node, "compatible", "uni-north");
+	OsxGuestAddCell(node, "device-rev", OSXCORE99UNINORTHVERSION);
+	cells[0] = OSXCORE99UNINORTH;
+	cells[1] = OSXCORE99UNINORTHSIZE;
+	OsxGuestAddCells(node, "reg", cells, 2);
+	pci = OsxGuestNewNode(root, "pci");
+	OsxGuestAddString(pci, "device_type", "pci");
+	OsxGuestAddString(pci, "compatible", "uni-north");
+	cells[0] = OSXCORE99PCIBASE;
+	cells[1] = OSXCORE99PCISIZE;
+	OsxGuestAddCells(pci, "reg", cells, 2);
+	OsxGuestAddCell(pci, "#address-cells", 3);
+	OsxGuestAddCell(pci, "#size-cells", 2);
+	cells[0] = 0;
+	cells[1] = 0;
+	OsxGuestAddCells(pci, "bus-range", cells, 2);
+	OsxGuestAddCell(pci, "clock-frequency", 33333333);
+	cells[0] = 0x01000000;
+	cells[1] = 0;
+	cells[2] = 0;
+	cells[3] = OSXCORE99PCIBASE;
+	cells[4] = 0;
+	cells[5] = CORE99PCIIOSIZE;
+	cells[6] = 0x02000000;
+	cells[7] = 0;
+	cells[8] = CORE99PCIMEMORY;
+	cells[9] = CORE99PCIMEMORY;
+	cells[10] = 0;
+	cells[11] = CORE99PCIMEMORYSIZE;
+	OsxGuestAddCells(pci, "ranges", cells, 12);
+	OsxGuestAddString(pci, "AAPL,unit-string", "f2000000");
+	return pci;
+}
+
+static OsxTreeNode *OsxGuestCore99MacIo(OsxTreeNode *pci, uint32 *controller)
+{
+	OsxTreeNode *macio;
+	OsxTreeNode *mpic;
+	OsxTreeNode *interrupting[3];
+	uint32 cells[5];
+	int index;
+	macio = OsxGuestNewNode(pci, "mac-io");
+	OsxGuestAddString(macio, "device_type", "mac-io");
+	OsxGuestAddString(macio, "compatible", "Keylargo");
+	OsxGuestAddString(macio, "model", "AAPL,Keylargo");
+	OsxGuestAddPciRegister(macio, OSXPCIDEVICEHEATHROW, OSXG5MACIOBASE, OSXG5MACIOSIZE, 0);
+	cells[0] = 0;
+	cells[1] = 0x82000010 | (OSXPCIDEVICEHEATHROW << 11);
+	cells[2] = 0;
+	cells[3] = OSXG5MACIOBASE;
+	cells[4] = OSXG5MACIOSIZE;
+	OsxGuestAddCells(macio, "ranges", cells, 5);
+	OsxGuestAddCell(macio, "AAPL,address", OSXG5MACIOBASE);
+	OsxGuestAddPciIdentity(macio, 0x106b, CORE99KEYLARGODEVICE, 0xff0000);
+	OsxGuestStoreBig32(OsxGuestFindProperty(macio, "revision-id")->value, CORE99KEYLARGOREVISION);
+	OsxGuestAddCell(macio, "#address-cells", 1);
+	OsxGuestAddCell(macio, "#size-cells", 1);
+	OsxGuestAddString(macio, "AAPL,unit-string", "10");
+	mpic = OsxGuestNewNode(macio, "interrupt-controller");
+	OsxGuestAddString(mpic, "device_type", "open-pic");
+	OsxGuestAddString(mpic, "compatible", "chrp,open-pic");
+	OsxGuestAddProperty(mpic, "built-in", "", 0);
+	cells[0] = OSXG5MPICOFFSET;
+	cells[1] = OSXG5MPICSIZE;
+	OsxGuestAddCells(mpic, "reg", cells, 2);
+	OsxGuestAddCell(mpic, "#interrupt-cells", 2);
+	OsxGuestAddCell(mpic, "#address-cells", 0);
+	OsxGuestAddProperty(mpic, "interrupt-controller", "", 0);
+	OsxGuestAddCell(mpic, "clock-frequency", 4166666);
+	*controller = CORE99CONTROLLERHANDLE;
+	OsxGuestAddCell(mpic, "AAPL,phandle", *controller);
+	OsxGuestAddCell(macio, "interrupt-parent", *controller);
+	OsxGuestAddPmuNodes(macio, interrupting);
+	for (index = 0; index < 3; index++)
+		OsxGuestAddCell(interrupting[index], "interrupt-parent", *controller);
+	return macio;
 }
 #endif
 
@@ -2744,8 +2956,19 @@ static OsxTreeNode *OsxGuestBuildTree(OsxBootState *state, OsxTreeNode **memorym
 	OsxTreeNode *cuda;
 	OsxTreeNode *chosen;
 	uint32 cells[16];
+#if OSXSMP
+	static const char core99compatible[] = "PowerMac3,3\0MacRISC2\0MacRISC\0Power Macintosh";
+	OsxTreeNode *cpus;
+	uint32 controller;
+#endif
 	machine = state->machine;
 	root = OsxGuestNewNode(NULL, "device-tree");
+#if OSXSMP
+	if (machine->core99) {
+		OsxGuestAddString(root, "model", "PowerMac3,3");
+		OsxGuestAddProperty(root, "compatible", core99compatible, sizeof(core99compatible));
+	} else
+#endif
 	if (state->machine->pvr == OSXPVRG4) {
 		OsxGuestAddString(root, "model", "PowerMac1,2");
 		OsxGuestAddStrings(root, "compatible", "PowerMac1,2", "MacRISC");
@@ -2761,6 +2984,9 @@ static OsxTreeNode *OsxGuestBuildTree(OsxBootState *state, OsxTreeNode **memorym
 	node = OsxGuestNewNode(root, "cpus");
 	OsxGuestAddCell(node, "#address-cells", 1);
 	OsxGuestAddCell(node, "#size-cells", 0);
+#if OSXSMP
+	cpus = node;
+#endif
 #if OSXG5
 	if (state->machine->pvr == OSX970PVR) {
 		node = OsxGuestNewNode(node, "PowerPC,G5");
@@ -2810,6 +3036,13 @@ static OsxTreeNode *OsxGuestBuildTree(OsxBootState *state, OsxTreeNode **memorym
 #if OSXG5
 	}
 #endif
+#if OSXSMP
+	if (machine->core99) {
+		OsxGuestSmpProcessors(cpus, node, "PowerPC,G4", SMPCORE99RESET, machine->cpucount);
+		for (node = cpus->firstchild->next; node; node = node->next)
+			OsxGuestAddCell(node, "timebase-enable", OSXCORE99TIMEBASEGPIO);
+	}
+#endif
 
 	node = OsxGuestNewNode(root, "memory");
 	OsxGuestAddString(node, "device_type", "memory");
@@ -2842,6 +3075,27 @@ static OsxTreeNode *OsxGuestBuildTree(OsxBootState *state, OsxTreeNode **memorym
 	OsxGuestAddString(node, "boot-args", "");
 	OsxGuestAddString(node, "auto-boot?", "true");
 
+#if OSXSMP
+	if (machine->core99) {
+		pci = OsxGuestCore99Bridge(root);
+		macio = OsxGuestCore99MacIo(pci, &controller);
+		OsxGuestAddAtaNode(macio, "ata-3", 0x20000, 0x8b00, OSXIRQIDE0, OSXIRQIDE0DMA);
+		memcpy(OsxGuestFindProperty(macio->lastchild, "compatible")->value, "keylargo-ata", 13);
+		OsxGuestCore99Sources(macio->lastchild, 1, controller);
+		OsxGuestAddAtaNode(macio, "ata-3", 0x21000, 0x8c00, OSXIRQIDE1, OSXIRQIDE1DMA);
+		memcpy(OsxGuestFindProperty(macio->lastchild, "compatible")->value, "keylargo-ata", 13);
+		OsxGuestCore99Sources(macio->lastchild, 1, controller);
+		OsxGuestAddBmacNode(macio);
+		OsxGuestCore99Sources(macio->lastchild, 0, controller);
+		OsxGuestAddAudioNode(macio);
+		OsxGuestCore99Sources(macio->lastchild, 0, controller);
+		node = OsxGuestAddDisplayNode(pci, machine, state->ignorendrv);
+		OsxGuestAddPciRegister(node, OSXPCIDEVICEDISPLAY, OSXVRAMBASE, OSXVRAMSIZE, 0);
+		OsxGuestAddPciIdentity(node, 0x1234, 0x1111, 0x030000);
+		OsxGuestAddString(node, "AAPL,unit-string", "12");
+		return root;
+	}
+#endif
 	node = OsxGuestNewNode(root, "aliases");
 	OsxGuestAddString(node, "pci", "/pci@80000000");
 
@@ -3171,6 +3425,10 @@ int OsxGuestBootLoad(OsxMachine *machine, const char *imagepath, int bootbus, in
 		return 0;
 	}
 	sprintf(state.rootpath, "/pci@80000000/mac-io@10/ata@%x/@%d:%d", 0x20000 + bootbus * 0x1000, bootunit, volume.partition);
+#if OSXSMP
+	if (machine->core99)
+		sprintf(state.rootpath, "/pci@f2000000/mac-io@10/ata-3@%x/@%d:%d", 0x20000 + bootbus * 0x1000, bootunit, volume.partition);
+#endif
 	machine->pvr = OSXPVRG4;
 #if OSXG5
 	if (PrefsFindBool("osxcpu970") || machine->g5)
@@ -3209,6 +3467,9 @@ int OsxGuestBootLoad(OsxMachine *machine, const char *imagepath, int bootbus, in
 #if OSXG5
 	if (!machine->g5)
 #endif
+#if OSXSMP
+	if (!machine->core99)
+#endif
 	if (OsxGuestContainsBytes(kernel, kernelsize, "Darwin Kernel Version 9.") &&
 	    (!mkext || !OsxGuestMkextHasBundle(mkext, mkextsize, "com.apple.driver.AppleGossamerPE"))) {
 		ErrorAlert("On non-G5 machine types, Mac OS X 10.5 needs the Old World platform drivers. Attach a Mac OS X 10.4 disc or disk image.");
@@ -3235,7 +3496,7 @@ int OsxGuestBootLoad(OsxMachine *machine, const char *imagepath, int bootbus, in
 	OsxGuestCloseVolume(&volume);
 	machine->bootargs = OsxGuestBootAllocate(&state, BOOTARGSSIZE);
 	OsxGuestAddRange(&state, "BootArgs", machine->bootargs, BOOTARGSSIZE);
-#if OSXG5
+#if OSXNEWWORLD
 	state.phandle = 0xff000001;
 	if (machine->g5)
 		root = OsxGuestBuildTreeG5(&state, &memorymap);

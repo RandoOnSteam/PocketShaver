@@ -163,8 +163,8 @@ void OsxGuestCudaReset(OsxMachine *machine)
 	cuda->mousewrite = 0;
 	cuda->pointerread = 0;
 	cuda->pointerwrite = 0;
-#if OSXG5
-	cuda->pmu = machine->g5;
+#if OSXNEWWORLD
+	cuda->pmu = machine->newworld;
 	cuda->pmustate = 0;
 	cuda->pmuintbits = 0;
 	cuda->pmuintmask = 0x90;
@@ -528,7 +528,7 @@ static uint64 OsxGuestTimerDeadline(uint64 start, uint32 ticks)
 	return start + ((uint64)ticks + 1) * OSXTIMEBASEFREQUENCY / VIAFREQUENCY;
 }
 
-#if OSXG5
+#if OSXNEWWORLD
 #define PMUTACK 0x08
 #define PMUTREQ 0x10
 #define PMUSTATEIDLE 0
@@ -627,8 +627,29 @@ static void OsxGuestPmuAdbCommand(OsxMachine *machine, const uint8 *data, int le
 		result = 0;
 	cuda->adbreply[0] = data[0];
 	cuda->adbreplysize = result + 1;
-	cuda->pmuintbits |= PMUINTADB;
+	cuda->pmuintbits = (cuda->pmuintbits & ~PMUINTADBAUTO) | PMUINTADB;
 	OsxGuestPmuUpdateRequest(machine);
+}
+
+static void OsxGuestPmuAutopoll(OsxCuda *cuda)
+{
+	int result;
+	uint8 request;
+	result = 0;
+	request = 0;
+	if (OsxGuestKeyboardHasData(cuda) && (cuda->pollmask & (1u << cuda->keyboard.address))) {
+		request = (uint8)((cuda->keyboard.address << 4) | 0x0c);
+		result = OsxGuestTalkKeyboard(cuda, 0, cuda->adbreply + 1);
+	} else if (OsxGuestMouseHasData(cuda) && (cuda->pollmask & (1u << cuda->mouse.address))) {
+		request = (uint8)((cuda->mouse.address << 4) | 0x0c);
+		result = OsxGuestTalkMouse(cuda, 0, cuda->adbreply + 1);
+	}
+	cuda->adbreply[0] = request;
+	cuda->adbreplysize = 0;
+	if (result > 0)
+		cuda->adbreplysize = result + 1;
+	else
+		cuda->pmuintbits &= ~(PMUINTADB | PMUINTADBAUTO);
 }
 
 static int OsxGuestPmuDispatch(OsxMachine *machine)
@@ -648,6 +669,8 @@ static int OsxGuestPmuDispatch(OsxMachine *machine)
 	cuda->pmuresponsesize = 0;
 	switch (cuda->pmucommand) {
 	case PMUINTACK:
+		if (cuda->pmuintbits & PMUINTADBAUTO)
+			OsxGuestPmuAutopoll(cuda);
 		if (cuda->pmuintbits & PMUINTADB) {
 			memcpy(out + 1, cuda->adbreply, cuda->adbreplysize);
 			out[0] = cuda->pmuintbits & (PMUINTADB | PMUINTADBAUTO);
@@ -805,8 +828,6 @@ static void OsxGuestPmuUpdate(OsxMachine *machine)
 static void OsxGuestPmuPoll(OsxMachine *machine, uint64 now)
 {
 	OsxCuda *cuda;
-	int result;
-	uint8 request;
 	cuda = &machine->cuda;
 	if (now >= cuda->tickdeadline) {
 		cuda->tickdeadline = now + OSXTIMEBASEFREQUENCY;
@@ -815,19 +836,8 @@ static void OsxGuestPmuPoll(OsxMachine *machine, uint64 now)
 	}
 	if (!cuda->autopoll || (cuda->pmuintbits & PMUINTADB) || cuda->pmustate != PMUSTATEIDLE)
 		return;
-	result = 0;
-	request = 0;
-	if (OsxGuestKeyboardHasData(cuda) && (cuda->pollmask & (1u << cuda->keyboard.address))) {
-		request = (uint8)((cuda->keyboard.address << 4) | 0x0c);
-		result = OsxGuestTalkKeyboard(cuda, 0, cuda->adbreply + 1);
-	} else if (OsxGuestMouseHasData(cuda) && (cuda->pollmask & (1u << cuda->mouse.address))) {
-		request = (uint8)((cuda->mouse.address << 4) | 0x0c);
-		result = OsxGuestTalkMouse(cuda, 0, cuda->adbreply + 1);
-	}
-	if (result <= 0)
+	if (!(OsxGuestKeyboardHasData(cuda) && (cuda->pollmask & (1u << cuda->keyboard.address))) && !(OsxGuestMouseHasData(cuda) && (cuda->pollmask & (1u << cuda->mouse.address))))
 		return;
-	cuda->adbreply[0] = request;
-	cuda->adbreplysize = result + 1;
 	cuda->pmuintbits |= PMUINTADB | PMUINTADBAUTO;
 	OsxGuestPmuUpdateRequest(machine);
 }
@@ -896,7 +906,7 @@ void OsxGuestCudaWrite(OsxMachine *machine, uint32 reg, uint32 value)
 	switch (reg) {
 	case VIAB:
 		cuda->b = (uint8)((cuda->b & ~cuda->dirb) | (value & cuda->dirb));
-#if OSXG5
+#if OSXNEWWORLD
 		if (cuda->pmu) {
 			OsxGuestPmuUpdate(machine);
 			break;
@@ -947,7 +957,7 @@ void OsxGuestCudaWrite(OsxMachine *machine, uint32 reg, uint32 value)
 		break;
 	case VIAACR:
 		cuda->acr = (uint8)value;
-#if OSXG5
+#if OSXNEWWORLD
 		if (cuda->pmu)
 			break;
 #endif
@@ -1041,7 +1051,7 @@ void OsxGuestCudaPoll(OsxMachine *machine, uint64 now)
 	}
 	if (now >= cuda->polldeadline) {
 		cuda->polldeadline = now + OsxGuestMicrosecondsToTicks(cuda->pollrate * 1000);
-#if OSXG5
+#if OSXNEWWORLD
 		if (cuda->pmu) {
 			OsxGuestPmuPoll(machine, now);
 			return;

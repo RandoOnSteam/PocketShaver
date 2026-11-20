@@ -347,6 +347,122 @@ void OsxGuestHostSleep(uint32 milliseconds)
 	SDL_Delay(milliseconds);
 }
 
+#if OSXSMP || CLASSICSMP
+#if SDL_VERSION_ATLEAST(3, 0, 0)
+#define OSXSDLSEMAPHORE SDL_Semaphore
+#define OSXSDLMUTEX SDL_Mutex
+#define OSXSDLRAISE(semaphore) SDL_SignalSemaphore(semaphore)
+#define OSXSDLWAIT(semaphore, milliseconds) SDL_WaitSemaphoreTimeout(semaphore, (Sint32)(milliseconds))
+#define OSXSDLVALUE(semaphore) SDL_GetSemaphoreValue(semaphore)
+#define OSXSDLTRY(mutex) SDL_TryLockMutex(mutex)
+#define OSXSDLCURRENT() SDL_GetCurrentThreadID()
+#define OSXSDLTHREAD(entry, context) SDL_CreateThread(entry, "cpu", context)
+#else
+#define OSXSDLSEMAPHORE SDL_sem
+#define OSXSDLMUTEX SDL_mutex
+#define OSXSDLRAISE(semaphore) SDL_SemPost(semaphore)
+#define OSXSDLWAIT(semaphore, milliseconds) (SDL_SemWaitTimeout(semaphore, milliseconds) == 0)
+#define OSXSDLVALUE(semaphore) SDL_SemValue(semaphore)
+#define OSXSDLCURRENT() SDL_ThreadID()
+#if SDL_VERSION_ATLEAST(2, 0, 0)
+#define OSXSDLTRY(mutex) (SDL_TryLockMutex(mutex) == 0)
+#define OSXSDLTHREAD(entry, context) SDL_CreateThread(entry, "cpu", context)
+#else
+#define OSXSDLTRY(mutex) 0
+#define OSXSDLTHREAD(entry, context) SDL_CreateThread(entry, context)
+#endif
+#endif
+
+typedef struct OsxSdlThread {
+	OsxSmpThreadFunction function;
+	void *context;
+	SDL_Thread *handle;
+	volatile uint64 identifier;
+} OsxSdlThread;
+
+OsxSmpSignal *OsxGuestHostSignalCreate(void)
+{
+	return (OsxSmpSignal *)SDL_CreateSemaphore(0);
+}
+
+void OsxGuestHostSignalDestroy(OsxSmpSignal *signal)
+{
+	SDL_DestroySemaphore((OSXSDLSEMAPHORE *)signal);
+}
+
+void OsxGuestHostSignalRaise(OsxSmpSignal *signal)
+{
+	if (OSXSDLVALUE((OSXSDLSEMAPHORE *)signal) == 0)
+		OSXSDLRAISE((OSXSDLSEMAPHORE *)signal);
+}
+
+int OsxGuestHostSignalWait(OsxSmpSignal *signal, uint32 milliseconds)
+{
+	return OSXSDLWAIT((OSXSDLSEMAPHORE *)signal, milliseconds) != 0;
+}
+
+static int SDLCALL OsxSdlThreadEntry(void *context)
+{
+	OsxSdlThread *thread;
+	thread = (OsxSdlThread *)context;
+	thread->identifier = (uint64)OSXSDLCURRENT();
+	thread->function(thread->context);
+	return 0;
+}
+
+void *OsxGuestHostThreadStart(OsxSmpThreadFunction function, void *context)
+{
+	OsxSdlThread *thread;
+	thread = (OsxSdlThread *)calloc(1, sizeof(OsxSdlThread));
+	if (thread == NULL)
+		return NULL;
+	thread->function = function;
+	thread->context = context;
+	thread->handle = OSXSDLTHREAD(OsxSdlThreadEntry, thread);
+	if (thread->handle == NULL) {
+		free(thread);
+		return NULL;
+	}
+	return thread;
+}
+
+int OsxGuestHostThreadCurrent(void *thread)
+{
+	return ((OsxSdlThread *)thread)->identifier == (uint64)OSXSDLCURRENT();
+}
+
+void OsxGuestHostThreadJoin(void *thread)
+{
+	SDL_WaitThread(((OsxSdlThread *)thread)->handle, NULL);
+	free(thread);
+}
+
+void *OsxGuestHostMutexCreate(void)
+{
+	return SDL_CreateMutex();
+}
+
+void OsxGuestHostMutexDestroy(void *mutex)
+{
+	SDL_DestroyMutex((OSXSDLMUTEX *)mutex);
+}
+
+int OsxGuestHostMutexTry(void *mutex)
+{
+	return OSXSDLTRY((OSXSDLMUTEX *)mutex) != 0;
+}
+
+void OsxGuestHostMutexEnter(void *mutex)
+{
+	SDL_LockMutex((OSXSDLMUTEX *)mutex);
+}
+
+void OsxGuestHostMutexLeave(void *mutex)
+{
+	SDL_UnlockMutex((OSXSDLMUTEX *)mutex);
+}
+#endif
+
 void OsxGuestHostEvents(OsxHostVideo *video, const uint8 *vram)
 {
 	OsxHostInput input = video->input;

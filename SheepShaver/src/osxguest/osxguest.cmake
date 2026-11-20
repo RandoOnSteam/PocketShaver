@@ -6,6 +6,7 @@ set(OSXGUESTSOURCES
 	"${OSXGUESTDIRECTORY}/osxtest.cpp"
 	"${OSXGUESTDIRECTORY}/osxbus.cpp"
 	"${OSXGUESTDIRECTORY}/osxg5.cpp"
+	"${OSXGUESTDIRECTORY}/osxsmp.cpp"
 	"${OSXGUESTDIRECTORY}/osxclip.cpp"
 	"${OSXGUESTDIRECTORY}/osxata.cpp"
 	"${OSXGUESTDIRECTORY}/osxcuda.cpp"

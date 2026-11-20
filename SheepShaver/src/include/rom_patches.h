@@ -39,6 +39,11 @@ extern int ROMType;
 extern bool DecodeROM(uint8 *data, uint32 size);
 extern bool FindChrpPayload(const uint8 *data, uint32 *imageoffset, uint32 *imagesize);
 extern bool PatchROM(void);
+extern bool MapEmulatorCode(void);
+extern void UnmapEmulatorCode(void);
+extern void RedirectKernelCallSlots(void);
+extern bool MachineReset(void);
+extern uint32 EmulatorCodeAlias(uint32 address);
 extern bool HasNanoKernel2(void);
 extern bool HasNewWorldV2Kernel(void);
 extern void InstallDrivers(void);
@@ -72,5 +77,9 @@ const uint32 DISPOSE_NIFT_PATCH_SPACE = 0x2fcf10;	// 68k thunk (10 bytes), after
 const uint32 GESTALT_VM_PATCH_SPACE = 0x2fcf20;		// 68k thunk (6 bytes; rts at +4)
 
 const uint32 PRINT_PATCH_SPACE = 0x2fd000;
+
+#if defined(CLASSICSMP) && CLASSICSMP
+extern bool ClassicSmpConfigured(void);
+#endif
 
 #endif

@@ -149,6 +149,10 @@ bool InitAll(const char *vmdir)
 		ErrorAlert(GetString(STR_UNSUPPORTED_ROM_TYPE_ERR));
 		return false;
 	}
+	if (!MapEmulatorCode()) {
+		ErrorAlert("Cannot map the 68k emulator code area.");
+		return false;
+	}
 
 	// Initialize Kernel Data
 	Mac_memset(KERNEL_DATA_BASE, 0, sizeof(KernelData));
@@ -297,6 +301,7 @@ void ExitAll(void)
 
 	// Save NVRAM
 	XPRAMExit();
+	UnmapEmulatorCode();
 
 	// Exit clipboard
 	ClipExit();

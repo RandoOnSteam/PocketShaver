@@ -28,6 +28,10 @@
 #include "sysdeps.h"
 #include "xpram.h"
 
+#define XPRAMSERIALUSE 0x1313
+#define XPRAMSERIALUSEFREE 0x00
+#define XPRAMSERIALUSEASYNC 0x22
+
 
 // Extended parameter RAM
 uint8 XPRAM[XPRAM_SIZE];
@@ -56,7 +60,6 @@ void XPRAMInit(const char *vmdir)
 		XPRAM[0x1310] = 0xa8;
 		XPRAM[0x1311] = 0x00;
 		XPRAM[0x1312] = 0x00;
-		XPRAM[0x1313] = 0x22;
 		XPRAM[0x1314] = 0xcc;
 		XPRAM[0x1315] = 0x0a;
 		XPRAM[0x1316] = 0xcc;
@@ -73,6 +76,8 @@ void XPRAMInit(const char *vmdir)
 		XPRAM[0x1377] = 0x01;
 		XPRAM[0x138a] = 0x25;
 	}
+	if (XPRAM[XPRAMSERIALUSE] == XPRAMSERIALUSEASYNC)
+		XPRAM[XPRAMSERIALUSE] = XPRAMSERIALUSEFREE;
 	uint32 pramindex;
 	uint32 pramchecksum = 0;
 	for (pramindex = 0x1800; pramindex < 0x2000; pramindex += 2)

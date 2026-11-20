@@ -35,8 +35,8 @@ static void OsxGuestUpdateModes(Osx970 *core);
 
 static uint64 OsxGuestLoadBig(const uint8 *host, int size)
 {
+	uint64 wide;
 	uint32 word;
-	uint32 low;
 	uint16 half;
 	if (size == 4) {
 		memcpy(&word, host, 4);
@@ -48,13 +48,13 @@ static uint64 OsxGuestLoadBig(const uint8 *host, int size)
 		memcpy(&half, host, 2);
 		return tswap16(half);
 	}
-	memcpy(&word, host, 4);
-	memcpy(&low, host + 4, 4);
-	return ((uint64)tswap32(word) << 32) | tswap32(low);
+	memcpy(&wide, host, 8);
+	return tswap64(wide);
 }
 
 static void OsxGuestStoreBig(uint8 *host, int size, uint64 value)
 {
+	uint64 wide;
 	uint32 word;
 	uint16 half;
 	if (size == 4) {
@@ -71,10 +71,8 @@ static void OsxGuestStoreBig(uint8 *host, int size, uint64 value)
 		memcpy(host, &half, 2);
 		return;
 	}
-	word = tswap32((uint32)(value >> 32));
-	memcpy(host, &word, 4);
-	word = tswap32((uint32)value);
-	memcpy(host + 4, &word, 4);
+	wide = tswap64(value);
+	memcpy(host, &wide, 8);
 }
 
 static int OsxGuestSixtyFour(Osx970 *core)
@@ -303,6 +301,20 @@ static void OsxGuestFlushPageIndex(Osx970 *core, uint64 pageindex)
 	core->fetchpage = OSX970TLBINVALID;
 }
 
+#if OSXSMP
+#define SMP970REFERENCED 0x100
+#define SMP970CHANGED 0x80
+#define SMP970REFERENCEDBYTE 14
+#define SMP970CHANGEDBYTE 15
+
+static void OsxGuestSmpStoreConditional(Osx970 *core, uint64 address, int count, uint64 value);
+
+void OsxGuest970FlushPage(Osx970 *core, uint64 pageindex)
+{
+	OsxGuestFlushPageIndex(core, pageindex);
+}
+#endif
+
 static void OsxGuestWriteSegment(Osx970 *core, int index, uint64 esid, uint64 vsid)
 {
 	Osx970Slb *slb;
@@ -494,11 +506,19 @@ int OsxGuest970Translate(Osx970 *core, uint64 address, int kind, int raise, uint
 				}
 				return 0;
 			}
+#if OSXSMP
+			updated = word1;
+			if (!(word1 & SMP970REFERENCED))
+				host[SMP970REFERENCEDBYTE] |= SMP970REFERENCED >> 8;
+			if (kind == OSXTLBWRITE && !(word1 & SMP970CHANGED))
+				host[SMP970CHANGEDBYTE] |= SMP970CHANGED;
+#else
 			updated = word1 | 0x100;
 			if (kind == OSXTLBWRITE)
 				updated |= 0x80;
 			if (updated != word1)
 				OsxGuestStoreBig(host + 8, 8, updated);
+#endif
 			*physical = (word1 & 0x0ffffffffffff000ULL) | (address & 0xfff);
 			return 1;
 		}
@@ -539,6 +559,15 @@ void OsxGuest970InvalidatePhysical(Osx970 *core, uint64 physical, uint64 length)
 	if (length > OsxGuestLinearSize(core->cpu) - physical)
 		length = OsxGuestLinearSize(core->cpu) - physical;
 	last = (physical + length - 1) >> 12;
+#if OSXSMP
+	if (core->cpu->cpucount > 1) {
+		OsxGuestAtomicFence();
+		for (page = physical >> 12; page <= last; page++)
+			if (core->codepages[page])
+				OsxGuestAtomicAdd((volatile int32 *)&core->versions[page], 1);
+		return;
+	}
+#endif
 	for (page = physical >> 12; page <= last; page++) {
 		if (core->codepages[page]) {
 			core->codepages[page] = 0;
@@ -552,7 +581,11 @@ static uint8 *OsxGuestHostSlow(Osx970 *core, uint64 address, int kind, int raise
 	uint8 *host;
 	if (!OsxGuest970Translate(core, address, kind, raise, physical))
 		return NULL;
+#if OSXSMP
+	if (kind == OSXTLBWRITE && core->cpu->cpucount <= 1)
+#else
 	if (kind == OSXTLBWRITE)
+#endif
 		OsxGuest970InvalidatePhysical(core, OsxGuestLinear(core->cpu, *physical), 1);
 	if (!OsxGuestPhysicalHost(core, *physical, &host)) {
 		*bus = 1;
@@ -707,6 +740,11 @@ static void OsxGuestWriteTimebase(Osx970 *core, uint32 number, uint64 value)
 		wanted = (value << 32) | (current & 0xffffffffULL);
 	else
 		wanted = (current & 0xffffffff00000000ULL) | (value & 0xffffffffULL);
+#if OSXSMP
+	if (cpu->cpucount > 1)
+		OsxGuestSmpShiftTime(cpu, wanted - current);
+	else
+#endif
 	cpu->tboffset += wanted - current;
 	if (cpu->decdeadline != OSXNEVER)
 		cpu->decdeadline += wanted - current;
@@ -1437,13 +1475,24 @@ static void OsxGuestExecuteGroup31(Osx970 *core, uint32 instruction)
 		if (!OsxGuestSupervisor(core))
 			return;
 		OsxGuestFlushPageIndex(core, (rb >> 12) & 0xffff);
+#if OSXSMP
+		if (extended == 306 && cpu->cpucount > 1)
+			OsxGuestSmpFlush(cpu, (uint32)(((rb >> 12) & 0xffff) << 12));
+#endif
 		return;
 	case 370:
 		if (!OsxGuestSupervisor(core))
 			return;
 		OsxGuest970FlushTlb(core);
+#if OSXSMP
+		if (cpu->cpucount > 1)
+			OsxGuestSmpFlush(cpu, OSXSMPFLUSHEVERYTHING);
+#endif
 		return;
 	case 566: case 598: case 854:
+#if OSXSMP
+		OsxGuestAtomicOrder();
+#endif
 		return;
 	case 54: case 86: case 246: case 278: case 470:
 		return;
@@ -1451,6 +1500,10 @@ static void OsxGuestExecuteGroup31(Osx970 *core, uint32 instruction)
 		core->fetchpage = OSX970TLBINVALID;
 		if (OsxGuest970Translate(core, OsxGuestIndexedAddress(core, instruction), OSXTLBREAD, 0, &value))
 			OsxGuest970InvalidatePhysical(core, value & ~127ULL, 128);
+#if OSXSMP
+		if (cpu->cpucount > 1)
+			OsxGuestSmpKickOthers(cpu);
+#endif
 		return;
 	case 1014:
 		if (instruction & 0x00200000)
@@ -1476,6 +1529,9 @@ static void OsxGuestExecuteGroup31(Osx970 *core, uint32 instruction)
 		core->gpr[rt] = value;
 		core->reservation = address;
 		core->reservationvalid = 1;
+#if OSXSMP
+		core->reservationvalue = value;
+#endif
 		return;
 	case 150: case 214:
 		address = OsxGuestIndexedAddress(core, instruction);
@@ -1489,6 +1545,12 @@ static void OsxGuestExecuteGroup31(Osx970 *core, uint32 instruction)
 			return;
 		}
 		if (core->reservationvalid && core->reservation == address) {
+#if OSXSMP
+			if (cpu->cpucount > 1) {
+				OsxGuestSmpStoreConditional(core, address, (int)count, rs);
+				return;
+			}
+#endif
 			if (!OsxGuest970Write(core, address, (int)count, rs))
 				return;
 			core->reservationvalid = 0;
@@ -1670,6 +1732,34 @@ static void OsxGuestExecuteFloat64(Osx970 *core, uint32 instruction)
 
 static void OsxGuestExecute(Osx970 *core, uint32 instruction);
 
+#define OSX970SHAREDFIRST 9
+#define OSX970SHAREDLAST 10
+#define OSX970SPACESHIFT 14
+
+static void OsxGuestMirrorSegments(Osx970 *core)
+{
+	OsxCpu *cpu;
+	Osx970Slb *slb;
+	uint32 segment;
+	uint32 space;
+	int index;
+	cpu = core->cpu;
+	space = 0;
+	for (index = 0; index < 16; index++)
+		cpu->sr[index] = 0;
+	for (index = 0; index < OSX970SLBSIZE; index++) {
+		slb = &core->slb[index];
+		if (!(slb->esid & OSX970SLBVALID) || (slb->esid >> 32))
+			continue;
+		segment = (uint32)(slb->esid >> 28);
+		cpu->sr[segment] = (uint32)(slb->vsid >> 12);
+		if (segment < OSX970SHAREDFIRST || segment > OSX970SHAREDLAST)
+			space = cpu->sr[segment] ^ (segment << OSX970SPACESHIFT);
+	}
+	if (!cpu->sr[0])
+		cpu->sr[0] = space;
+}
+
 static void OsxGuestMirror(Osx970 *core)
 {
 	OsxCpu *cpu;
@@ -1689,8 +1779,7 @@ static void OsxGuestMirror(Osx970 *core)
 	cpu->sdr1 = (uint32)core->sdr1;
 	for (index = 0; index < 4; index++)
 		cpu->sprg[index] = (uint32)core->sprg[index];
-	for (index = 0; index < 16; index++)
-		cpu->sr[index] = (uint32)(core->slb[index].vsid >> 12);
+	OsxGuestMirrorSegments(core);
 }
 
 static void OsxGuestAbsorb(Osx970 *core)
@@ -1726,7 +1815,7 @@ int OsxGuest970TranslateVirtual(Osx970 *core, uint32 address, int kind, uint32 *
 	translated = OsxGuest970Translate(core, address, kind, 0, &result);
 	core->msr = msr;
 	if (!translated) {
-		if (address >= core->cpu->ramsize)
+		if ((msr & OSXMSRPR) || address >= core->cpu->ramsize)
 			return 0;
 		result = address;
 	}
@@ -1738,6 +1827,91 @@ int OsxGuest970TranslateVirtual(Osx970 *core, uint32 address, int kind, uint32 *
 	return 1;
 }
 
+#if OSXSMP
+static int OsxGuestSmpRestart(Osx970 *core)
+{
+	OsxCpu *cpu;
+	cpu = core->cpu;
+	if (!cpu->restart)
+		return 0;
+	cpu->restart = 0;
+	core->nextpc = core->pc;
+	cpu->slice = 0;
+	return 1;
+}
+
+static void OsxGuestSmpStoreConditional(Osx970 *core, uint64 address, int count, uint64 value)
+{
+	OsxCpu *cpu;
+	uint8 *host;
+	uint64 physical;
+	uint64 expectedwide;
+	uint64 storedwide;
+	uint32 expected;
+	uint32 stored;
+	int bus;
+	int success;
+	cpu = core->cpu;
+	address = OsxGuestEffective(core, address);
+	host = OsxGuestCpu970Host(core, address, OSXTLBWRITE, 1, &physical, &bus);
+	if (!host && !bus)
+		return;
+	core->reservationvalid = 0;
+	if (!host) {
+		OsxGuest970Write(core, address, count, value);
+		OsxGuestSetCrField(cpu, 0, 2 | (cpu->xer >> 31));
+		return;
+	}
+	if (count == 8) {
+		OsxGuestStoreBig((uint8 *)&expectedwide, 8, core->reservationvalue);
+		OsxGuestStoreBig((uint8 *)&storedwide, 8, value);
+		success = OsxGuestAtomicCompareWide((volatile uint64 *)host, expectedwide, storedwide) == expectedwide;
+	} else {
+		OsxGuestStoreBig((uint8 *)&expected, 4, core->reservationvalue & 0xffffffffULL);
+		OsxGuestStoreBig((uint8 *)&stored, 4, value & 0xffffffffULL);
+		success = OsxGuestAtomicCompare((volatile uint32 *)host, expected, stored) == expected;
+	}
+	if (success) {
+		OsxGuestSetCrField(cpu, 0, 2 | (cpu->xer >> 31));
+		return;
+	}
+#if OSXSMPTRACE
+	cpu->tracefailures++;
+#endif
+	OsxGuestSetCrField(cpu, 0, cpu->xer >> 31);
+}
+#endif
+
+#define OSX970KERNELVSIDSHIFT 26
+
+int OsxGuest970KernelRead(Osx970 *core, uint32 address, uint32 *value)
+{
+	Osx970Slb saved;
+	Osx970Slb *slb;
+	uint64 esid;
+	uint32 physical;
+	int translated;
+	int index;
+	esid = (address & 0xf0000000u) | OSX970SLBVALID;
+	slb = &core->slb[0];
+	for (index = 0; index < OSX970SLBSIZE; index++)
+		if (core->slb[index].esid == esid)
+			slb = &core->slb[index];
+	saved = *slb;
+	slb->esid = esid;
+	slb->vsid = (uint64)(address >> 28) << OSX970KERNELVSIDSHIFT;
+	translated = OsxGuest970TranslateVirtual(core, address, OSXTLBREAD, &physical);
+	*slb = saved;
+	if (!translated && address < core->cpu->ramsize) {
+		physical = address;
+		translated = 1;
+	}
+	if (!translated || physical > OsxGuestLinearSize(core->cpu) - 4)
+		return 0;
+	*value = (uint32)OsxGuestLoadBig(core->cpu->ram + physical, 4);
+	return 1;
+}
+
 static void OsxGuestExecuteHook(Osx970 *core, uint32 instruction)
 {
 	OsxCpu *cpu;
@@ -1745,6 +1919,26 @@ static void OsxGuestExecuteHook(Osx970 *core, uint32 instruction)
 	uint32 index;
 	cpu = core->cpu;
 	index = instruction & 0x03ffffff;
+#if OSXSMP
+	if (cpu->cpucount > 1)
+		OsxGuestSmpLock(cpu);
+	if ((core->msr & OSXMSRPR) || index >= (uint32)cpu->primary->hookcount) {
+		if (cpu->cpucount > 1)
+			OsxGuestSmpUnlock(cpu);
+		OsxGuestIllegal(core);
+		return;
+	}
+	hook = &cpu->primary->hooks[index];
+	OsxGuestMirror(core);
+	cpu->nextpc = cpu->pc + 4;
+	hook->function(cpu, hook->context, hook->address);
+	OsxGuestAbsorb(core);
+	if (cpu->cpucount > 1) {
+		OsxGuestSmpUnlock(cpu);
+		if (OsxGuestSmpRestart(core))
+			return;
+	}
+#else
 	if ((core->msr & OSXMSRPR) || index >= (uint32)cpu->hookcount) {
 		OsxGuestIllegal(core);
 		return;
@@ -1754,6 +1948,7 @@ static void OsxGuestExecuteHook(Osx970 *core, uint32 instruction)
 	cpu->nextpc = cpu->pc + 4;
 	hook->function(cpu, hook->context, hook->address);
 	OsxGuestAbsorb(core);
+#endif
 	if (core->nextpc == OsxGuestEffective(core, core->pc + 4))
 		OsxGuestExecute(core, hook->original);
 }
@@ -1849,9 +2044,20 @@ static void OsxGuestExecute(Osx970 *core, uint32 instruction)
 		return;
 	case 17:
 		if (core->cpu->syscallobserver) {
+#if OSXSMP
+			if (core->cpu->cpucount > 1)
+				OsxGuestSmpLock(core->cpu);
+#endif
 			OsxGuestMirror(core);
 			index = core->cpu->syscallobserver(core->cpu, core->cpu->syscallcontext, instruction);
 			OsxGuestAbsorb(core);
+#if OSXSMP
+			if (core->cpu->cpucount > 1) {
+				OsxGuestSmpUnlock(core->cpu);
+				if (OsxGuestSmpRestart(core))
+					return;
+			}
+#endif
 			if (index)
 				return;
 		}
@@ -2076,6 +2282,11 @@ void OsxGuest970CheckInterrupts(Osx970 *core, uint64 now)
 #define OSX970FIELD(member) ((uint32)offsetof(Osx970, member) - OSX970BASE)
 #define OSX970CPUFIELD(member) ((uint32)offsetof(OsxCpu, member))
 #define OSX970CRF(field) (OSX970CPUFIELD(crf) + (uint32)(field))
+#if OSXSMP
+#define OSX970JITARENA(core) ((OSX970JITBYTES / (uint32)(core)->cpu->cpucount) & ~0xfffffu)
+#else
+#define OSX970JITARENA(core) OSX970JITBYTES
+#endif
 
 typedef int (OSXJITABI *Osx970Code)(Osx970 *core);
 
@@ -2138,6 +2349,9 @@ typedef struct Osx970Emitter {
 	uint32 key;
 	int fetchmode;
 	int vector;
+#if OSXSMP
+	int smp;
+#endif
 } Osx970Emitter;
 
 static void OsxGuestEmitByte(Osx970Emitter *emitter, uint32 value)
@@ -2360,6 +2574,17 @@ static void OsxGuestEmitLookupThunk(Osx970Emitter *emitter)
 	OsxGuestEmitByte(emitter, 0x18);
 }
 
+#if OSXSMP
+static void OsxGuestEmitKick(Osx970Emitter *emitter)
+{
+	if (!emitter->smp)
+		return;
+	OsxGuestEmitMemory(emitter, 0, 0x83, 7, OSX970RSI, OSX970CPUFIELD(kick));
+	OsxGuestEmitByte(emitter, 0);
+	emitter->exits[emitter->exitcount++] = OsxGuestEmitJump(emitter, 0x85);
+}
+#endif
+
 static void OsxGuestEmitChain(Osx970Emitter *emitter, uint32 count, uint64 target)
 {
 	OsxGuestEmitAccount(emitter, count);
@@ -2367,6 +2592,9 @@ static void OsxGuestEmitChain(Osx970Emitter *emitter, uint32 count, uint64 targe
 	if (emitter->exitcount >= OSX970JITEXITS - 8 || emitter->linkcount >= OSX970JITEXITS)
 		return;
 	emitter->exits[emitter->exitcount++] = OsxGuestEmitJump(emitter, 0x8e);
+#if OSXSMP
+	OsxGuestEmitKick(emitter);
+#endif
 	if ((target & ~0xfffULL) == emitter->page) {
 		emitter->links[emitter->linkcount++] = OsxGuestEmitJump(emitter, 0);
 		return;
@@ -2382,6 +2610,9 @@ static void OsxGuestEmitDynamicExit(Osx970Emitter *emitter, uint32 count)
 	if (emitter->exitcount >= OSX970JITEXITS - 8)
 		return;
 	emitter->exits[emitter->exitcount++] = OsxGuestEmitJump(emitter, 0x8e);
+#if OSXSMP
+	OsxGuestEmitKick(emitter);
+#endif
 	OsxGuestEmitDynamicLookup(emitter);
 	emitter->exits[emitter->exitcount++] = OsxGuestEmitJump(emitter, 0);
 }
@@ -2656,6 +2887,10 @@ static int OsxGuestEmitSpecialMemory(Osx970Emitter *emitter, uint32 instruction,
 	}
 	if (opcode != 31)
 		return 0;
+#if OSXSMP
+	if (emitter->smp && (extended == 20 || extended == 150))
+		return 0;
+#endif
 	if (extended == 20) {
 		OsxGuestEmitIndexedAddress(emitter, instruction, sixtyfour);
 		OsxGuestEmitAlignmentCheck(emitter, 3, pc, instruction, count);
@@ -3578,7 +3813,10 @@ static void OsxGuestCompile(Osx970 *core, Osx970Jit *jit, Osx970Block *block, ui
 	int index;
 	uint8 *host;
 	Osx970TlbEntry *entry;
-	if (jit->used + OSX970JITRESERVE >= OSX970JITBYTES) {
+#if OSXSMP
+	uint32 version;
+#endif
+	if (jit->used + OSX970JITRESERVE >= OSX970JITARENA(core)) {
 		memset(jit->blocks, 0, sizeof(jit->blocks));
 		memset(jit->cache, 0, sizeof(jit->cache));
 		jit->used = jit->codestart;
@@ -3593,6 +3831,9 @@ static void OsxGuestCompile(Osx970 *core, Osx970Jit *jit, Osx970Block *block, ui
 	emitter.key = key;
 	emitter.fetchmode = core->modes[OSXTLBFETCH];
 	emitter.vector = (core->msr & OSXMSRVEC) != 0;
+#if OSXSMP
+	emitter.smp = core->cpu->cpucount > 1;
+#endif
 	emitter.stepthunk = jit->stepthunk;
 	emitter.probes = jit->probes;
 	emitter.lookups = jit->lookups;
@@ -3600,6 +3841,13 @@ static void OsxGuestCompile(Osx970 *core, Osx970Jit *jit, Osx970Block *block, ui
 	sixtyfour = (core->msr & OSX970MSRSF) != 0;
 	mode = core->modes[OSXTLBREAD];
 	page = physical >> 12;
+#if OSXSMP
+	if (emitter.smp) {
+		core->codepages[page] = 1;
+		OsxGuestAtomicFence();
+	}
+	version = core->versions[page];
+#endif
 	if (!core->codepages[page]) {
 		core->codepages[page] = 1;
 		host = core->cpu->ram + ((uintptr_t)page << 12);
@@ -3622,7 +3870,11 @@ static void OsxGuestCompile(Osx970 *core, Osx970Jit *jit, Osx970Block *block, ui
 	body = emitter.cursor;
 	OsxGuestEmitMemory(&emitter, 1, 0x8b, OSX970RAX, OSX970RBX, OSX970FIELD(versions));
 	OsxGuestEmitMemory(&emitter, 0, 0x81, 7, OSX970RAX, page * 4);
+#if OSXSMP
+	OsxGuestEmitDword(&emitter, version);
+#else
 	OsxGuestEmitDword(&emitter, core->versions[page]);
+#endif
 	stale = OsxGuestEmitJump(&emitter, 0x85);
 	count = 0;
 	while (count < OSX970JITLIMIT) {
@@ -3679,7 +3931,11 @@ static void OsxGuestCompile(Osx970 *core, Osx970Jit *jit, Osx970Block *block, ui
 	block->pc = pc;
 	block->physical = physical;
 	block->key = key;
+#if OSXSMP
+	block->version = version;
+#else
 	block->version = core->versions[page];
+#endif
 	block->count = count;
 	block->code = (Osx970Code)start;
 	block->body = body;
@@ -3696,13 +3952,23 @@ int OsxGuest970JitCreate(Osx970 *core)
 	jit = (Osx970Jit *)calloc(1, sizeof(Osx970Jit));
 	if (jit == NULL)
 		return 0;
-	jit->arena = OsxGuestJitAllocate(OSX970JITBYTES);
+	jit->arena = OsxGuestJitAllocate(OSX970JITARENA(core));
 	pages = (uint32)(OsxGuestLinearSize(core->cpu) >> 12);
+#if OSXSMP
+	if (core->cpu->primary != core->cpu) {
+		core->codepages = ((Osx970 *)core->cpu->primary->core970)->codepages;
+		core->versions = ((Osx970 *)core->cpu->primary->core970)->versions;
+		if (jit->arena == NULL) {
+			free(jit);
+			return 0;
+		}
+	} else {
+#endif
 	core->codepages = (uint8 *)calloc(pages, 1);
 	core->versions = (uint32 *)calloc(pages, sizeof(uint32));
 	if (jit->arena == NULL || core->codepages == NULL || core->versions == NULL) {
 		if (jit->arena)
-			OsxGuestJitRelease(jit->arena, OSX970JITBYTES);
+			OsxGuestJitRelease(jit->arena, OSX970JITARENA(core));
 		free(core->codepages);
 		free(core->versions);
 		core->codepages = NULL;
@@ -3710,6 +3976,9 @@ int OsxGuest970JitCreate(Osx970 *core)
 		free(jit);
 		return 0;
 	}
+#if OSXSMP
+	}
+#endif
 	jit->stepthunk = jit->arena;
 	thunk.cursor = jit->arena;
 	OsxGuestEmitMemory(&thunk, 1, 0x89, OSX970R8, OSX970RBX, OSX970FIELD(pc));
@@ -3775,10 +4044,16 @@ void OsxGuest970JitDestroy(Osx970 *core)
 		return;
 	if (core->cpu->logfile)
 		fprintf(core->cpu->logfile, "970 jit compiled %llu resets %llu instructions %llu guest %llu bytes %llu cold %llu\n", (unsigned long long)jit->compiled, (unsigned long long)jit->resets, (unsigned long long)core->cpu->instructions, (unsigned long long)jit->guestcompiled, (unsigned long long)jit->bytes, (unsigned long long)jit->coldbytes);
-	OsxGuestJitRelease(jit->arena, OSX970JITBYTES);
+	OsxGuestJitRelease(jit->arena, OSX970JITARENA(core));
 	free(jit);
+#if OSXSMP
+	if (core->cpu->primary == core->cpu) {
+#endif
 	free(core->codepages);
 	free(core->versions);
+#if OSXSMP
+	}
+#endif
 	core->codepages = NULL;
 	core->versions = NULL;
 	core->jit = NULL;
@@ -3801,7 +4076,11 @@ static void OsxGuestInterpretBlock(Osx970 *core)
 #endif
 		OsxGuest970ExecuteInstruction(core, instruction);
 		executed++;
+#if OSXSMP
+	} while (core->pc == expected && executed < OSX970JITLIMIT && cpu->slice > 0 && (core->pc & 0xfff) != 0 && !cpu->halted && !cpu->kick);
+#else
 	} while (core->pc == expected && executed < OSX970JITLIMIT && cpu->slice > 0 && (core->pc & 0xfff) != 0 && !cpu->halted);
+#endif
 }
 
 static void OsxGuestCpu970JitRun(Osx970 *core, Osx970Jit *jit)
@@ -3824,7 +4103,11 @@ static void OsxGuestCpu970JitRun(Osx970 *core, Osx970Jit *jit)
 	hot = OSX970JITHOT;
 	if (core->jithot)
 		hot = (uint32)core->jithot;
+#if OSXSMP
+	while (cpu->slice > 0 && !cpu->halted && !cpu->kick) {
+#else
 	while (cpu->slice > 0 && !cpu->halted) {
+#endif
 		if (!OsxGuestFetch(core, &instruction)) {
 			core->pc = core->nextpc;
 			cpu->slice--;
@@ -3903,7 +4186,11 @@ void OsxGuest970Run(Osx970 *core, int32 count)
 	cpu->slice = count;
 	if (core->jit)
 		OsxGuestCpu970JitRun(core, (Osx970Jit *)core->jit);
+#if OSXSMP
+	while (cpu->slice > 0 && !cpu->halted && !cpu->kick) {
+#else
 	while (cpu->slice > 0 && !cpu->halted) {
+#endif
 		cpu->slice--;
 		if (!OsxGuestFetch(core, &instruction)) {
 			core->pc = core->nextpc;
@@ -3932,7 +4219,11 @@ void OsxGuest970Run(Osx970 *core, int32 count)
 		return;
 	OsxGuestUpdateModes(core);
 	cpu->slice = count;
+#if OSXSMP
+	while (cpu->slice > 0 && !cpu->halted && !cpu->kick) {
+#else
 	while (cpu->slice > 0 && !cpu->halted) {
+#endif
 		cpu->slice--;
 		if (!OsxGuestFetch(core, &instruction)) {
 			core->pc = core->nextpc;

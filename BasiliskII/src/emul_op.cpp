@@ -92,6 +92,7 @@ void EmulOp(uint16 opcode, M68kRegisters *r)
 			JoyManagerReset();
 			CDROMRemount(); // for System 7.x
 			TimerReset();
+			ADBReset();
 			EtherReset();
 			AudioReset();
 #ifdef USE_SDL_AUDIO

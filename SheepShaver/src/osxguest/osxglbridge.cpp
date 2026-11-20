@@ -1399,6 +1399,10 @@ int OsxGuestQuartzIdleGeometry(OsxQuartzBridge *bridge, OsxCpu *cpu, OsxQuartzEv
 		if (context->idle) {
 			if (cpu->pc != context->idlepc || cpu->gpr[1] != context->flushstack)
 				return 0;
+#if OSXSMP
+			if (!OsxGuestSmpClaimHost(cpu))
+				return 1;
+#endif
 			OsxGuestQuartzChainAdvance(bridge, cpu, context);
 			return context->idle;
 		}
@@ -1408,6 +1412,10 @@ int OsxGuestQuartzIdleGeometry(OsxQuartzBridge *bridge, OsxCpu *cpu, OsxQuartzEv
 	}
 	if (!stalecontext || !eventloop(owner, cpu))
 		return 0;
+#if OSXSMP
+	if (!OsxGuestSmpClaimHost(cpu))
+		return 1;
+#endif
 	idlestack = (cpu->gpr[1] - QUARTZFLUSHFRAME) & ~15u;
 	if (!OsxGuestCpuWriteVirtual(cpu, idlestack, cpu->gpr[1]))
 		return 0;

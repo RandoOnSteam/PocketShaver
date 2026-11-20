@@ -213,6 +213,15 @@ void DoPatchNameRegistry(void)
 		RegistryPropertyCreateStr(device_tree.addr(), "model", "Power Macintosh");
 #endif
 
+#if defined(CLASSICSMP) && CLASSICSMP
+		if (ClassicSmpEnabled()) {
+			SheepRegEntryID hammerhead;
+			if (!RegistryCStrEntryCreate(device_tree.addr(), "hammerhead", hammerhead.addr())) {
+				RegistryPropertyCreateStr(hammerhead.addr(), "name", "hammerhead");
+				RegistryPropertyCreateStr(hammerhead.addr(), "device_type", "hammerhead");
+			}
+		}
+#endif
 		// Create "AAPL,ROM"
 		SheepRegEntryID aapl_rom;
 		if (!RegistryCStrEntryCreate(device_tree.addr(), "AAPL,ROM", aapl_rom.addr())) {

@@ -38,6 +38,10 @@ enum {
 	SPCFLAG_JIT_SWITCH				= 1 << 7,
 };
 
+#if defined(CLASSICSMP) && CLASSICSMP
+#define SPCFLAG_CPU_IDLE (1 << 8)
+#endif
+
 // Flags are set from other threads (e.g. the 60 Hz tick thread triggering
 // an interrupt) while the CPU thread tests and clears them, so updates must
 // be atomic read-modify-writes. Reads stay relaxed: the emulation loop polls

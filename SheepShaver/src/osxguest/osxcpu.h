@@ -179,6 +179,120 @@ typedef struct OsxFaultRecord {
 #ifndef OSXG5
 #define OSXG5 0
 #endif
+#ifndef CLASSICSMP
+#define CLASSICSMP 0
+#endif
+#if OSXSMP || CLASSICSMP
+typedef struct OsxSmpSignal OsxSmpSignal;
+typedef void (*OsxSmpThreadFunction)(void *context);
+OsxSmpSignal *OsxGuestHostSignalCreate(void);
+void OsxGuestHostSignalDestroy(OsxSmpSignal *signal);
+void OsxGuestHostSignalRaise(OsxSmpSignal *signal);
+int OsxGuestHostSignalWait(OsxSmpSignal *signal, uint32 milliseconds);
+void *OsxGuestHostThreadStart(OsxSmpThreadFunction function, void *context);
+void OsxGuestHostThreadJoin(void *thread);
+int OsxGuestHostThreadCurrent(void *thread);
+void *OsxGuestHostMutexCreate(void);
+void OsxGuestHostMutexDestroy(void *mutex);
+int OsxGuestHostMutexTry(void *mutex);
+void OsxGuestHostMutexEnter(void *mutex);
+void OsxGuestHostMutexLeave(void *mutex);
+#endif
+#ifndef OSXSMP
+#define OSXSMP 0
+#endif
+#ifndef OSXSMPTRACE
+#define OSXSMPTRACE 0
+#endif
+#define OSXNEWWORLD (OSXG5 || OSXSMP)
+
+#if OSXSMP || CLASSICSMP
+#if defined(_MSC_VER)
+#include <intrin.h>
+#endif
+#define OSXSMPCPUS 4
+#define OSXSMPFLUSHES 16
+#define OSXSMPRESET 0
+#define OSXSMPRUN 1
+#define OSXSMPIDLE 2
+#define OSXSMPDECREMENTERCAP 1666666
+#define OSXSMPFREEZEGPIO 1
+#define OSXSMPFREEZESTALL 2
+#define OSXSMPFLUSHEVERYTHING 1
+#define OSXSPRPROCESSORID 1023
+
+static OSXFORCEINLINE void OsxGuestAtomicFence(void)
+{
+#if defined(_MSC_VER) && OSXHOSTARM64
+	__dmb(_ARM64_BARRIER_SY);
+#elif defined(_MSC_VER)
+	_mm_mfence();
+#else
+	__sync_synchronize();
+#endif
+}
+
+static OSXFORCEINLINE void OsxGuestAtomicOrder(void)
+{
+#if !OSXHOSTX64 && !OSXHOSTX86
+	OsxGuestAtomicFence();
+#endif
+}
+
+static OSXFORCEINLINE void OsxGuestAtomicPause(void)
+{
+#if defined(_MSC_VER) && OSXHOSTARM64
+	__yield();
+#elif defined(_MSC_VER)
+	_mm_pause();
+#elif OSXHOSTX64 || OSXHOSTX86
+	__builtin_ia32_pause();
+#elif OSXHOSTARM64
+	__asm__ __volatile__("yield");
+#endif
+}
+
+static OSXFORCEINLINE int32 OsxGuestAtomicExchange(volatile int32 *target, int32 value)
+{
+#if defined(_MSC_VER)
+	return (int32)_InterlockedExchange((volatile long *)target, (long)value);
+#else
+	int32 previous;
+	previous = __sync_lock_test_and_set(target, value);
+	OsxGuestAtomicOrder();
+	return previous;
+#endif
+}
+
+static OSXFORCEINLINE int32 OsxGuestAtomicAdd(volatile int32 *target, int32 value)
+{
+#if defined(_MSC_VER)
+	return (int32)_InterlockedExchangeAdd((volatile long *)target, (long)value);
+#else
+	return __sync_fetch_and_add(target, value);
+#endif
+}
+
+static OSXFORCEINLINE uint32 OsxGuestAtomicCompare(volatile uint32 *target, uint32 expected, uint32 value)
+{
+#if defined(_MSC_VER)
+	return (uint32)_InterlockedCompareExchange((volatile long *)target, (long)value, (long)expected);
+#else
+	return __sync_val_compare_and_swap(target, expected, value);
+#endif
+}
+
+#if OSXG5
+static OSXFORCEINLINE uint64 OsxGuestAtomicCompareWide(volatile uint64 *target, uint64 expected, uint64 value)
+{
+#if defined(_MSC_VER)
+	return (uint64)_InterlockedCompareExchange64((volatile __int64 *)target, (__int64)value, (__int64)expected);
+#else
+	return __sync_val_compare_and_swap(target, expected, value);
+#endif
+}
+#endif
+#endif
 
 typedef struct OsxCpu OsxCpu;
 
@@ -308,6 +422,42 @@ struct OsxCpu {
 	uint64 virtualticks;
 #if OSXG5
 	void *core970;
+#endif
+#if OSXSMP
+	OsxCpu *primary;
+	void *owner;
+	void *wake;
+	int cpuindex;
+	int cpucount;
+	int hostthread;
+	int restart;
+	uint32 reservationvalue;
+	uint32 processorid;
+	uint64 capdeadline;
+	uint64 timefrozenvalue;
+	volatile uint32 timesequence;
+	volatile int32 timefrozen;
+	volatile int32 kick;
+	volatile int32 running;
+	volatile int32 state;
+	volatile int32 sleeping;
+	volatile int32 lineraised;
+	volatile uint32 beat;
+	volatile uint32 wakebeat;
+	volatile uint32 flushlock;
+	volatile int32 flushcount;
+	volatile int32 flushposted;
+	volatile int32 flushdone;
+	uint32 flushpages[OSXSMPFLUSHES];
+#if OSXSMPTRACE
+	uint64 tracelockwait;
+	uint64 tracelocks;
+	uint64 tracekicks;
+	uint64 traceflushes;
+	uint64 traceflushwait;
+	uint64 tracefailures;
+	uint64 traceswaps;
+#endif
 #endif
 	OsxTlbEntry tlb[OSXMODES][OSXTLBKINDS][OSXTLBSIZE];
 };
@@ -471,6 +621,22 @@ void OsxGuestCpuExecuteFloat(OsxCpu *cpu, uint32 instruction);
 void OsxGuestCpuSetFloatCompare(OsxCpu *cpu, int field, double left, double right, int ordered);
 void OsxGuestCpuDump(OsxCpu *cpu, FILE *output);
 void OsxGuestCpuDumpFaults(OsxCpu *cpu, FILE *output);
+#if OSXSMP
+void OsxGuestSmpLock(OsxCpu *cpu);
+void OsxGuestSmpUnlock(OsxCpu *cpu);
+int OsxGuestSmpClaimHost(OsxCpu *cpu);
+void OsxGuestSmpWake(OsxCpu *cpu);
+void OsxGuestSmpKickOthers(OsxCpu *cpu);
+void OsxGuestSmpFlush(OsxCpu *cpu, uint32 page);
+void OsxGuestSmpFlushWait(OsxCpu *cpu);
+void OsxGuestSmpDrain(OsxCpu *cpu);
+void OsxGuestSmpFreezeTime(OsxCpu *cpu, int reason, int frozen);
+void OsxGuestSmpRewindTime(OsxCpu *cpu, uint64 ticks);
+void OsxGuestSmpShiftTime(OsxCpu *cpu, uint64 ticks);
+uint64 OsxGuestSmpRawTimebase(OsxCpu *cpu);
+uint32 OsxGuestSmpBusRead(void *context, uint32 address, int size);
+void OsxGuestSmpBusWrite(void *context, uint32 address, int size, uint32 value);
+#endif
 
 #if OSXG5
 #define OSX970MSRSF 0x8000000000000000ULL
@@ -530,6 +696,9 @@ typedef struct Osx970 {
 	uint64 scomc;
 	uint64 scomd;
 	uint64 reservation;
+#if OSXSMP
+	uint64 reservationvalue;
+#endif
 	int reservationvalid;
 	uint32 dsisr;
 	uint32 pir;
@@ -551,6 +720,9 @@ typedef struct Osx970 {
 
 void OsxGuest970Reset(Osx970 *core, OsxCpu *cpu, uint32 pvr);
 void OsxGuest970FlushTlb(Osx970 *core);
+#if OSXSMP
+void OsxGuest970FlushPage(Osx970 *core, uint64 pageindex);
+#endif
 void OsxGuest970Raise(Osx970 *core, uint32 vector, uint64 srr1bits);
 int OsxGuest970Translate(Osx970 *core, uint64 address, int kind, int raise, uint64 *physical);
 int OsxGuest970Read(Osx970 *core, uint64 address, int size, uint64 *value);
@@ -559,6 +731,7 @@ void OsxGuest970ExecuteInstruction(Osx970 *core, uint32 instruction);
 void OsxGuest970CheckInterrupts(Osx970 *core, uint64 now);
 void OsxGuest970Run(Osx970 *core, int32 count);
 int OsxGuest970TranslateVirtual(Osx970 *core, uint32 address, int kind, uint32 *physical);
+int OsxGuest970KernelRead(Osx970 *core, uint32 address, uint32 *value);
 OSXJITABI int OsxGuest970Step(Osx970 *core, uint32 instruction);
 void OsxGuest970InvalidatePhysical(Osx970 *core, uint64 physical, uint64 length);
 int OsxGuest970JitCreate(Osx970 *core);

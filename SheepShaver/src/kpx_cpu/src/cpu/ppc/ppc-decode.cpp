@@ -1107,7 +1107,11 @@ const powerpc_cpu::instr_info_t powerpc_cpu::powerpc_ii_table[] = {
 	},
 #endif
 	{ "sync",
+#if defined(CLASSICSMP) && CLASSICSMP
+	  EXECUTE_0(sync),
+#else
 	  EXECUTE_0(nop),
+#endif
 	  PPC_I(SYNC),
 	  X_form, 31, 598, CFLOW_NORMAL
 	},
@@ -1848,6 +1852,23 @@ const powerpc_cpu::instr_info_t powerpc_cpu::powerpc_ii_table[] = {
 	}
 };
 
+#if defined(CLASSICSMP) && CLASSICSMP
+#define CLASSICSMPVECTOROPCODE 4
+
+extern bool ClassicSmpVectorless(void);
+
+static bool ClassicSmpVectorInstruction(int opcode, int mnemonic)
+{
+	if (opcode == CLASSICSMPVECTOROPCODE)
+		return true;
+	if (mnemonic >= PPC_I(DSS) && mnemonic <= PPC_I(DSTST))
+		return true;
+	if (mnemonic >= PPC_I(LVEBX) && mnemonic <= PPC_I(LVXL))
+		return true;
+	return mnemonic >= PPC_I(STVEBX) && mnemonic <= PPC_I(STVXL);
+}
+#endif
+
 void powerpc_cpu::init_decoder()
 {
 	const int ii_count = sizeof(powerpc_ii_table)/sizeof(powerpc_ii_table[0]);
@@ -1857,6 +1878,10 @@ void powerpc_cpu::init_decoder()
 
 	for (int i = 0; i < ii_count; i++) {
 		const instr_info_t * ii = &powerpc_ii_table[i];
+#if defined(CLASSICSMP) && CLASSICSMP
+		if (ClassicSmpVectorless() && ClassicSmpVectorInstruction(ii->opcode, ii->mnemo))
+			continue;
+#endif
 		init_decoder_entry(ii);
 	}
 }

@@ -29,6 +29,8 @@
 // Constants
 const uint32  ROM_SIZE = 0x400000;				// Size of ROM file
 const uint32  ROM_AREA_SIZE = 0x500000;			// Size of ROM area
+const uintptr EMULATOR_CODE_BASE = 0x68060000;
+const uint32  EMULATOR_CODE_SIZE = 0x10000;
 const uintptr DR_EMULATOR_BASE = 0x68070000;	// Address of DR emulator code
 const uint32  DR_EMULATOR_SIZE = 0x10000;		// Size of DR emulator code
 const uintptr DR_CACHE_BASE = 0x69000000;		// Address of DR cache

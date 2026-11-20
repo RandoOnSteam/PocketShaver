@@ -171,6 +171,14 @@ void powerpc_cpu::init_registers()
 	pc() = 0;
 }
 
+void powerpc_cpu::ResetRegisters(void)
+{
+#ifdef SHEEPSHAVER
+	stop_decrementer_timer();
+#endif
+	init_registers();
+}
+
 void powerpc_cpu::init_flight_recorder()
 {
 #if PPC_FLIGHT_RECORDER
@@ -299,6 +307,7 @@ void powerpc_cpu::initialize()
 	init_registers();
 	init_decode_cache();
 	execute_depth = 0;
+	processing_interrupt = false;
 
 	// Initialize block lookup table
 #if PPC_DECODE_CACHE || PPC_ENABLE_JIT
@@ -654,7 +663,6 @@ bool powerpc_cpu::check_spcflags()
 #endif
 	}
 	if (spcflags().test(SPCFLAG_CPU_HANDLE_INTERRUPT)) {
-		static bool processing_interrupt = false;
 		// External exceptions are recognized only while MSR[EE] is set.
 		// execute_depth is host recursion, not a guest interrupt mask: the 68K
 		// emulator and EMUL_OP bridges deliberately run guest code in nested
@@ -686,6 +694,10 @@ bool powerpc_cpu::check_spcflags()
 #endif
 	if (spcflags().test(SPCFLAG_CPU_DECREMENTER))
 		spcflags().clear(SPCFLAG_CPU_DECREMENTER);
+#if defined(CLASSICSMP) && CLASSICSMP
+	if (spcflags().test(SPCFLAG_CPU_IDLE))
+		IdleWait();
+#endif
 	// Host wakeups (notably the 60 Hz tick) also provide a bounded polling
 	// point for DEC while translated code is running. Normal nanokernel context
 	// returns and writes to DEC service it immediately in ppc-execute.cpp.
@@ -1023,6 +1035,13 @@ void powerpc_cpu::execute(uint32 entry)
 	if (execute_depth == 1 && decrementer_pending)
 		spcflags().set(SPCFLAG_CPU_DECREMENTER);
 }
+
+#if defined(CLASSICSMP) && CLASSICSMP
+void powerpc_cpu::IdleWait(void)
+{
+	spcflags().clear(SPCFLAG_CPU_IDLE);
+}
+#endif
 
 void powerpc_cpu::execute()
 {

@@ -316,6 +316,10 @@ private:
 
 	// Current execute() nested level
 	int execute_depth;
+	bool processing_interrupt;
+#if defined(CLASSICSMP) && CLASSICSMP
+	virtual void IdleWait(void);
+#endif
 
 #ifdef SHEEPSHAVER
 	void start_decrementer_timer();
@@ -333,6 +337,7 @@ public:
 
 	// Initialization & finalization
 	void initialize();
+	void ResetRegisters(void);
 #ifdef SHEEPSHAVER
 	powerpc_cpu();
 #else
@@ -635,6 +640,9 @@ private:
 	template< class RA, class RB >
 	void execute_icbi(uint32 opcode);
 	void execute_isync(uint32 opcode);
+#if defined(CLASSICSMP) && CLASSICSMP
+	void execute_sync(uint32 opcode);
+#endif
 	void execute_invalidate_cache_range();
 	static void call_execute_invalidate_cache_range(powerpc_cpu * cpu);
 	template< class RA, class RB >
@@ -689,6 +697,9 @@ private:
 		uint32 srr1;
 		uint32 sprg[4];
 		uint32 sr[16];
+#if defined(CLASSICSMP) && CLASSICSMP
+		uint32 reserved;
+#endif
 	} system_registers;
 
 	// DEC is represented by a value/time-base anchor rather than being

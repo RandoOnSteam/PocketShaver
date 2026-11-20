@@ -33,6 +33,9 @@
 #include "cpu/ppc/ppc-operations.hpp"
 #include "cpu/ppc/ppc-execute.hpp"
 #include "cpu/ppc/ppc-stfiwx.hpp"
+#if defined(CLASSICSMP) && CLASSICSMP
+#include "osxcpu.h"
+#endif
 #ifdef SHEEPSHAVER
 #include "ppc-report.h"
 #else
@@ -102,6 +105,11 @@ void powerpc_cpu::execute_illegal(uint32 opcode)
 			return;
 		}
 	}
+#if defined(CLASSICSMP) && CLASSICSMP
+	extern bool ClassicSmpDeliverIllegal(powerpc_cpu *cpu);
+	if (ClassicSmpDeliverIllegal(this))
+		return;
+#endif
 #endif
 
 	gfx_log_emit("[crash] ", "Illegal instruction at %08x, opcode = %08x\n", pc(), opcode);
@@ -258,6 +266,17 @@ void powerpc_cpu::execute_nop(uint32 opcode)
 {
 	increment_pc(4);
 }
+
+#if defined(CLASSICSMP) && CLASSICSMP
+extern void ClassicSmpSync(powerpc_cpu *cpu);
+
+void powerpc_cpu::execute_sync(uint32 opcode)
+{
+	OsxGuestAtomicFence();
+	ClassicSmpSync(this);
+	increment_pc(4);
+}
+#endif
 
 /**
  *  Floating-point rounding modes conversion
@@ -748,6 +767,12 @@ DEFINE_MEMORY_HELPER(4);
 static const uint32 PPC_68K_KDATA = (uint32)KERNEL_DATA_BASE;
 static const uint32 PPC_68K_EMUL_R31 = (uint32)(KERNEL_DATA_BASE + 0x1000);
 extern uint32 ppc_recover_68k_sp(uint32 a7);
+#if defined(CLASSICSMP) && CLASSICSMP
+#define PPC68KPROGRAMCOUNTER 24
+#define CLASSICSMPPAGETABLEREGISTER 25
+extern void ClassicSmpPageTable(powerpc_cpu *cpu);
+extern uint8 *ClassicSmpTranslate(powerpc_cpu *cpu, uint32 address);
+#endif
 #endif
 
 #if PPC_REPORT_BAD_EA
@@ -796,7 +821,11 @@ void powerpc_cpu::execute_loadstore(uint32 opcode)
 	/* 68k opcode fetch: r1 is the 68k a7, repaired before the opcode runs. */
 	if (LD && SZ == 2 && UP) {
 #ifdef SHEEPSHAVER
+#if defined(CLASSICSMP) && CLASSICSMP
+		if (rA_field::extract(opcode) == PPC68KPROGRAMCOUNTER && gpr(1) - PPC_68K_KDATA < 0x8000u && gpr(31) == PPC_68K_EMUL_R31)
+#else
 		if (gpr(1) - PPC_68K_KDATA < 0x8000u && gpr(31) == PPC_68K_EMUL_R31)
+#endif
 			gpr(1) = ppc_recover_68k_sp(gpr(1));
 #endif
 #if PPC_REPORT_BAD_EA
@@ -1042,6 +1071,9 @@ void powerpc_cpu::execute_lwarx(uint32 opcode)
 #if KPX_MAX_CPUS != 1
 	regs().reserve_data = reserve_data;
 #endif
+#if defined(CLASSICSMP) && CLASSICSMP
+	system_registers.reserved = reserve_data;
+#endif
 	operand_RD::set(this, opcode, reserve_data);
 	increment_pc(4);
 }
@@ -1059,8 +1091,17 @@ void powerpc_cpu::execute_stwcx(uint32 opcode)
 			&& regs().reserve_data == vm_read_memory_4(ea)
 #endif
 			) {
+#if defined(CLASSICSMP) && CLASSICSMP
+			uint32 expected;
+			uint32 stored;
+			vm_do_write_memory_4(&expected, system_registers.reserved);
+			vm_do_write_memory_4(&stored, operand_RS::get(this, opcode));
+			if (OsxGuestAtomicCompare((volatile uint32 *)ClassicSmpTranslate(this, ea), expected, stored) == expected)
+				cr().set(0, standalone_CR_EQ_field::mask());
+#else
 			vm_write_memory_4(ea, operand_RS::get(this, opcode));
 			cr().set(0, standalone_CR_EQ_field::mask());
+#endif
 		}
 		regs().reserve_valid = 0;
 	}
@@ -1271,9 +1312,15 @@ void powerpc_cpu::execute_fp_round(uint32 opcode)
 void powerpc_cpu::execute_syscall(uint32 opcode)
 {
 #ifdef SHEEPSHAVER
+#if defined(CLASSICSMP) && CLASSICSMP
+	extern bool ClassicSmpDeliverSystemCall(powerpc_cpu *cpu);
+	if (ClassicSmpDeliverSystemCall(this))
+		return;
+#else
 	extern bool DeliverSystemCall(void);
 	if (DeliverSystemCall())
 		return;
+#endif
 	execute_illegal(opcode);
 #else
 	cr().set_so(0, execute_do_syscall && !execute_do_syscall(this));
@@ -1334,8 +1381,13 @@ void powerpc_cpu::execute_trap_taken(uint32 opcode)
 	const char *why = "not built for SheepShaver";
 #ifdef SHEEPSHAVER
 	{
+#if defined(CLASSICSMP) && CLASSICSMP
+		extern const char *ClassicSmpDeliverTrap(powerpc_cpu *cpu, uint32 opcode);
+		why = ClassicSmpDeliverTrap(this, opcode);
+#else
 		extern const char *DeliverTrapException(uint32 opcode);
 		why = DeliverTrapException(opcode);
+#endif
 		if (why == NULL)
 			return;		// handed to the guest; it resumes us when it is done
 	}
@@ -2007,6 +2059,9 @@ void powerpc_cpu::execute_mtspr(uint32 opcode)
 	case powerpc_registers::SPR_SPRG2:	sprg(2) = s;	break;
 	case powerpc_registers::SPR_SPRG3:	sprg(3) = s;	break;
 	case powerpc_registers::SPR_VRSAVE:	vrsave() = s;	break;
+#if defined(CLASSICSMP) && CLASSICSMP
+	case CLASSICSMPPAGETABLEREGISTER:	ClassicSmpPageTable(this);	break;
+#endif
 #ifndef SHEEPSHAVER
 	default: execute_illegal(opcode);
 #endif

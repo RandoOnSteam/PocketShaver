@@ -45,6 +45,7 @@
 #include "joymanager.h"
 #include "macos_util.h"
 #include "thunks.h"
+#include "vm_alloc.h"
 
 #define DEBUG 0
 #include "debug.h"
@@ -764,6 +765,30 @@ static const uint8 adbop_patch[] = {	// Call ADBOp() completion procedure
  *  Install ROM patches (RAMBase and KernelDataAddr must be set)
  */
 
+#if defined(CLASSICSMP) && CLASSICSMP
+#define CLASSICSMPPROCESSOR 0x00090204
+#define CLASSICSMPPARKFILLER 0x48000004u
+#define CLASSICSMPKERNELWORD 0x310004u
+#define CLASSICSMPKERNEL 0x0205
+#define CLASSICSMPKERNELLATE 0x0228
+
+bool ClassicSmpConfigured(void)
+{
+	if (PrefsFindInt32("osxcpus") <= 1)
+		return false;
+	if (ROMType == ROMTYPE_TNT)
+		return true;
+	if (ROMType != ROMTYPE_NEWWORLD)
+		return false;
+	return ReadMacInt16(ROMBase + CLASSICSMPKERNELWORD) == CLASSICSMPKERNEL || ReadMacInt16(ROMBase + CLASSICSMPKERNELWORD) == CLASSICSMPKERNELLATE;
+}
+
+bool ClassicSmpVectorless(void)
+{
+	return ClassicSmpConfigured() && HasNanoKernel2();
+}
+#endif
+
 bool PatchROM(void)
 {
 	// Print ROM info
@@ -803,6 +828,14 @@ bool PatchROM(void)
 		return false;
 
 	// Apply patches
+#if defined(CLASSICSMP) && CLASSICSMP
+	if (ClassicSmpConfigured()) {
+		if (ReadMacInt32(ROMBase + CLASSICSMPPARKADDRESS) != POWERPC_NOP && ReadMacInt32(ROMBase + CLASSICSMPPARKADDRESS) != CLASSICSMPPARKFILLER)
+			return false;
+		WriteMacInt32(ROMBase + CLASSICSMPPARKADDRESS, CLASSICSMPPARK);
+		PVR = CLASSICSMPPROCESSOR;
+	}
+#endif
 	if (!patch_nanokernel_boot()) return false;
 	if (!patch_68k_emul()) return false;
 	if (!patch_nanokernel()) return false;
@@ -830,6 +863,60 @@ bool PatchROM(void)
 /*
  *  Nanokernel boot routine patches
  */
+
+#define EMULATORCODECOPY 0x460000u
+#define EMULATORSTUBPAGE 0x46f800u
+#define KERNELCALLSLOTS 0x960u
+#define KERNELCALLSLOTCOUNT 16u
+#define POWERPCBRANCHMASK 0xfc000003u
+#define POWERPCBRANCH 0x48000000u
+#define POWERPCBRANCHOFFSET 0x03fffffcu
+#define POWERPCBRANCHSIGN 0x02000000u
+
+bool MapEmulatorCode(void)
+{
+	if (HasNanoKernel2())
+		return true;
+	if (vm_acquire_fixed(Mac2HostAddr(EMULATOR_CODE_BASE), EMULATOR_CODE_SIZE) < 0)
+		return false;
+	memcpy(Mac2HostAddr(EMULATOR_CODE_BASE), ROMBaseHost + EMULATORCODECOPY, EMULATOR_CODE_SIZE);
+	return true;
+}
+
+void UnmapEmulatorCode(void)
+{
+	if (!HasNanoKernel2())
+		vm_release(Mac2HostAddr(EMULATOR_CODE_BASE), EMULATOR_CODE_SIZE);
+}
+
+uint32 EmulatorCodeAlias(uint32 address)
+{
+	return address - (ROMBase + EMULATORCODECOPY) + EMULATOR_CODE_BASE;
+}
+
+void RedirectKernelCallSlots(void)
+{
+	uint32 slot;
+	uint32 target;
+	uint32 instruction;
+	uint32 offset;
+	if (HasNanoKernel2())
+		return;
+	for (slot = 0; slot < KERNELCALLSLOTCOUNT; slot++) {
+		target = ReadMacInt32(KernelDataAddr + offsetof(KernelData, ed) + KERNELCALLSLOTS + slot * 4);
+		if (target < ROMBase + EMULATORCODECOPY || target >= ROMBase + EMULATORCODECOPY + EMULATOR_CODE_SIZE)
+			continue;
+		instruction = ReadMacInt32(target);
+		if ((instruction & POWERPCBRANCHMASK) != POWERPCBRANCH)
+			continue;
+		offset = instruction & POWERPCBRANCHOFFSET;
+		if (offset & POWERPCBRANCHSIGN)
+			offset |= ~POWERPCBRANCHOFFSET;
+		if (target + offset < ROMBase + EMULATORSTUBPAGE || target + offset >= ROMBase + EMULATORCODECOPY + EMULATOR_CODE_SIZE)
+			continue;
+		WriteMacInt32(KernelDataAddr + offsetof(KernelData, ed) + KERNELCALLSLOTS + slot * 4, EmulatorCodeAlias(target));
+	}
+}
 
 bool HasNanoKernel2(void)
 {
@@ -862,6 +949,11 @@ static bool PatchNanoKernel2ContextTable(uint32 address, uint32 patchaddress,
 	}
 	instruction = (uint32 *)(ROMBaseHost + patchaddress);
 	*instruction++ = htonl(0x39000000 | mode);
+#if defined(CLASSICSMP) && CLASSICSMP
+	if (ClassicSmpConfigured())
+		*instruction++ = htonl(CLASSICSMPRUNMODE);
+	else
+#endif
 	*instruction++ = htonl(0x91000000 + XLM_RUN_MODE);
 	*instruction++ = htonl(0x39010000 | tableoffset);
 	*instruction++ = htonl(0x7d1343a6);
@@ -908,6 +1000,90 @@ static bool PatchNanoKernel2SystemCalls(void)
 	*instruction++ = htonl(0x48000001 | ((loadregisters - patchaddress - 36) & 0x3fffffc));
 	*instruction = htonl(0x48000000 | ((handler + 4 - patchaddress - 40) & 0x3fffffc));
 	*(uint32 *)(ROMBaseHost + handler) = htonl(0x48000000 | ((patchaddress - handler) & 0x3fffffc));
+	return true;
+}
+
+#if defined(CLASSICSMP) && CLASSICSMP
+#define CLASSICSMPPAGEBASE 0x577f0026u
+#define CLASSICSMPPAGEFOUND 0x37ff0182u
+
+static bool PatchNanoKernel2PageLookup(void)
+{
+	static const uint8 lookuppattern[] = {0x7f, 0xe0, 0xdd, 0x26, 0x57, 0x7e, 0x56, 0xbe, 0x53, 0xfe, 0x38, 0x70};
+	uint32 *instruction;
+	uint32 lookup;
+	if (!ClassicSmpConfigured())
+		return true;
+	lookup = find_rom_data(0x310000, 0x320000, lookuppattern, sizeof(lookuppattern));
+	if (lookup == 0)
+		return false;
+	instruction = (uint32 *)(ROMBaseHost + lookup);
+	*instruction++ = htonl(CLASSICSMPPAGEBASE);
+	*instruction++ = htonl(CLASSICSMPPAGEFOUND);
+	*instruction = htonl(POWERPC_BLR);
+	return true;
+}
+
+#define CLASSICSMPBLUEFLAGS 0x61080028u
+#define CLASSICSMPBLUEBOUND 0x00000040u
+#define CLASSICSMPBLUEWINDOW 48u
+
+static void PatchNanoKernel2BlueProcessor(void)
+{
+	static const uint8 bluepattern[] = {0x3d, 0x00, 0x62, 0x6c, 0x61, 0x08, 0x75, 0x65, 0x91, 0x1f, 0x00, 0x74};
+	uint32 name;
+	uint32 offset;
+	if (!ClassicSmpConfigured())
+		return;
+	name = find_rom_data(0x310000, 0x320000, bluepattern, sizeof(bluepattern));
+	if (name == 0)
+		return;
+	for (offset = sizeof(bluepattern); offset < CLASSICSMPBLUEWINDOW; offset += 4) {
+		if (ReadMacInt32(ROMBase + name + offset) == CLASSICSMPBLUEFLAGS)
+			WriteMacInt32(ROMBase + name + offset, CLASSICSMPBLUEFLAGS | CLASSICSMPBLUEBOUND);
+	}
+}
+#endif
+
+#define BLUEDEADLINEPATCH 0x36ff40u
+#define BLUEDEADLINEPATCHSIZE 32u
+#define BLUEDEADLINECHECK 0x2c030000u
+#define BLUEDEADLINEKEEP 0x40800014u
+#define BLUEDEADLINEHIGH 0x7c6d42e6u
+#define BLUEDEADLINELOW 0x7c8c42e6u
+#define BLUEDEADLINEADD 0x30840000u
+#define BLUEDEADLINECARRY 0x7c630194u
+#define BLUEDEADLINERATE 1000u
+#define BLUEDEADLINELIMIT 0x7fffu
+
+static bool PatchNanoKernel2BlueDeadline(void)
+{
+	static const uint8 deadlinepattern[] = {0x9a, 0x30, 0x00, 0x14, 0x90, 0x70, 0x00, 0x38, 0x90, 0x90, 0x00, 0x3c, 0x93, 0xf0, 0x00, 0x18};
+	uint32 *instruction;
+	uint32 store;
+	uint32 patchindex;
+	uint32 interval;
+	store = find_rom_data(0x310000, 0x320000, deadlinepattern, sizeof(deadlinepattern));
+	if (store == 0)
+		return true;
+	store += 4;
+	for (patchindex = 0; patchindex < BLUEDEADLINEPATCHSIZE; patchindex += 4) {
+		if (ReadMacInt32(ROMBase + BLUEDEADLINEPATCH + patchindex) != POWERPC_NOP)
+			return true;
+	}
+	interval = TimebaseSpeed / BLUEDEADLINERATE;
+	if (interval > BLUEDEADLINELIMIT)
+		interval = BLUEDEADLINELIMIT;
+	instruction = (uint32 *)(ROMBaseHost + BLUEDEADLINEPATCH);
+	*instruction++ = htonl(BLUEDEADLINECHECK);
+	*instruction++ = htonl(BLUEDEADLINEKEEP);
+	*instruction++ = htonl(BLUEDEADLINEHIGH);
+	*instruction++ = htonl(BLUEDEADLINELOW);
+	*instruction++ = htonl(BLUEDEADLINEADD | interval);
+	*instruction++ = htonl(BLUEDEADLINECARRY);
+	*instruction++ = htonl(ReadMacInt32(ROMBase + store));
+	*instruction = htonl(POWERPCBRANCH | ((store + 4 - (BLUEDEADLINEPATCH + BLUEDEADLINEPATCHSIZE - 4)) & POWERPCBRANCHOFFSET));
+	*(uint32 *)(ROMBaseHost + store) = htonl(POWERPCBRANCH | ((BLUEDEADLINEPATCH - store) & POWERPCBRANCHOFFSET));
 	return true;
 }
 
@@ -1470,6 +1646,53 @@ static bool patch_nanokernel_boot(void)
  *  68k emulator patches
  */
 
+
+
+static uint32 *PatchNanokernelEntry(uint32 *lp)
+{
+	*lp++ = htonl(0x7c2903a6); 						// mtctr	r1
+#if defined(CLASSICSMP) && CLASSICSMP
+	if (ClassicSmpConfigured() && !HasNanoKernel2()) {
+		*lp++ = htonl(CLASSICSMPMFMSR);
+		*lp++ = htonl(CLASSICSMPCLEAREE);
+		*lp++ = htonl(CLASSICSMPMTMSR);
+		*lp++ = htonl(CLASSICSMPMFSPRG0);
+		return lp;
+	}
+#endif
+	*lp++ = htonl(0x80200000 + XLM_IRQ_NEST); 		// lwz		r1,XLM_IRQ_NEST
+	*lp++ = htonl(0x38210001); 						// addi		r1,r1,1
+	*lp++ = htonl(0x90200000 + XLM_IRQ_NEST); 		// stw		r1,XLM_IRQ_NEST
+	*lp++ = htonl(0x80200000 + XLM_KERNEL_DATA); 	// lwz		r1,XLM_KERNEL_DATA
+	return lp;
+}
+
+static void PatchKernelCalls(uint32 base, bool nanokernel2)
+{
+	uint32 *lp;
+	int opcodeindex;
+	lp = (uint32 *)(ROMBaseHost + base);
+	*lp++ = htonl(0x48000000 + 0x36f900 - base);		// b 0x36f900 (Emulator start)
+#if defined(CLASSICSMP) && CLASSICSMP
+	if (nanokernel2 && ClassicSmpConfigured())
+		lp[-1] = htonl(CLASSICSMPKERNELRETURN);
+#endif
+	*lp++ = htonl(0x48000000 + 0x36fa00 - base - 4);	// b 0x36fa00 (Mixed mode)
+	*lp++ = htonl(0x48000000 + 0x36fb00 - base - 8);	// b 0x36fb00 (Reset/FC1E opcode)
+	*lp++ = htonl(0x48000000 + 0x36fc00 - base - 12);	// FE0A opcode
+	if (nanokernel2)
+		lp++;
+	else
+		*lp++ = htonl(POWERPC_ILLEGAL);
+	*lp++ = htonl(0x48000000 + 0x36fd00 - base - 20);	// FE0F opcode
+	for (opcodeindex = 6; opcodeindex < 16; opcodeindex++) {
+		if (nanokernel2)
+			lp++;
+		else
+			*lp++ = htonl(POWERPC_ILLEGAL);
+	}
+}
+
 static bool patch_68k_emul(void)
 {
 	bool nanokernel2 = HasNanoKernel2();
@@ -1480,22 +1703,7 @@ static bool patch_68k_emul(void)
 	static const uint8 twi_dat[] = {0x0f, 0xff, 0x00, 0x00, 0x0f, 0xff, 0x00, 0x01, 0x0f, 0xff, 0x00, 0x02};
 	if ((base = find_rom_data(0x36e600, 0x36ea00, twi_dat, sizeof(twi_dat))) == 0) return false;
 	D(bug("twi %08lx\n", base));
-	lp = (uint32 *)(ROMBaseHost + base);
-	*lp++ = htonl(0x48000000 + 0x36f900 - base);		// b 0x36f900 (Emulator start)
-	*lp++ = htonl(0x48000000 + 0x36fa00 - base - 4);	// b 0x36fa00 (Mixed mode)
-	*lp++ = htonl(0x48000000 + 0x36fb00 - base - 8);	// b 0x36fb00 (Reset/FC1E opcode)
-	*lp++ = htonl(0x48000000 + 0x36fc00 - base - 12);	// FE0A opcode
-	if (nanokernel2)
-		lp++;
-	else
-		*lp++ = htonl(POWERPC_ILLEGAL);
-	*lp++ = htonl(0x48000000 + 0x36fd00 - base - 20);	// FE0F opcode
-	for (int opcodeindex = 6; opcodeindex < 16; opcodeindex++) {
-		if (nanokernel2)
-			lp++;
-		else
-			*lp++ = htonl(POWERPC_ILLEGAL);
-	}
+	PatchKernelCalls(base, nanokernel2);
 
 #if EMULATED_PPC
 	// Install EMUL_RETURN, EXEC_RETURN, EXEC_NATIVE and EMUL_OP opcodes
@@ -1536,11 +1744,7 @@ static bool patch_68k_emul(void)
 
 	// Extra routine for 68k emulator start
 	lp = (uint32 *)(ROMBaseHost + 0x36f900);
-	*lp++ = htonl(0x7c2903a6);					// mtctr	r1
-	*lp++ = htonl(0x80200000 + XLM_IRQ_NEST);	// lwz		r1,XLM_IRQ_NEST
-	*lp++ = htonl(0x38210001);					// addi		r1,r1,1
-	*lp++ = htonl(0x90200000 + XLM_IRQ_NEST);	// stw		r1,XLM_IRQ_NEST
-	*lp++ = htonl(0x80200000 + XLM_KERNEL_DATA);// lwz		r1,XLM_KERNEL_DATA
+	lp = PatchNanokernelEntry(lp);
 	*lp++ = htonl(0x90c10018);					// stw		r6,0x18(r1)
 	*lp++ = htonl(0x7cc902a6);					// mfctr	r6
 	*lp++ = htonl(0x90c10004);					// stw		r6,$0004(r1)
@@ -1580,11 +1784,7 @@ static bool patch_68k_emul(void)
 
 	// Extra routine for Mixed Mode
 	lp = (uint32 *)(ROMBaseHost + 0x36fa00);
-	*lp++ = htonl(0x7c2903a6);					// mtctr	r1
-	*lp++ = htonl(0x80200000 + XLM_IRQ_NEST);	// lwz		r1,XLM_IRQ_NEST
-	*lp++ = htonl(0x38210001);					// addi		r1,r1,1
-	*lp++ = htonl(0x90200000 + XLM_IRQ_NEST);	// stw		r1,XLM_IRQ_NEST
-	*lp++ = htonl(0x80200000 + XLM_KERNEL_DATA);// lwz		r1,XLM_KERNEL_DATA
+	lp = PatchNanokernelEntry(lp);
 	*lp++ = htonl(0x90c10018);					// stw		r6,0x18(r1)
 	*lp++ = htonl(0x7cc902a6);					// mfctr	r6
 	*lp++ = htonl(0x90c10004);					// stw		r6,$0004(r1)
@@ -1624,11 +1824,7 @@ static bool patch_68k_emul(void)
 
 	// Extra routine for Reset/FC1E opcode
 	lp = (uint32 *)(ROMBaseHost + 0x36fb00);
-	*lp++ = htonl(0x7c2903a6);					// mtctr	r1
-	*lp++ = htonl(0x80200000 + XLM_IRQ_NEST);	// lwz		r1,XLM_IRQ_NEST
-	*lp++ = htonl(0x38210001);					// addi		r1,r1,1
-	*lp++ = htonl(0x90200000 + XLM_IRQ_NEST);	// stw		r1,XLM_IRQ_NEST
-	*lp++ = htonl(0x80200000 + XLM_KERNEL_DATA);// lwz		r1,XLM_KERNEL_DATA
+	lp = PatchNanokernelEntry(lp);
 	*lp++ = htonl(0x90c10018);					// stw		r6,0x18(r1)
 	*lp++ = htonl(0x7cc902a6);					// mfctr	r6
 	*lp++ = htonl(0x90c10004);					// stw		r6,$0004(r1)
@@ -1664,11 +1860,7 @@ static bool patch_68k_emul(void)
 
 	// Extra routine for FE0A opcode (QuickDraw 3D needs this)
 	lp = (uint32 *)(ROMBaseHost + 0x36fc00);
-	*lp++ = htonl(0x7c2903a6);					// mtctr	r1
-	*lp++ = htonl(0x80200000 + XLM_IRQ_NEST);	// lwz		r1,XLM_IRQ_NEST
-	*lp++ = htonl(0x38210001);					// addi		r1,r1,1
-	*lp++ = htonl(0x90200000 + XLM_IRQ_NEST);	// stw		r1,XLM_IRQ_NEST
-	*lp++ = htonl(0x80200000 + XLM_KERNEL_DATA);// lwz		r1,XLM_KERNEL_DATA
+	lp = PatchNanokernelEntry(lp);
 	*lp++ = htonl(0x90c10018);					// stw		r6,0x18(r1)
 	*lp++ = htonl(0x7cc902a6);					// mfctr	r6
 	*lp++ = htonl(0x90c10004);					// stw		r6,$0004(r1)
@@ -1704,11 +1896,7 @@ static bool patch_68k_emul(void)
 
 	// Extra routine for FE0F opcode (power management)
 	lp = (uint32 *)(ROMBaseHost + 0x36fd00);
-	*lp++ = htonl(0x7c2903a6);					// mtctr	r1
-	*lp++ = htonl(0x80200000 + XLM_IRQ_NEST);	// lwz		r1,XLM_IRQ_NEST
-	*lp++ = htonl(0x38210001);					// addi		r1,r1,1
-	*lp++ = htonl(0x90200000 + XLM_IRQ_NEST);	// stw		r1,XLM_IRQ_NEST
-	*lp++ = htonl(0x80200000 + XLM_KERNEL_DATA);// lwz		r1,XLM_KERNEL_DATA
+	lp = PatchNanokernelEntry(lp);
 	*lp++ = htonl(0x90c10018);					// stw		r6,0x18(r1)
 	*lp++ = htonl(0x7cc902a6);					// mfctr	r6
 	*lp++ = htonl(0x90c10004);					// stw		r6,$0004(r1)
@@ -1800,6 +1988,10 @@ static bool patch_nanokernel(void)
 		lp = (uint32 *)(ROMBaseHost + base);		// Don't activate PPC exception table
 		*lp++ = htonl(0x39000000 + MODE_NATIVE);	// li	r8,MODE_NATIVE
 		*lp = htonl(0x91000000 + XLM_RUN_MODE);		// stw	r8,XLM_RUN_MODE
+#if defined(CLASSICSMP) && CLASSICSMP
+		if (ClassicSmpConfigured())
+			*lp = htonl(CLASSICSMPRUNMODE);
+#endif
 	}
 
 	static const uint8 save_fpu_dat[] = {0x7d, 0x00, 0x00, 0xa6, 0x61, 0x08, 0x20, 0x00, 0x7d, 0x00, 0x01, 0x24};
@@ -1859,6 +2051,10 @@ static bool patch_nanokernel(void)
 		lp = (uint32 *)(ROMBaseHost + base + 4);	// Don't activate 68k exception table
 		*lp++ = htonl(0x39000000 + MODE_68K);		// li	r8,MODE_68K
 		*lp = htonl(0x91000000 + XLM_RUN_MODE);		// stw	r8,XLM_RUN_MODE
+#if defined(CLASSICSMP) && CLASSICSMP
+		if (ClassicSmpConfigured())
+			*lp = htonl(CLASSICSMPRUNMODE);
+#endif
 	}
 
 	// Patch 68k emulator trap routine
@@ -1948,8 +2144,14 @@ static bool patch_nanokernel(void)
 	*lp++ = htonl(POWERPC_NOP);
 	*lp += 8;
 */
-	if (nanokernel2)
-		return PatchNanoKernel2SystemCalls();
+	if (nanokernel2) {
+#if defined(CLASSICSMP) && CLASSICSMP
+		if (!PatchNanoKernel2PageLookup())
+			return false;
+		PatchNanoKernel2BlueProcessor();
+#endif
+		return PatchNanoKernel2SystemCalls() && PatchNanoKernel2BlueDeadline();
+	}
 
 	return true;
 }

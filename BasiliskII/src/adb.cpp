@@ -2274,6 +2274,12 @@ static void adb_bases_invalidate(void)
 	and checked. */
 #define ADB_ENTRY_STRIDE 12
 
+void ADBReset(void)
+{
+	adb_scratch = 0;
+	adb_bases_valid = false;
+}
+
 void ADBInstall(void)
 {
 	M68kRegisters r;

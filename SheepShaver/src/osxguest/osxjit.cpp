@@ -74,6 +74,11 @@ static int OsxGuestReadsOperand(uint32 opcode)
 #define OSXJITFPR(reg) (OSXJITOFFSET(fpr) + (uint32)(reg) * 8)
 #define OSXJITCRF(field) (OSXJITOFFSET(crf) + (uint32)(field))
 #define OSXJITCRMASK(bit) (8u >> ((bit) & 3))
+#if OSXSMP
+#define OSXJITARENA(cpu) ((OSXJITBYTES / (uint32)(cpu)->cpucount) & ~0xfffffu)
+#else
+#define OSXJITARENA(cpu) OSXJITBYTES
+#endif
 
 typedef int (OSXJITABI *OsxNativeFunction)(OsxCpu *cpu);
 
@@ -147,6 +152,9 @@ typedef struct OsxNativeEmitter {
 	int fused;
 	int rounding;
 	int bytemask;
+#if OSXSMP
+	int smp;
+#endif
 	const uint32 (*vectorconstants)[4];
 	uint8 *misses[OSXJITMISSES];
 	int misscounts[OSXJITMISSES];
@@ -356,11 +364,27 @@ static void OsxGuestReturn(OsxNativeEmitter *emitter, int count)
 	OsxGuestJumpTo(emitter, emitter->interpretthunk);
 }
 
+#if OSXSMP
+static void OsxGuestKick(OsxNativeEmitter *emitter)
+{
+	if (!emitter->smp)
+		return;
+	OsxGuestJitByte(emitter, 0x83); OsxGuestJitByte(emitter, 0xbb);
+	OsxGuestWord(emitter, OSXJITOFFSET(kick));
+	OsxGuestJitByte(emitter, 0);
+	OsxGuestJitByte(emitter, 0x0f); OsxGuestJitByte(emitter, 0x85);
+	OsxGuestJumpTo(emitter, emitter->finishthunk);
+}
+#endif
+
 static void OsxGuestDynamicExit(OsxNativeEmitter *emitter, int count)
 {
 	OsxGuestAccount(emitter, count);
 	OsxGuestJitByte(emitter, 0x0f); OsxGuestJitByte(emitter, 0x8e);
 	OsxGuestJumpTo(emitter, emitter->finishthunk);
+#if OSXSMP
+	OsxGuestKick(emitter);
+#endif
 	OsxGuestJitByte(emitter, 0xe9);
 	OsxGuestJumpTo(emitter, emitter->dynamicthunk);
 }
@@ -570,6 +594,9 @@ static void OsxGuestExit(OsxNativeEmitter *emitter, int count, uint32 targetoffs
 	OsxGuestAccount(emitter, count);
 	OsxGuestJitByte(emitter, 0x0f); OsxGuestJitByte(emitter, 0x8e);
 	OsxGuestJumpTo(emitter, emitter->finishthunk);
+#if OSXSMP
+	OsxGuestKick(emitter);
+#endif
 	OsxGuestJitByte(emitter, 0xe9);
 	OsxGuestWord(emitter, 0);
 	OsxGuestJitByte(emitter, 0xe8);
@@ -2594,6 +2621,9 @@ static int OsxGuestReserved(OsxNativeEmitter *emitter, uint32 instruction, uint3
 	uint8 *invalid;
 	uint8 *elsewhere;
 	uint8 *done;
+#if OSXSMP
+	uint8 *lost;
+#endif
 	base = (instruction >> 16) & 31;
 	index = (instruction >> 11) & 31;
 	OsxGuestAddress(emitter, base, index, 0, 0);
@@ -2606,6 +2636,12 @@ static int OsxGuestReserved(OsxNativeEmitter *emitter, uint32 instruction, uint3
 		OsxGuestJitByte(emitter, 0xc7); OsxGuestJitByte(emitter, 0x83);
 		OsxGuestWord(emitter, OSXJITOFFSET(reservationvalid));
 		OsxGuestWord(emitter, 1);
+#if OSXSMP
+		if (emitter->smp) {
+			OsxGuestCpuMemory(emitter, 0x8b, 1, OSXJITGPR((instruction >> 21) & 31), 0);
+			OsxGuestCpuMemory(emitter, 0x89, 1, OSXJITOFFSET(reservationvalue), 0);
+		}
+#endif
 		return 1;
 	}
 	OsxGuestJitByte(emitter, 0x81); OsxGuestJitByte(emitter, 0xbb);
@@ -2614,6 +2650,19 @@ static int OsxGuestReserved(OsxNativeEmitter *emitter, uint32 instruction, uint3
 	invalid = OsxGuestJump(emitter, 4);
 	OsxGuestCpuMemory(emitter, 0x39, 0, OSXJITOFFSET(reservation), 0);
 	elsewhere = OsxGuestJump(emitter, 5);
+#if OSXSMP
+	lost = NULL;
+	if (emitter->smp) {
+		OsxGuestTranslate(emitter, 1, 0xffc, count);
+		OsxGuestJitByte(emitter, 0x4d); OsxGuestJitByte(emitter, 0x8d); OsxGuestJitByte(emitter, 0x04); OsxGuestJitByte(emitter, 0x00);
+		OsxGuestCpuMemory(emitter, 0x8b, 1, OSXJITGPR((instruction >> 21) & 31), 0);
+		OsxGuestJitByte(emitter, 0x0f); OsxGuestJitByte(emitter, 0xc9);
+		OsxGuestCpuMemory(emitter, 0x8b, 0, OSXJITOFFSET(reservationvalue), 0);
+		OsxGuestJitByte(emitter, 0x0f); OsxGuestJitByte(emitter, 0xc8);
+		OsxGuestJitByte(emitter, 0xf0); OsxGuestJitByte(emitter, 0x41); OsxGuestJitByte(emitter, 0x0f); OsxGuestJitByte(emitter, 0xb1); OsxGuestJitByte(emitter, 0x08);
+		lost = OsxGuestJump(emitter, 5);
+	} else
+#endif
 	OsxGuestMemory(emitter, instruction, 36, index, count);
 	OsxGuestConditionZero(emitter);
 	OsxGuestImmediateOp(emitter, 1, 0, 2);
@@ -2622,6 +2671,10 @@ static int OsxGuestReserved(OsxNativeEmitter *emitter, uint32 instruction, uint3
 	OsxGuestWord(emitter, 0);
 	OsxGuestPatch(invalid, emitter->cursor);
 	OsxGuestPatch(elsewhere, emitter->cursor);
+#if OSXSMP
+	if (lost)
+		OsxGuestPatch(lost, emitter->cursor);
+#endif
 	OsxGuestConditionZero(emitter);
 	OsxGuestPatch(done, emitter->cursor);
 	OsxGuestJitByte(emitter, 0xc7); OsxGuestJitByte(emitter, 0x83);
@@ -3119,14 +3172,23 @@ int OsxGuestJitCreate(OsxCpu *cpu)
 	OsxGuestUnpackMask((uint8 *)state->vectorconstants[6], 8, 0);
 	OsxGuestUnpackMask((uint8 *)state->vectorconstants[7], 0, 1);
 	OsxGuestUnpackMask((uint8 *)state->vectorconstants[8], 4, 1);
+#if OSXSMP
+	if (cpu->primary != cpu) {
+		state->versions = ((OsxNativeState *)cpu->primary->nativejit)->versions;
+		state->compiledpages = ((OsxNativeState *)cpu->primary->nativejit)->compiledpages;
+	} else {
+#endif
 	state->versions = (uint32 *)calloc(state->pagecount, sizeof(uint32));
 	state->compiledpages = (uint8 *)calloc(state->pagecount, 1);
+#if OSXSMP
+	}
+#endif
 	state->records = (OsxNativeRecord *)malloc(OSXJITRECORDS * sizeof(OsxNativeRecord));
 	OsxGuestHostHugePages(state->records, OSXJITRECORDS * sizeof(OsxNativeRecord));
 	if (state->records)
 		memset(state->records, 0xff, OSXJITRECORDS * sizeof(OsxNativeRecord));
-	state->writebase = OsxGuestJitAllocate(OSXJITBYTES);
-	OsxGuestHostHugePages(state->writebase, OSXJITBYTES);
+	state->writebase = OsxGuestJitAllocate(OSXJITARENA(cpu));
+	OsxGuestHostHugePages(state->writebase, OSXJITARENA(cpu));
 	state->executebase = state->writebase;
 	cpu->nativejit = state;
 	if (state->versions == NULL || state->compiledpages == NULL || state->records == NULL || state->writebase == NULL || state->executebase == NULL) {
@@ -3154,9 +3216,15 @@ void OsxGuestJitDestroy(OsxCpu *cpu)
 		fclose(state->tmpmap);
 #endif
 	if (state->writebase)
-		OsxGuestJitRelease(state->writebase, OSXJITBYTES);
+		OsxGuestJitRelease(state->writebase, OSXJITARENA(cpu));
+#if OSXSMP
+	if (cpu->primary == cpu) {
+#endif
 	free(state->versions);
 	free(state->compiledpages);
+#if OSXSMP
+	}
+#endif
 	free(state->records);
 	free(state);
 }
@@ -3181,6 +3249,18 @@ int OsxGuestJitInvalidate(OsxCpu *cpu, uint32 address, uint32 length)
 	first = address >> 12;
 	last = (address + length - 1) >> 12;
 	invalidated = 0;
+#if OSXSMP
+	if (cpu->cpucount > 1) {
+		OsxGuestAtomicFence();
+		for (; first <= last; first++) {
+			if (!state->compiledpages[first])
+				continue;
+			OsxGuestAtomicAdd((volatile int32 *)&state->versions[first], 1);
+			invalidated = 1;
+		}
+		return invalidated;
+	}
+#endif
 	for (; first <= last; first++) {
 		if (!state->compiledpages[first])
 			continue;
@@ -3229,6 +3309,9 @@ static void OsxGuestCompile(OsxCpu *cpu, OsxNativeState *state, OsxNativeBlock *
 #endif
 	int shared;
 	uint32 pendingpc;
+#if OSXSMP
+	uint32 version;
+#endif
 #if OSXPROFILEJIT
 	uint32 tmpoffsets[OSXJITLIMIT + 1];
 	uint32 tmpwords[OSXJITLIMIT + 1];
@@ -3236,7 +3319,12 @@ static void OsxGuestCompile(OsxCpu *cpu, OsxNativeState *state, OsxNativeBlock *
 	uint32 tmpbody;
 	uint32 tmpexit;
 #endif
-	if (state->used + OSXJITRESERVE >= OSXJITBYTES) {
+#if OSXSMP
+	state->compiledpages[physical >> 12] = 1;
+	OsxGuestAtomicFence();
+	version = state->versions[physical >> 12] + 1;
+#endif
+	if (state->used + OSXJITRESERVE >= OSXJITARENA(cpu)) {
 #if OSXPROFILEJIT
 		state->tmpstats[0]++;
 #endif
@@ -3263,6 +3351,9 @@ static void OsxGuestCompile(OsxCpu *cpu, OsxNativeState *state, OsxNativeBlock *
 	emitter.rounding = state->rounding;
 	emitter.fused = state->fused;
 	emitter.bytemask = 0;
+#if OSXSMP
+	emitter.smp = cpu->cpucount > 1;
+#endif
 	emitter.vectorconstants = state->vectorconstants;
 	emitter.misscount = 0;
 #if OSXJITINLINETLB
@@ -3375,7 +3466,11 @@ static void OsxGuestCompile(OsxCpu *cpu, OsxNativeState *state, OsxNativeBlock *
 	state->compiledpages[physical >> 12] = 1;
 	block->physical = physical;
 	block->mode = mode;
+#if OSXSMP
+	block->version = version;
+#else
 	block->version = state->versions[physical >> 12] + 1;
+#endif
 	block->count = count;
 	if (count == 0) {
 		block->function = NULL;
@@ -3469,7 +3564,11 @@ void OsxGuestJitRun(OsxCpu *cpu, int32 count)
 	cpu->jitlink = NULL;
 	linkkind = 0;
 	linkmode = 0;
+#if OSXSMP
+	while (cpu->slice > 0 && !cpu->kick) {
+#else
 	while (cpu->slice > 0) {
+#endif
 		if (cpu->tracefile) {
 			OsxGuestCpuRun(cpu, cpu->slice);
 			return;
@@ -3544,8 +3643,12 @@ void OsxGuestJitRun(OsxCpu *cpu, int32 count)
 				if (block->count > 0 && mode == linkmode) {
 					if (linkkind == OSXJITLINK)
 						OsxGuestLink(state, cpu->jitlink, block);
-					else
+					else {
 						OsxGuestLinkDynamic(cpu, state, (OsxNativeRecord *)cpu->jitlink, block, physical);
+#if OSXSMP
+						((OsxNativeRecord *)cpu->jitlink)->version = version - 1;
+#endif
+					}
 				}
 				cpu->jitlink = NULL;
 			}
@@ -3637,6 +3740,11 @@ void OsxGuestJitTmpStats(OsxCpu *cpu, FILE *log)
 #define OSXJITSLICE 7
 #define OSXJITFRAMESLICE 16
 #define OSXJITOFFSET(member) ((uint32)offsetof(OsxCpu, member))
+#if OSXSMP
+#define OSXJITARENA(cpu) ((OSXJITBYTES / (uint32)(cpu)->cpucount) & ~0xfffffu)
+#else
+#define OSXJITARENA(cpu) OSXJITBYTES
+#endif
 #define OSXJITGPR(reg) (OSXJITOFFSET(gpr) + (uint32)(reg) * 4)
 #define OSXJITFPR(reg) (OSXJITOFFSET(fpr) + (uint32)(reg) * 8)
 #define OSXJITCRF(field) (OSXJITOFFSET(crf) + (uint32)(field))
@@ -3693,6 +3801,9 @@ typedef struct OsxNativeEmitter {
 	uint32 physical;
 	int deterministic;
 	uint32 enabled;
+#if OSXSMP
+	int smp;
+#endif
 	uint8 *misses[OSXJITMISSES];
 	int misscounts[OSXJITMISSES];
 	int misscount;
@@ -3866,11 +3977,27 @@ static void OsxGuestReturn(OsxNativeEmitter *emitter, int count)
 	OsxGuestJumpTo(emitter, emitter->state->interpretthunk);
 }
 
+#if OSXSMP
+static void OsxGuestKick(OsxNativeEmitter *emitter)
+{
+	if (!emitter->smp)
+		return;
+	OsxGuestJitByte(emitter, 0x83); OsxGuestJitByte(emitter, 0xbb);
+	OsxGuestWord(emitter, OSXJITOFFSET(kick));
+	OsxGuestJitByte(emitter, 0);
+	OsxGuestJitByte(emitter, 0x0f); OsxGuestJitByte(emitter, 0x85);
+	OsxGuestJumpTo(emitter, emitter->state->finishthunk);
+}
+#endif
+
 static void OsxGuestDynamicExit(OsxNativeEmitter *emitter, int count)
 {
 	OsxGuestCharge(emitter, count);
 	OsxGuestJitByte(emitter, 0x0f); OsxGuestJitByte(emitter, 0x8e);
 	OsxGuestJumpTo(emitter, emitter->state->finishthunk);
+#if OSXSMP
+	OsxGuestKick(emitter);
+#endif
 	OsxGuestJitByte(emitter, 0xe9);
 	OsxGuestJumpTo(emitter, emitter->state->dynamicthunk);
 }
@@ -4054,6 +4181,9 @@ static void OsxGuestExit(OsxNativeEmitter *emitter, int count, uint32 targetoffs
 	OsxGuestCharge(emitter, count);
 	OsxGuestJitByte(emitter, 0x0f); OsxGuestJitByte(emitter, 0x8e);
 	OsxGuestJumpTo(emitter, emitter->state->finishthunk);
+#if OSXSMP
+	OsxGuestKick(emitter);
+#endif
 	OsxGuestJitByte(emitter, 0xe9);
 	OsxGuestWord(emitter, 0);
 	OsxGuestCall(emitter, emitter->state->linkcallthunk);
@@ -5722,6 +5852,12 @@ static int OsxGuestEmit(OsxNativeEmitter *emitter, uint32 instruction, int count
 			OsxGuestRecord(emitter, instruction);
 			return 1;
 		}
+#if OSXSMP
+		if ((extended == 20 || extended == 150) && emitter->smp) {
+			OsxGuestCallout(emitter, instruction, count);
+			return 1;
+		}
+#endif
 		if (extended == 20 || extended == 150)
 			return OsxGuestReserved(emitter, instruction, extended, count);
 		if (extended == 1014)
@@ -5755,12 +5891,21 @@ int OsxGuestJitCreate(OsxCpu *cpu)
 		return 0;
 	state->pagecount = (cpu->ramsize + 4095) >> 12;
 	state->fused = !OSXJITNOFUSED && OsxGuestHostFeature(OSXFEATUREFMA);
+#if OSXSMP
+	if (cpu->primary != cpu) {
+		state->versions = ((OsxNativeState *)cpu->primary->nativejit)->versions;
+		state->compiledpages = ((OsxNativeState *)cpu->primary->nativejit)->compiledpages;
+	} else {
+#endif
 	state->versions = (uint32 *)calloc(state->pagecount, sizeof(uint32));
 	state->compiledpages = (uint8 *)calloc(state->pagecount, 1);
+#if OSXSMP
+	}
+#endif
 	state->records = (OsxNativeRecord *)malloc(OSXJITRECORDS * sizeof(OsxNativeRecord));
 	if (state->records)
 		memset(state->records, 0xff, OSXJITRECORDS * sizeof(OsxNativeRecord));
-	state->code = OsxGuestJitAllocate(OSXJITBYTES);
+	state->code = OsxGuestJitAllocate(OSXJITARENA(cpu));
 	cpu->nativejit = state;
 	if (state->versions == NULL || state->compiledpages == NULL || state->records == NULL || state->code == NULL) {
 		OsxGuestJitDestroy(cpu);
@@ -5780,9 +5925,15 @@ void OsxGuestJitDestroy(OsxCpu *cpu)
 	if (cpu->logfile)
 		fprintf(cpu->logfile, "jit compiled %llu linked %llu instructions %llu interpreted %llu bytes %u\n", (unsigned long long)state->compiled, (unsigned long long)state->linked, (unsigned long long)cpu->instructions, (unsigned long long)state->interpreted, state->used);
 	if (state->code)
-		OsxGuestJitRelease(state->code, OSXJITBYTES);
+		OsxGuestJitRelease(state->code, OSXJITARENA(cpu));
+#if OSXSMP
+	if (cpu->primary == cpu) {
+#endif
 	free(state->versions);
 	free(state->compiledpages);
+#if OSXSMP
+	}
+#endif
 	free(state->records);
 	free(state);
 }
@@ -5807,6 +5958,18 @@ int OsxGuestJitInvalidate(OsxCpu *cpu, uint32 address, uint32 length)
 	first = address >> 12;
 	last = (address + length - 1) >> 12;
 	invalidated = 0;
+#if OSXSMP
+	if (cpu->cpucount > 1) {
+		OsxGuestAtomicFence();
+		for (; first <= last; first++) {
+			if (!state->compiledpages[first])
+				continue;
+			OsxGuestAtomicAdd((volatile int32 *)&state->versions[first], 1);
+			invalidated = 1;
+		}
+		return invalidated;
+	}
+#endif
 	for (; first <= last; first++) {
 		if (!state->compiledpages[first])
 			continue;
@@ -5847,7 +6010,13 @@ static void OsxGuestCompile(OsxCpu *cpu, OsxNativeState *state, OsxNativeBlock *
 	int status;
 	int index;
 	int shared;
-	if (state->used + OSXJITRESERVE >= OSXJITBYTES) {
+#if OSXSMP
+	uint32 version;
+	state->compiledpages[physical >> 12] = 1;
+	OsxGuestAtomicFence();
+	version = state->versions[physical >> 12] + 1;
+#endif
+	if (state->used + OSXJITRESERVE >= OSXJITARENA(cpu)) {
 		memset(state->records, 0xff, OSXJITRECORDS * sizeof(OsxNativeRecord));
 		memset(state->blocks, 0, sizeof(state->blocks));
 		memset(state->front, 0, sizeof(state->front));
@@ -5860,6 +6029,9 @@ static void OsxGuestCompile(OsxCpu *cpu, OsxNativeState *state, OsxNativeBlock *
 	emitter.physical = physical;
 	emitter.deterministic = cpu->deterministic != 0;
 	emitter.enabled = 0;
+#if OSXSMP
+	emitter.smp = cpu->cpucount > 1;
+#endif
 	emitter.misscount = 0;
 	emitter.stored = NULL;
 #if OSXJITINLINETLB
@@ -5927,7 +6099,11 @@ static void OsxGuestCompile(OsxCpu *cpu, OsxNativeState *state, OsxNativeBlock *
 	state->compiledpages[physical >> 12] = 1;
 	block->physical = physical;
 	block->mode = mode;
+#if OSXSMP
+	block->version = version;
+#else
 	block->version = state->versions[physical >> 12] + 1;
+#endif
 	block->count = count;
 	state->compiled++;
 	if (count == 0) {
@@ -6002,7 +6178,11 @@ void OsxGuestJitRun(OsxCpu *cpu, int32 count)
 	cpu->jitlink = NULL;
 	linkkind = 0;
 	linkmode = 0;
+#if OSXSMP
+	while (cpu->slice > 0 && !cpu->kick) {
+#else
 	while (cpu->slice > 0) {
+#endif
 		if (cpu->tracefile) {
 			OsxGuestCpuRun(cpu, cpu->slice);
 			return;
@@ -6051,8 +6231,12 @@ void OsxGuestJitRun(OsxCpu *cpu, int32 count)
 				if (block->count > 0 && mode == linkmode) {
 					if (linkkind == OSXJITLINK)
 						OsxGuestLink(state, cpu->jitlink, block);
-					else
+					else {
 						OsxGuestLinkDynamic(cpu, state, (OsxNativeRecord *)cpu->jitlink, block, physical);
+#if OSXSMP
+						((OsxNativeRecord *)cpu->jitlink)->version = version - 1;
+#endif
+					}
 				}
 				cpu->jitlink = NULL;
 			}
@@ -6159,11 +6343,17 @@ void OsxGuestJitTmpStats(OsxCpu *cpu, FILE *log)
 #define OSXA64BL 0x94000000u
 #define OSXA64BCOND 0x54000000u
 #define OSXA64CBZ 0x34000000u
+#define OSXA64BARRIER 0xd5033bbfu
 #define OSXA64CBNZ 0x35000000u
 #define OSXA64TBZ 0x36000000u
 #define OSXA64TBNZ 0x37000000u
 #define OSXA64RET 0xd65f03c0u
 #define OSXJITOFFSET(member) ((uint32)offsetof(OsxCpu, member))
+#if OSXSMP
+#define OSXJITARENA(cpu) ((OSXJITBYTES / (uint32)(cpu)->cpucount) & ~0xfffffu)
+#else
+#define OSXJITARENA(cpu) OSXJITBYTES
+#endif
 #define OSXJITGPR(reg) (OSXJITOFFSET(gpr) + (uint32)(reg) * 4)
 #define OSXJITFPR(reg) (OSXJITOFFSET(fpr) + (uint32)(reg) * 8)
 #define OSXJITCRF(field) (OSXJITOFFSET(crf) + (uint32)(field))
@@ -6220,6 +6410,9 @@ typedef struct OsxNativeEmitter {
 	uint32 physical;
 	int deterministic;
 	uint32 enabled;
+#if OSXSMP
+	int smp;
+#endif
 	uint8 *misses[OSXJITMISSES];
 	int misscounts[OSXJITMISSES];
 	int misscount;
@@ -6495,11 +6688,25 @@ static void OsxGuestReturn(OsxNativeEmitter *emitter, int count)
 	OsxGuestBranchTo(emitter, OSXA64B, emitter->state->interpretthunk);
 }
 
+#if OSXSMP
+static void OsxGuestKick(OsxNativeEmitter *emitter)
+{
+	if (!emitter->smp)
+		return;
+	OsxGuestLoad(emitter, OSXJITSCRATCH, OSXJITOFFSET(kick));
+	OsxGuestOp(emitter, OSXA64CBZ | (2 << 5) | OSXJITSCRATCH);
+	OsxGuestBranchTo(emitter, OSXA64B, emitter->state->finishthunk);
+}
+#endif
+
 static void OsxGuestDynamicExit(OsxNativeEmitter *emitter, int count)
 {
 	OsxGuestCharge(emitter, count);
 	OsxGuestOp(emitter, OsxGuestConditional(OSXCONDGT) | (2 << 5));
 	OsxGuestBranchTo(emitter, OSXA64B, emitter->state->finishthunk);
+#if OSXSMP
+	OsxGuestKick(emitter);
+#endif
 	OsxGuestBranchTo(emitter, OSXA64B, emitter->state->dynamicthunk);
 }
 
@@ -6652,6 +6859,9 @@ static void OsxGuestExit(OsxNativeEmitter *emitter, int count, uint32 targetoffs
 	OsxGuestCharge(emitter, count);
 	OsxGuestOp(emitter, OsxGuestConditional(OSXCONDGT) | (2 << 5));
 	OsxGuestBranchTo(emitter, OSXA64B, emitter->state->finishthunk);
+#if OSXSMP
+	OsxGuestKick(emitter);
+#endif
 	OsxGuestOp(emitter, OSXA64B | 1);
 	OsxGuestBranchTo(emitter, OSXA64BL, emitter->state->linkcallthunk);
 }
@@ -7482,6 +7692,10 @@ static int OsxGuestSystem(OsxNativeEmitter *emitter, uint32 instruction, uint32 
 	target = (instruction >> 21) & 31;
 	switch (extended) {
 	case 54: case 86: case 246: case 278: case 598: case 854:
+#if OSXSMP
+		if (emitter->smp && (extended == 598 || extended == 854))
+			OsxGuestOp(emitter, OSXA64BARRIER);
+#endif
 		return 1;
 	case 144:
 #if OSXJITCRFIELDS
@@ -7984,6 +8198,12 @@ static int OsxGuestEmit(OsxNativeEmitter *emitter, uint32 instruction, int count
 			OsxGuestRecord(emitter, instruction);
 			return 1;
 		}
+#if OSXSMP
+		if ((extended == 20 || extended == 150) && emitter->smp) {
+			OsxGuestCallout(emitter, instruction, count);
+			return 1;
+		}
+#endif
 		if (extended == 20 || extended == 150)
 			return OsxGuestReserved(emitter, instruction, extended, count);
 		if (extended == 1014)
@@ -8012,16 +8232,25 @@ int OsxGuestJitCreate(OsxCpu *cpu)
 	if (state == NULL)
 		return 0;
 	state->pagecount = (cpu->ramsize + 4095) >> 12;
+#if OSXSMP
+	if (cpu->primary != cpu) {
+		state->versions = ((OsxNativeState *)cpu->primary->nativejit)->versions;
+		state->compiledpages = ((OsxNativeState *)cpu->primary->nativejit)->compiledpages;
+	} else {
+#endif
 	state->versions = (uint32 *)calloc(state->pagecount, sizeof(uint32));
 	state->compiledpages = (uint8 *)calloc(state->pagecount, 1);
+#if OSXSMP
+	}
+#endif
 	state->records = (OsxNativeRecord *)malloc(OSXJITRECORDS * sizeof(OsxNativeRecord));
 	if (state->records)
 		memset(state->records, 0xff, OSXJITRECORDS * sizeof(OsxNativeRecord));
 #if defined(__APPLE__)
-	state->executebase = (uint8 *)jit_wx_map(OSXJITBYTES);
-	state->writebase = (uint8 *)malloc(OSXJITBYTES);
+	state->executebase = (uint8 *)jit_wx_map(OSXJITARENA(cpu));
+	state->writebase = (uint8 *)malloc(OSXJITARENA(cpu));
 #else
-	state->writebase = OsxGuestJitAllocate(OSXJITBYTES);
+	state->writebase = OsxGuestJitAllocate(OSXJITARENA(cpu));
 	state->executebase = state->writebase;
 #endif
 	cpu->nativejit = state;
@@ -8044,14 +8273,20 @@ void OsxGuestJitDestroy(OsxCpu *cpu)
 		fprintf(cpu->logfile, "jit compiled %llu linked %llu instructions %llu interpreted %llu bytes %u\n", (unsigned long long)state->compiled, (unsigned long long)state->linked, (unsigned long long)cpu->instructions, (unsigned long long)state->interpreted, state->used);
 #if defined(__APPLE__)
 	if (state->executebase)
-		jit_wx_unmap(state->executebase, OSXJITBYTES);
+		jit_wx_unmap(state->executebase, OSXJITARENA(cpu));
 	free(state->writebase);
 #else
 	if (state->writebase)
-		OsxGuestJitRelease(state->writebase, OSXJITBYTES);
+		OsxGuestJitRelease(state->writebase, OSXJITARENA(cpu));
+#endif
+#if OSXSMP
+	if (cpu->primary == cpu) {
 #endif
 	free(state->versions);
 	free(state->compiledpages);
+#if OSXSMP
+	}
+#endif
 	free(state->records);
 	free(state);
 }
@@ -8076,6 +8311,18 @@ int OsxGuestJitInvalidate(OsxCpu *cpu, uint32 address, uint32 length)
 	first = address >> 12;
 	last = (address + length - 1) >> 12;
 	invalidated = 0;
+#if OSXSMP
+	if (cpu->cpucount > 1) {
+		OsxGuestAtomicFence();
+		for (; first <= last; first++) {
+			if (!state->compiledpages[first])
+				continue;
+			OsxGuestAtomicAdd((volatile int32 *)&state->versions[first], 1);
+			invalidated = 1;
+		}
+		return invalidated;
+	}
+#endif
 	for (; first <= last; first++) {
 		if (!state->compiledpages[first])
 			continue;
@@ -8116,7 +8363,13 @@ static void OsxGuestCompile(OsxCpu *cpu, OsxNativeState *state, OsxNativeBlock *
 	int status;
 	int index;
 	int shared;
-	if (state->used + OSXJITRESERVE >= OSXJITBYTES) {
+#if OSXSMP
+	uint32 version;
+	state->compiledpages[physical >> 12] = 1;
+	OsxGuestAtomicFence();
+	version = state->versions[physical >> 12] + 1;
+#endif
+	if (state->used + OSXJITRESERVE >= OSXJITARENA(cpu)) {
 		memset(state->records, 0xff, OSXJITRECORDS * sizeof(OsxNativeRecord));
 		memset(state->blocks, 0, sizeof(state->blocks));
 		memset(state->front, 0, sizeof(state->front));
@@ -8129,6 +8382,9 @@ static void OsxGuestCompile(OsxCpu *cpu, OsxNativeState *state, OsxNativeBlock *
 	emitter.physical = physical;
 	emitter.deterministic = cpu->deterministic != 0;
 	emitter.enabled = 0;
+#if OSXSMP
+	emitter.smp = cpu->cpucount > 1;
+#endif
 	emitter.misscount = 0;
 #if OSXJITINLINETLB
 	emitter.tlbsites = 0;
@@ -8195,7 +8451,11 @@ static void OsxGuestCompile(OsxCpu *cpu, OsxNativeState *state, OsxNativeBlock *
 	state->compiledpages[physical >> 12] = 1;
 	block->physical = physical;
 	block->mode = mode;
+#if OSXSMP
+	block->version = version;
+#else
 	block->version = state->versions[physical >> 12] + 1;
+#endif
 	block->count = count;
 	state->compiled++;
 	if (count == 0) {
@@ -8274,7 +8534,11 @@ void OsxGuestJitRun(OsxCpu *cpu, int32 count)
 	cpu->jitlink = NULL;
 	linkkind = 0;
 	linkmode = 0;
+#if OSXSMP
+	while (cpu->slice > 0 && !cpu->kick) {
+#else
 	while (cpu->slice > 0) {
+#endif
 		if (cpu->tracefile) {
 			OsxGuestCpuRun(cpu, cpu->slice);
 			return;
@@ -8323,8 +8587,12 @@ void OsxGuestJitRun(OsxCpu *cpu, int32 count)
 				if (block->count > 0 && mode == linkmode) {
 					if (linkkind == OSXJITLINK)
 						OsxGuestLink(state, cpu->jitlink, block);
-					else
+					else {
 						OsxGuestLinkDynamic(cpu, state, (OsxNativeRecord *)cpu->jitlink, block, physical);
+#if OSXSMP
+						((OsxNativeRecord *)cpu->jitlink)->version = version - 1;
+#endif
+					}
 				}
 				cpu->jitlink = NULL;
 			}

@@ -884,6 +884,10 @@ static int OsxGuestKernelRead32(OsxCpu *cpu, uint32 address, uint32 *value)
 	uint32 savedsr[16];
 	int index;
 	int result;
+#if OSXG5
+	if (cpu->core970)
+		return OsxGuest970KernelRead((Osx970 *)cpu->core970, address, value);
+#endif
 	savedmsr = cpu->msr;
 	memcpy(savedsr, cpu->sr, sizeof(savedsr));
 	for (index = 0; index < 16; index++)
@@ -969,15 +973,13 @@ static int OsxGuestResolveProcessLayout(OsxSession *session, OsxCpu *cpu)
 	return layout->taskoffset != 0;
 }
 
-static int OsxGuestWalkProcesses(OsxSession *session, uint32 *processes, uint32 *spaces, uint32 *count)
+static int OsxGuestWalkProcesses(OsxSession *session, OsxCpu *cpu, uint32 *processes, uint32 *spaces, uint32 *count)
 {
-	OsxCpu *cpu;
 	OsxProcessLayout *layout;
 	uint32 proc;
 	uint32 task;
 	uint32 map;
 	uint32 pmap;
-	cpu = session->machine->cpu;
 	layout = &session->layout;
 	if (!OsxGuestResolveProcessLayout(session, cpu) || !OsxGuestKernelRead32(cpu, layout->allproc, &proc))
 		return 0;
@@ -1006,7 +1008,7 @@ static uint32 OsxGuestQuartzProcess(void *owner, OsxCpu *cpu)
 	uint32 index;
 	OsxSession *session;
 	session = (OsxSession *)owner;
-	if (!OsxGuestWalkProcesses(session, processes, spaces, &count))
+	if (!OsxGuestWalkProcesses(session, cpu, processes, spaces, &count))
 		return 0;
 	for (index = 0; index < count; index++)
 		if (spaces[index] == (cpu->sr[0] & session->layout.mask))
@@ -1036,7 +1038,7 @@ static void OsxGuestReleaseDeadContexts(OsxSession *session)
 	uint32 processes[PROCESSSCAN];
 	uint32 spaces[PROCESSSCAN];
 	uint32 count;
-	if (session->quartz && OsxGuestWalkProcesses(session, processes, spaces, &count))
+	if (session->quartz && OsxGuestWalkProcesses(session, session->machine->cpu, processes, spaces, &count))
 		OsxGuestQuartzKeepProcesses(session->quartz, processes, spaces, count, session->layout.mask);
 }
 #endif
@@ -1055,6 +1057,10 @@ static int OsxGuestSyscallObserver(OsxCpu *cpu, void *context, uint32 instructio
 #endif
 	session = (OsxSession *)context;
 	if (instruction == OSXDISPLAYTRAP) {
+#if OSXSMP
+		if (!OsxGuestSmpClaimHost(cpu))
+			return 1;
+#endif
 		change = OsxGuestDisplayDriverCall(session->machine, cpu);
 		if (change)
 			memset(session->shadow, 0xff, session->machine->rowbytes * session->machine->maxheight);
@@ -1070,6 +1076,10 @@ static int OsxGuestSyscallObserver(OsxCpu *cpu, void *context, uint32 instructio
 #if OSXGLBRIDGE
 	if (session->machine->quartz && (cpu->msr & OSXMSRPR) &&
 		(instruction & 0xfffc00ffu) == OSXQUARTZTRAP) {
+#if OSXSMP
+		if (!OsxGuestSmpClaimHost(cpu))
+			return 1;
+#endif
 		if (!session->quartz)
 			session->quartz = OsxGuestCreateQuartzBridge(session->machine->width, session->machine->height,
 				session->machine->quartzbase, session->machine->quartzstrings, session->machine->quartzextensions, session->machine->quartzallocatedextensions,
@@ -1521,6 +1531,13 @@ static void OsxGuestRunMachine(OsxSession *session)
 	now = OsxGuestCpuTimebase(cpu);
 	slicesize = 20000;
 	while (!machine->quit) {
+#if OSXSMP
+		if (machine->cpucount > 1) {
+			cpu = OsxGuestSmpBegin(machine, 0);
+			now = OsxGuestCpuTimebase(cpu);
+			OsxGuestSmpInterrupts(cpu, now);
+		} else
+#endif
 #if OSXG5
 		if (cpu->core970)
 			OsxGuest970CheckInterrupts((Osx970 *)cpu->core970, now);
@@ -1564,6 +1581,10 @@ static void OsxGuestRunMachine(OsxSession *session)
 				milliseconds = (uint32)((waitticks * 1000 + OSXTIMEBASEFREQUENCY - 1) / OSXTIMEBASEFREQUENCY);
 			if (cpu->deterministic)
 				cpu->virtualticks += waitticks + 1;
+#if OSXSMP
+			else if (machine->cpucount > 1)
+				OsxGuestSmpIdle(cpu, waitticks);
+#endif
 			else if (milliseconds > 0)
 				OsxGuestHostSleep(milliseconds);
 			else
@@ -1606,6 +1627,12 @@ static void OsxGuestRunMachine(OsxSession *session)
 #endif
 			slices++;
 		}
+#if OSXSMP
+		if (machine->cpucount > 1) {
+			OsxGuestSmpEnd(cpu);
+			OsxGuestSmpLock(cpu);
+		}
+#endif
 		OsxGuestCudaPoll(machine, now);
 		OsxGuestBmacPoll(machine, now);
 		OsxGuestAtaPoll(machine, now);
@@ -1651,12 +1678,22 @@ static void OsxGuestRunMachine(OsxSession *session)
 				if (session->tmpsamplefile)
 					fflush(session->tmpsamplefile);
 #endif
+#if OSXSMP
+				OsxGuestSmpStatus(machine, machine->log);
+#endif
 				fflush(machine->log);
 			}
 		}
 		if (now >= stoptime)
 			machine->quit = 1;
+#if OSXSMP
+		if (machine->cpucount > 1)
+			OsxGuestSmpUnlock(cpu);
+#endif
 	}
+#if OSXSMP
+	OsxGuestSmpJoin(machine);
+#endif
 }
 
 static void OsxGuestDestroySession(OsxSession *session)
@@ -1666,6 +1703,9 @@ static void OsxGuestDestroySession(OsxSession *session)
 	int unitindex;
 	machine = session->machine;
 	if (machine) {
+#if OSXSMP
+		OsxGuestSmpDestroy(machine);
+#endif
 		OsxGuestAudioExit(machine);
 		if (machine->bmac.slirpthread)
 			OsxGuestHostNetClose(machine->bmac.slirpthread);
@@ -1787,16 +1827,22 @@ static int OsxGuestRunSession(OsxSession *session)
 	cpu->buswrite = OsxGuestBusWrite;
 	cpu->logfile = machine->log;
 #if OSXG5
-	if (PrefsFindString("osxmodel") && strcmp(PrefsFindString("osxmodel"), "PowerMac7,3") == 0)
+	if (PrefsFindString("osxmodel") && strcmp(PrefsFindString("osxmodel"), "PowerMac7,3") == 0) {
 		machine->g5 = 1;
+		machine->newworld = 1;
+	}
+#endif
+#if OSXSMP
+	if (!OsxGuestSmpCreate(machine, PrefsFindInt32("osxcpus")))
+		return 1;
 #endif
 	OsxGuestPciReset(machine);
 	OsxGuestAtaReset(machine);
 	OsxGuestCudaReset(machine);
 	OsxGuestBmacReset(machine);
 	OsxGuestAudioReset(machine);
-#if OSXG5
-	if (machine->g5)
+#if OSXNEWWORLD
+	if (machine->newworld)
 		OsxGuestG5Reset(machine);
 #endif
 	XPRAMInit(NULL);
@@ -1856,8 +1902,8 @@ static int OsxGuestRunSession(OsxSession *session)
 		OsxGuestCpuAddHook(cpu, OsxGuestFindKernelSymbol(machine, "_panic"), OsxGuestPanicHook, session);
 	memcpy(machine->nvramclassic, machine->nvram, OSXNVRAMSIZE);
 	OsxGuestNvramMakeNewWorld(machine->nvram);
-#if OSXG5
-	if (machine->g5)
+#if OSXNEWWORLD
+	if (machine->newworld)
 		OsxGuestG5PrepareNvram(machine);
 #endif
 	OsxGuestHookKernelSymbol(machine, "__ZN16IOPlatformExpert14getBootROMTypeEv", OsxGuestNewWorldEpochHook);
@@ -1913,6 +1959,10 @@ static int OsxGuestRunSession(OsxSession *session)
 	memset(session->shadow, 0xff, machine->rowbytes * machine->height);
 #if OSXPROFILE
 	session->tmpsamplefile = fopen("osxsamples.bin", "wb");
+#endif
+#if OSXSMP
+	if (!OsxGuestSmpLaunch(machine))
+		return 1;
 #endif
 	OsxGuestRunMachine(session);
 	OsxGuestNvramFinishBoot(machine, XPRAM + 0x1378);

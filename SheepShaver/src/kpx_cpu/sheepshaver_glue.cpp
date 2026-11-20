@@ -52,6 +52,10 @@ extern "C" void catalyst_pump_appkit_events(void);
 #include "usbhid.h"
 #include "usbuim.h"
 #include "mmio.h"
+#if defined(CLASSICSMP) && CLASSICSMP
+#include "osxcpu.h"
+#include "pcibridge.h"
+#endif
 #include "serial.h"
 #include "ether.h"
 #include "timer.h"
@@ -209,7 +213,28 @@ class sheepshaver_cpu
 public:
 
 	// Constructor
+#if CLASSICSMP
+	sheepshaver_cpu(bool issecondary);
+	bool secondary;
+	void *smp;
+	const char *EnterSecondaryVector(uint32 vector, uint32 savedpc, uint32 savedmsr);
+	void RunSecondary(uint32 entry);
+	void RaiseSecondary(void);
+	void LeaveSecondary(void);
+	void IdleAssert(void);
+	void IdleWait(void);
+	int Scheduling(void);
+	void FindIdleLoop(void);
+	uint32 kernelidleloop;
+	uint32 kernelidleend;
+	void RunMode(void);
+	void PageTable(void);
+	int Translated(void);
+	bool DeliverIllegal(void);
+	void KernelReturn(void);
+#else
 	sheepshaver_cpu();
+#endif
 	~sheepshaver_cpu();
 
 	// CR & XER accessors
@@ -244,8 +269,14 @@ public:
 	bool nanokernel2;
 	bool newworldv2;
 	int nestedframekind;
+	void ResetKernelState(void);
+	bool MachineReset(void);
+	bool Reboot(void);
+	bool rebootpending;
+	bool resetseen;
 	uint32 emulatorstubstart;
 	uint32 emulatorstubend;
+	int EmulatorStub(uint32 address);
 	void FindEmulatorStubs(void);
 	bool kernelmemorymapped;
 	uint32 kernelmemorybase;
@@ -421,12 +452,22 @@ public:
 	friend sigsegv_return_t sigsegv_handler(sigsegv_info_t *sip);
 };
 
+#if CLASSICSMP
+sheepshaver_cpu::sheepshaver_cpu(bool issecondary)
+#else
 sheepshaver_cpu::sheepshaver_cpu()
+#endif
 {
 	init_decoder();
+#if CLASSICSMP
+	secondary = issecondary;
+	smp = NULL;
+	FindIdleLoop();
+#endif
+	rebootpending = false;
+	resetseen = false;
 	nanokernel2 = HasNanoKernel2();
 	newworldv2 = HasNewWorldV2Kernel();
-	nestedframekind = NESTEDFRAMENONE;
 	emulatorstubstart = 0;
 	emulatorstubend = 0;
 	if (nanokernel2)
@@ -444,7 +485,11 @@ sheepshaver_cpu::sheepshaver_cpu()
 			}
 		}
 	}
+#if CLASSICSMP
+	if (nanokernel2 && ReadMacInt16(ROMBase + 0x310004) >= 0x0210 && !secondary) {
+#else
 	if (nanokernel2 && ReadMacInt16(ROMBase + 0x310004) >= 0x0210) {
+#endif
 		if (vm_acquire_fixed(Mac2HostAddr(kernelmemorybase), 0x200000) < 0) {
 			ErrorAlert("Cannot allocate NanoKernel memory");
 			QuitEmulator();
@@ -453,20 +498,7 @@ sheepshaver_cpu::sheepshaver_cpu()
 		WriteMacInt32(KernelDataAddr - 0x20, KernelDataAddr - 0xa000);
 		Mac2Mac_memcpy(KernelDataAddr - 0xa000 + 0xdc0, KernelDataAddr + 0xd00, 0x100);
 	}
-	sprg(0) = KernelDataAddr;
-	if (nanokernel2)
-		WriteMacInt32(KernelDataAddr - 4, KernelDataAddr);
-	sprg(3) = KernelDataAddr + PPC_68K_EXCEPTION_TABLE_OFFSET;
-	exception_step_active = false;
-	exception_step_trap = false;
-	exception_step_opcode = 0;
-	exception_step_trampoline = 0;
-	exception_step_pc = 0;
-	exception_step_pending = false;
-	exception_entry_depth = 0;
-	system_ticks_valid = false;
-	system_ticks_high_water = 0;
-	system_queue_repairs = 0;
+	ResetKernelState();
 #if PPC_DEBUG_TRACE
 	exception_stall_pc = 0;
 #if GUEST_STALL_TRACE
@@ -560,6 +592,55 @@ sheepshaver_cpu::sheepshaver_cpu()
 #endif
 }
 
+void sheepshaver_cpu::ResetKernelState(void)
+{
+	nestedframekind = NESTEDFRAMENONE;
+	sprg(0) = KernelDataAddr;
+	if (nanokernel2)
+		WriteMacInt32(KernelDataAddr - 4, KernelDataAddr);
+	sprg(3) = KernelDataAddr + PPC_68K_EXCEPTION_TABLE_OFFSET;
+	exception_step_active = false;
+	exception_step_trap = false;
+	exception_step_opcode = 0;
+	exception_step_trampoline = 0;
+	exception_step_pc = 0;
+	exception_step_pending = false;
+	exception_entry_depth = 0;
+	system_ticks_valid = false;
+	system_ticks_high_water = 0;
+	system_queue_repairs = 0;
+}
+
+#if CLASSICSMP
+static int ClassicSmpReset(void);
+#endif
+
+bool sheepshaver_cpu::MachineReset(void)
+{
+	rebootpending = resetseen && newworldv2;
+	resetseen = true;
+#if CLASSICSMP
+	if (ClassicSmpReset() && nanokernel2)
+		rebootpending = true;
+#endif
+	if (rebootpending)
+		spcflags().set(SPCFLAG_CPU_STOP);
+	return rebootpending;
+}
+
+bool sheepshaver_cpu::Reboot(void)
+{
+	if (!rebootpending)
+		return false;
+	rebootpending = false;
+	resetseen = false;
+	spcflags().clear(SPCFLAG_CPU_STOP);
+	invalidate_cache();
+	ResetRegisters();
+	ResetKernelState();
+	return true;
+}
+
 void sheepshaver_cpu::init_decoder()
 {
 	static const instr_info_t sheep_ii_table[] = {
@@ -639,6 +720,20 @@ void sheepshaver_cpu::execute_sheep(uint32 opcode)
 {
 //	D(bug("Extended opcode %08x at %08x (68k pc %08x)\n", opcode, pc(), gpr(24)));
 	assert((((opcode >> 26) & 0x3f) == 6) && OP_MAX + 3 <= 64);
+#if CLASSICSMP
+	if (opcode == CLASSICSMPRUNMODE) {
+		RunMode();
+		return;
+	}
+	if (opcode == CLASSICSMPKERNELRETURN) {
+		KernelReturn();
+		return;
+	}
+	if (opcode == CLASSICSMPPARK) {
+		LeaveSecondary();
+		return;
+	}
+#endif
 
 	switch (opcode & 0x3f) {
 	case 0:		// EMUL_RETURN
@@ -689,6 +784,10 @@ int sheepshaver_cpu::compile1(codegen_context_t & cg_context)
 	powerpc_dyngen & dg = cg_context.codegen;
 	uint32 opcode = cg_context.opcode;
 
+#if CLASSICSMP
+	if (opcode == CLASSICSMPRUNMODE || opcode == CLASSICSMPKERNELRETURN || opcode == CLASSICSMPPARK)
+		return COMPILE_FAILURE;
+#endif
 	switch (opcode & 0x3f) {
 	case 0:		// EMUL_RETURN
 		dg.gen_invoke(QuitEmulator);
@@ -2168,10 +2267,95 @@ bool sheepshaver_cpu::exception_step_trampoline_ready(void)
 	return exception_step_trampoline != 0;
 }
 
+#if CLASSICSMP
+#define CLASSICSMPMSREE 0x00008000u
+#define CLASSICSMPMSRPREFIX 0x00000040u
+#define CLASSICSMPMSRDATA 0x00000010u
+#define CLASSICSMPSRR1ILLEGAL 0x00080000u
+#define CLASSICSMPMSRUSER 0x00004000u
+#define CLASSICSMPKERNELSTART 0x310000u
+#define CLASSICSMPKERNELEND 0x330000u
+#define CLASSICSMPIDLEFIRST 0x7c3e0b78u
+#define CLASSICSMPIDLESECOND 0x7c411378u
+#define CLASSICSMPIDLETHIRD 0x7ca22b78u
+#define CLASSICSMPIDLELIMIT 0x100u
+#define CLASSICSMPBRANCH 0x48000000u
+#define CLASSICSMPBRANCHOFFSET 0x03fffffcu
+#define CLASSICSMPPAGEARRAY 0x6b0u
+#define CLASSICSMPPAGE 0x1000u
+
+const char *sheepshaver_cpu::EnterSecondaryVector(uint32 vector, uint32 savedpc, uint32 savedmsr)
+{
+	srr0() = savedpc;
+	srr1() = savedmsr;
+	msr() = ppc_exception_msr(msr());
+	pc() = ROMBase + vector;
+	return NULL;
+}
+
+void sheepshaver_cpu::RunMode(void)
+{
+	pc() += 4;
+	if (!secondary) {
+		WriteMacInt32(XLM_RUN_MODE, gpr(8));
+		return;
+	}
+	if (nanokernel2)
+		return;
+	if (gpr(8) == MODE_NATIVE) {
+		sprg(3) = gpr(1) + PPC_NATIVE_EXCEPTION_TABLE_OFFSET;
+		return;
+	}
+	sprg(3) = gpr(1) + PPC_68K_EXCEPTION_TABLE_OFFSET;
+}
+
+void sheepshaver_cpu::KernelReturn(void)
+{
+	if (secondary || (msr() & CLASSICSMPMSRUSER) == 0) {
+		if (deliver_trap_exception(CLASSICSMPKERNELRETURN) == NULL)
+			return;
+	}
+	pc() = emulatorstubstart;
+}
+
+bool sheepshaver_cpu::DeliverIllegal(void)
+{
+	if (!nanokernel2 || !ClassicSmpEnabled())
+		return false;
+	return enter_exception_vector(PPC_PROGRAM_VECTOR, PPC_PROGRAM_HANDLER_SLOT, pc(), ppc_exception_srr1(msr(), CLASSICSMPSRR1ILLEGAL)) == NULL;
+}
+
+bool ClassicSmpDeliverIllegal(powerpc_cpu *cpu)
+{
+	return ((sheepshaver_cpu *)cpu)->DeliverIllegal();
+}
+
+bool ClassicSmpDeliverSystemCall(powerpc_cpu *cpu)
+{
+	return ((sheepshaver_cpu *)cpu)->DeliverSystemCall();
+}
+
+void sheepshaver_cpu::RunSecondary(uint32 entry)
+{
+	spcflags().clear(SPCFLAG_CPU_EXEC_RETURN | SPCFLAG_CPU_TRIGGER_INTERRUPT | SPCFLAG_CPU_HANDLE_INTERRUPT | SPCFLAG_CPU_DECREMENTER | SPCFLAG_CPU_IDLE);
+	invalidate_cache();
+	ResetRegisters();
+	ResetKernelState();
+	msr() = CLASSICSMPMSRPREFIX;
+	srr0() = ROMBase + CLASSICSMPPARKADDRESS;
+	srr1() = CLASSICSMPMSRPREFIX;
+	execute(entry);
+}
+#endif
+
 const char *sheepshaver_cpu::enter_exception_vector(
 	uint32 vector, uint32 handler_slot, uint32 saved_pc, uint32 saved_msr)
 {
 	uint32 table;
+#if CLASSICSMP
+	if (secondary)
+		return EnterSecondaryVector(vector, saved_pc, saved_msr);
+#endif
 	if (nanokernel2)
 		table = sprg(3);
 	else {
@@ -2259,9 +2443,15 @@ void sheepshaver_cpu::FindEmulatorStubs(void)
 	lowest = 0xffffffffU;
 	highest = 0;
 	for (address = ROMBase + 0x46e000; address < ROMBase + 0x470000; address += 0x100) {
+#if CLASSICSMP
+		if (ReadMacInt32(address) != 0x7c2903a6 || ((ReadMacInt32(address + 4) != 0x80202818 || ReadMacInt32(address + 8) != 0x38210001) &&
+				(ReadMacInt32(address + 4) != CLASSICSMPMFMSR || ReadMacInt32(address + 8) != CLASSICSMPCLEAREE)))
+			continue;
+#else
 		if (ReadMacInt32(address) != 0x7c2903a6 || ReadMacInt32(address + 4) != 0x80202818 ||
 				ReadMacInt32(address + 8) != 0x38210001)
 			continue;
+#endif
 		if (address < lowest)
 			lowest = address;
 		highest = address;
@@ -2272,8 +2462,36 @@ void sheepshaver_cpu::FindEmulatorStubs(void)
 	emulatorstubend = highest + 0x100;
 }
 
+int sheepshaver_cpu::EmulatorStub(uint32 address)
+{
+	if (address >= emulatorstubstart && address < emulatorstubend)
+		return 1;
+	if (nanokernel2)
+		return 0;
+	return address >= EmulatorCodeAlias(emulatorstubstart) && address < EmulatorCodeAlias(emulatorstubend);
+}
+
+#if CLASSICSMP
+static int ClassicSmpLineRaised(void);
+static int ClassicSmpPrimaryPending(void);
+static void ClassicSmpPrimaryVector(void);
+#endif
+
 bool sheepshaver_cpu::external_interrupt()
 {
+#if CLASSICSMP
+	if (secondary) {
+		if (!ClassicSmpLineRaised())
+			return true;
+		if (!(msr() & CLASSICSMPMSREE))
+			return false;
+		return enter_exception_vector(PPC_EXTERNAL_VECTOR, PPC_EXTERNAL_HANDLER_SLOT, pc(), ppc_exception_srr1(msr(), 0)) == NULL;
+	}
+	if (ClassicSmpPrimaryPending() && ReadMacInt32(XLM_RUN_MODE) == MODE_68K && current_execute_depth() == 1 && (msr() & CLASSICSMPMSREE) && !EmulatorStub(pc())) {
+		ClassicSmpPrimaryVector();
+		return enter_exception_vector(PPC_EXTERNAL_VECTOR, PPC_EXTERNAL_HANDLER_SLOT, pc(), ppc_exception_srr1(msr(), 0)) == NULL;
+	}
+#endif
 	// The 68K and EMUL_OP modes deliberately retain their existing callbacks:
 	// they are host-created nested execution frames, not a native PowerPC
 	// context which can take a hardware vector. Native mode must not use that
@@ -2302,7 +2520,7 @@ bool sheepshaver_cpu::external_interrupt()
 		return false;
 	}
 
-	if (pc() >= emulatorstubstart && pc() < emulatorstubend) {
+	if (EmulatorStub(pc())) {
 		external_interrupt_mode_deferred_count++;
 		return false;
 	}
@@ -2356,7 +2574,7 @@ bool sheepshaver_cpu::fp_unavailable_eligible()
 		return false;
 	if (newworldv2 && nestedframekind == NESTEDFRAME68K)
 		return false;
-	return pc() < emulatorstubstart || pc() >= emulatorstubend;
+	return !EmulatorStub(pc());
 }
 
 bool sheepshaver_cpu::deliver_fp_unavailable()
@@ -2375,6 +2593,10 @@ bool sheepshaver_cpu::DeliverSystemCall(void)
 
 const char *sheepshaver_cpu::deliver_trap_exception(uint32 opcode)
 {
+#if CLASSICSMP
+	if (secondary)
+		return EnterSecondaryVector(PPC_PROGRAM_VECTOR, pc(), ppc_exception_srr1(msr(), PPC_SRR1_PROGRAM_TRAP));
+#endif
 	if (exception_step_active) {
 		exception_step_trap = true;
 		exception_step_opcode = opcode;
@@ -2504,6 +2726,14 @@ const char *sheepshaver_cpu::deliver_trap_exception(uint32 opcode)
 // removes a native callback from every context return.
 void sheepshaver_cpu::return_from_exception(uint32 saved_pc, uint32 saved_msr)
 {
+#if CLASSICSMP
+	if (secondary) {
+		powerpc_cpu::return_from_exception(saved_pc, saved_msr);
+		if (ClassicSmpLineRaised())
+			RaiseSecondary();
+		return;
+	}
+#endif
 	msr() = (msr() & ~PPC_RFI_MSR_MASK) |
 		(saved_msr & PPC_RFI_MSR_MASK);
 	// The guest has completed its context restore before executing rfi. Keep
@@ -2707,6 +2937,526 @@ inline void sheepshaver_cpu::get_resource(uint32 old_get_resource)
 
 // PowerPC CPU emulator
 static sheepshaver_cpu *ppc_cpu = NULL;
+
+#if CLASSICSMP
+#define CLASSICSMPHAMMERHEAD 0xf8000000u
+#define CLASSICSMPGRANDCENTRAL 0xf3000000u
+#define CLASSICSMPPRIMARYTRIGGER 0xf3019000u
+#define CLASSICSMPHANDOFF 0xf2800000u
+#define CLASSICSMPWINDOW 0x1000u
+#define CLASSICSMPCONFIG 0x90u
+#define CLASSICSMPCONFIGDUAL 0x02u
+#define CLASSICSMPSECONDARYLINE 0xc0u
+#define CLASSICSMPLINECLEAR 0x80u
+#define CLASSICSMPEVENTS 0x20u
+#define CLASSICSMPMASK 0x24u
+#define CLASSICSMPCLEAR 0x28u
+#define CLASSICSMPPRIMARYEVENT 0x40000000u
+#define CLASSICSMPDEVICEEVENT 0x00040000u
+#define CLASSICSMPREGISTER 0xfffffffcu
+#define CLASSICSMPBYTEBITS 3u
+#define CLASSICSMPSUPERVISORSPACE 0x5c8u
+#define CLASSICSMPCURRENTSPACE 0x5e8u
+#define CLASSICSMPSPACESIZE 8u
+#define CLASSICSMPSEGMENTMAP 0x80u
+#define CLASSICSMPSEGMENTS 16u
+#define CLASSICSMPSEGMENTPAGES 0x10000u
+#define CLASSICSMPSEGMENTSHIFT 28u
+#define CLASSICSMPPAGESHIFT 12u
+#define CLASSICSMPMAPENTRY 8u
+#define CLASSICSMPMAPVALUE 4u
+#define CLASSICSMPMAPCOUNT 2u
+#define CLASSICSMPMAPWHOLE 0xffffu
+#define CLASSICSMPMAPPAGED 0x00000c00u
+#define CLASSICSMPMAPDIRECT 0x00000012u
+#define CLASSICSMPPARKMILLISECONDS 100
+#define CLASSICSMPSYSTEMCONTEXT 0x658u
+#define CLASSICSMPACTIVECONTEXT 0x65cu
+#define CLASSICSMPIDLEPOLLS 200u
+#define CLASSICSMPIDLEMILLISECONDS 4
+
+typedef struct ClassicSmp {
+	sheepshaver_cpu *secondary;
+	uint8 *shadow;
+	uint32 privatelogical;
+	uint32 privatephysical;
+	volatile int32 pagebusy;
+	OsxSmpSignal *wake;
+	void *thread;
+	uint32 line;
+	uint32 events;
+	uint32 mask;
+	uint32 handoff;
+	int bridged;
+	volatile int32 started;
+	volatile int32 quit;
+	volatile int32 primarypending;
+	volatile int32 sleeping;
+	volatile int32 generation;
+	int32 idlegeneration;
+	uint32 idlepolls;
+} ClassicSmp;
+
+static uint32 ClassicSmpSwap(uint32 value, int size)
+{
+	if (size == 4)
+		return bswap_32(value);
+	if (size == 2)
+		return bswap_16((uint16)value);
+	return value;
+}
+
+static uint32 ClassicSmpHandoff(ClassicSmp *smp)
+{
+	if (smp->bridged)
+		return bswap_32(PCIBridgeAddressLatch());
+	return smp->handoff;
+}
+
+static uint32 ClassicSmpHandoffRead(uint32 offset, int size)
+{
+	ClassicSmp *smp;
+	smp = (ClassicSmp *)ppc_cpu->smp;
+	return ClassicSmpSwap(smp->handoff, size);
+}
+
+static void ClassicSmpHandoffWrite(uint32 offset, int size, uint32 value)
+{
+	ClassicSmp *smp;
+	smp = (ClassicSmp *)ppc_cpu->smp;
+	value = ClassicSmpSwap(value, size);
+	if (offset == 0 && size == 4)
+		smp->handoff = value;
+}
+
+static void ClassicSmpTrimSegment(uint32 segment, uint32 memorypages)
+{
+	uint32 entry;
+	uint32 first;
+	uint32 last;
+	uint32 pages;
+	entry = ReadMacInt32(KERNEL_DATA_BASE + CLASSICSMPSEGMENTMAP + segment * CLASSICSMPMAPENTRY);
+	first = segment * CLASSICSMPSEGMENTPAGES;
+	last = ReadMacInt16(entry + CLASSICSMPMAPCOUNT);
+	if (ReadMacInt16(entry) != 0 || (ReadMacInt32(entry + CLASSICSMPMAPVALUE) & CLASSICSMPMAPPAGED) != CLASSICSMPMAPPAGED || memorypages > first + last)
+		return;
+	pages = 0;
+	if (memorypages > first) {
+		pages = memorypages - first;
+		WriteMacInt16(entry + CLASSICSMPMAPCOUNT, pages - 1);
+		entry += CLASSICSMPMAPENTRY;
+	}
+	WriteMacInt16(entry, pages);
+	WriteMacInt16(entry + CLASSICSMPMAPCOUNT, last - pages);
+	WriteMacInt32(entry + CLASSICSMPMAPVALUE, (segment << CLASSICSMPSEGMENTSHIFT) | (pages << CLASSICSMPPAGESHIFT) | CLASSICSMPMAPDIRECT);
+}
+
+static void ClassicSmpPrepareKernel(void)
+{
+	uint32 segment;
+	if (HasNanoKernel2() || ReadMacInt32(KERNEL_DATA_BASE + CLASSICSMPCURRENTSPACE) != 0)
+		return;
+	Mac2Mac_memcpy(KERNEL_DATA_BASE + CLASSICSMPCURRENTSPACE, KERNEL_DATA_BASE + CLASSICSMPSUPERVISORSPACE, CLASSICSMPSPACESIZE);
+	for (segment = 0; segment < CLASSICSMPSEGMENTS; segment++)
+		ClassicSmpTrimSegment(segment, RAMSize >> CLASSICSMPPAGESHIFT);
+}
+
+static uint8 *ClassicSmpPrivate(ClassicSmp *smp, int issecondary)
+{
+	while (smp->pagebusy)
+		OsxGuestAtomicPause();
+	if (issecondary && smp->secondary->Translated())
+		return Mac2HostAddr(smp->privatephysical);
+	return smp->shadow;
+}
+
+static uint32 ClassicSmpPrivateRead(uint32 offset, int size)
+{
+	ClassicSmp *smp;
+	uint32 value;
+	smp = (ClassicSmp *)ppc_cpu->smp;
+	value = 0;
+	memcpy(&value, ClassicSmpPrivate(smp, OsxGuestHostThreadCurrent(smp->thread)) + offset, size);
+	return value;
+}
+
+static void ClassicSmpPrivateWrite(uint32 offset, int size, uint32 value)
+{
+	ClassicSmp *smp;
+	smp = (ClassicSmp *)ppc_cpu->smp;
+	memcpy(ClassicSmpPrivate(smp, OsxGuestHostThreadCurrent(smp->thread)) + offset, &value, size);
+}
+
+void ClassicSmpIdleProbe(void)
+{
+	ClassicSmp *smp;
+	if (ppc_cpu == NULL || ppc_cpu->smp == NULL)
+		return;
+	smp = (ClassicSmp *)ppc_cpu->smp;
+	if (smp->started && smp->secondary->Scheduling())
+		smp->secondary->IdleAssert();
+}
+
+void ClassicSmpSync(powerpc_cpu *cpu)
+{
+	ClassicSmp *smp;
+	if (ppc_cpu == NULL || ppc_cpu->smp == NULL)
+		return;
+	smp = (ClassicSmp *)ppc_cpu->smp;
+	if (cpu == smp->secondary)
+		return;
+	OsxGuestAtomicAdd(&smp->generation, 1);
+	if (smp->sleeping)
+		OsxGuestHostSignalRaise(smp->wake);
+}
+
+void sheepshaver_cpu::RaiseSecondary(void)
+{
+	ClassicSmp *smp;
+	smp = (ClassicSmp *)ppc_cpu->smp;
+	spcflags().set(SPCFLAG_CPU_HANDLE_INTERRUPT);
+	if (smp->sleeping)
+		OsxGuestHostSignalRaise(smp->wake);
+}
+
+void sheepshaver_cpu::LeaveSecondary(void)
+{
+	spcflags().set(SPCFLAG_CPU_EXEC_RETURN);
+}
+
+void sheepshaver_cpu::IdleAssert(void)
+{
+	spcflags().set(SPCFLAG_CPU_IDLE);
+}
+
+int sheepshaver_cpu::Scheduling(void)
+{
+	uint32 kernel;
+	if (!secondary)
+		return 0;
+	if (nanokernel2)
+		return pc() >= kernelidleloop && pc() <= kernelidleend;
+	kernel = sprg(0);
+	return kernel != 0 && ReadMacInt32(kernel + CLASSICSMPACTIVECONTEXT) == ReadMacInt32(kernel + CLASSICSMPSYSTEMCONTEXT);
+}
+
+void sheepshaver_cpu::FindIdleLoop(void)
+{
+	uint32 offset;
+	kernelidleloop = 0;
+	kernelidleend = 0;
+	for (offset = CLASSICSMPKERNELSTART; offset < CLASSICSMPKERNELEND; offset += 4) {
+		if (ReadMacInt32(ROMBase + offset) == CLASSICSMPIDLEFIRST && ReadMacInt32(ROMBase + offset + 4) == CLASSICSMPIDLESECOND && ReadMacInt32(ROMBase + offset + 8) == CLASSICSMPIDLETHIRD)
+			kernelidleloop = ROMBase + offset;
+	}
+	for (offset = 0; offset < CLASSICSMPIDLELIMIT && kernelidleloop != 0; offset += 4) {
+		if (ReadMacInt32(kernelidleloop + offset) == (CLASSICSMPBRANCH | ((0 - offset) & CLASSICSMPBRANCHOFFSET)))
+			kernelidleend = kernelidleloop + offset;
+	}
+}
+
+void sheepshaver_cpu::IdleWait(void)
+{
+	ClassicSmp *smp;
+	smp = (ClassicSmp *)ppc_cpu->smp;
+	if (!Scheduling() || smp->quit) {
+		smp->idlepolls = 0;
+		spcflags().clear(SPCFLAG_CPU_IDLE);
+		return;
+	}
+	if (smp->idlepolls == 0)
+		smp->idlegeneration = smp->generation;
+	if (++smp->idlepolls < CLASSICSMPIDLEPOLLS)
+		return;
+	smp->idlepolls = 0;
+	OsxGuestAtomicExchange(&smp->sleeping, 1);
+	if (smp->generation == smp->idlegeneration && !spcflags().test(SPCFLAG_CPU_HANDLE_INTERRUPT))
+		OsxGuestHostSignalWait(smp->wake, CLASSICSMPIDLEMILLISECONDS);
+	OsxGuestAtomicExchange(&smp->sleeping, 0);
+}
+
+static void ClassicSmpInstallPrivate(ClassicSmp *smp, uint32 logical, uint32 physical)
+{
+	if (smp->privatelogical == logical && smp->privatephysical == physical)
+		return;
+	if (smp->shadow == NULL)
+		smp->shadow = (uint8 *)malloc(CLASSICSMPPAGE);
+	if (smp->shadow == NULL)
+		return;
+	OsxGuestAtomicExchange(&smp->pagebusy, 1);
+	if (smp->privatelogical != 0) {
+		MMIOUnmapMemory(smp->privatelogical, smp->shadow);
+		smp->privatelogical = 0;
+	}
+	if (MMIOMapMemory(logical, CLASSICSMPPAGE, smp->shadow, ClassicSmpPrivateRead, ClassicSmpPrivateWrite)) {
+		smp->privatephysical = physical;
+		smp->privatelogical = logical;
+	}
+	OsxGuestAtomicExchange(&smp->pagebusy, 0);
+	fprintf(stderr, "classicsmp private page %08x backed by %08x\n", logical, physical);
+	fflush(stderr);
+}
+
+int sheepshaver_cpu::Translated(void)
+{
+	return (msr() & CLASSICSMPMSRDATA) != 0;
+}
+
+void sheepshaver_cpu::PageTable(void)
+{
+	ClassicSmp *smp;
+	uint32 pages;
+	uint32 index;
+	uint32 base;
+	uint32 entry;
+	if (!secondary || nanokernel2)
+		return;
+	smp = (ClassicSmp *)ppc_cpu->smp;
+	pages = RAMSize >> CLASSICSMPPAGESHIFT;
+	base = ReadMacInt32(sprg(0) + CLASSICSMPPAGEARRAY);
+	if (base == 0 || base >= RAMSize - pages * 4)
+		return;
+	for (index = 0; index < pages; index++) {
+		entry = ReadMacInt32(base + index * 4);
+		if ((entry >> CLASSICSMPPAGESHIFT) != index) {
+			ClassicSmpInstallPrivate(smp, index << CLASSICSMPPAGESHIFT, entry & ~(CLASSICSMPPAGE - 1));
+			return;
+		}
+	}
+}
+
+void ClassicSmpPageTable(powerpc_cpu *cpu)
+{
+	((sheepshaver_cpu *)cpu)->PageTable();
+}
+
+uint8 *ClassicSmpTranslate(powerpc_cpu *cpu, uint32 address)
+{
+	ClassicSmp *smp;
+	if (ppc_cpu == NULL || ppc_cpu->smp == NULL)
+		return Mac2HostAddr(address);
+	smp = (ClassicSmp *)ppc_cpu->smp;
+	if (smp->privatelogical == 0 || (address & ~(CLASSICSMPPAGE - 1)) != smp->privatelogical)
+		return Mac2HostAddr(address);
+	return ClassicSmpPrivate(smp, cpu == smp->secondary) + (address & (CLASSICSMPPAGE - 1));
+}
+
+static int ClassicSmpLineRaised(void)
+{
+	ClassicSmp *smp;
+	smp = (ClassicSmp *)ppc_cpu->smp;
+	return smp->started && !(smp->line & CLASSICSMPLINECLEAR);
+}
+
+static uint32 ClassicSmpHammerheadRead(uint32 offset, int size)
+{
+	ClassicSmp *smp;
+	uint32 value;
+	smp = (ClassicSmp *)ppc_cpu->smp;
+	value = 0;
+	if (offset == CLASSICSMPCONFIG) {
+		value = CLASSICSMPCONFIGDUAL;
+		ClassicSmpPrepareKernel();
+	}
+	if (offset == CLASSICSMPSECONDARYLINE)
+		value = smp->line;
+	return value;
+}
+
+static void ClassicSmpHammerheadWrite(uint32 offset, int size, uint32 value)
+{
+	ClassicSmp *smp;
+	smp = (ClassicSmp *)ppc_cpu->smp;
+	if (offset != CLASSICSMPSECONDARYLINE)
+		return;
+	smp->line = value & 0xff;
+	if (smp->line & CLASSICSMPLINECLEAR)
+		return;
+	if (!smp->started) {
+		if (ClassicSmpHandoff(smp) == 0)
+			return;
+		smp->line |= CLASSICSMPLINECLEAR;
+		OsxGuestAtomicExchange(&smp->started, 1);
+		OsxGuestHostSignalRaise(smp->wake);
+		return;
+	}
+	smp->secondary->RaiseSecondary();
+}
+
+static uint32 ClassicSmpAccessMask(int size)
+{
+	if (size >= 4)
+		return 0xffffffffu;
+	return (1u << (size << CLASSICSMPBYTEBITS)) - 1;
+}
+
+static uint32 ClassicSmpGrandCentralRead(uint32 offset, int size)
+{
+	ClassicSmp *smp;
+	uint32 value;
+	uint32 shift;
+	smp = (ClassicSmp *)ppc_cpu->smp;
+	value = 0;
+	shift = (offset & ~CLASSICSMPREGISTER) << CLASSICSMPBYTEBITS;
+	if ((offset & CLASSICSMPREGISTER) == CLASSICSMPEVENTS) {
+		value = smp->events;
+		if (InterruptFlags != 0)
+			value |= CLASSICSMPDEVICEEVENT;
+		value >>= shift;
+	}
+	if ((offset & CLASSICSMPREGISTER) == CLASSICSMPMASK)
+		value = smp->mask >> shift;
+	value &= ClassicSmpAccessMask(size);
+	return value;
+}
+
+static void ClassicSmpGrandCentralWrite(uint32 offset, int size, uint32 value)
+{
+	ClassicSmp *smp;
+	uint32 shift;
+	uint32 bits;
+	smp = (ClassicSmp *)ppc_cpu->smp;
+	shift = (offset & ~CLASSICSMPREGISTER) << CLASSICSMPBYTEBITS;
+	bits = (value & ClassicSmpAccessMask(size)) << shift;
+	if ((offset & CLASSICSMPREGISTER) == CLASSICSMPMASK)
+		smp->mask = (smp->mask & ~(ClassicSmpAccessMask(size) << shift)) | bits;
+	if ((offset & CLASSICSMPREGISTER) == CLASSICSMPCLEAR)
+		smp->events &= ~bits;
+}
+
+static int ClassicSmpPrimaryPending(void)
+{
+	ClassicSmp *smp;
+	if (ppc_cpu == NULL || ppc_cpu->smp == NULL)
+		return 0;
+	smp = (ClassicSmp *)ppc_cpu->smp;
+	return smp->primarypending && (smp->mask & CLASSICSMPPRIMARYEVENT) != 0;
+}
+
+static void ClassicSmpPrimaryVector(void)
+{
+	OsxGuestAtomicExchange(&((ClassicSmp *)ppc_cpu->smp)->primarypending, 0);
+}
+
+static uint32 ClassicSmpTriggerRead(uint32 offset, int size)
+{
+	ClassicSmp *smp;
+	smp = (ClassicSmp *)ppc_cpu->smp;
+	smp->events |= CLASSICSMPPRIMARYEVENT;
+	OsxGuestAtomicExchange(&smp->primarypending, 1);
+	TriggerInterrupt();
+	return 0;
+}
+
+static void ClassicSmpTriggerWrite(uint32 offset, int size, uint32 value)
+{
+}
+
+static void ClassicSmpRelease(ClassicSmp *smp)
+{
+	smp->idlepolls = 0;
+	if (smp->privatelogical == 0)
+		return;
+	OsxGuestAtomicExchange(&smp->pagebusy, 1);
+	MMIOUnmapMemory(smp->privatelogical, smp->shadow);
+	smp->privatelogical = 0;
+	smp->privatephysical = 0;
+	OsxGuestAtomicExchange(&smp->pagebusy, 0);
+}
+
+static void ClassicSmpThread(void *context)
+{
+	ClassicSmp *smp;
+	uint32 entry;
+	smp = (ClassicSmp *)context;
+	while (!smp->quit) {
+		while (!smp->started && !smp->quit)
+			OsxGuestHostSignalWait(smp->wake, CLASSICSMPPARKMILLISECONDS);
+		if (!smp->quit) {
+			entry = ClassicSmpHandoff(smp);
+			fprintf(stderr, "classicsmp secondary starts at %08x\n", entry);
+			fflush(stderr);
+			smp->secondary->RunSecondary(entry);
+			ClassicSmpRelease(smp);
+			OsxGuestAtomicExchange(&smp->started, 0);
+			fprintf(stderr, "classicsmp secondary stopped\n");
+			fflush(stderr);
+		}
+	}
+}
+
+static int ClassicSmpReset(void)
+{
+	ClassicSmp *smp;
+	int running;
+	if (ppc_cpu == NULL || ppc_cpu->smp == NULL)
+		return 0;
+	smp = (ClassicSmp *)ppc_cpu->smp;
+	running = smp->started;
+	while (smp->started) {
+		smp->secondary->LeaveSecondary();
+		OsxGuestHostSignalRaise(smp->wake);
+		OsxGuestAtomicPause();
+	}
+	smp->line = CLASSICSMPLINECLEAR;
+	smp->events = 0;
+	smp->mask = 0;
+	smp->handoff = 0;
+	OsxGuestAtomicExchange(&smp->primarypending, 0);
+	return running;
+}
+
+int ClassicSmpEnabled(void)
+{
+	return ppc_cpu != NULL && ppc_cpu->smp != NULL;
+}
+
+static void ClassicSmpInit(void)
+{
+	ClassicSmp *smp;
+	if (!ClassicSmpConfigured())
+		return;
+	smp = (ClassicSmp *)calloc(1, sizeof(ClassicSmp));
+	if (smp == NULL)
+		return;
+	smp->line = CLASSICSMPLINECLEAR;
+	smp->wake = OsxGuestHostSignalCreate();
+	if (smp->wake == NULL || !MMIOMapWindow(CLASSICSMPHAMMERHEAD, CLASSICSMPWINDOW, ClassicSmpHammerheadRead, ClassicSmpHammerheadWrite) ||
+		!MMIOMapWindow(CLASSICSMPGRANDCENTRAL, CLASSICSMPWINDOW, ClassicSmpGrandCentralRead, ClassicSmpGrandCentralWrite) ||
+		!MMIOMapWindow(CLASSICSMPPRIMARYTRIGGER, CLASSICSMPWINDOW, ClassicSmpTriggerRead, ClassicSmpTriggerWrite)) {
+		fprintf(stderr, "classicsmp could not map the dual processor registers\n");
+		if (smp->wake != NULL)
+			OsxGuestHostSignalDestroy(smp->wake);
+		free(smp);
+		return;
+	}
+	smp->bridged = PCIBridgeReady();
+	smp->secondary = new sheepshaver_cpu(true);
+	ppc_cpu->smp = smp;
+	if (!smp->bridged && !MMIOMapWindow(CLASSICSMPHANDOFF, CLASSICSMPWINDOW, ClassicSmpHandoffRead, ClassicSmpHandoffWrite))
+		fprintf(stderr, "classicsmp could not map the hand-off word\n");
+	smp->thread = OsxGuestHostThreadStart(ClassicSmpThread, smp);
+	fprintf(stderr, "classicsmp ready thread %p\n", smp->thread);
+	fflush(stderr);
+}
+
+static void ClassicSmpExit(void)
+{
+	ClassicSmp *smp;
+	if (ppc_cpu == NULL || ppc_cpu->smp == NULL)
+		return;
+	smp = (ClassicSmp *)ppc_cpu->smp;
+	OsxGuestAtomicExchange(&smp->quit, 1);
+	OsxGuestHostSignalRaise(smp->wake);
+	smp->secondary->StopExecution();
+	if (smp->thread)
+		OsxGuestHostThreadJoin(smp->thread);
+	ppc_cpu->smp = NULL;
+	delete smp->secondary;
+	OsxGuestHostSignalDestroy(smp->wake);
+	free(smp);
+}
+#endif
 
 
 // Guest PC, for sampling from the host tick thread. A racy read of one word:
@@ -3424,16 +4174,26 @@ sigsegv_return_t sigsegv_handler(sigsegv_info_t *sip)
  *  Initialize CPU emulation
  */
 
+static void KernelBootArguments(void)
+{
+	ppc_cpu->set_register(powerpc_registers::GPR(3), any_register((uint32)ROMBase + 0x30d000));
+	ppc_cpu->set_register(powerpc_registers::GPR(4), any_register(KernelDataAddr + 0x1000));
+	WriteMacInt32(XLM_RUN_MODE, MODE_68K);
+}
+
 void init_emul_ppc(void)
 {
 	// Get pointer to KernelData in host address space
 	kernel_data = (KernelData *)Mac2HostAddr(KERNEL_DATA_BASE);
 
 	// Initialize main CPU emulator
+#if CLASSICSMP
+	ppc_cpu = new sheepshaver_cpu(false);
+	ClassicSmpInit();
+#else
 	ppc_cpu = new sheepshaver_cpu();
-	ppc_cpu->set_register(powerpc_registers::GPR(3), any_register((uint32)ROMBase + 0x30d000));
-	ppc_cpu->set_register(powerpc_registers::GPR(4), any_register(KernelDataAddr + 0x1000));
-	WriteMacInt32(XLM_RUN_MODE, MODE_68K);
+#endif
+	KernelBootArguments();
 
 #if ENABLE_MON
 	// Install "regs" command in cxmon
@@ -3452,6 +4212,9 @@ void init_emul_ppc(void)
 
 void exit_emul_ppc(void)
 {
+#if CLASSICSMP
+	ClassicSmpExit();
+#endif
 #if EMUL_TIME_STATS
 	clock_t emul_end_time = clock();
 
@@ -3516,6 +4279,10 @@ void emul_ppc(uint32 entry)
 #endif
 	// start emulation loop and enable code translation or caching
 	ppc_cpu->execute(entry);
+	while (ppc_cpu->Reboot()) {
+		KernelBootArguments();
+		ppc_cpu->execute(entry);
+	}
 }
 
 /*
@@ -3525,6 +4292,9 @@ void emul_ppc(uint32 entry)
 void TriggerInterrupt(void)
 {
 	idle_resume();
+#if CLASSICSMP
+	ClassicSmpIdleProbe();
+#endif
 	// Trigger interrupt to main cpu only
 	if (ppc_cpu)
 		ppc_cpu->trigger_interrupt();
@@ -4134,6 +4904,11 @@ void sheepshaver_cpu::execute_native_op(uint32 selector)
  *  sheepshaver_cpu::deliver_trap_exception).  Called from the PowerPC core.
  */
 
+bool MachineReset(void)
+{
+	return ppc_cpu->MachineReset();
+}
+
 void StopEmulation(void)
 {
 	ppc_cpu->StopExecution();
@@ -4143,6 +4918,13 @@ bool DeliverSystemCall(void)
 {
 	return ppc_cpu->DeliverSystemCall();
 }
+
+#if CLASSICSMP
+const char *ClassicSmpDeliverTrap(powerpc_cpu *cpu, uint32 opcode)
+{
+	return ((sheepshaver_cpu *)cpu)->deliver_trap_exception(opcode);
+}
+#endif
 
 const char *DeliverTrapException(uint32 opcode)
 {

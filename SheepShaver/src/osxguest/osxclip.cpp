@@ -486,6 +486,10 @@ int OsxGuestClipSyscall(OsxMachine *machine, OsxCpu *cpu)
 		if (cpu->pc == clip->pc && cpu->gpr[1] == clip->stack) {
 			host = OsxGuestHost(cpu, clip->stack, OSXTLBREAD);
 			if (host && (uint32)(host - cpu->ram) == clip->stackphysical) {
+#if OSXSMP
+				if (!OsxGuestSmpClaimHost(cpu))
+					return 1;
+#endif
 				if (clip->task == CLIPTASKPUT)
 					return OsxGuestAdvancePut(machine, clip, cpu, cpu->gpr[3]);
 				return OsxGuestAdvanceGet(machine, clip, cpu, cpu->gpr[3]);
@@ -508,6 +512,10 @@ int OsxGuestClipSyscall(OsxMachine *machine, OsxCpu *cpu)
 	now = OsxGuestHostNanoseconds();
 	if (now - clip->lastput < CLIPPUTINTERVAL || !OsxGuestEventLoopThread(clip, cpu))
 		return 0;
+#if OSXSMP
+	if (!OsxGuestSmpClaimHost(cpu))
+		return 1;
+#endif
 	clip->lastput = now;
 	data = OsxGuestReadHostClipboard(&length);
 	if (data && length > 0 && length <= CLIPMAXBYTES) {
