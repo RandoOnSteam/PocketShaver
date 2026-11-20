@@ -77,6 +77,7 @@ int SflEmulatorSetup(int argc, char **argv);
 void SflEmulatorStart(void);
 void SflEmulatorStop(void);
 void SflEmulatorTick(void);
+void SflEmulatorHostKey(int code, int down);
 void SflEmulatorKey(int code, int down);
 void SflEmulatorMouse(int x, int y);
 void SflEmulatorButton(int down);

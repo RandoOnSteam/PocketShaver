@@ -1017,8 +1017,14 @@ void powerpc_cpu::execute(uint32 entry)
 		if (dump_state)
 			dump_registers();
 #endif
-		if (!spcflags().empty() && !check_spcflags())
-			goto return_site;
+		if (!spcflags().empty()) {
+			if (!check_spcflags())
+				goto return_site;
+			if (spcflags().test(SPCFLAG_JIT_EXEC_RETURN)) {
+				spcflags().clear(SPCFLAG_JIT_EXEC_RETURN);
+				invalidated_cache = true;
+			}
+		}
 	}
   return_site:
 	// Tell upper level we invalidated cache?

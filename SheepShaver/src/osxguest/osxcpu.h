@@ -668,6 +668,8 @@ typedef struct Osx970Slb {
 typedef struct Osx970TlbEntry {
 	uint64 page;
 	uint8 *host;
+	uint64 tag;
+	uint64 spare;
 } Osx970TlbEntry;
 
 typedef struct Osx970 {
@@ -713,6 +715,7 @@ typedef struct Osx970 {
 	int slbhint;
 	int jithot;
 	Osx970Slb slb[OSX970SLBSIZE];
+	uint64 segtag[16];
 	Osx970TlbEntry *filled[OSX970FILLS];
 	int fillcount;
 	Osx970TlbEntry tlb[OSXMODES][OSXTLBKINDS][OSX970TLBSIZE];

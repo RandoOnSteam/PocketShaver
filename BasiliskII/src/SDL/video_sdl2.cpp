@@ -1902,12 +1902,6 @@ bool VideoInit(bool classic)
 		int h;
 		int resolution_id;
 	}
-#ifdef SHEEPSHAVER
-	// Omit Classic resolutions, except 512x384: it is a real Mac mode (the
-	// built-in video size on every machine with a 12" RGB display), and titles
-	// search DrawSprocket for it by exact size. MechWarrior 2 asks for
-	// 512x384@16; when the search fails it falls back to rendering that size
-	// as a centred inset of the larger screen instead of full-screen.
 	video_modes[] = {
 		{   -1,   -1, 0x80 },
 		{  512,  384, 0x80 },
@@ -1919,19 +1913,6 @@ bool VideoInit(bool classic)
 		{ 1600, 1200, 0x86 },
 		{ 0, }
 	};
-#else
-	video_modes[] = {
-		{   -1,   -1, 0x80 },
-		{  512,  384, 0x80 },
-		{  640,  480, 0x81 },
-		{  800,  600, 0x82 },
-		{ 1024,  768, 0x83 },
-		{ 1152,  870, 0x84 },
-		{ 1280, 1024, 0x85 },
-		{ 1600, 1200, 0x86 },
-		{ 0, }
-	};
-#endif
 	video_modes[0].w = default_width;
 	video_modes[0].h = default_height;
 

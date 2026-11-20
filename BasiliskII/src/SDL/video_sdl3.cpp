@@ -412,6 +412,8 @@ static vector<monitor_desc *> VideoMonitors;
 // Find Apple mode matching best specified dimensions
 static int find_apple_resolution(int xsize, int ysize)
 {
+	if (xsize == 512 && ysize == 384)
+		return APPLE_512x384;
 	if (xsize == 640 && ysize == 480)
 		return APPLE_640x480;
 	if (xsize == 800 && ysize == 600)
@@ -1911,19 +1913,6 @@ bool VideoInit(bool classic)
 		int h;
 		int resolution_id;
 	}
-#ifdef SHEEPSHAVER
-	// Omit Classic resolutions
-	video_modes[] = {
-		{   -1,   -1, 0x80 },
-		{  640,  480, 0x81 },
-		{  800,  600, 0x82 },
-		{ 1024,  768, 0x83 },
-		{ 1152,  870, 0x84 },
-		{ 1280, 1024, 0x85 },
-		{ 1600, 1200, 0x86 },
-		{ 0, }
-	};
-#else
 	video_modes[] = {
 		{   -1,   -1, 0x80 },
 		{  512,  384, 0x80 },
@@ -1935,7 +1924,6 @@ bool VideoInit(bool classic)
 		{ 1600, 1200, 0x86 },
 		{ 0, }
 	};
-#endif
 	video_modes[0].w = default_width;
 	video_modes[0].h = default_height;
 
@@ -1965,7 +1953,7 @@ bool VideoInit(bool classic)
 			const int h = video_modes[i].h;
 			if (i > 0 && (w >= default_width || h >= default_height))
 				continue;
-			for (int d = VIDEO_DEPTH_1BIT; d <= default_depth; d++)
+			for (int d = VIDEO_DEPTH_8BIT; d <= default_depth; d++)
 				add_mode(display_type, w, h, video_modes[i].resolution_id, TrivialBytesPerRow(w, (video_depth)d), d);
 		}
 	}

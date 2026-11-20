@@ -100,6 +100,8 @@ static uint32 guest_paint_one = 0;
 static uint32 guest_dispose_rgn = 0;
 static uint32 guest_hide_cursor = 0;
 static uint32 guest_show_cursor = 0;
+static uint32 guest_draw_menu_bar = 0;
+static uint16 guest_menu_bar_height = 0;
 /* Nest count for publish-time HideCursor (outermost only issues Hide/Show). */
 static int s_screen_publish_cm_depth = 0;
 /* False during driver mode transitions; begin/end are no-ops then. */
@@ -948,6 +950,9 @@ bool video_prepare_guest_display(void)
 	if (guest_show_cursor == 0)
 		guest_show_cursor =
 			FindLibSymbol("\014InterfaceLib", "\012ShowCursor");
+	if (guest_draw_menu_bar == 0)
+		guest_draw_menu_bar =
+			FindLibSymbol("\014InterfaceLib", "\013DrawMenuBar");
 	return guest_dm_set_display_mode != 0;
 }
 
@@ -1020,6 +1025,11 @@ uint32 video_create_guest_fullscreen_window(uint32 width, uint32 height)
 	WriteMacInt16(rect + 6, (uint16)width);
 	WriteMacInt8(title, 0);
 
+	if (guest_menu_bar_height == 0) {
+		guest_menu_bar_height = ReadMacInt16(0x0baa);
+		WriteMacInt16(0x0baa, 0);
+	}
+
 	/* A visible frontmost plainDBox supplies Window Manager ordering only.
 	 * Its pixels still live in the canonical screen and are immediately
 	 * replaced by the accelerated producer. Disposing it after mode restore
@@ -1037,6 +1047,12 @@ bool video_dispose_guest_window(uint32 window)
 	if (guest_dispose_window == 0)
 		return false;
 	(void)call_macos1(guest_dispose_window, window);
+	if (guest_menu_bar_height != 0) {
+		WriteMacInt16(0x0baa, guest_menu_bar_height);
+		guest_menu_bar_height = 0;
+		if (guest_draw_menu_bar != 0)
+			(void)call_macos(guest_draw_menu_bar);
+	}
 
 	/* DisposeWindow exposes the pixels, but accelerated rendering bypasses
 	 * the Window Manager's normal damage bookkeeping. Paint the exposed

@@ -11,7 +11,7 @@ void VideoPumpEvents(void)
 	SflUiPumpEvents();
 }
 
-void SflEmulatorKey(int code, int down)
+void SflEmulatorHostKey(int code, int down)
 {
 	if (PrefsFindBool("swap_opt_cmd")) {
 		if (code == 0x37)
@@ -19,6 +19,11 @@ void SflEmulatorKey(int code, int down)
 		else if (code == 0x3a)
 			code = 0x37;
 	}
+	SflEmulatorKey(code, down);
+}
+
+void SflEmulatorKey(int code, int down)
+{
 	if (SflUiQueueInput(SFLUIINPUTKEY, code, down))
 		return;
 	if (down)

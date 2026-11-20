@@ -38,7 +38,7 @@
 #include "nqd_accel.h"
 #endif
 
-#define SFLVIDEOSIZES 6
+#define SFLVIDEOSIZES 7
 #define SFLVIDEOPOWERKEY 0x7f
 #define SFLVIDEODEFAULTWIDTH 640
 #define SFLVIDEODEFAULTHEIGHT 480
@@ -60,6 +60,7 @@ typedef struct SFLVIDEO {
 static SFLVIDEO SflVideo;
 
 static const SFLVIDEOSIZE SflVideoSizes[SFLVIDEOSIZES] = {
+	{512, 384, APPLE_512x384},
 	{640, 480, APPLE_640x480},
 	{800, 600, APPLE_800x600},
 	{1024, 768, APPLE_1024x768},
@@ -268,10 +269,19 @@ bool VideoInit(void)
 			count++;
 		}
 	} else {
+#if defined(ENABLE_GFXACCEL)
+		SflUiGetDesktopSize(&listwidth, &listheight);
+		for (index = 0; index < SFLVIDEOSIZES; index++) {
+			if ((SflVideoSizes[index].width != width || SflVideoSizes[index].height != height)
+					&& SflVideoSizes[index].width <= listwidth && SflVideoSizes[index].height <= listheight)
+				SflVideoAddModes(&cursor, SflVideoSizes[index].width, SflVideoSizes[index].height, &custom);
+		}
+#else
 		for (index = 0; index < SFLVIDEOSIZES; index++) {
 			if (SflVideoSizes[index].width < width && SflVideoSizes[index].height < height)
 				SflVideoAddModes(&cursor, SflVideoSizes[index].width, SflVideoSizes[index].height, &custom);
 		}
+#endif
 	}
 	cursor->viType = DIS_INVALID;
 	cursor->viRowBytes = 0;

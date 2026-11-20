@@ -246,7 +246,8 @@ bool SflMainMapMemory(void)
 		return false;
 	}
 	KernelDataAddr = KERNEL_DATA_BASE;
-	if (SflMemMap(((RAMSize + 0x0fffffff) & 0xf0000000) + 0x10000000, SFLMAINNANOKERNELSIZE) == NULL) {
+	if (SflMemMap(((RAMSize + 0x0fffffff) & 0xf0000000) + 0x10000000, SFLMAINNANOKERNELSIZE) == NULL
+		|| SflMemMap(EMULATOR_CODE_BASE, EMULATOR_CODE_SIZE) == NULL) {
 		ErrorAlert(GetString(STR_KD_SHMAT_ERR));
 		return false;
 	}

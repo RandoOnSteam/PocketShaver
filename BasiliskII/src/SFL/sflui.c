@@ -524,7 +524,7 @@ static void SflUiKey(SFLUIAPP *pThis, size_t wskey, int down)
 	if (!down && !pThis->keys[adb])
 		return;
 	pThis->keys[adb] = (unsigned char)down;
-	SflEmulatorKey(adb, down);
+	SflEmulatorHostKey(adb, down);
 }
 
 static void SflUiMouseDeliver(SFLUIAPP *pThis, guipos_t x, guipos_t y)
@@ -651,7 +651,7 @@ WSFOCUSEVENT_CALLBACK(SflUiOnKillFocus)
 	for (adb = 0; adb < SFLUIADBCOUNT; ++adb) {
 		if (SflUiApp->keys[adb]) {
 			SflUiApp->keys[adb] = 0;
-			SflEmulatorKey(adb, 0);
+			SflEmulatorHostKey(adb, 0);
 		}
 	}
 	return WSFOCUSEVENT_UNHANDLED;
