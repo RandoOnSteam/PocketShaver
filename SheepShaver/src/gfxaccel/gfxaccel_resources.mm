@@ -140,7 +140,8 @@ extern "C" void *gfxaccel_resources_get_framebuffer_buffer(void *host_base, uint
 		return NULL;
 	}
 
-	// Page-alignment guard.
+	// Page-alignment guard (both host_base and length must be page-aligned
+	// for Metal newBufferWithBytesNoCopy on 16K-page Apple Silicon).
 	const uintptr_t page = gfxres_page_size();
 	if (((uintptr_t)host_base & (page - 1)) != 0) {
 		fprintf(stderr, "[gfxaccel_resources] get_framebuffer_buffer: "
@@ -150,11 +151,13 @@ extern "C" void *gfxaccel_resources_get_framebuffer_buffer(void *host_base, uint
 				host_base, (unsigned long)page);
 		return NULL;
 	}
+	const uint32_t aligned_length =
+		(uint32_t)(((uint64_t)length + page - 1) & ~(uint64_t)(page - 1));
 
 	// Cache hit: same backing + length.
 	if (s_framebuffer_buffer != nil &&
 		s_framebuffer_host_base == host_base &&
-		s_framebuffer_length == length) {
+		s_framebuffer_length == aligned_length) {
 		return (__bridge void *)s_framebuffer_buffer;
 	}
 
@@ -172,20 +175,20 @@ extern "C" void *gfxaccel_resources_get_framebuffer_buffer(void *host_base, uint
 
 	// Byte-identical to metal_compositor.mm:279-282 zero-copy creation.
 	id<MTLBuffer> buf = [device newBufferWithBytesNoCopy:host_base
-												  length:length
+												  length:aligned_length
 												 options:MTLResourceStorageModeShared
 											 deallocator:nil];
 	if (buf == nil) {
 		fprintf(stderr, "[gfxaccel_resources] get_framebuffer_buffer: "
 						"newBufferWithBytesNoCopy returned nil "
-						"(host_base=%p length=%u)\n",
-				host_base, (unsigned)length);
+						"(host_base=%p length=%u aligned=%u)\n",
+				host_base, (unsigned)length, (unsigned)aligned_length);
 		return NULL;
 	}
 
 	s_framebuffer_buffer    = buf;
 	s_framebuffer_host_base = host_base;
-	s_framebuffer_length    = length;
+	s_framebuffer_length    = aligned_length;
 
 	return (__bridge void *)s_framebuffer_buffer;
 }
