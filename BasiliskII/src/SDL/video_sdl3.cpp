@@ -52,6 +52,8 @@
 
 #ifdef SDL_PLATFORM_MACOS
 #include "utils_macosx.h"
+#else
+static inline bool MetalIsAvailable() { return false; }
 #endif
 #if TARGET_OS_IPHONE
 #include "utils_ios.h"
@@ -839,7 +841,9 @@ static Uint32 SDLGfxAccelWindowFlags(void)
 #if defined(ENABLE_GFXACCEL) && defined(SHEEPSHAVER)
 #if defined(GFXACCEL_USE_METAL)
 	return SDL_WINDOW_METAL;
-#elif !defined(GFXACCEL_USE_SDLGPU)
+#elif defined(GFXACCEL_USE_SDLGPU)
+	return MetalIsAvailable() ? SDL_WINDOW_METAL : SDL_WINDOW_OPENGL;
+#else
 	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
 	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 1);
 	SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
@@ -848,11 +852,9 @@ static Uint32 SDLGfxAccelWindowFlags(void)
 	SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK,
 		                SDL_GL_CONTEXT_PROFILE_COMPATIBILITY);
 	return SDL_WINDOW_OPENGL;
-#else
-	return SDL_WINDOW_OPENGL;
 #endif
 #else
-	return 0;
+	return MetalIsAvailable() ? SDL_WINDOW_METAL : 0;
 #endif
 }
 
@@ -892,9 +894,6 @@ static SDL_Surface *init_sdl_video(int width, int height, int depth, Uint32 flag
 		}
 	}
 
-#ifdef SDL_PLATFORM_MACOS
-	if (MetalIsAvailable()) window_flags |= SDL_WINDOW_METAL;
-#endif
 	window_flags |= SDLGfxAccelWindowFlags();
 
 	if (!sdl_window) {
