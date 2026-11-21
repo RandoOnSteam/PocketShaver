@@ -633,7 +633,6 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 				break;
 			uint16 *p = (uint16 *)Mac2HostAddr(adr);
 			uint32 size = ReadMacInt32(adr - 8) & 0xffffff;
-			maybe_queue_nift_lock(type, r->a[0]);	// schedule sound-component PEF lock
 			CheckLoad(type, id, p, size);
 			break;
 		}

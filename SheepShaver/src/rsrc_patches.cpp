@@ -1152,7 +1152,6 @@ void check_load_invoc(uint32 type, int16 id, uint32 h)
 		return;
 	size -= overhead;
 
-	maybe_queue_nift_lock(type, h);		// queue 'nift' lock (no trap here)
 	CheckLoad(type, id, (uint16 *)Mac2HostAddr(p), size);
 }
 
@@ -1174,7 +1173,6 @@ void named_check_load_invoc(uint32 type, uint32 name, uint32 h)
 		return;
 	size -= overhead;
 
-	maybe_queue_nift_lock(type, h);		// queue 'nift' lock (no trap here)
 	CheckLoad(type, (char *)Mac2HostAddr(name), Mac2HostAddr(p), size);
 }
 
