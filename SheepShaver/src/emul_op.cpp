@@ -633,6 +633,9 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 				break;
 			uint16 *p = (uint16 *)Mac2HostAddr(adr);
 			uint32 size = ReadMacInt32(adr - 8) & 0xffffff;
+#if TARGET_OS_IPHONE && 0 // Note: Buggy, likely only needed for IPHONE?
+			maybe_queue_nift_lock(type, r->a[0]);	// schedule sound-component PEF lock
+#endif
 			CheckLoad(type, id, p, size);
 			break;
 		}

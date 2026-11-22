@@ -1,21 +1,128 @@
-# PocketShaver
+# RandoOnSteam's MacEmu Fork
 
-A fork of [SheepShaver](https://github.com/kanjitalk755/macemu) that brings Mac OS 8.6 - 9.0.4 emulation to iOS, iPadOS and macOS with Metal GPU acceleration, a UI built in Swift, LAN networking, and full touchscreen gamepad support.
+A fork of MacEmu - Basilisk II and SheepShaver - with a large amount of new features, bug fixes, performance improvements, and crash protections.
+
+## Originally PocketShaver Derived
+
+Originally derived from PocketShaver, this fork supports that build's boot UI when building for IPhone. The metal portion of PocketShaver is unable to be tested by RandoOnSteam so it might be various levels of stable.
 
 PocketShaver extends the SheepShaver PowerPC emulation core with four Metal-accelerated graphics engines, a customizable on-screen gamepad, Bonjour peer-to-peer networking, a modern preferences system that adapts to the running platform, and (on Mac Catalyst) a PowerPC-to-arm64 JIT compiler. The upstream BasiliskII (68k) and desktop SheepShaver targets are preserved alongside the iOS-specific additions.
 
 ## Features
 
-### Metal GPU Acceleration
+### New, Improved Classic JIT
 
-PocketShaver implements four graphics acceleration engines, all targeting Metal:
+MacEmu now has an optional new JIT, called the "Native JIT", that is 5-10% faster on average and much faster in stuffit decompression. It can also be fully compiled with Microsoft Visual C++, in addition to GCC/Clang and more.
 
-- **QuickDraw 2D (NQD)** -- Metal compute acceleration for supported blits, solid fills, inversions, and masked operations, with CPU fast paths for small operations. Emulated RAM is wrapped as a shared `MTLBuffer`. Hooks decline operations whose clipping, layout, or transfer mode requires software QuickDraw.
-- **QuickDraw 3D RAVE (Rendering Acceleration Virtual Engine)** -- RAVE 1.6 entry points supporting Gouraud shading, texture mapping, fog, alpha testing, multi-texturing, mipmaps, blending, and z-sorted transparency. Offscreen draw contexts and ATI VQ codebooks are unavailable. RAVE frames are composited over the 2D framebuffer through the shared Metal compositor.
-- **OpenGL fixed function** -- Reports GL 1.1 with selected extensions, including two-unit multitexture, transpose matrices, and secondary colors. Implements matrix stacks, eight-light lighting, fog, texture environments, AGL drawables, and selected GLU/GLUT geometry helpers. Some GL 1.2-era entry points are present without advertising their complete extension: for example, 2D DXT uploads are decoded, while the full compression API and imaging subset are unavailable. GLUT window creation, its event loop, and callback-driven applications are unsupported. This is a compatibility implementation, not a conformance certification.
-- **DrawSprocket** -- Full-screen display services including display-mode selection, back-buffer swaps, palette and gamma fades, and VBL-synced presentation through the Metal compositor. Swaps publish buffer contents; hardware page flipping is unavailable.
+### GPU Acceleration
 
-A unified **Metal compositor** handles 2D/3D compositing, supporting all Mac OS video depths (1/2/4/8/16/32-bit), palette updates for indexed color modes, and VBL-synced frame pacing.
+MacEmu now renders using native low and high level GPU Acceleration APIs through the gfxaccel option:
+
+* **SDL1, SDL2, and SDL3 with OpenGL**- Everything is redirected and rendered with OpenGL with some light shader support
+* **SDLGPU** - Renders with various APIs like DirectX 12 or Metal
+* **Metal** - PocketShaver
+
+#### GPU accelerated guest APIs supported
+
+* **QuickDraw 3D RAVE** - Requires the extensions to be installed
+
+* **3DFX Glide 2 and 3** - Requires the extensions - 3dfx GlideLib2.x and 3dfx GlideLib3.x - to be installed. Note that normal installation may not work and you may need to manually install by dragging all the extensions from the driver installation disk to your System folder.
+
+* **OpenGL**
+
+* **DrawSprocket**
+
+#### GPU accelerated games tested
+
+* **Diablo II** - All 4 Modes
+
+* **Descent II 6500**
+
+* **MechWarrior II 6500**
+
+* **Quake 3 Demo**
+
+* **Tomb Raider Last Revelation Demo**
+
+* **Bugdom**
+
+* **Unreal Tournament**
+
+* **Unreal**
+
+### OSX Guest Support
+
+This MacEmu fork has full high-level emulation support for PowerPC OSX.
+
+* **All PowerPC OSX Versions Supported** - 10.0 through 10.5
+
+* **64 Bit OSX Support** - Through PowerPC 970, a.k.a. G5, emulation (osxcpu970 pref).
+
+* **No ROM or Firmware Needed** - OSX is booted entirely through fake hooks and high level emulation and does not need a ROM or any other firmware to run.
+
+* **Full ScreenSaver Support** - All ScreenSavers of all OSX versions are supported and run natively on the host at full speed provided you have the GPU to do so. Requires gfxaccel.
+
+* **Some 3D Game Support** - Alice Madness Returns, Giants Citizen Kabuto, Warcraft III, Warcraft III Frozen Throne tested. Requires gfxaccel.
+
+* **OSX x86+x64 Native JIT** - Since OSX is more demanding than classic it is recommended you turn on the OSX jit (osxjit).
+
+* **Networking and Sound Support**
+
+undefined undefined
+
+MacEmu now fully supports PowerPC debugging. CodeWarrior on classic mac and GCC and Clang on OSX are tested.
+
+### Full Classic Joystick and Gamepad Support
+
+Nearly every API ever released for classic is supported. The default build of MacEmu supports:
+
+* **JoyManager** - This driver supports CH joysticks and a few others. Guest drivers are not needed for this.
+
+* **Gravis FireBird** - Requires guest driver
+
+* **ThrustMaster** - Requires guest driver
+
+Optional compile-in backends include: Gravis Mousestick II, Gravis BlackHawk, Gravis GamePad, MacAlly gamepad, Microsoft SideWinder, and raw CH FlightStick Pro (though this is redundant with JoyManager).
+
+USB is optionally supported as well, however its practicality is limited as it requires later versions of OS 9 and requires enabling the USB stack which can be intensive to emulate on classic.
+
+### SoundBase Support
+
+SoundBase, the pre-Sound Manager audio interface, is now supported for old games like Populous or Dark Castle
+
+### CD Image and QCOW2 Support
+
+MacEmu now support of variety of cd images: ISO, CUE+BIN, CHD, TOAST, and more.
+
+MacEmu now also supports QCOW2 for hard drives.
+
+Large 64-bit images are now supported including DVDs.
+
+### Multi-CPU Support
+
+MacEmu now supports multiple CPUs - generally with one host thread per CPU - for both classic and OSX. Tested 7.5.3, 7.6, 7.6.1, 8.0, 8.1, 8.5, 9.0.4 and 9.2.1, as well as all supported OSX versions.
+
+### Automatic ROM Loading
+
+If a ROM isn't specified and the classic OS has a ROM, that ROM is loaded instead.
+
+### Improved Host<->Guest Clipboard Bridge
+
+You can now copy and paste from the host to guest - and vice versa - more seamlessly. Including OSX.
+
+### 9.2 Support
+
+System 9.2 is now supported through either automatic ROM loading or the NewWorld 8.4 ROM.
+
+### Emulator Monitor Remote Access Support
+
+MacEmu now supports an "emulator monitor" through emumonitor.exe that can remotely send various commands to the emulator. These include file deployment, input - mouse and keyboard - commands, and much, much more.
+
+### Printing to PDF Support (Experimental)
+
+Some basic printing to PDF support is now included in MacEmu.
+
+## PocketShaver Features
 
 ### JIT Compiler (Mac Catalyst)
 
@@ -49,6 +156,7 @@ A new optional way of steering the mouse cursor on touchscreen that makes fast a
 - **Long drag** -- allows long mouse drag movements, for long click-and-drag actions or rectangular selection of a large area (as needed in real time strategy games)
 
 ### Touch Input (iOS / iPadOS)
+
 - **Relative mouse mode** -- needed for certain game and software titles
 - **Right-click** -- available as gamepad overlay key on touchscreen, as well as hardware support for physical mouse / mousepad
 - **Soft keyboard** -- iOS keyboard bridged to emulated Mac input with configurable screen offset (top, middle, bottom)
@@ -69,11 +177,11 @@ Peer-to-peer networking between devices over local network, using Bonjour:
 
 A tabbed preferences interface with five sections:
 
-| Tab | Contents |
-|---|---|
-| **General** | Setup, disk management (create/import/delete), audio toggle, input options, haptic feedback, hints |
-| **Graphics** | Monitor resolutions, rendering filter (nearest/bilinear), frame rate (60/75/120 Hz), gamma ramp, NQD/RAVE/GL acceleration toggles |
-| **Network** | Slirp vs. Bonjour selection, host/client role, peer browsing, device naming |
+| Tab          | Contents                                                                                                                                    |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| **General**  | Setup, disk management (create/import/delete), audio toggle, input options, haptic feedback, hints                                          |
+| **Graphics** | Monitor resolutions, rendering filter (nearest/bilinear), frame rate (60/75/120 Hz), gamma ramp, NQD/RAVE/GL acceleration toggles           |
+| **Network**  | Slirp vs. Bonjour selection, host/client role, peer browsing, device naming                                                                 |
 | **Advanced** | RAM setting, performance metrics (FPS counter), UI options, relative mouse settings, bootstrap/ROM info, JIT compiler toggle (Mac Catalyst) |
 
 The UI adapts to the platform -- on macOS, the Gamepad tab is hidden and touch-specific options are suppressed.
@@ -100,11 +208,11 @@ The UI adapts to the platform -- on macOS, the Gamepad tab is hidden and touch-s
 
 ## Platform Support
 
-| Platform | Status |
-|---|---|
-| iOS (iPhone/iPad) | Primary target -- full touch, gamepad, and GPU acceleration |
-| "Designed for iPad" on macOS | Supported -- gamepad hidden, keyboard/mouse passthrough |
-| Mac Catalyst | Supported -- native Mac build with the PowerPC-to-arm64 JIT compiler |
+| Platform                     | Status                                                               |
+| ---------------------------- | -------------------------------------------------------------------- |
+| iOS (iPhone/iPad)            | Primary target -- full touch, gamepad, and GPU acceleration          |
+| "Designed for iPad" on macOS | Supported -- gamepad hidden, keyboard/mouse passthrough              |
+| Mac Catalyst                 | Supported -- native Mac build with the PowerPC-to-arm64 JIT compiler |
 
 ## Building
 
@@ -118,4 +226,4 @@ Targets are included within the Xcode project for Mac Catalyst and iOS.
 
 ## Upstream
 
-Forked from [kanjitalk755/macemu](https://github.com/kanjitalk755/macemu) (SheepShaver / BasiliskII).
+Forked from [kanjitalk755/macemu](https://github.com/kanjitalk755/macemu) (SheepShaver / BasiliskII). 
