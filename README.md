@@ -50,6 +50,8 @@ MacEmu now renders using native low and high level GPU Acceleration APIs through
 
 * **Unreal**
 
+* **Myth II**
+
 ### OSX Guest Support
 
 This MacEmu fork has full high-level emulation support for PowerPC OSX.
@@ -62,13 +64,13 @@ This MacEmu fork has full high-level emulation support for PowerPC OSX.
 
 * **Full ScreenSaver Support** - All ScreenSavers of all OSX versions are supported and run natively on the host at full speed provided you have the GPU to do so. Requires gfxaccel.
 
-* **Some 3D Game Support** - Alice Madness Returns, Giants Citizen Kabuto, Warcraft III, Warcraft III Frozen Throne tested. Requires gfxaccel.
+* **3D Game Support** - Alice Madness Returns, Giants Citizen Kabuto, Warcraft III, and Warcraft III Frozen Throne tested. Requires gfxaccel.
 
 * **OSX x86+x64 Native JIT** - Since OSX is more demanding than classic it is recommended you turn on the OSX jit (osxjit).
 
 * **Networking and Sound Support**
 
-undefined undefined
+### PowerPC Guest Debugging Support
 
 MacEmu now fully supports PowerPC debugging. CodeWarrior on classic mac and GCC and Clang on OSX are tested.
 
