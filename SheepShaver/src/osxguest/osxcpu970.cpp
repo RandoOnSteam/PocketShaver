@@ -302,10 +302,6 @@ static void OsxGuestFlushPageIndex(Osx970 *core, uint64 pageindex)
 }
 
 #if OSXSMP
-#define SMP970REFERENCED 0x100
-#define SMP970CHANGED 0x80
-#define SMP970REFERENCEDBYTE 14
-#define SMP970CHANGEDBYTE 15
 
 static void OsxGuestSmpStoreConditional(Osx970 *core, uint64 address, int count, uint64 value);
 
@@ -460,6 +456,11 @@ int OsxGuest970Translate(Osx970 *core, uint64 address, int kind, int raise, uint
 	uint64 word0;
 	uint64 word1;
 	uint64 updated;
+#if OSXSMP
+	uint32 current;
+	uint32 previous;
+	uint32 wanted;
+#endif
 	uint8 *host;
 	int translated;
 	int index;
@@ -522,16 +523,20 @@ int OsxGuest970Translate(Osx970 *core, uint64 address, int kind, int raise, uint
 				}
 				return 0;
 			}
-#if OSXSMP
-			updated = word1;
-			if (!(word1 & SMP970REFERENCED))
-				host[SMP970REFERENCEDBYTE] |= SMP970REFERENCED >> 8;
-			if (kind == OSXTLBWRITE && !(word1 & SMP970CHANGED))
-				host[SMP970CHANGEDBYTE] |= SMP970CHANGED;
-#else
 			updated = word1 | 0x100;
 			if (kind == OSXTLBWRITE)
 				updated |= 0x80;
+#if OSXSMP
+			current = (uint32)word1;
+			wanted = (uint32)updated;
+			while (wanted != current) {
+				previous = tswap32(OsxGuestAtomicCompare((volatile uint32 *)(host + 12), tswap32(current), tswap32(wanted)));
+				if (previous == current)
+					break;
+				wanted = previous | (wanted ^ current);
+				current = previous;
+			}
+#else
 			if (updated != word1)
 				OsxGuestStoreBig(host + 8, 8, updated);
 #endif

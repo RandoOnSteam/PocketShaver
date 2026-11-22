@@ -537,7 +537,7 @@ void CheckLoad(uint32 type, int16 id, uint16 *p, uint32 size)
 
 	if (type == FOURCC('b','o','o','t') && id == 3) {
 		D(bug("boot 3 found\n"));
-		if (HasNanoKernel2() && ReadMacInt16(ROMBase + 0x310004) >= 0x0210) {
+		if (HasNanoKernel2() && RomKernelWord() >= 0x0210) {
 			static const uint8 displayinitpattern[] = {0x55, 0x4f, 0x70, 0xff, 0xab, 0xeb, 0x54, 0x4f};
 			uint32 displayinitoffset = find_rsrc_data((uint8 *)p, size, displayinitpattern, sizeof(displayinitpattern));
 			if (displayinitoffset) {
@@ -608,7 +608,7 @@ void CheckLoad(uint32 type, int16 id, uint16 *p, uint32 size)
 				D(bug(" patch 9 applied\n"));
 #ifdef CLASSICMACHINENEWWORLD
 			} else if (PM(0,0x558f) && PM(1,0x4eba) && PM(3,0x1a1f) && PM(4,0x670c) && PM(5,0x49ee) && PM(6,0xff28) && PM(7,0x7a03)) {
-				if (!HasNanoKernel2() || ReadMacInt16(ROMBase + 0x310004) < 0x0210) {
+				if (!HasNanoKernel2() || RomKernelWord() < 0x0210) {
 					p[1] = htons(0x4257);
 					p[2] = htons(M68K_NOP);
 				}

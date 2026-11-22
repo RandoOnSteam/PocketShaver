@@ -223,7 +223,13 @@ bool InitAll(const char *vmdir)
 		WriteMacInt32(KERNEL_DATA_BASE + 0xd20, 0x00010000);
 		WriteMacInt32(KERNEL_DATA_BASE + 0xd30, RAMBase);
 		WriteMacInt32(KERNEL_DATA_BASE + 0xd34, RAMSize);
-		if (ReadMacInt16(ROMBase + 0x310004) >= 0x0210) {
+		if (RomKernelWord() == 0) {
+			WriteMacInt32(KERNEL_DATA_BASE + 0xf60, PVR);
+			WriteMacInt32(KERNEL_DATA_BASE + 0xf64, CPUClockSpeed);
+			WriteMacInt32(KERNEL_DATA_BASE + 0xf68, BusClockSpeed);
+			WriteMacInt32(KERNEL_DATA_BASE + 0xf6c, TimebaseSpeed);
+		}
+		if (RomKernelWord() >= 0x0210) {
 			WriteMacInt32(KERNEL_DATA_BASE + 0xf20, PVR);
 			WriteMacInt32(KERNEL_DATA_BASE + 0xf24, CPUClockSpeed);
 			WriteMacInt32(KERNEL_DATA_BASE + 0xf28, BusClockSpeed);

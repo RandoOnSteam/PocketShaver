@@ -488,9 +488,9 @@ sheepshaver_cpu::sheepshaver_cpu()
 		}
 	}
 #if CLASSICSMP
-	if (nanokernel2 && ReadMacInt16(ROMBase + 0x310004) >= 0x0210 && !secondary) {
+	if (nanokernel2 && RomKernelWord() >= 0x0210 && !secondary) {
 #else
-	if (nanokernel2 && ReadMacInt16(ROMBase + 0x310004) >= 0x0210) {
+	if (nanokernel2 && RomKernelWord() >= 0x0210) {
 #endif
 		if (vm_acquire_fixed(Mac2HostAddr(kernelmemorybase), 0x200000) < 0) {
 			ErrorAlert("Cannot allocate NanoKernel memory");
@@ -2312,7 +2312,7 @@ void sheepshaver_cpu::RunMode(void)
 
 void sheepshaver_cpu::KernelReturn(void)
 {
-	if (secondary || (msr() & CLASSICSMPMSRUSER) == 0) {
+	if (secondary || ((msr() & CLASSICSMPMSRUSER) == 0 && (ReadMacInt16(ROMBase + 0x310004) < 0x0210 || lr() == pc()))) {
 		if (deliver_trap_exception(CLASSICSMPKERNELRETURN) == NULL)
 			return;
 	}
@@ -2732,6 +2732,8 @@ void sheepshaver_cpu::return_from_exception(uint32 saved_pc, uint32 saved_msr)
 		powerpc_cpu::return_from_exception(saved_pc, saved_msr);
 		if (ClassicSmpLineRaised())
 			RaiseSecondary();
+		if (Scheduling())
+			IdleAssert();
 		return;
 	}
 #endif

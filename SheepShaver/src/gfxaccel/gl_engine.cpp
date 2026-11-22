@@ -1354,6 +1354,7 @@ uint32_t NativeAGLDestroyContext(uint32_t ctx)
 
 	delete context;
 	gl_contexts[idx] = NULL;
+	Mac_sysfree(gl_context_mac_handles[idx]);
 	gl_context_mac_handles[idx] = 0;
 
 	GL_LOG("aglDestroyContext: destroyed context %d", idx + 1);
@@ -1398,6 +1399,7 @@ uint32_t NativeAGLDestroyPixelFormat(uint32_t pix)
 
 	for (int i = 0; i < gl_pixel_format_count; i++) {
 		if (gl_pixel_formats[i].mac_addr == pix) {
+			Mac_sysfree(pix);
 			gl_pixel_formats[i].mac_addr = 0;
 			GL_LOG("aglDestroyPixelFormat: freed slot %d (handle=0x%08x)", i, pix);
 			break;
@@ -2792,11 +2794,8 @@ void GLInstallHooks()
 		{ "\014gluUnProject", GL_SUB_GLU_UNPROJECT, "gluUnProject" },
 	};
 	const int num_glu = sizeof(glu_symbols) / sizeof(glu_symbols[0]);
-	uint32 libraryloadoptions = 1;
-	if (HasNanoKernel2())
-		libraryloadoptions = 2;
-	bool glpresent = FindLibSymbol(gl_lib, "\013glGetString", libraryloadoptions) != 0;
-	bool glupresent = FindLibSymbol(glu_lib, "\016gluPerspective", libraryloadoptions) != 0;
+	bool glpresent = FindLibSymbol(gl_lib, "\013glGetString", 1) != 0;
+	bool glupresent = FindLibSymbol(glu_lib, "\016gluPerspective", 1) != 0;
 
 	// ---- Cache AGL TVECTs ----
 	struct CachedTVECT {
@@ -2811,7 +2810,7 @@ void GLInstallHooks()
 
 	// Search AGL functions in OpenGLLibrary
 	for (int i = 0; !gl_hooks_installed && glpresent && i < num_agl; i++) {
-		uint32_t tvect = FindLibSymbol(gl_lib, agl_symbols[i].pascal_sym, libraryloadoptions);
+		uint32_t tvect = FindLibSymbol(gl_lib, agl_symbols[i].pascal_sym, 1);
 		if (tvect != 0) {
 			cached_tvects.push_back({ tvect, agl_symbols[i].sub_opcode, agl_symbols[i].name });
 			found_count++;
@@ -2825,7 +2824,7 @@ void GLInstallHooks()
 
 	int gl_found = 0, gl_notfound = 0;
 	for (int i = 0; !gl_hooks_installed && glpresent && i < num_gl; i++) {
-		uint32_t tvect = FindLibSymbol(gl_lib, gl_symbols[i].pascal_sym, libraryloadoptions);
+		uint32_t tvect = FindLibSymbol(gl_lib, gl_symbols[i].pascal_sym, 1);
 		if (tvect != 0) {
 			cached_tvects.push_back({ tvect, gl_symbols[i].sub_opcode, gl_symbols[i].name });
 			gl_found++;
@@ -2837,7 +2836,7 @@ void GLInstallHooks()
 
 	int gl_extra_found = 0, gl_extra_notfound = 0;
 	for (int i = 0; !gl_hooks_installed && glpresent && i < num_gl_extra; i++) {
-		uint32_t tvect = FindLibSymbol(gl_lib, gl_extra_symbols[i].pascal_sym, libraryloadoptions);
+		uint32_t tvect = FindLibSymbol(gl_lib, gl_extra_symbols[i].pascal_sym, 1);
 		if (tvect != 0) {
 			cached_tvects.push_back({ tvect, gl_extra_symbols[i].sub_opcode, gl_extra_symbols[i].name });
 			gl_extra_found++;
@@ -2859,9 +2858,9 @@ void GLInstallHooks()
 	for (int i = 0; !glu_hooks_installed && (glupresent || glpresent) && i < num_glu; i++) {
 		uint32_t tvect = 0;
 		if (glupresent)
-			tvect = FindLibSymbol(glu_lib, glu_symbols[i].pascal_sym, libraryloadoptions);
+			tvect = FindLibSymbol(glu_lib, glu_symbols[i].pascal_sym, 1);
 		if (tvect == 0 && glpresent)
-			tvect = FindLibSymbol(gl_lib, glu_symbols[i].pascal_sym, libraryloadoptions);
+			tvect = FindLibSymbol(gl_lib, glu_symbols[i].pascal_sym, 1);
 		if (tvect != 0) {
 			cached_tvects.push_back({ tvect, glu_symbols[i].sub_opcode, glu_symbols[i].name });
 			glu_found++;

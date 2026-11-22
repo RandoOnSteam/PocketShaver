@@ -37,6 +37,7 @@ void OsxGuestLockstepTest(uint8 *ramhost, uint32 ramsize, int iterations, const 
 #define OSXBOOTNATIVE 2
 int OsxGuestSelectBootImage(int *diskindex, int *partition);
 uint8 *OsxGuestReadClassicRom(uint32 *size);
+uint8 *OsxGuestReadClassicKernel(uint32 *size);
 int OsxGuestRequested(void);
 int OsxGuestMain(void);
 

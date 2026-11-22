@@ -46,6 +46,7 @@
 #include "macos_util.h"
 #include "thunks.h"
 #include "vm_alloc.h"
+#include "osxguest.h"
 
 #define DEBUG 0
 #include "debug.h"
@@ -768,7 +769,6 @@ static const uint8 adbop_patch[] = {	// Call ADBOp() completion procedure
 #if defined(CLASSICSMP) && CLASSICSMP
 #define CLASSICSMPPROCESSOR 0x00090204
 #define CLASSICSMPPARKFILLER 0x48000004u
-#define CLASSICSMPKERNELWORD 0x310004u
 #define CLASSICSMPKERNEL 0x0205
 #define CLASSICSMPKERNELLATE 0x0228
 
@@ -780,7 +780,7 @@ bool ClassicSmpConfigured(void)
 		return true;
 	if (ROMType != ROMTYPE_NEWWORLD)
 		return false;
-	return ReadMacInt16(ROMBase + CLASSICSMPKERNELWORD) == CLASSICSMPKERNEL || ReadMacInt16(ROMBase + CLASSICSMPKERNELWORD) == CLASSICSMPKERNELLATE;
+	return RomKernelWord() == CLASSICSMPKERNEL || RomKernelWord() == CLASSICSMPKERNELLATE;
 }
 
 bool ClassicSmpVectorless(void)
@@ -788,6 +788,45 @@ bool ClassicSmpVectorless(void)
 	return ClassicSmpConfigured() && HasNanoKernel2();
 }
 #endif
+
+#define KERNELSLOT 0x310000u
+#define KERNELSLOTSIZE 0x50000u
+#define KERNELBRANCH 0x4800u
+
+#define KERNELSLOTWORD (KERNELSLOT + KERNELSLOTSIZE - 2)
+
+uint16 RomKernelWord(void)
+{
+	uint16 word;
+	word = ReadMacInt16(ROMBase + KERNELSLOTWORD);
+	if (word == 0)
+		word = ReadMacInt16(ROMBase + 0x310004);
+	if (word < 0x0200 || word >= 0x0300)
+		return 0;
+	return word;
+}
+
+static void InstallSystemKernel(void)
+{
+	uint8 *kernel;
+	uint32 size;
+	uint16 word;
+	size = 0;
+	if (ROMType != ROMTYPE_TNT && !HasNanoKernel2())
+		return;
+	kernel = OsxGuestReadClassicKernel(&size);
+	if (kernel == NULL)
+		return;
+	if (size >= 8 && size < KERNELSLOTSIZE - 2 && (((uint32)kernel[0] << 8) | kernel[1]) == KERNELBRANCH &&
+		(!HasNanoKernel2() || (((uint32)kernel[4] << 8) | kernel[5]) > ntohs(*(uint16 *)(ROMBaseHost + KERNELSLOT + 4)))) {
+		fprintf(stderr, "system kernel %02x%02x replaces ROM kernel %04x\n", kernel[4], kernel[5], ntohs(*(uint16 *)(ROMBaseHost + KERNELSLOT + 4)));
+		word = *(uint16 *)(ROMBaseHost + KERNELSLOT + 4);
+		memset(ROMBaseHost + KERNELSLOT, 0, KERNELSLOTSIZE);
+		memcpy(ROMBaseHost + KERNELSLOT, kernel, size);
+		*(uint16 *)(ROMBaseHost + KERNELSLOTWORD) = word;
+	}
+	free(kernel);
+}
 
 bool PatchROM(void)
 {
@@ -814,6 +853,7 @@ bool PatchROM(void)
 		ROMType = ROMTYPE_NEWWORLD;
 	else
 		return false;
+	InstallSystemKernel();
 	
 	// Check that other ROM addresses point to really free regions
 	if (!check_rom_patch_space(CHECK_LOAD_PATCH_SPACE, 0x40))
@@ -926,7 +966,7 @@ bool HasNanoKernel2(void)
 
 bool HasNewWorldV2Kernel(void)
 {
-	return HasNanoKernel2() && ReadMacInt16(ROMBase + 0x310004) >= 0x0210;
+	return HasNanoKernel2() && RomKernelWord() >= 0x0210;
 }
 
 
@@ -938,13 +978,15 @@ static uint32 RomSearchBound(bool nanokernel2, uint32 original, uint32 extended)
 }
 
 
+#define ROMFILLERBRANCH 0x48000004u
+
 static bool PatchNanoKernel2ContextTable(uint32 address, uint32 patchaddress,
 	uint32 mode, uint32 tableoffset)
 {
 	uint32 *instruction;
 	uint32 patchindex;
 	for (patchindex = 0; patchindex < 20; patchindex += 4) {
-		if (ReadMacInt32(ROMBase + patchaddress + patchindex) != POWERPC_NOP)
+		if (ReadMacInt32(ROMBase + patchaddress + patchindex) != POWERPC_NOP && ReadMacInt32(ROMBase + patchaddress + patchindex) != ROMFILLERBRANCH)
 			return false;
 	}
 	instruction = (uint32 *)(ROMBaseHost + patchaddress);
@@ -1212,9 +1254,9 @@ static bool PatchNanoKernel2Boot(void)
 {
 	uint32 *instruction;
 	uint32 initialize, address, target;
-	if (ReadMacInt16(ROMBase + 0x310004) >= 0x0210 && !PatchNanoKernel2PageMap())
+	if (RomKernelWord() >= 0x0210 && !PatchNanoKernel2PageMap())
 		return false;
-	if (ReadMacInt16(ROMBase + 0x310004) >= 0x0210) {
+	if (RomKernelWord() >= 0x0210) {
 		static const uint8 interruptpattern[] = {0x7d, 0x33, 0x43, 0xa6, 0x7e, 0xe0, 0x00, 0xa6, 0x82, 0x81, 0xff, 0xe0, 0xa3, 0x61, 0x09, 0x10, 0x82, 0xd4, 0x0f, 0x18};
 		static const uint8 commonpattern[] = {0x7f, 0xd3, 0x43, 0xa6, 0x82, 0xe1, 0x06, 0x7c};
 		target = find_rom_data(0x320000, 0x330000, commonpattern, sizeof(commonpattern));
@@ -1230,6 +1272,17 @@ static bool PatchNanoKernel2Boot(void)
 			*instruction++ = htonl(0x3ac00000);
 			*instruction = htonl(0x48000000 | ((target - address - 8) & 0x3fffffc));
 			address = find_rom_data(address + sizeof(interruptpattern), 0x330000, interruptpattern, sizeof(interruptpattern));
+		}
+	} else {
+		static const uint8 controllerpattern[] = {0xa0, 0xe1, 0x09, 0x10, 0x80, 0x41};
+		static const uint8 levelpattern[] = {0x80, 0xe1, 0x06, 0x7c, 0xa1, 0x07, 0x00, 0x00};
+		address = find_rom_data(0x320000, 0x330000, controllerpattern, sizeof(controllerpattern));
+		while (address != 0) {
+			target = find_rom_data(address, 0x330000, levelpattern, sizeof(levelpattern));
+			if (target == 0 || ReadMacInt32(ROMBase + address + 12) != 0x2c070000)
+				return false;
+			WriteMacInt32(ROMBase + address + 16, 0x48000000 | ((target - address - 16) & 0x3fffffc));
+			address = find_rom_data(address + sizeof(controllerpattern), 0x330000, controllerpattern, sizeof(controllerpattern));
 		}
 	}
 	static const uint8 initializepattern[] = {0x35, 0x4a, 0xff, 0xfc, 0x7d, 0x86, 0x50, 0x2e};
@@ -1248,7 +1301,7 @@ static bool PatchNanoKernel2Boot(void)
 	*instruction = htonl(0x48000000 | (initialize - 0x310000));
 	instruction = (uint32 *)(ROMBaseHost + initialize);
 	*instruction++ = htonl(0x80200000 + XLM_KERNEL_DATA);
-	if (ReadMacInt16(ROMBase + 0x310004) >= 0x0210)
+	if (RomKernelWord() >= 0x0210)
 		*instruction++ = htonl(0x3da00000 | ((((RAMSize + 0x0fffffff) & 0xf0000000) + 0x10000000) >> 16));
 	else
 		*instruction++ = htonl(0x3da0dead);
@@ -1270,7 +1323,7 @@ static bool PatchNanoKernel2Boot(void)
 	address = find_rom_data(0x310000, 0x320000, descriptorpattern, sizeof(descriptorpattern));
 	if (address == 0)
 		return false;
-	if (ReadMacInt16(ROMBase + 0x310004) < 0x0210)
+	if (RomKernelWord() < 0x0210)
 		*(uint32 *)(ROMBaseHost + address) = htonl(POWERPC_NOP);
 	target = find_rom_data(0x310000, 0x320000, segmentpattern, sizeof(segmentpattern));
 	if (target == 0) {
@@ -1322,6 +1375,9 @@ static bool PatchNanoKernel2Boot(void)
 }
 
 
+#define INTERRUPTHANDLERKIND 0x30d098u
+#define INTERRUPTHANDLERSOFTWARE 6
+
 static bool patch_nanokernel_boot(void)
 {
 	bool nanokernel2 = HasNanoKernel2();
@@ -1338,6 +1394,8 @@ static bool patch_nanokernel_boot(void)
 	lp[0x360 >> 2] = htonl(0);						// Physical RAM base (? on NewWorld ROM, this contains -1)
 	lp[0xfd8 >> 2] = htonl(ROMBase + 0x2a);		// 68k reset vector
 
+	if (nanokernel2 && RomKernelWord() == 0)
+		ROMBaseHost[INTERRUPTHANDLERKIND] = INTERRUPTHANDLERSOFTWARE;
 	if (nanokernel2)
 		return PatchNanoKernel2Boot();
 
@@ -1752,7 +1810,7 @@ static bool patch_68k_emul(void)
 		*lp++ = htonl(0x80c1ffec);
 	else
 		*lp++ = htonl(0x80c1065c);					// lwz		r6,$065c(r1)
-	if (nanokernel2 && ReadMacInt16(ROMBase + 0x310004) >= 0x0210) {
+	if (nanokernel2 && RomKernelWord() >= 0x0210) {
 		*lp++ = htonl(0x38000000);
 		*lp++ = htonl(0x90060104);
 	}
@@ -1792,7 +1850,7 @@ static bool patch_68k_emul(void)
 		*lp++ = htonl(0x80c1ffec);
 	else
 		*lp++ = htonl(0x80c1065c);					// lwz		r6,$065c(r1)
-	if (nanokernel2 && ReadMacInt16(ROMBase + 0x310004) >= 0x0210) {
+	if (nanokernel2 && RomKernelWord() >= 0x0210) {
 		*lp++ = htonl(0x38000000);
 		*lp++ = htonl(0x90060104);
 	}
@@ -2163,7 +2221,7 @@ static bool patch_nanokernel(void)
 
 static bool patch_68k(void)
 {
-	bool nanokernel2 = HasNanoKernel2();
+	bool nanokernel2 = RomKernelWord() != 0;
 	bool newworldv2 = HasNewWorldV2Kernel();
 	uint32 *lp;
 	uint16 *wp;
@@ -3091,7 +3149,7 @@ static bool patch_68k(void)
 	if ((base = find_rom_data(RomSearchBound(nanokernel2, 0xa000, 0x9000), 0x10000, egret_dat, sizeof(egret_dat))) == 0) return false;
 	D(bug("egret %08lx\n", base));
 	wp = (uint16 *)(ROMBaseHost + base);
-	if (HasNanoKernel2() && ReadMacInt16(ROMBase + 0x310004) >= 0x0210) {
+	if (HasNanoKernel2() && RomKernelWord() >= 0x0210) {
 		uint32 powerhandler = ROMBase + 0x36f720;
 		for (uint32 handleroffset = 0; handleroffset < 36; handleroffset += 4) {
 			if (ReadMacInt32(powerhandler + handleroffset) != POWERPC_NOP)
@@ -3378,7 +3436,7 @@ static bool patch_68k(void)
 
 void ReserveKernelRam(void)
 {
-	if (!HasNanoKernel2() || ReadMacInt16(ROMBase + 0x310004) < 0x0210)
+	if (!HasNanoKernel2() || RomKernelWord() < 0x0210)
 		return;
 	uint32 freepages = ReadMacInt32(KERNEL_DATA_BASE + 0x6a8);
 	if (freepages == 0 || freepages >= (RAMSize >> 12))
@@ -3398,7 +3456,7 @@ void ReserveKernelRam(void)
 
 bool InitFirmwareClockServices(void)
 {
-	if (!HasNanoKernel2() || ReadMacInt16(ROMBase + 0x310004) < 0x0210)
+	if (!HasNanoKernel2() || RomKernelWord() < 0x0210)
 		return true;
 	const uint8 procedure[] = {
 		0x55, 0x8f, 0x2f, 0x08, 0x2f, 0x3c, 0x70, 0x77, 0x70, 0x63,

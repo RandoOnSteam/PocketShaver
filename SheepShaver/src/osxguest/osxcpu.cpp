@@ -763,12 +763,8 @@ static int OsxGuestCheckProtection(int key, uint32 pp, int kind)
 	return 1;
 }
 
-#if OSXSMP
 #define OSXPTEREFERENCED 0x100
 #define OSXPTECHANGED 0x80
-#define OSXPTEREFERENCEDBYTE 6
-#define OSXPTECHANGEDBYTE 7
-#endif
 
 int OsxGuestCpuTranslate(OsxCpu *cpu, uint32 address, int kind, int raise, uint32 *physical)
 {
@@ -785,6 +781,10 @@ int OsxGuestCpuTranslate(OsxCpu *cpu, uint32 address, int kind, int raise, uint3
 	uint32 word0;
 	uint32 word1;
 	uint32 updated;
+#if OSXSMP
+	uint32 current;
+	uint32 previous;
+#endif
 	uint8 *host;
 	int translated;
 	int user;
@@ -867,16 +867,19 @@ int OsxGuestCpuTranslate(OsxCpu *cpu, uint32 address, int kind, int raise, uint3
 				}
 				return 0;
 			}
-#if OSXSMP
-			updated = word1;
-			if (!(word1 & OSXPTEREFERENCED))
-				host[OSXPTEREFERENCEDBYTE] |= OSXPTEREFERENCED >> 8;
-			if (kind == OSXTLBWRITE && !(word1 & OSXPTECHANGED))
-				host[OSXPTECHANGEDBYTE] |= OSXPTECHANGED;
-#else
-			updated = word1 | 0x100;
+			updated = word1 | OSXPTEREFERENCED;
 			if (kind == OSXTLBWRITE)
-				updated |= 0x80;
+				updated |= OSXPTECHANGED;
+#if OSXSMP
+			current = word1;
+			while (updated != current) {
+				previous = tswap32(OsxGuestAtomicCompare((volatile uint32 *)(host + 4), tswap32(current), tswap32(updated)));
+				if (previous == current)
+					break;
+				updated = previous | (updated ^ current);
+				current = previous;
+			}
+#else
 			if (updated != word1)
 				OsxGuestStoreHost32(host + 4, updated);
 #endif

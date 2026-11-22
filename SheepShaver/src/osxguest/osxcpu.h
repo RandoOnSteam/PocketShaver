@@ -434,6 +434,7 @@ struct OsxCpu {
 	uint32 reservationvalue;
 	uint32 processorid;
 	uint64 capdeadline;
+	volatile uint64 linedue;
 	uint64 timefrozenvalue;
 	volatile uint32 timesequence;
 	volatile int32 timefrozen;

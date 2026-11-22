@@ -36,6 +36,7 @@
 #define SMPSTALLBEATS 1526
 #define SMPBEATNANOSECONDS 65536
 #define SMPIDLESPINNANOSECONDS 100000
+#define SMPIPILATENCY (OSXTIMEBASEFREQUENCY / 20000)
 
 static void OsxGuestSmpRelax(uint32 *spins)
 {
@@ -124,6 +125,13 @@ void OsxGuestSmpSetLine(OsxMachine *machine, int index, int level)
 {
 	OsxCpu *cpu;
 	cpu = machine->cpus[index];
+	if (level && !cpu->externalline && machine->cpucount > 1 && !machine->inlinecpus && machine->accessor != index && !cpu->halted) {
+		if (!cpu->linedue)
+			cpu->linedue = OsxGuestCpuTimebase(cpu) + SMPIPILATENCY;
+		OsxGuestAtomicExchange(&cpu->kick, 1);
+		return;
+	}
+	cpu->linedue = 0;
 	if (cpu->externalline == level)
 		return;
 	cpu->externalline = level;
@@ -315,6 +323,15 @@ void OsxGuestSmpInterrupts(OsxCpu *cpu, uint64 now)
 		OsxGuestAtomicExchange(&cpu->lineraised, 0);
 		cpu->halted = 0;
 	}
+	if (cpu->linedue && (now >= cpu->linedue || cpu->halted)) {
+		OsxGuestSmpLock(cpu);
+		if (cpu->linedue) {
+			cpu->linedue = 0;
+			cpu->externalline = 1;
+			cpu->halted = 0;
+		}
+		OsxGuestSmpUnlock(cpu);
+	}
 	if (!cpu->decpending && now >= cpu->capdeadline)
 		cpu->decpending = 1;
 	taken = cpu->decrementercount + cpu->externalcount;
@@ -415,6 +432,7 @@ static void OsxGuestSmpThread(void *context)
 	uint64 wait;
 	uint64 sliceticks;
 	int32 slicesize;
+	int32 runsize;
 	slot = (OsxSmpSlot *)context;
 	machine = slot->machine;
 	slicesize = SMPSLICE;
@@ -438,12 +456,15 @@ static void OsxGuestSmpThread(void *context)
 		}
 		start = now;
 		instructions = cpu->instructions;
+		runsize = slicesize;
+		if (cpu->linedue > now)
+			runsize = (int32)((cpu->linedue - now) * (uint64)slicesize / SMPQUANTUM) + 1;
 #if OSXG5
 		if (cpu->core970)
-			OsxGuest970Run((Osx970 *)cpu->core970, slicesize);
+			OsxGuest970Run((Osx970 *)cpu->core970, runsize);
 		else
 #endif
-		OsxGuestJitRun(cpu, slicesize);
+		OsxGuestJitRun(cpu, runsize);
 		now = OsxGuestCpuTimebase(cpu);
 		if (cpu->instructions - instructions >= (uint32)slicesize && now > start) {
 			sliceticks = (cpu->instructions - instructions) * SMPQUANTUM / (now - start);

@@ -455,7 +455,7 @@ void DoPatchNameRegistry(void)
 		}
 
 #if EMULATED_PPC
-		if (HasNanoKernel2() && ReadMacInt16(ROMBase + 0x310004) >= 0x0210) {
+		if (HasNanoKernel2() && RomKernelWord() >= 0x0210) {
 			SheepRegEntryID rtc;
 			if (!RegistryCStrEntryCreate(device_tree.addr(), "rtc", rtc.addr())) {
 				const uint8 clockdriver[] = {
@@ -501,7 +501,7 @@ void DoPatchNameRegistry(void)
 		// Create "video"
 		SheepRegEntryID video;
 		if (!RegistryCStrEntryCreate(device_tree.addr(), "video", video.addr())) {
-			if (HasNanoKernel2() && ReadMacInt16(ROMBase + 0x310004) >= 0x0210) {
+			if (HasNanoKernel2() && RomKernelWord() >= 0x0210) {
 				RegistryPropertyCreateStr(video.addr(), "name", "video");
 				u32.set_value(32);
 				RegistryPropertyCreate(video.addr(), "did", u32.addr(), 4);
@@ -517,7 +517,7 @@ void DoPatchNameRegistry(void)
 			SheepArray<sizeof(video_driver) + 1> the_video_driver;
 			uint32 videodriversize = sizeof(video_driver);
 			Host2Mac_memcpy(the_video_driver.addr(), video_driver, videodriversize);
-			if (HasNanoKernel2() && ReadMacInt16(ROMBase + 0x310004) >= 0x0210) {
+			if (HasNanoKernel2() && RomKernelWord() >= 0x0210) {
 				Host2Mac_memcpy(the_video_driver.addr() + 0x159, video_driver + 0x158, videodriversize - 0x158);
 				WriteMacInt32(the_video_driver.addr() + 0x54, 0x40);
 				WriteMacInt8(the_video_driver.addr() + 0x155, 0x3c);

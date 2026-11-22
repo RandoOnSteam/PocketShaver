@@ -262,14 +262,11 @@ void GlideInstallHooks(void)
 	 */
 	const char *glide_libs[kGlideLibCandidateCount];
 	int glide_lib_count = 0;
-	uint32 libraryloadoptions = 1;
-	if (HasNanoKernel2())
-		libraryloadoptions = 2;
 	for (int c = 0; c < kGlideLibCandidateCount; c++) {
 		const char *candidate = kGlideLibCandidates[c];
 		QD3D_INIT_LOG("GlideInstallHooks: trying library \"%s\" (%d chars)",
 					  candidate + 1, (int)(unsigned char)candidate[0]);
-		uint32_t probe_tvect = FindLibSymbol(candidate, glide_symbols[0].pascal_sym, libraryloadoptions);
+		uint32_t probe_tvect = FindLibSymbol(candidate, glide_symbols[0].pascal_sym, 1);
 		if (probe_tvect == 0)
 			continue;
 

@@ -169,7 +169,7 @@ typedef void (*nqdmisc_ptr)(uint32, void *);
 static uint32 nqdmisc_tvect = 0;
 void VideoInstallDisplay(void)
 {
-	if (!HasNanoKernel2() || ReadMacInt16(ROMBase + 0x310004) < 0x0210)
+	if (!HasNanoKernel2() || RomKernelWord() < 0x0210)
 		return;
 	if (private_data == NULL || private_data->displayregistered || private_data->displayregistrationactive)
 		return;

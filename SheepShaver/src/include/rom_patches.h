@@ -46,6 +46,7 @@ extern bool MachineReset(void);
 extern uint32 EmulatorCodeAlias(uint32 address);
 extern bool HasNanoKernel2(void);
 extern bool HasNewWorldV2Kernel(void);
+extern uint16 RomKernelWord(void);
 extern void InstallDrivers(void);
 extern bool InitFirmwareClockServices(void);
 extern void ReserveKernelRam(void);

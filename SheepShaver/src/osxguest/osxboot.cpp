@@ -1002,6 +1002,93 @@ uint8 *OsxGuestReadClassicRom(uint32 *size)
 	return rom;
 }
 
+static uint8 *OsxGuestReadResource(OsxHfsVolume *volume, const uint8 *record, uint32 type, int id, uint32 *size)
+{
+	OsxHfsFork *fork;
+	uint8 *data;
+	uint8 *resource;
+	uint32 length;
+	uint32 dataoffset;
+	uint32 mapoffset;
+	uint32 typelist;
+	uint32 references;
+	uint32 typecount;
+	uint32 count;
+	uint32 offset;
+	uint32 index;
+	fork = (OsxHfsFork *)malloc(sizeof(OsxHfsFork));
+	OsxGuestParseFork(record + 168, OsxGuestBig32(record + 8), 0xff, fork);
+	OsxGuestCompleteFork(volume, fork);
+	length = (uint32)fork->logical;
+	data = (uint8 *)malloc((size_t)length + 1);
+	if (data == NULL || length < 16 || !OsxGuestReadFork(volume, fork, 0, data, length)) {
+		free(data);
+		free(fork);
+		return NULL;
+	}
+	free(fork);
+	resource = NULL;
+	dataoffset = OsxGuestBig32(data);
+	mapoffset = OsxGuestBig32(data + 4);
+	typelist = 0;
+	typecount = 0;
+	references = 0;
+	count = 0;
+	if (mapoffset < length && length - mapoffset >= 30) {
+		typelist = mapoffset + OsxGuestBig16(data + mapoffset + 24);
+		if (typelist < length && length - typelist >= 2)
+			typecount = (OsxGuestBig16(data + typelist) + 1) & 0xffff;
+	}
+	for (index = 0; index < typecount && references == 0 && length - typelist >= 10 + index * 8; index++) {
+		if (OsxGuestBig32(data + typelist + 2 + index * 8) == type) {
+			count = OsxGuestBig16(data + typelist + 6 + index * 8) + 1;
+			references = typelist + OsxGuestBig16(data + typelist + 8 + index * 8);
+		}
+	}
+	for (index = 0; index < count && resource == NULL && references < length && length - references >= 12 + index * 12; index++) {
+		if ((int16)OsxGuestBig16(data + references + index * 12) == id) {
+			offset = dataoffset + (OsxGuestBig32(data + references + index * 12 + 4) & 0xffffff);
+			if (offset < length && length - offset >= 4 && OsxGuestBig32(data + offset) <= length - offset - 4) {
+				*size = OsxGuestBig32(data + offset);
+				resource = (uint8 *)malloc((size_t)*size + 1);
+				if (resource != NULL)
+					memcpy(resource, data + offset + 4, *size);
+			}
+		}
+	}
+	free(data);
+	return resource;
+}
+
+uint8 *OsxGuestReadClassicKernel(uint32 *size)
+{
+	OsxHfsVolume volume;
+	uint8 block[512];
+	uint8 record[248];
+	const char *path;
+	void *file;
+	uint8 *kernel;
+	int diskindex;
+	int partition;
+	if (!(OsxGuestSelectBootImage(&diskindex, &partition) & OSXBOOTCLASSIC))
+		return NULL;
+	path = OsxGuestBootImagePath(diskindex);
+	if (path == NULL)
+		return NULL;
+	if (path[0] == '*')
+		path++;
+	file = Sys_open(path, true, false);
+	if (file == NULL)
+		return NULL;
+	kernel = NULL;
+	if (OsxGuestOpenVolume(&volume, file, partition) && OsxGuestReadVolume(&volume, 1024, block, 512) &&
+		OsxGuestFindCatalogRecord(&volume, OsxGuestBig32(block + 80), "System", record) && OsxGuestBig16(record) == HFSFILERECORD)
+		kernel = OsxGuestReadResource(&volume, record, 0x6b726e6c, 0, size);
+	OsxGuestCloseVolume(&volume);
+	Sys_close(file);
+	return kernel;
+}
+
 static int OsxGuestPowerPCSlice(const uint8 *data, uint32 size, uint32 *offset, uint32 *length)
 {
 	uint32 count;
