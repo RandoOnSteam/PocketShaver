@@ -120,6 +120,11 @@ void idle_wait(void)
 	WSSignal_Wait(&SflTimer.idle, SFLTIMERIDLEWAITMS);
 }
 
+void idle_wait_usec(uint32 usec)
+{
+	WSSignal_Wait(&SflTimer.idle, (usec + 999) / 1000);
+}
+
 void idle_resume(void)
 {
 	WSSignal_Raise(&SflTimer.idle);

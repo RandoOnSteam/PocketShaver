@@ -2623,11 +2623,46 @@ static bool DSpSetContextBackdropWindow(DSpContextPrivate *ctx, bool visible)
 		DSP_LOG("backdrop window disposed ctx=%u win=0x%08x",
 				ctx->handle, ctx->guest_window);
 		ctx->guest_window = 0;
+		if (ctx->menubarhidden) {
+			const uint32_t showmenubar = FindLibSymbol("\010MenusLib", "\013ShowMenuBar");
+			if (showmenubar != 0)
+				(void)call_macos(showmenubar);
+			ctx->menubarhidden = false;
+		} else if (ctx->menubarheight != 0) {
+			const uint32_t setmbarheight = FindLibSymbol("\014InterfaceLib", "\017LMSetMBarHeight");
+			const uint32_t drawmenubar = FindLibSymbol("\014InterfaceLib", "\013DrawMenuBar");
+			if (setmbarheight != 0)
+				(void)call_macos1(setmbarheight, ctx->menubarheight);
+			if (drawmenubar != 0)
+				(void)call_macos(drawmenubar);
+			ctx->menubarheight = 0;
+		}
 		return true;
 	}
 
 	const uint32_t width = ctx->attr.displayWidth;
 	const uint32_t height = ctx->attr.displayHeight;
+	if (!ctx->menubarhidden && ctx->menubarheight == 0) {
+		const uint32_t ismenubarvisible = FindLibSymbol("\010MenusLib", "\020IsMenuBarVisible");
+		if (ismenubarvisible != 0) {
+			if ((call_macos(ismenubarvisible) & 0xff) != 0) {
+				const uint32_t hidemenubar = FindLibSymbol("\010MenusLib", "\013HideMenuBar");
+				if (hidemenubar != 0) {
+					(void)call_macos(hidemenubar);
+					ctx->menubarhidden = true;
+				}
+			}
+		} else {
+			const uint32_t getmbarheight = FindLibSymbol("\014InterfaceLib", "\015GetMBarHeight");
+			if (getmbarheight != 0)
+				ctx->menubarheight = (uint16_t)call_macos(getmbarheight);
+			if (ctx->menubarheight != 0) {
+				const uint32_t setmbarheight = FindLibSymbol("\014InterfaceLib", "\017LMSetMBarHeight");
+				if (setmbarheight != 0)
+					(void)call_macos1(setmbarheight, 0);
+			}
+		}
+	}
 	ctx->guest_window =
 		video_create_guest_fullscreen_window(width, height);
 	DSP_LOG("backdrop window %s ctx=%u win=0x%08x %ux%u",

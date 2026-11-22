@@ -94,13 +94,15 @@ void GetInterruptServiceDiagnostics(InterruptServiceDiagnostics &d)
 
 #if defined(__APPLE__) && (defined(ENABLE_GFXACCEL) || (defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE))
 extern "C" __attribute__((weak)) int gfx_idle_latency_sensitive(void) { return 0; }
+#elif defined(ENABLE_GFXACCEL)
+extern "C" int gfx_idle_latency_sensitive(void);
 #endif
 
 static const uint32 IDLE_WAIT_3D_USEC = 1000;
 
 static void synch_idle_wait(void)
 {
-#if defined(__APPLE__) && (defined(ENABLE_GFXACCEL) || (defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE))
+#if defined(ENABLE_GFXACCEL) || (defined(__APPLE__) && defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE)
 	if (gfx_idle_latency_sensitive()) {
 		idle_wait_usec(IDLE_WAIT_3D_USEC);
 		return;

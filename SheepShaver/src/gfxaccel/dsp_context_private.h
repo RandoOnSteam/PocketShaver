@@ -115,6 +115,12 @@ struct DSpContextPrivate {
 	 * introducing another pixel surface. 0 when no backdrop is live. */
 	uint32_t  guest_window;
 
+	/* For hiding and restoring the menu bar. Doing MenusLib calls first,
+	 * as those hide both the control strip and menu bar. Falls back to
+	 * InterfaceLib folder pre-8.5. */
+	bool      menubarhidden;
+	uint16_t  menubarheight;
+
 	/* Per-context CLUT storage.
 	 * clut_bytes is the writer-visible state - DSpContext_SetCLUTEntries
 	 * writes here. clut_bytes_latched is the reader-visible

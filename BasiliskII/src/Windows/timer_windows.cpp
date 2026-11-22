@@ -235,19 +235,32 @@ idle_sentinel::~idle_sentinel()
 	}
 }
 
-void idle_wait(void)
+static void IdleWaitFor(DWORD milliseconds)
 {
 	LOCK_IDLE;
 	if (idle_sem_ok > 0) {
 		idle_sem_ok++;
 		UNLOCK_IDLE;
-		WaitForSingleObject(idle_sem, INFINITE);
+		if (WaitForSingleObject(idle_sem, milliseconds) == WAIT_TIMEOUT) {
+			LOCK_IDLE;
+			if (idle_sem_ok > 1)
+				idle_sem_ok--;
+			UNLOCK_IDLE;
+		}
 		return;
 	}
 	UNLOCK_IDLE;
-
-	// Fallback: sleep 10 ms (this should not happen though)
 	Delay_usec(10000);
+}
+
+void idle_wait(void)
+{
+	IdleWaitFor(INFINITE);
+}
+
+void idle_wait_usec(uint32 usec)
+{
+	IdleWaitFor((usec + 999) / 1000);
 }
 
 
