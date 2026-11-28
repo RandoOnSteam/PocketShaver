@@ -40,6 +40,7 @@ enum {
 
 #if defined(CLASSICSMP) && CLASSICSMP
 #define SPCFLAG_CPU_IDLE (1 << 8)
+#define SPCFLAG_JIT_REDIRECT (1 << 9)
 #endif
 
 // Flags are set from other threads (e.g. the 60 Hz tick thread triggering

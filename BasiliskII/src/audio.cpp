@@ -33,6 +33,9 @@
 #include "audio_defs.h"
 #include "user_strings.h"
 #include "cdrom.h"
+#ifdef AUDIO_USELOCALMIXERFALLBACK
+#include "thunks.h"
+#endif
 
 #define DEBUG 0
 #include "debug.h"
@@ -454,9 +457,124 @@ static int32 AudioSetInfo(uint32 infoPtr, uint32 selector, uint32 sourceID)
 
 
 /*
+ *  Local mixer fallback routines. This will be rare so
+ *	arrays are kept local and on the stack.
+ */
+#ifdef AUDIO_USELOCALMIXERFALLBACK
+static void AudioRunGlue(const uint8 *instructions, uint32 size, M68kRegisters &r)
+{
+	SheepVar procedure(size);
+	Host2Mac_memcpy(procedure.addr(), instructions, size);
+	r.a[5] = ReadMacInt32(0x904);
+	Execute68k(procedure.addr(), &r);
+}
+
+static uint32 AudioGetSystemResource(uint32 type, int16 id)
+{
+	const uint8 instructions[] = {
+		0x3f, 0x38, 0x0a, 0x58, 0xa9, 0x98,
+		0x59, 0x8f, 0x2f, 0x03, 0x3f, 0x04, 0xa8, 0x1f,
+		0x3f, 0x05, 0xa9, 0x98, 0x20, 0x1f, 0x4e, 0x75
+	};
+	M68kRegisters r = {0};
+	r.d[3] = type;
+	r.d[4] = id;
+	r.d[5] = ReadMacInt16(0xa5a);
+	AudioRunGlue(instructions, sizeof(instructions), r);
+	return r.d[0];
+}
+
+static void AudioCloseLocalMixer(void)
+{
+	const uint8 unregister_component[] = {
+		0x55, 0x8f, 0x2f, 0x00, 0x70, 0x02, 0xa8, 0x2a,
+		0x30, 0x1f, 0x48, 0xc0, 0x4e, 0x75
+	};
+	M68kRegisters r = {0};
+	r.d[0] = ReadMacInt32(audio_data + adatLocalMixer);
+	if (r.d[0]) {
+		AudioRunGlue(unregister_component, sizeof(unregister_component), r);
+		if (r.d[0] == noErr) {
+			r.a[0] = ReadMacInt32(audio_data + adatLocalMixerCode);
+			Execute68kTrap(0xa023, &r);
+		}
+		WriteMacInt32(audio_data + adatLocalMixer, 0);
+		WriteMacInt32(audio_data + adatLocalMixerCode, 0);
+	}
+}
+
+static int32 AudioOpenLocalMixer(uint32 mixerProc)
+{
+	const int16 apple_mixer_resource = -16561;
+	const uint8 register_component[] = {
+		0x59, 0x8f, 0x2f, 0x08, 0x2f, 0x09, 0x42, 0x67,
+		0x42, 0xa7, 0x42, 0xa7, 0x42, 0xa7, 0x70, 0x01,
+		0xa8, 0x2a, 0x20, 0x1f, 0x4e, 0x75
+	};
+	M68kRegisters r = {0};
+	uint32 description;
+	uint32 resource;
+	uint32 code;
+	uint32 component;
+	int32 result;
+
+	if (open_count != 1 || AudioStatus.sample_size != 16 ||
+		ReadMacInt32(0x118) != ReadMacInt32(0x2aa) ||
+		ReadMacInt32(0x118) == ReadMacInt32(0x2a6) || !ReadMacInt32(0x904))
+		return memFullErr;
+
+	r.a[5] = ReadMacInt32(0x904);
+	r.a[0] = AudioGetSystemResource(FOURCC('t','h','n','g'), apple_mixer_resource);
+	if (!r.a[0])
+		return memFullErr;
+	description = ReadMacInt32(r.a[0]);
+	Execute68kTrap(0xa025, &r);
+	if (!description || (int32)r.d[0] < 26 ||
+		ReadMacInt32(description) != FOURCC('m','i','x','r') ||
+		ReadMacInt32(description + 4) != FOURCC('m','i','x','w') ||
+		ReadMacInt32(description + 8) != FOURCC('a','p','p','l') ||
+		ReadMacInt32(description + 20) != FOURCC('s','i','f','t'))
+		return memFullErr;
+
+	SheepArray<20> component_description;
+	Mac2Mac_memcpy(component_description.addr(), description, 20);
+	resource = AudioGetSystemResource(FOURCC('s','i','f','t'), ReadMacInt16(description + 24));
+	if (!resource || !ReadMacInt32(resource))
+		return memFullErr;
+	r.a[0] = resource;
+	Execute68kTrap(0xa9e1, &r);
+	if ((int16)r.d[0] != noErr || !r.a[0])
+		return memFullErr;
+	code = r.a[0];
+	Execute68kTrap(0xa029, &r);
+
+	r.a[0] = component_description.addr();
+	r.a[1] = ReadMacInt32(code);
+	AudioRunGlue(register_component, sizeof(register_component), r);
+	component = r.d[0];
+	if (!component) {
+		r.a[0] = code;
+		Execute68kTrap(0xa023, &r);
+		return memFullErr;
+	}
+
+	WriteMacInt32(audio_data + adatLocalMixerCode, code);
+	WriteMacInt32(audio_data + adatLocalMixer, component);
+	r.a[0] = audio_data + adatMixer;
+	r.a[1] = audio_data + adatData;
+	r.a[5] = ReadMacInt32(0x904);
+	r.d[0] = 0;
+	Execute68k(mixerProc, &r);
+	result = r.d[0];
+	if (result != noErr)
+		AudioCloseLocalMixer();
+	return result;
+}
+#endif
+
+/*
  *  Sound output component dispatch
  */
-
 int32 AudioDispatch(uint32 params, uint32 globals)
 {
 	D(bug("AudioDispatch params %08lx (size %d), what %d\n", params, ReadMacInt8(params + cp_paramSize), (int16)ReadMacInt16(params + cp_what)));
@@ -597,6 +715,10 @@ adat_error:	printf("FATAL: audio component data block initialization error\n");
 						D(bug(" CloseMixer() returns %08lx, mixer %08lx\n", r.d[0], AudioStatus.mixer));
 						AudioStatus.mixer = 0;
 					}
+#ifdef AUDIO_USELOCALMIXERFALLBACK
+					// Close local mixer if we had the fallback
+					AudioCloseLocalMixer();
+#endif
 					r.a[0] = audio_data;
 					Execute68kTrap(0xa01f, &r);	// DisposePtr()
 					audio_data = 0;
@@ -653,6 +775,11 @@ adat_error:	printf("FATAL: audio component data block initialization error\n");
 			r.d[0] = 0;
 			r.a[1] = audio_data + adatData;
 			Execute68k(audio_data + adatOpenMixer, &r);
+#ifdef AUDIO_USELOCALMIXERFALLBACK
+			// If system memory was full fall back to local app heap
+			if ((int32)r.d[0] == memFullErr && ReadMacInt32(ReadMacInt32(0x2b6) + 0x1ae) <= AUDIO_SOUNDMANAGER_RETRY_RESERVE)
+				r.d[0] = AudioOpenLocalMixer(audio_data + adatOpenMixer);
+#endif
 			AudioStatus.mixer = ReadMacInt32(audio_data + adatMixer);
 			D(bug(" OpenMixer() returns %08lx, mixer %08lx\n", r.d[0], AudioStatus.mixer));
 			return r.d[0];

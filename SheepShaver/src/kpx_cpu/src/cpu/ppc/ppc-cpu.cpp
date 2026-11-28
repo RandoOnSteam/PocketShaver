@@ -698,6 +698,12 @@ bool powerpc_cpu::check_spcflags()
 	if (spcflags().test(SPCFLAG_CPU_IDLE))
 		IdleWait();
 #endif
+#if defined(CLASSICSMP) && CLASSICSMP && PPC_NATIVE_JIT
+	if (spcflags().test(SPCFLAG_JIT_REDIRECT)) {
+		spcflags().clear(SPCFLAG_JIT_REDIRECT);
+		ResolveRedirectFault();
+	}
+#endif
 	// Host wakeups (notably the 60 Hz tick) also provide a bounded polling
 	// point for DEC while translated code is running. Normal nanokernel context
 	// returns and writes to DEC service it immediately in ppc-execute.cpp.
@@ -1066,6 +1072,14 @@ void powerpc_cpu::init_decode_cache()
 #if PPC_NATIVE_JIT
 	nativejit = NULL;
 	nativejitpaused = false;
+#endif
+#if defined(CLASSICSMP) && CLASSICSMP && PPC_NATIVE_JIT
+	redirectaddress = 0;
+	redirectresult = 0;
+	redirectvalue = 0;
+	redirectfault = 0;
+	redirectnext = 0;
+	memset(redirectpcs, 0, sizeof(redirectpcs));
 #endif
 #if FLIGHT_RECORDER
 	// Leave enough room to last call to record_step()

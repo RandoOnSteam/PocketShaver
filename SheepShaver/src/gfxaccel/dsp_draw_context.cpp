@@ -1730,8 +1730,6 @@ extern "C" int32_t DSpContext_ReleaseHandler(uint32_t ctxRef)
 	const int32_t fade_err = DSpCancelContextFade(ctx);
 	if (fade_err != kDSpNoErr)
 		return fade_err;
-	/* The Window Manager backdrop cannot outlive its DSp context. */
-	DSpSetContextBackdropWindow(ctx, false);
 	DSpFreeContextHandle(ctxRef);
 	dsp_context_count--;
 	/* Defer to next VBL. Do NOT free synchronously. */
@@ -2609,13 +2607,64 @@ extern "C" bool DSpCopyBackBufferToCanonicalScreen(
  * The video subsystem owns the guest call boundary. DSp stores only the
  * resulting WindowPtr; it does not own symbol caches or scratch allocations.
  */
+static bool DSpBackdropWindowOwned(uint32_t window)
+{
+	bool owned = false;
+	for (uint32_t i = 0; i < DSP_MAX_CONTEXTS; i++) {
+		if (dsp_context_table[i] != NULL && dsp_context_table[i]->guest_window == window)
+			owned = true;
+	}
+	return owned;
+}
+
+static bool DSpDisposeBackdropWindow(uint32_t window, bool menubarhidden, uint16_t menubarheight)
+{
+	if (!video_dispose_guest_window(window))
+		return false;
+	if (menubarhidden) {
+		const uint32_t showmenubar = FindLibSymbol("\010MenusLib", "\013ShowMenuBar");
+		if (showmenubar != 0)
+			(void)call_macos(showmenubar);
+	} else if (menubarheight != 0) {
+		const uint32_t setmbarheight = FindLibSymbol("\014InterfaceLib", "\017LMSetMBarHeight");
+		const uint32_t drawmenubar = FindLibSymbol("\014InterfaceLib", "\013DrawMenuBar");
+		if (setmbarheight != 0)
+			(void)call_macos1(setmbarheight, menubarheight);
+		if (drawmenubar != 0)
+			(void)call_macos(drawmenubar);
+	}
+	return true;
+}
+
+static void DSpRetireContextBackdropWindow(DSpContextPrivate *ctx)
+{
+	if (ctx->guest_window == 0)
+		return;
+	WriteMacInt16(ctx->guest_window + VIDEO_BACKDROP_MENUBAR_HEIGHT, ctx->menubarheight);
+	WriteMacInt16(ctx->guest_window + VIDEO_BACKDROP_MENUBAR_HIDDEN, ctx->menubarhidden);
+	DSP_LOG("backdrop window retired ctx=%u win=0x%08x", ctx->handle, ctx->guest_window);
+	ctx->guest_window = 0;
+	ctx->menubarhidden = false;
+	ctx->menubarheight = 0;
+}
+
+extern "C" void DSpServiceIdle(void)
+{
+	const uint32_t window = video_find_guest_backdrop();
+	if (window == 0 || DSpBackdropWindowOwned(window))
+		return;
+	(void)DSpDisposeBackdropWindow(window,
+		ReadMacInt16(window + VIDEO_BACKDROP_MENUBAR_HIDDEN) != 0,
+		(uint16_t)ReadMacInt16(window + VIDEO_BACKDROP_MENUBAR_HEIGHT));
+}
+
 static bool DSpSetContextBackdropWindow(DSpContextPrivate *ctx, bool visible)
 {
 	if (ctx == NULL || visible == (ctx->guest_window != 0))
 		return ctx != NULL;
 
 	if (!visible) {
-		if (!video_dispose_guest_window(ctx->guest_window)) {
+		if (!DSpDisposeBackdropWindow(ctx->guest_window, ctx->menubarhidden, ctx->menubarheight)) {
 			DSP_LOG("backdrop window dispose unavailable ctx=%u win=0x%08x",
 					ctx->handle, ctx->guest_window);
 			return false;
@@ -2623,25 +2672,19 @@ static bool DSpSetContextBackdropWindow(DSpContextPrivate *ctx, bool visible)
 		DSP_LOG("backdrop window disposed ctx=%u win=0x%08x",
 				ctx->handle, ctx->guest_window);
 		ctx->guest_window = 0;
-		if (ctx->menubarhidden) {
-			const uint32_t showmenubar = FindLibSymbol("\010MenusLib", "\013ShowMenuBar");
-			if (showmenubar != 0)
-				(void)call_macos(showmenubar);
-			ctx->menubarhidden = false;
-		} else if (ctx->menubarheight != 0) {
-			const uint32_t setmbarheight = FindLibSymbol("\014InterfaceLib", "\017LMSetMBarHeight");
-			const uint32_t drawmenubar = FindLibSymbol("\014InterfaceLib", "\013DrawMenuBar");
-			if (setmbarheight != 0)
-				(void)call_macos1(setmbarheight, ctx->menubarheight);
-			if (drawmenubar != 0)
-				(void)call_macos(drawmenubar);
-			ctx->menubarheight = 0;
-		}
+		ctx->menubarhidden = false;
+		ctx->menubarheight = 0;
 		return true;
 	}
 
-	const uint32_t width = ctx->attr.displayWidth;
-	const uint32_t height = ctx->attr.displayHeight;
+	const uint32_t retired = video_find_guest_backdrop();
+	if (retired != 0 && !DSpBackdropWindowOwned(retired)) {
+		ctx->guest_window = retired;
+		ctx->menubarhidden = ReadMacInt16(retired + VIDEO_BACKDROP_MENUBAR_HIDDEN) != 0;
+		ctx->menubarheight = (uint16_t)ReadMacInt16(retired + VIDEO_BACKDROP_MENUBAR_HEIGHT);
+		DSP_LOG("backdrop window adopted ctx=%u win=0x%08x", ctx->handle, retired);
+		return true;
+	}
 	if (!ctx->menubarhidden && ctx->menubarheight == 0) {
 		const uint32_t ismenubarvisible = FindLibSymbol("\010MenusLib", "\020IsMenuBarVisible");
 		if (ismenubarvisible != 0) {
@@ -2663,11 +2706,10 @@ static bool DSpSetContextBackdropWindow(DSpContextPrivate *ctx, bool visible)
 			}
 		}
 	}
-	ctx->guest_window =
-		video_create_guest_fullscreen_window(width, height);
-	DSP_LOG("backdrop window %s ctx=%u win=0x%08x %ux%u",
+	ctx->guest_window = video_create_guest_fullscreen_window();
+	DSP_LOG("backdrop window %s ctx=%u win=0x%08x",
 			ctx->guest_window ? "created" : "CREATE FAILED",
-			ctx->handle, ctx->guest_window, width, height);
+			ctx->handle, ctx->guest_window);
 	return ctx->guest_window != 0;
 }
 
@@ -2835,9 +2877,15 @@ extern "C" int32_t DSpContext_SetStateHandler(uint32_t ctxRef, uint32_t state)
 	}
 
 	if (activating) {
+		if (!DSpSetContextBackdropWindow(ctx, true)) {
+			DSP_LOG("SetState: backdrop creation failed ctx=%u", ctxRef);
+			return kDSpInternalErr;
+		}
 		const int32_t mode_err = DSpActivateVideoMode(ctx);
-		if (mode_err != kDSpNoErr)
+		if (mode_err != kDSpNoErr) {
+			(void)DSpSetContextBackdropWindow(ctx, false);
 			return mode_err;
+		}
 
 		const uint32_t display_depth =
 			DSpDisplayModeDepth(ctx->attr.backBufferBestDepth,
@@ -2871,6 +2919,7 @@ extern "C" int32_t DSpContext_SetStateHandler(uint32_t ctxRef, uint32_t state)
 				}
 				if (opened_dsp_session)
 					DSpClearSavedQuickDrawDisplay();
+				(void)DSpSetContextBackdropWindow(ctx, false);
 				DSP_LOG("SetState: Color QuickDraw rejected context CLUT "
 						"(ctx=%u depth=%u err=%d)",
 						ctxRef, display_depth, clut_err);
@@ -2903,6 +2952,7 @@ extern "C" int32_t DSpContext_SetStateHandler(uint32_t ctxRef, uint32_t state)
 					mode_before_transition, rollback_err);
 			if (opened_dsp_session)
 				DSpClearSavedQuickDrawDisplay();
+			(void)DSpSetContextBackdropWindow(ctx, false);
 		}
 		return kDSpInvalidAttributesErr;
 	}
@@ -2945,41 +2995,13 @@ extern "C" int32_t DSpContext_SetStateHandler(uint32_t ctxRef, uint32_t state)
 		DSpClearSavedQuickDrawDisplay();
 	}
 
-	/* A full-screen DSp activation is not complete until the Window Manager
-	 * has an application layer for it. If that guest call fails, roll the
-	 * already-completed mode/CLUT/owner changes back as one transaction and
-	 * leave ctx->state untouched. */
-	if (activating && !DSpSetContextBackdropWindow(ctx, true)) {
-		const int32_t mode_rollback_err =
-			DSpSetQuickDrawVideoMode(mode_before_transition);
-		int32_t clut_rollback_err = kDSpNoErr;
-		if (had_clut_before_transition) {
-			clut_rollback_err = DSpInstallCLUTOnDisplay(
-				clut_before_transition,
-				clut_depth_before_transition);
-		}
-		const DMCOwner previous_owner = was_any_active
-			? kDMCOwnerDSp
-			: kDMCOwnerQuickDraw;
-		const int32_t owner_rollback_err =
-			dmc_set_active_owner((uint32_t)previous_owner);
-		if (opened_dsp_session)
-			DSpClearSavedQuickDrawDisplay();
-		DSP_LOG("SetState: backdrop creation failed ctx=%u; rollback "
-				"mode=%d clut=%d owner=%d",
-				ctxRef, mode_rollback_err, clut_rollback_err,
-				owner_rollback_err);
-		return kDSpInternalErr;
-	}
-
 	DSP_LOG("SetState: ctx=%u %u->%u DMC owner->%d",
 			ctxRef, ctx->state, state, (int)new_owner);
 	ctx->state = state;
 
-	/* Remove the full-screen layer only after Display Manager has installed
-	 * the restored desktop surface. Its exposure repaint must target that
-	 * surface, not the outgoing game framebuffer. */
-	if (!activating && state != (uint32_t)kDSpContextState_Active)
+	if (!activating && state == (uint32_t)kDSpContextState_Inactive)
+		DSpRetireContextBackdropWindow(ctx);
+	else if (!activating && state != (uint32_t)kDSpContextState_Active)
 		(void)DSpSetContextBackdropWindow(ctx, false);
 
 	/*
@@ -3061,6 +3083,7 @@ extern "C" void DSpShutdownContexts(void)
 					ctx->handle, err);
 		}
 	}
+	DSpServiceIdle();
 	DSpResetAltBufferTable();
 	uint8_t lut[768];
 	DSpCopyDriverGammaLUT(lut);

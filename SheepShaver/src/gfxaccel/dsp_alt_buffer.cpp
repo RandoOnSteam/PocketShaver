@@ -370,11 +370,14 @@ extern "C" int32_t DSpAltBuffer_GetCGrafPtrHandler(uint32_t altBuffer,
 	bool baseaddr_owned_staging = false;
 	void *contents = DSpGetBackingContents(rec->backing);
 	if (contents != NULL) { /* NULL on StorageModePrivate */
-		baseAddr_mac = DSpUsableGuestBaseOrZero(
-			Host2MacAddr((uint8 *)contents),
+		const uint32_t mapped = Host2MacAddr((uint8 *)contents);
+		baseAddr_mac = DSpUsableDirectGuestBaseOrZero(
+			mapped,
 			buffer_size,
 			(uint32_t)RAMBase,
-			(uint32_t)RAMSize);
+			(uint32_t)RAMSize,
+			(uintptr_t)Mac2HostAddr(mapped),
+			(uintptr_t)contents);
 	}
 	if (baseAddr_mac == 0) {
 		/* The Metal backing's contents pointer is outside guest RAM (the iOS

@@ -65,6 +65,9 @@ public:
 	int clear_range(uintptr start, uintptr end, void (*retire)(void *, block_info *), void *context);
 	block_info *fast_find(uintptr pc);
 	block_info *find(uintptr pc);
+#if defined(CLASSICSMP) && CLASSICSMP
+	block_info *find_native(uintptr address);
+#endif
 
 	void remove_from_cl_list(block_info *bi);
 	void remove_from_list(block_info *bi);
@@ -174,6 +177,19 @@ int block_cache< block_info, block_allocator >::clear_range(uintptr start, uintp
 	}
 	return native;
 }
+
+#if defined(CLASSICSMP) && CLASSICSMP
+template< class block_info, template<class T> class block_allocator >
+block_info *block_cache< block_info, block_allocator >::find_native(uintptr address)
+{
+	entry *p;
+	for (p = active; p; p = p->next) {
+		if (p->nativeentry && address >= (uintptr)p->nativeentry && address < (uintptr)p->nativeentry + p->nativesize)
+			return p;
+	}
+	return NULL;
+}
+#endif
 
 template< class block_info, template<class T> class block_allocator >
 inline block_info *block_cache< block_info, block_allocator >::new_blockinfo()

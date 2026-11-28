@@ -94,8 +94,10 @@ void GetInterruptServiceDiagnostics(InterruptServiceDiagnostics &d)
 
 #if defined(__APPLE__) && (defined(ENABLE_GFXACCEL) || (defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE))
 extern "C" __attribute__((weak)) int gfx_idle_latency_sensitive(void) { return 0; }
+extern "C" __attribute__((weak)) void DSpServiceIdle(void) {}
 #elif defined(ENABLE_GFXACCEL)
 extern "C" int gfx_idle_latency_sensitive(void);
+extern "C" void DSpServiceIdle(void);
 #endif
 
 static const uint32 IDLE_WAIT_3D_USEC = 1000;
@@ -696,6 +698,9 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 #ifdef ENABLE_USB
 			USBNodePublishDeferred();
 #endif /* ENABLE_USB */
+#if defined(ENABLE_GFXACCEL) || (defined(__APPLE__) && defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE)
+			DSpServiceIdle();
+#endif
 			// Sleep if no events pending
 			if (ReadMacInt32(0x14c) == 0)
 				IdleWaitMeasured();
@@ -706,6 +711,9 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 #ifdef ENABLE_USB
 			USBNodePublishDeferred();
 #endif /* ENABLE_USB */
+#if defined(ENABLE_GFXACCEL) || (defined(__APPLE__) && defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE)
+			DSpServiceIdle();
+#endif
 			// Sleep if no events pending
 			if (ReadMacInt32(0x14c) == 0)
 				IdleWaitMeasured();

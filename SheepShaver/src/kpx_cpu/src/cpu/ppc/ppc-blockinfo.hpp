@@ -43,6 +43,9 @@ struct powerpc_block_info
 #endif
 #if PPC_NATIVE_JIT
 	void *				nativeentry;
+#if defined(CLASSICSMP) && CLASSICSMP
+	uint32				nativesize;
+#endif
 #if PPC_NATIVEJIT_VERIFY
 	int					nativecomplete;
 #endif
@@ -78,6 +81,9 @@ powerpc_block_info::init(uintptr start_pc)
 #endif
 #if PPC_NATIVE_JIT
 	nativeentry = NULL;
+#if defined(CLASSICSMP) && CLASSICSMP
+	nativesize = 0;
+#endif
 #if PPC_NATIVEJIT_VERIFY
 	nativecomplete = 0;
 #endif

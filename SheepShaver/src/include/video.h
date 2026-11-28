@@ -103,6 +103,13 @@ enum {	// Display type
 	DIS_CHROMAKEY
 };
 
+enum {	// Guest backdrop window record
+	VIDEO_BACKDROP_DISPLAY_STATE = 156,
+	VIDEO_BACKDROP_MENUBAR_HEIGHT = 160,
+	VIDEO_BACKDROP_MENUBAR_HIDDEN = 162,
+	VIDEO_BACKDROP_SIZE = 164
+};
+
 extern bool video_activated;		// Flag: video display activated, mouse and keyboard data valid
 extern uint32 screen_base;			// Frame buffer base address
 extern int cur_mode;					// Number of current video mode (index in VModes array)
@@ -179,7 +186,8 @@ extern bool video_install_guest_clut(const uint8 clut_rgb[768],
 									 uint32 first,
 									 uint32 last);
 extern uint32 video_get_live_main_device_pixmap(void);
-extern uint32 video_create_guest_fullscreen_window(uint32 width, uint32 height);
+extern uint32 video_find_guest_backdrop(void);
+extern uint32 video_create_guest_fullscreen_window(void);
 extern bool video_dispose_guest_window(uint32 window);
 // Return the guest framebuffer presentation viewport in drawable-pixel
 // coordinates (top-left origin). Aspect-fits the current guest mode into the

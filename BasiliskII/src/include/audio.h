@@ -27,6 +27,10 @@
 #define MACEMU_USEVIASOUNDBASE
 #endif
 
+#ifdef SHEEPSHAVER
+#define AUDIO_USELOCALMIXERFALLBACK
+#endif
+
 #ifdef MACEMU_USEVIASOUNDBASE
 #include "atomic.h"
 #endif
@@ -100,6 +104,10 @@ extern void AudioCaptureClose(void *capture);
 #endif
 #endif
 
+#ifdef AUDIO_USELOCALMIXERFALLBACK
+#define AUDIO_SOUNDMANAGER_RETRY_RESERVE 0x8000
+#endif
+
 // Current audio status
 struct audio_status {
 	uint32 sample_rate;		// 16.16 fixed point
@@ -140,7 +148,13 @@ enum {
 	adatData = 168,				// SoundComponentData struct
 	adatMixer = 196,			// Mac address of mixer, returned by adatOpenMixer
 	adatStreamInfo = 200,		// Mac address of stream info, returned by adatGetSourceData
+#ifdef AUDIO_USELOCALMIXERFALLBACK
+	adatLocalMixer = 204,
+	adatLocalMixerCode = 208,
+	SIZEOF_adat = 212
+#else
 	SIZEOF_adat = 204
+#endif
 };
 
 extern uint32 audio_data;		// Mac address of global data area

@@ -1088,7 +1088,11 @@ template< class RA >
 void powerpc_cpu::execute_lwarx(uint32 opcode)
 {
 	const uint32 ea = RA::get(this, opcode) + operand_RB::get(this, opcode);
+#if defined(CLASSICSMP) && CLASSICSMP
+	uint32 reserve_data = vm_do_read_memory_4((uint32 *)ClassicSmpTranslate(this, ea));
+#else
 	uint32 reserve_data = vm_read_memory_4(ea);
+#endif
 	regs().reserve_valid = 1;
 	regs().reserve_addr = ea;
 #if KPX_MAX_CPUS != 1

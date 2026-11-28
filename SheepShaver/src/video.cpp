@@ -55,6 +55,17 @@
 #define DEBUG 0
 #include "debug.h"
 
+#if defined(ENABLE_GFXACCEL)
+#define VIDEO_BACKDROP_REACH 16000
+#define VIDEO_BACKDROP_KIND 0x4453
+#define VIDEO_BACKDROP_MAGIC 0x44537042u
+#define VIDEO_WINDOW_KIND 108
+#define VIDEO_WINDOW_NEXT 144
+#define VIDEO_WINDOW_REFCON 152
+#define VIDEO_LOWMEM_WINDOW_LIST 0x9d6
+#define VIDEO_WINDOW_LIST_LIMIT 512
+#endif
+
 
 // Global variables
 bool video_activated = false;		// Flag: video display activated, mouse and keyboard data valid
@@ -1004,29 +1015,62 @@ void video_screen_publish_end(void)
 		(void)call_macos(guest_show_cursor);
 }
 
-uint32 video_create_guest_fullscreen_window(uint32 width, uint32 height)
+uint32 video_find_guest_backdrop(void)
+{
+	uint32 window = ReadMacInt32(VIDEO_LOWMEM_WINDOW_LIST);
+	uint32 steps = 0;
+	while (window != 0 && steps < VIDEO_WINDOW_LIST_LIMIT &&
+		(ReadMacInt16(window + VIDEO_WINDOW_KIND) != VIDEO_BACKDROP_KIND ||
+		 ReadMacInt32(window + VIDEO_WINDOW_REFCON) != VIDEO_BACKDROP_MAGIC)) {
+		window = ReadMacInt32(window + VIDEO_WINDOW_NEXT);
+		steps++;
+	}
+	if (steps >= VIDEO_WINDOW_LIST_LIMIT)
+		return 0;
+	return window;
+}
+
+uint32 video_create_guest_fullscreen_window(void)
 {
 	(void)video_prepare_guest_display();
-	if (guest_new_cwindow == 0 || width == 0 || height == 0 ||
-		width > 0x7fffu || height > 0x7fffu)
+	const uint32 new_ptr = FindLibSymbol("\014InterfaceLib", "\006NewPtr");
+	const uint32 dispose_ptr = FindLibSymbol("\014InterfaceLib", "\012DisposePtr");
+	if (guest_new_cwindow == 0 || new_ptr == 0 || dispose_ptr == 0)
+		return 0;
+	const uint32 storage = call_macos1(new_ptr, VIDEO_BACKDROP_SIZE);
+	if (storage == 0)
 		return 0;
 
-	SheepVar scratch(12);
+	SheepVar scratch(16);
 	const uint32 rect = scratch.addr();
 	const uint32 title = rect + 8;
-	WriteMacInt16(rect + 0, 0);
-	WriteMacInt16(rect + 2, 0);
-	WriteMacInt16(rect + 4, (uint16)height);
-	WriteMacInt16(rect + 6, (uint16)width);
+	WriteMacInt16(rect + 0, (uint16)-VIDEO_BACKDROP_REACH);
+	WriteMacInt16(rect + 2, (uint16)-VIDEO_BACKDROP_REACH);
+	WriteMacInt16(rect + 4, VIDEO_BACKDROP_REACH);
+	WriteMacInt16(rect + 6, VIDEO_BACKDROP_REACH);
 	WriteMacInt8(title, 0);
 
 	/* A visible frontmost plainDBox supplies Window Manager ordering only.
 	 * Its pixels still live in the canonical screen and are immediately
 	 * replaced by the accelerated producer. Disposing it after mode restore
 	 * exposes the underlying desktop through the normal guest update path. */
-	return call_macos8(
+	const uint32 window = call_macos8(
 		guest_new_cwindow,
-		0, rect, title, 1, 2, 0xffffffffu, 0, 0);
+		storage, rect, title, 1, 2, 0xffffffffu, 0, VIDEO_BACKDROP_MAGIC);
+	if (window == 0) {
+		(void)call_macos1(dispose_ptr, storage);
+		return 0;
+	}
+	WriteMacInt16(window + VIDEO_WINDOW_KIND, VIDEO_BACKDROP_KIND);
+	WriteMacInt16(window + VIDEO_BACKDROP_MENUBAR_HEIGHT, 0);
+	WriteMacInt16(window + VIDEO_BACKDROP_MENUBAR_HIDDEN, 0);
+	const uint32 begin = FindLibSymbol("\014InterfaceLib", "\030DMBeginConfigureDisplays");
+	const uint32 state = rect + 12;
+	WriteMacInt32(state, 0);
+	if (begin != 0 && (int16)call_macos1(begin, state) != noErr)
+		WriteMacInt32(state, 0);
+	WriteMacInt32(window + VIDEO_BACKDROP_DISPLAY_STATE, ReadMacInt32(state));
+	return window;
 }
 
 bool video_dispose_guest_window(uint32 window)
@@ -1036,6 +1080,10 @@ bool video_dispose_guest_window(uint32 window)
 	(void)video_prepare_guest_display();
 	if (guest_dispose_window == 0)
 		return false;
+	uint32 state = 0;
+	if (ReadMacInt16(window + VIDEO_WINDOW_KIND) == VIDEO_BACKDROP_KIND &&
+		ReadMacInt32(window + VIDEO_WINDOW_REFCON) == VIDEO_BACKDROP_MAGIC)
+		state = ReadMacInt32(window + VIDEO_BACKDROP_DISPLAY_STATE);
 	(void)call_macos1(guest_dispose_window, window);
 
 	/* DisposeWindow exposes the pixels, but accelerated rendering bypasses
@@ -1062,6 +1110,9 @@ bool video_dispose_guest_window(uint32 window)
 			(void)call_macos1(guest_dispose_rgn, exposed);
 		}
 	}
+	const uint32 end = FindLibSymbol("\014InterfaceLib", "\026DMEndConfigureDisplays");
+	if (state != 0 && end != 0)
+		(void)call_macos1(end, state);
 	return true;
 }
 
@@ -1191,6 +1242,10 @@ bool video_switch_guest_display(int mode_index)
 	const VideoInfo &mode = VModes[mode_index];
 	const uint16 relative_depth =
 		video_rel_depth_from_abs(mode.viAppleMode);
+	const uint32 backdrop = video_find_guest_backdrop();
+	uint32 state = 0;
+	if (backdrop != 0)
+		state = ReadMacInt32(backdrop + VIDEO_BACKDROP_DISPLAY_STATE);
 
 	WriteMacInt16(switch_info + csMode, relative_depth);
 	WriteMacInt32(switch_info + csData, mode.viAppleID);
@@ -1204,7 +1259,7 @@ bool video_switch_guest_display(int mode_index)
 		mode.viAppleID,
 		depth_mode,
 		switch_info,
-		0);
+		state);
 	return err == noErr && video_guest_device_matches_mode(mode_index);
 }
 
@@ -1248,13 +1303,14 @@ bool video_install_guest_clut(const uint8 clut_rgb[768],
 bool video_prepare_guest_display(void) { return false; }
 int video_find_guest_mode(uint32, uint32, uint32) { return -1; }
 bool video_switch_guest_display(int) { return false; }
+uint32 video_find_guest_backdrop(void) { return 0; }
 bool video_capture_guest_clut(uint8[768], uint32 *) { return false; }
 bool video_install_guest_clut(const uint8[768], uint32, uint32, uint32)
 {
 	return false;
 }
 uint32 video_get_live_main_device_pixmap(void) { return 0; }
-uint32 video_create_guest_fullscreen_window(uint32, uint32) { return 0; }
+uint32 video_create_guest_fullscreen_window(void) { return 0; }
 bool video_dispose_guest_window(uint32) { return false; }
 void video_screen_publish_cm_suspend(void) {}
 void video_screen_publish_cm_resume(void) {}

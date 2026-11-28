@@ -472,8 +472,12 @@ sheepshaver_cpu::sheepshaver_cpu()
 	newworldv2 = HasNewWorldV2Kernel();
 	emulatorstubstart = 0;
 	emulatorstubend = 0;
+#if CLASSICSMP
+	FindEmulatorStubs();
+#else
 	if (nanokernel2)
 		FindEmulatorStubs();
+#endif
 	kernelmemorymapped = false;
 	kernelmemorybase = ((RAMSize + 0x0fffffff) & 0xf0000000) + 0x10000000;
 	idlevectortable = 0;
@@ -2431,6 +2435,13 @@ const char *sheepshaver_cpu::enter_exception_vector(
 
 bool sheepshaver_cpu::decrementer_exception()
 {
+#if CLASSICSMP
+	if (!secondary && !nanokernel2 && (int32(ReadMacInt32(XLM_IRQ_NEST)) > 0 || EmulatorStub(pc())))
+		return false;
+#else
+	if (!nanokernel2 && int32(ReadMacInt32(XLM_IRQ_NEST)) > 0)
+		return false;
+#endif
 	return enter_exception_vector(PPC_DECREMENTER_VECTOR,
 		PPC_DECREMENTER_HANDLER_SLOT, pc(), ppc_exception_srr1(msr(), 0)) == NULL;
 }
@@ -2488,7 +2499,11 @@ bool sheepshaver_cpu::external_interrupt()
 			return false;
 		return enter_exception_vector(PPC_EXTERNAL_VECTOR, PPC_EXTERNAL_HANDLER_SLOT, pc(), ppc_exception_srr1(msr(), 0)) == NULL;
 	}
-	if (ClassicSmpPrimaryPending() && ReadMacInt32(XLM_RUN_MODE) == MODE_68K && current_execute_depth() == 1 && (msr() & CLASSICSMPMSREE) && !EmulatorStub(pc())) {
+	if (EmulatorStub(pc())) {
+		external_interrupt_mode_deferred_count++;
+		return false;
+	}
+	if (ClassicSmpPrimaryPending() && ReadMacInt32(XLM_RUN_MODE) == MODE_68K && current_execute_depth() == 1 && (msr() & CLASSICSMPMSREE)) {
 		ClassicSmpPrimaryVector();
 		return enter_exception_vector(PPC_EXTERNAL_VECTOR, PPC_EXTERNAL_HANDLER_SLOT, pc(), ppc_exception_srr1(msr(), 0)) == NULL;
 	}
@@ -2521,11 +2536,12 @@ bool sheepshaver_cpu::external_interrupt()
 		return false;
 	}
 
+#if !CLASSICSMP
 	if (EmulatorStub(pc())) {
 		external_interrupt_mode_deferred_count++;
 		return false;
 	}
-
+#endif
 
 	VideoPumpEvents();
 #if TARGET_OS_MACCATALYST
@@ -3183,9 +3199,7 @@ static void ClassicSmpInstallPrivate(ClassicSmp *smp, uint32 logical, uint32 phy
 	if (smp->privatelogical == logical && smp->privatephysical == physical)
 		return;
 	if (smp->shadow == NULL)
-		smp->shadow = (uint8 *)malloc(CLASSICSMPPAGE);
-	if (smp->shadow == NULL)
-		return;
+		smp->shadow = Mac2HostAddr((SheepMem::ReserveProc(CLASSICSMPPAGE * 2) + CLASSICSMPPAGE - 1) & ~(CLASSICSMPPAGE - 1));
 	OsxGuestAtomicExchange(&smp->pagebusy, 1);
 	if (smp->privatelogical != 0) {
 		MMIOUnmapMemory(smp->privatelogical, smp->shadow);
@@ -3242,6 +3256,62 @@ uint8 *ClassicSmpTranslate(powerpc_cpu *cpu, uint32 address)
 	if (smp->privatelogical == 0 || (address & ~(CLASSICSMPPAGE - 1)) != smp->privatelogical)
 		return Mac2HostAddr(address);
 	return ClassicSmpPrivate(smp, cpu == smp->secondary) + (address & (CLASSICSMPPAGE - 1));
+}
+
+uint32 ClassicSmpRedirectMemory(uint32 address, uint32 flags, uint32 value)
+{
+	uint8 *host;
+	uint32 size;
+	uint32 raw;
+	uint32 result;
+	size = flags & 15u;
+	host = Mac2HostAddr(address);
+	if (flags & 16u) {
+		raw = 0;
+		if (MMIOIsWindow(host))
+			raw = MMIORead(host, (int)size);
+		else
+			memcpy(&raw, host, size);
+		if (size == 4)
+			result = raw;
+		else if (size == 2)
+			result = raw & 0xffffu;
+		else
+			result = raw & 0xffu;
+		if ((flags & 64u) == 0 && size == 4)
+			result = bswap_32(result);
+		if ((flags & 64u) == 0 && size == 2)
+			result = bswap_16((uint16)result);
+		if ((flags & 32u) && size == 2)
+			result = (uint32)(int32)(int16)result;
+		return result;
+	}
+	raw = value;
+	if ((flags & 64u) == 0 && size == 4)
+		raw = bswap_32(value);
+	if ((flags & 64u) == 0 && size == 2)
+		raw = bswap_16((uint16)value);
+	if (MMIOIsWindow(host))
+		MMIOWrite(host, (int)size, raw);
+	else
+		memcpy(host, &raw, size);
+	return 0;
+}
+
+void ClassicSmpNoteFault(uintptr address, uintptr instruction)
+{
+	ClassicSmp *smp;
+	if (ppc_cpu == NULL || ppc_cpu->smp == NULL)
+		return;
+	smp = (ClassicSmp *)ppc_cpu->smp;
+	if (!MMIOIsWindow((void *)address))
+		return;
+#if PPC_NATIVE_JIT
+	if (OsxGuestHostThreadCurrent(smp->thread))
+		smp->secondary->NoteRedirectFault(instruction);
+	else
+		ppc_cpu->NoteRedirectFault(instruction);
+#endif
 }
 
 static int ClassicSmpLineRaised(void)
@@ -4087,6 +4157,9 @@ sigsegv_return_t sigsegv_handler(sigsegv_info_t *sip)
 	// Emulated device windows (see mmio.h). Their pages are deliberately kept
 	// inaccessible so that every guest load and store lands here and is served
 	// with real register semantics instead of being polled out of RAM.
+#if CLASSICSMP
+	ClassicSmpNoteFault(addr, (uintptr)sigsegv_get_fault_instruction_address(sip));
+#endif
 	if (MMIOIsWindow((void *)addr))
 		return SIGSEGV_RETURN_DEVICE_ACCESS;
 

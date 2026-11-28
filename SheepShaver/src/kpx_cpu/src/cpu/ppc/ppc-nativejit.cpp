@@ -57,6 +57,12 @@ typedef struct NATIVEJITLAYOUT
 	int mCount;
 	int mFpscr;
 	int mFloat;
+#if defined(CLASSICSMP) && CLASSICSMP
+	int mRedirect;
+	int mRedirectAddress;
+	int mRedirectResult;
+	int mRedirectValue;
+#endif
 	NATIVEJITSTATE* mState;
 } NATIVEJITLAYOUT;
 
@@ -145,6 +151,33 @@ static void NativeJitRecord(NATIVEJITEMITTER* emitter, const NATIVEJITLAYOUT* la
 	}
 }
 
+#if defined(CLASSICSMP) && CLASSICSMP
+#define NATIVEJITMEMORYLOAD 16u
+#define NATIVEJITMEMORYSIGNED 32u
+#define NATIVEJITMEMORYREVERSED 64u
+static void NativeJitMemoryHelper(void* cpu, const void* argument)
+{
+	((powerpc_cpu*)cpu)->RedirectMemory((uint32)(uintptr)argument);
+}
+
+static void NativeJitRedirectAccess(NATIVEJITEMITTER* emitter, const NATIVEJITLAYOUT* layout, uint32 data, uint32 flags)
+{
+	NativeJitStoreRegister(emitter, layout->mRedirectAddress, NATIVEJIT_T1);
+	if ((flags & NATIVEJITMEMORYLOAD) == 0)
+	{
+		NativeJitLoadGpr(emitter, layout, NATIVEJIT_T0, data);
+		NativeJitStoreRegister(emitter, layout->mRedirectValue, NATIVEJIT_T0);
+	}
+	NativeJitCallHelper(emitter, NativeJitMemoryHelper, (const void*)(uintptr)flags);
+	if (flags & NATIVEJITMEMORYLOAD)
+	{
+		NativeJitLoadRegister(emitter, NATIVEJIT_T0, layout->mRedirectResult);
+		NativeJitStoreGpr(emitter, layout, data, NATIVEJIT_T0);
+	}
+	NativeJitLoadRegister(emitter, NATIVEJIT_T1, layout->mRedirectAddress);
+}
+#endif
+
 static void NativeJitEffectiveAddress(NATIVEJITEMITTER* emitter, const NATIVEJITLAYOUT* layout, uint32 opcode, int indexed)
 {
 	uint32 base;
@@ -172,6 +205,9 @@ static int NativeJitTranslateMemory(NATIVEJITEMITTER* emitter, const NATIVEJITLA
 {
 	uint32 data;
 	uint32 base;
+#if defined(CLASSICSMP) && CLASSICSMP
+	uint32 flags;
+#endif
 	if (!NATIVEJIT_DIRECT_MEMORY)
 		return 0;
 	data = NATIVEJIT_OPCODE_RD(opcode);
@@ -179,6 +215,20 @@ static int NativeJitTranslateMemory(NATIVEJITEMITTER* emitter, const NATIVEJITLA
 	if (update && (base == 0 || (isload && base == data)))
 		return 0;
 	NativeJitEffectiveAddress(emitter, layout, opcode, indexed);
+#if defined(CLASSICSMP) && CLASSICSMP
+	if (layout->mRedirect)
+	{
+		flags = (uint32)size;
+		if (isload)
+			flags |= NATIVEJITMEMORYLOAD;
+		if (issigned)
+			flags |= NATIVEJITMEMORYSIGNED;
+		NativeJitRedirectAccess(emitter, layout, data, flags);
+		if (update)
+			NativeJitStoreGpr(emitter, layout, base, NATIVEJIT_T1);
+		return 1;
+	}
+#endif
 	if (isload)
 	{
 		NativeJitLoadMemory(emitter, NATIVEJIT_T0, NATIVEJIT_T1, size, issigned);
@@ -502,6 +552,10 @@ static int NativeJitTranslateMultiple(NATIVEJITEMITTER* emitter, const NATIVEJIT
 	uint32 gpr;
 	if (!NATIVEJIT_DIRECT_MEMORY)
 		return 0;
+#if defined(CLASSICSMP) && CLASSICSMP
+	if (layout->mRedirect)
+		return 0;
+#endif
 	NativeJitEffectiveAddress(emitter, layout, opcode, 0);
 	for (gpr = NATIVEJIT_OPCODE_RD(opcode); gpr <= 31; gpr++)
 	{
@@ -527,6 +581,16 @@ static int NativeJitTranslateReversed(NATIVEJITEMITTER* emitter, const NATIVEJIT
 	if (!NATIVEJIT_DIRECT_MEMORY)
 		return 0;
 	NativeJitEffectiveAddress(emitter, layout, opcode, 1);
+#if defined(CLASSICSMP) && CLASSICSMP
+	if (layout->mRedirect)
+	{
+		if (isload)
+			NativeJitRedirectAccess(emitter, layout, NATIVEJIT_OPCODE_RD(opcode), (uint32)size | NATIVEJITMEMORYLOAD | NATIVEJITMEMORYREVERSED);
+		else
+			NativeJitRedirectAccess(emitter, layout, NATIVEJIT_OPCODE_RD(opcode), (uint32)size | NATIVEJITMEMORYREVERSED);
+		return 1;
+	}
+#endif
 	if (isload)
 	{
 		NativeJitLoadMemoryReversed(emitter, NATIVEJIT_T0, NATIVEJIT_T1, size);
@@ -545,6 +609,10 @@ static int NativeJitTranslateZeroLine(NATIVEJITEMITTER* emitter, const NATIVEJIT
 	int index;
 	if (!NATIVEJIT_DIRECT_MEMORY)
 		return 0;
+#if defined(CLASSICSMP) && CLASSICSMP
+	if (layout->mRedirect)
+		return 0;
+#endif
 	NativeJitEffectiveAddress(emitter, layout, opcode, 1);
 	NativeJitOperateImmediate(emitter, NATIVEJIT_ALU_AND, NATIVEJIT_T1, ~31U);
 	NativeJitLoadImmediate(emitter, NATIVEJIT_T0, 0);
@@ -564,6 +632,10 @@ static int NativeJitTranslateFloatMemory(NATIVEJITEMITTER* emitter, const NATIVE
 	uint32 base;
 	if (!NATIVEJIT_DIRECT_MEMORY)
 		return 0;
+#if defined(CLASSICSMP) && CLASSICSMP
+	if (layout->mRedirect)
+		return 0;
+#endif
 	base = NATIVEJIT_OPCODE_RA(opcode);
 	if (update && base == 0)
 		return 0;
@@ -613,6 +685,10 @@ static int NativeJitTranslateStoreFloatWord(NATIVEJITEMITTER* emitter, const NAT
 {
 	if (!NATIVEJIT_DIRECT_MEMORY)
 		return 0;
+#if defined(CLASSICSMP) && CLASSICSMP
+	if (layout->mRedirect)
+		return 0;
+#endif
 	NativeJitEffectiveAddress(emitter, layout, opcode, 1);
 	NativeJitLoadRegister(emitter, NATIVEJIT_T0, layout->mFpr + 8 * NATIVEJIT_OPCODE_RD(opcode) + layout->mFprLow);
 	NativeJitStoreMemory(emitter, NATIVEJIT_T1, NATIVEJIT_T0, 4);
@@ -1222,6 +1298,50 @@ static int NativeJitTranslate(NATIVEJITEMITTER* emitter, const NATIVEJITLAYOUT* 
 	return 0;
 }
 
+#if defined(CLASSICSMP) && CLASSICSMP
+extern uint32 ClassicSmpRedirectMemory(uint32 address, uint32 flags, uint32 value);
+
+void powerpc_cpu::RedirectMemory(uint32 flags)
+{
+	redirectresult = ClassicSmpRedirectMemory(redirectaddress, flags, redirectvalue);
+}
+
+int powerpc_cpu::RedirectBlock(uint32 pc)
+{
+	int index;
+	for (index = 0; index < PPC_REDIRECT_BLOCKS; index++)
+	{
+		if (redirectpcs[index] == pc && pc != 0)
+			return 1;
+	}
+	return 0;
+}
+
+void powerpc_cpu::NoteRedirectFault(uintptr address)
+{
+	if (nativejit == NULL || redirectfault != 0)
+		return;
+	if (address < (uintptr)nativejit->mCode || address >= (uintptr)nativejit + NATIVEJIT_CODE_SIZE)
+		return;
+	redirectfault = address;
+	spcflags().set(SPCFLAG_JIT_REDIRECT);
+}
+
+void powerpc_cpu::ResolveRedirectFault(void)
+{
+	block_info* bi;
+	uintptr address;
+	address = redirectfault;
+	redirectfault = 0;
+	bi = my_block_cache.find_native(address);
+	if (bi == NULL || RedirectBlock(bi->pc))
+		return;
+	redirectpcs[redirectnext] = bi->pc;
+	redirectnext = (redirectnext + 1) % PPC_REDIRECT_BLOCKS;
+	invalidate_cache_range(bi->min_pc, bi->max_pc);
+}
+#endif
+
 void powerpc_cpu::NativeJitInterpret(void* cpu, const void* decodeinfo)
 {
 	const block_info::decode_info* info;
@@ -1356,6 +1476,12 @@ void* powerpc_cpu::NativeJitCompileBlock(block_info* bi)
 	layout.mFpscr = (int)((uint8*)&regs().fpscr - base);
 	layout.mFloat = nativejit->mFloat;
 	layout.mState = nativejit;
+#if defined(CLASSICSMP) && CLASSICSMP
+	layout.mRedirect = RedirectBlock(bi->pc);
+	layout.mRedirectAddress = (int)((uint8*)&redirectaddress - base);
+	layout.mRedirectResult = (int)((uint8*)&redirectresult - base);
+	layout.mRedirectValue = (int)((uint8*)&redirectvalue - base);
+#endif
 	codestart = nativejit->mCursor;
 	NativeJitBegin(&emitter, codestart, nativejit->mDecodeTop, layout.mCarry, layout.mSummaryOverflow);
 	if (!NativeJitHasRoom(&emitter))
@@ -1475,6 +1601,9 @@ void* powerpc_cpu::NativeJitCompileBlock(block_info* bi)
 	if (decode != olddecode)
 		bi->di = decode;
 	nativejit->mCursor = emitter.mCode;
+#if defined(CLASSICSMP) && CLASSICSMP
+	bi->nativesize = (uint32)(emitter.mCode - codestart);
+#endif
 	return codestart;
 }
 

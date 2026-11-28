@@ -34,6 +34,9 @@
 #endif
 #include "cpu/ppc/ppc-instructions.hpp"
 #include <vector>
+#if defined(CLASSICSMP) && CLASSICSMP
+#define PPC_REDIRECT_BLOCKS 32
+#endif
 #ifdef SHEEPSHAVER
 /* Host mutex, condition and thread backing the decrementer deadline. The
  * definition is per platform and lives in ppc-execute.cpp, so the Win32 and
@@ -726,6 +729,20 @@ private:
 	uint32 decrementer_maximum_write;
 	uint64 decrementer_write_count;
 	uint64 decrementer_delivery_count;
+#if defined(CLASSICSMP) && CLASSICSMP && PPC_NATIVE_JIT
+public:
+	uint32 redirectaddress;
+	uint32 redirectresult;
+	uint32 redirectvalue;
+	void NoteRedirectFault(uintptr address);
+	void RedirectMemory(uint32 flags);
+	int RedirectBlock(uint32 pc);
+private:
+	uintptr redirectfault;
+	uint32 redirectpcs[PPC_REDIRECT_BLOCKS];
+	uint32 redirectnext;
+	void ResolveRedirectFault(void);
+#endif
 };
 
 

@@ -1,7 +1,7 @@
 #include "sysdeps.h"
 #include "video.h"
 
-extern uint32 SDLGPUCreateBackdropWindow(uint32 width, uint32 height);
+extern uint32 SDLGPUCreateBackdropWindow(void);
 extern bool SDLGPUDisposeBackdropWindow(uint32 window);
 
 #define video_create_guest_fullscreen_window SDLGPUCreateBackdropWindow
@@ -10,9 +10,9 @@ extern bool SDLGPUDisposeBackdropWindow(uint32 window);
 #undef video_dispose_guest_window
 #undef video_create_guest_fullscreen_window
 
-uint32 SDLGPUCreateBackdropWindow(uint32 width, uint32 height)
+uint32 SDLGPUCreateBackdropWindow(void)
 {
-	return video_create_guest_fullscreen_window(width, height);
+	return video_create_guest_fullscreen_window();
 }
 
 bool SDLGPUDisposeBackdropWindow(uint32 window)
